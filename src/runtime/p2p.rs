@@ -153,6 +153,16 @@ impl From<libp2p::multiaddr::Error> for P2pBuildError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use futures::StreamExt as _;
+    use libp2p::{
+        request_response::{self, Message},
+        swarm::SwarmEvent,
+    };
+
+    use crate::wire::{Frame, PayloadType};
+
     use super::*;
 
     #[tokio::test]
@@ -170,5 +180,84 @@ mod tests {
         .expect("node should build");
 
         assert_eq!(node.local_peer_id, expected_peer_id);
+    }
+
+    #[tokio::test]
+    async fn two_nodes_exchange_packet_request() {
+        let mut listener = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            mtu: 1280,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+        })
+        .expect("listener node");
+        let listener_address = next_listen_address(&mut listener.swarm).await;
+
+        let mut dialer = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener.local_peer_id, listener_address)],
+        })
+        .expect("dialer node");
+        let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).expect("frame");
+        let request_id = dialer
+            .swarm
+            .behaviour_mut()
+            .packet
+            .send_request(&listener.local_peer_id, frame.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_response(&mut listener.swarm, &mut dialer.swarm, frame, request_id),
+        )
+        .await
+        .expect("packet exchange timed out");
+    }
+
+    async fn next_listen_address(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
+        loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
+                return address;
+            }
+        }
+    }
+
+    async fn exchange_until_response(
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        expected_frame: Frame,
+        expected_request_id: request_response::OutboundRequestId,
+    ) {
+        loop {
+            tokio::select! {
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Packet(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. },
+                        ..
+                    })) = event {
+                        assert_eq!(request, expected_frame);
+                        listener
+                            .behaviour_mut()
+                            .packet
+                            .send_response(channel, packet::PacketResponse::Accepted)
+                            .expect("send response");
+                    }
+                }
+                event = dialer.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Packet(request_response::Event::Message {
+                        message: Message::Response { request_id, response },
+                        ..
+                    })) = event {
+                        assert_eq!(request_id, expected_request_id);
+                        assert_eq!(response, packet::PacketResponse::Accepted);
+                        assert_eq!(expected_frame.header.payload_type, PayloadType::IpPacket);
+                        return;
+                    }
+                }
+            }
+        }
     }
 }
