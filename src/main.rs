@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
     config::{Config, RuntimeDefaults},
+    runtime::tun::{TunDevice, TunRuntimeConfig},
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
@@ -20,6 +21,12 @@ enum Command {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
     },
+    Up {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> Result<(), String> {
@@ -27,6 +34,7 @@ fn main() -> Result<(), String> {
 
     match cli.command {
         Command::Status { config } => status(&config),
+        Command::Up { config, dry_run } => up(&config, dry_run),
     }
 }
 
@@ -38,6 +46,10 @@ fn status(path: &PathBuf) -> Result<(), String> {
     let defaults = RuntimeDefaults::default();
 
     println!("network: {}", config.network.name);
+    println!(
+        "interface: {} mtu {}",
+        config.interface.name, config.interface.mtu
+    );
     println!("peers: {}", config.peers.len());
     println!(
         "queue: {} packets / {} bytes per peer",
@@ -51,6 +63,47 @@ fn status(path: &PathBuf) -> Result<(), String> {
     );
     println!("compiled routes: {}", routes.len());
 
+    Ok(())
+}
+
+fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let runtime = TunRuntimeConfig::from_config(&config)
+        .map_err(|error| format!("failed to prepare TUN runtime: {error:?}"))?;
+
+    println!("interface: {}", runtime.name);
+    println!("mtu: {}", runtime.mtu);
+    println!("address4: {}/32", runtime.addresses.ipv4);
+    println!("address6: {}/128", runtime.addresses.ipv6);
+
+    let commands = runtime.route_commands();
+    if dry_run {
+        println!("dry-run: would create Linux TUN interface and run:");
+        for command in commands {
+            println!("{command}");
+        }
+        return Ok(());
+    }
+
+    let device = TunDevice::open(&runtime)
+        .map_err(|error| format!("failed to open TUN device: {error:?}"))?;
+    println!(
+        "created interface: {}",
+        device
+            .name()
+            .map_err(|error| format!("failed to inspect TUN device: {error:?}"))?
+    );
+
+    for command in commands {
+        let status = command
+            .execute()
+            .map_err(|error| format!("failed to execute `{command}`: {error}"))?;
+        if !status.success() {
+            return Err(format!("`{command}` exited with {status}"));
+        }
+    }
+
+    println!("runtime packet forwarding is not implemented yet");
     Ok(())
 }
 

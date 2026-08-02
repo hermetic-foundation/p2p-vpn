@@ -37,7 +37,7 @@ nix build .#default
 {
   "network": {
     "name": "lab",
-    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+    "local_peer": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
   },
   "interface": {
     "name": "hs0",
@@ -49,7 +49,7 @@ nix build .#default
   },
   "peers": [
     {
-      "id": "0101010101010101010101010101010101010101010101010101010101010101",
+      "id": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
       "name": "node-a",
       "routes": [
         {
@@ -66,4 +66,16 @@ Inspect the compiled local view:
 
 ```sh
 cargo run -- status --config p2p-vpn.json
+```
+
+Inspect the Linux interface setup plan without requiring root:
+
+```sh
+cargo run -- up --config p2p-vpn.json --dry-run
+```
+
+Attempt to create the TUN device and install routes:
+
+```sh
+sudo target/debug/p2p-vpn up --config p2p-vpn.json
 ```
