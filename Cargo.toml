@@ -1,0 +1,16 @@
+[package]
+name = "p2p-vpn"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "A Rust foundation for a libp2p-native packet-oriented mesh VPN"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[dependencies]
