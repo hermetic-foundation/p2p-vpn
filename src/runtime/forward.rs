@@ -8,6 +8,7 @@ use libp2p::{PeerId as Libp2pPeerId, Swarm, request_response};
 use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError},
+    queue::{EnqueueError, Packet, PeerQueues},
     route::{RouteError, RouteTable},
     runtime::{
         p2p::Behaviour,
@@ -52,6 +53,38 @@ impl Forwarder {
         swarm: &mut Swarm<Behaviour>,
         packet: Vec<u8>,
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let packet = self.prepare_tun_packet(packet)?;
+        self.send_queued_packet(swarm, &packet)
+    }
+
+    pub fn enqueue_tun_packet(
+        &mut self,
+        queues: &mut PeerQueues,
+        packet: Vec<u8>,
+    ) -> Result<(), ForwardError> {
+        let packet = self.prepare_tun_packet(packet)?;
+        Ok(queues.enqueue(packet)?)
+    }
+
+    pub fn send_queued_packet(
+        &self,
+        swarm: &mut Swarm<Behaviour>,
+        packet: &Packet,
+    ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let peer = self
+            .peers
+            .get(&packet.peer())
+            .ok_or(ForwardError::NoTransportPeer(packet.peer()))?;
+        let frame = Frame::packet(
+            self.session_id,
+            packet.sequence(),
+            packet.payload().to_vec(),
+        )?;
+
+        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+    }
+
+    fn prepare_tun_packet(&mut self, packet: Vec<u8>) -> Result<Packet, ForwardError> {
         if packet.len() > self.mtu {
             return Err(ForwardError::PacketTooLarge {
                 actual: packet.len(),
@@ -64,15 +97,13 @@ impl Forwarder {
             .routes
             .resolve(destination)
             .ok_or(ForwardError::NoRoute(destination))?;
-        let peer = self
-            .peers
-            .get(&route.owner)
-            .ok_or(ForwardError::NoTransportPeer(route.owner))?;
+        if !self.peers.contains_key(&route.owner) {
+            return Err(ForwardError::NoTransportPeer(route.owner));
+        }
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        let frame = Frame::packet(self.session_id, sequence, packet)?;
 
-        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+        Ok(Packet::new(route.owner, sequence, packet))
     }
 
     pub fn accept_inbound_packet<'a>(
@@ -176,6 +207,7 @@ pub enum ForwardError {
     Config(ConfigError),
     Route(RouteError),
     Frame(FrameError),
+    Enqueue(EnqueueError),
     NoRoute(IpAddr),
     NoTransportPeer(PeerId),
     PacketTooLarge { actual: usize, max: usize },
@@ -201,6 +233,12 @@ impl From<RouteError> for ForwardError {
 impl From<FrameError> for ForwardError {
     fn from(error: FrameError) -> Self {
         Self::Frame(error)
+    }
+}
+
+impl From<EnqueueError> for ForwardError {
+    fn from(error: EnqueueError) -> Self {
+        Self::Enqueue(error)
     }
 }
 
@@ -339,6 +377,41 @@ mod tests {
             .expect("request id");
 
         assert_ne!(format!("{request_id:?}"), "");
+    }
+
+    #[test]
+    fn outbound_packet_can_be_enqueued_before_send() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut queues = PeerQueues::new(1, 1280);
+        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("queued");
+
+        let queued_packet = queues.dequeue().expect("queued packet");
+        assert_eq!(queued_packet.peer(), remote_overlay);
+        assert_eq!(queued_packet.sequence(), 0);
+    }
+
+    #[test]
+    fn outbound_packet_reports_queue_backpressure() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut queues = PeerQueues::new(1, 1280);
+        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet.clone())
+            .expect("first packet queued");
+
+        assert!(matches!(
+            forwarder.enqueue_tun_packet(&mut queues, packet),
+            Err(ForwardError::Enqueue(EnqueueError::QueueFull { .. }))
+        ));
     }
 
     #[test]

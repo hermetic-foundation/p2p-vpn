@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::{PeerId, Sequence};
 
@@ -51,6 +51,18 @@ pub struct QueueStats {
     pub queued_bytes: usize,
     pub dropped_packets: u64,
     pub dropped_bytes: u64,
+}
+
+impl QueueStats {
+    #[must_use]
+    pub const fn add(self, other: Self) -> Self {
+        Self {
+            queued_packets: self.queued_packets + other.queued_packets,
+            queued_bytes: self.queued_bytes + other.queued_bytes,
+            dropped_packets: self.dropped_packets + other.dropped_packets,
+            dropped_bytes: self.dropped_bytes + other.dropped_bytes,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,6 +137,74 @@ impl PeerQueue {
     }
 }
 
+#[derive(Debug)]
+pub struct PeerQueues {
+    max_packets_per_peer: usize,
+    max_bytes_per_peer: usize,
+    queues: HashMap<PeerId, PeerQueue>,
+    ready: VecDeque<PeerId>,
+}
+
+impl PeerQueues {
+    #[must_use]
+    pub fn new(max_packets_per_peer: usize, max_bytes_per_peer: usize) -> Self {
+        Self {
+            max_packets_per_peer,
+            max_bytes_per_peer,
+            queues: HashMap::new(),
+            ready: VecDeque::new(),
+        }
+    }
+
+    pub fn enqueue(&mut self, packet: Packet) -> Result<(), EnqueueError> {
+        let peer = packet.peer();
+        let was_empty = self
+            .queues
+            .get(&peer)
+            .is_none_or(|queue| queue.stats().queued_packets == 0);
+        let queue = self.queue_mut(peer);
+        queue.enqueue(packet)?;
+        if was_empty {
+            self.ready.push_back(peer);
+        }
+
+        Ok(())
+    }
+
+    pub fn dequeue(&mut self) -> Option<Packet> {
+        let peer = self.ready.pop_front()?;
+        let queue = self.queues.get_mut(&peer)?;
+        let packet = queue.dequeue()?;
+        if queue.stats().queued_packets > 0 {
+            self.ready.push_back(peer);
+        }
+
+        Some(packet)
+    }
+
+    #[must_use]
+    pub fn peer_stats(&self, peer: PeerId) -> QueueStats {
+        self.queues
+            .get(&peer)
+            .map_or_else(QueueStats::default, PeerQueue::stats)
+    }
+
+    #[must_use]
+    pub fn total_stats(&self) -> QueueStats {
+        self.queues
+            .values()
+            .fold(QueueStats::default(), |total, queue| {
+                total.add(queue.stats())
+            })
+    }
+
+    fn queue_mut(&mut self, peer: PeerId) -> &mut PeerQueue {
+        self.queues
+            .entry(peer)
+            .or_insert_with(|| PeerQueue::new(self.max_packets_per_peer, self.max_bytes_per_peer))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +271,50 @@ mod tests {
         );
         assert_eq!(queue.stats().dropped_bytes, 4);
         assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn peer_queues_drain_fairly_across_peers() {
+        let mut queues = PeerQueues::new(8, 1024);
+
+        queues
+            .enqueue(Packet::new(peer(1), 1, vec![1]))
+            .expect("enqueue");
+        queues
+            .enqueue(Packet::new(peer(1), 2, vec![2]))
+            .expect("enqueue");
+        queues
+            .enqueue(Packet::new(peer(2), 3, vec![3]))
+            .expect("enqueue");
+
+        assert_eq!(queues.dequeue().expect("packet").sequence(), 1);
+        assert_eq!(queues.dequeue().expect("packet").sequence(), 3);
+        assert_eq!(queues.dequeue().expect("packet").sequence(), 2);
+        assert!(queues.dequeue().is_none());
+    }
+
+    #[test]
+    fn peer_queues_keep_drop_stats_per_peer_and_total() {
+        let mut queues = PeerQueues::new(1, 2);
+
+        queues
+            .enqueue(Packet::new(peer(1), 1, vec![1]))
+            .expect("enqueue");
+        assert_eq!(
+            queues.enqueue(Packet::new(peer(1), 2, vec![2])),
+            Err(EnqueueError::QueueFull { packet_bytes: 1 })
+        );
+        assert_eq!(
+            queues.enqueue(Packet::new(peer(2), 3, vec![0; 3])),
+            Err(EnqueueError::PacketTooLarge {
+                packet_bytes: 3,
+                byte_limit: 2
+            })
+        );
+
+        assert_eq!(queues.peer_stats(peer(1)).dropped_packets, 1);
+        assert_eq!(queues.peer_stats(peer(2)).dropped_bytes, 3);
+        assert_eq!(queues.total_stats().queued_packets, 1);
+        assert_eq!(queues.total_stats().dropped_packets, 2);
     }
 }

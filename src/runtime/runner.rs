@@ -9,7 +9,8 @@ use libp2p::{
 use tokio::sync::mpsc;
 
 use crate::{
-    config::Config,
+    config::{Config, QueueConfig},
+    queue::PeerQueues,
     runtime::{
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
@@ -30,7 +31,7 @@ pub async fn run_config(config: Config, device: TunDevice) -> Result<(), RunnerE
     })?;
     let forwarder = Forwarder::from_config(&config)?;
 
-    run_node(node, forwarder, device, config.interface.mtu).await
+    run_node(node, forwarder, device, config.interface.mtu, config.queue).await
 }
 
 pub async fn run_node(
@@ -38,19 +39,26 @@ pub async fn run_node(
     mut forwarder: Forwarder,
     device: TunDevice,
     mtu: u16,
+    queue_config: QueueConfig,
 ) -> Result<(), RunnerError> {
     let device = Arc::new(Mutex::new(device));
     let mut tun_rx = spawn_tun_reader(Arc::clone(&device), mtu);
+    let mut queues = PeerQueues::new(
+        queue_config.max_packets_per_peer,
+        queue_config.max_bytes_per_peer,
+    );
 
     loop {
         tokio::select! {
             Some(packet) = tun_rx.recv() => {
-                if let Err(error) = forwarder.send_tun_packet(&mut node.swarm, packet) {
+                if let Err(error) = forwarder.enqueue_tun_packet(&mut queues, packet) {
                     eprintln!("dropping outbound packet: {error:?}");
                 }
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues);
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(&mut node.swarm, &forwarder, &device, event)?;
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues);
             }
         }
     }
@@ -80,6 +88,18 @@ fn spawn_tun_reader(device: Arc<Mutex<TunDevice>>, mtu: u16) -> mpsc::Receiver<V
         }
     });
     rx
+}
+
+fn drain_outbound_queue(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    queues: &mut PeerQueues,
+) {
+    while let Some(packet) = queues.dequeue() {
+        if let Err(error) = forwarder.send_queued_packet(swarm, &packet) {
+            eprintln!("dropping queued outbound packet: {error:?}");
+        }
+    }
 }
 
 fn handle_swarm_event(
