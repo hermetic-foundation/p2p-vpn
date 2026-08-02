@@ -44,11 +44,9 @@ impl IpCidr {
     #[must_use]
     pub fn contains(self, candidate: IpAddr) -> bool {
         match (self.address, candidate) {
-            (IpAddr::V4(network), IpAddr::V4(address)) => prefix_matches(
-                u128::from(u32::from(network)),
-                u128::from(u32::from(address)),
-                self.prefix_len,
-            ),
+            (IpAddr::V4(network), IpAddr::V4(address)) => {
+                prefix_matches(u32::from(network), u32::from(address), self.prefix_len)
+            }
             (IpAddr::V6(network), IpAddr::V6(address)) => {
                 prefix_matches(u128::from(network), u128::from(address), self.prefix_len)
             }
@@ -135,12 +133,21 @@ impl RouteTable {
     }
 }
 
-fn prefix_matches(network: u128, address: u128, prefix_len: u8) -> bool {
-    let host_bits = 128 - u32::from(prefix_len);
+fn prefix_matches<T>(network: T, address: T, prefix_len: u8) -> bool
+where
+    T: Copy
+        + From<u8>
+        + std::ops::BitAnd<Output = T>
+        + std::ops::Shl<u32, Output = T>
+        + std::ops::Not<Output = T>
+        + PartialEq,
+{
+    let width = u32::try_from(std::mem::size_of::<T>() * 8).expect("integer width fits u32");
+    let host_bits = width - u32::from(prefix_len);
     let mask = if prefix_len == 0 {
-        0
+        T::from(0)
     } else {
-        u128::MAX.checked_shl(host_bits).unwrap_or(0)
+        !T::from(0) << host_bits
     };
 
     (network & mask) == (address & mask)
@@ -199,6 +206,14 @@ mod tests {
             .expect("route should resolve");
 
         assert_eq!(route.owner, peer(2));
+    }
+
+    #[test]
+    fn ipv4_prefix_matching_respects_ipv4_width() {
+        let prefix = IpCidr::new(IpAddr::V4(Ipv4Addr::new(100, 64, 1, 2)), 32).unwrap();
+
+        assert!(prefix.contains(IpAddr::V4(Ipv4Addr::new(100, 64, 1, 2))));
+        assert!(!prefix.contains(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1))));
     }
 
     #[test]
