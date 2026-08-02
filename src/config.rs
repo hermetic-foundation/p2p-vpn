@@ -16,6 +16,8 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Config {
     pub network: NetworkConfig,
+    #[serde(default = "default_interface")]
+    pub interface: InterfaceConfig,
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
     #[serde(default = "default_queue")]
@@ -54,12 +56,22 @@ impl Config {
 
         Ok(table)
     }
+
+    pub fn local_peer_id(&self) -> Result<PeerId, ConfigError> {
+        PeerId::from_str(&self.network.local_peer).map_err(ConfigError::PeerId)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct NetworkConfig {
     pub name: String,
     pub local_peer: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct InterfaceConfig {
+    pub name: String,
+    pub mtu: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -164,6 +176,13 @@ fn default_queue() -> QueueConfig {
     }
 }
 
+fn default_interface() -> InterfaceConfig {
+    InterfaceConfig {
+        name: "hs0".to_owned(),
+        mtu: 1_280,
+    }
+}
+
 fn parse_cidr(input: &str) -> Result<IpCidr, RoutePrefixError> {
     let (address, prefix) = input
         .split_once('/')
@@ -221,7 +240,12 @@ mod tests {
         let config = Config {
             network: NetworkConfig {
                 name: "dev".to_owned(),
-                local_peer: "local".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
             },
             peers: vec![PeerConfig {
                 id: "0101010101010101010101010101010101010101010101010101010101010101".to_owned(),

@@ -1,4 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use crate::PeerId;
 
@@ -54,6 +57,12 @@ impl IpCidr {
     }
 }
 
+impl fmt::Display for IpCidr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}/{}", self.address, self.prefix_len)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Route {
     pub owner: PeerId,
@@ -98,6 +107,11 @@ impl RouteTable {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.routes.is_empty()
+    }
+
+    #[must_use]
+    pub fn routes(&self) -> &[Route] {
+        &self.routes
     }
 
     #[must_use]

@@ -37,7 +37,11 @@ nix build .#default
 {
   "network": {
     "name": "lab",
-    "local_peer": "local"
+    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "interface": {
+    "name": "hs0",
+    "mtu": 1280
   },
   "queue": {
     "max_packets_per_peer": 256,
