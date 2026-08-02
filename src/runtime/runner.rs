@@ -5,7 +5,7 @@ use std::{
 
 use futures::StreamExt as _;
 use libp2p::{
-    Swarm,
+    Multiaddr, PeerId as Libp2pPeerId, Swarm, identify, mdns,
     request_response::{self, Message},
     swarm::SwarmEvent,
 };
@@ -182,10 +182,56 @@ fn handle_swarm_event(
             metrics.record_inbound_failure();
             eprintln!("packet request from {peer} failed: {error}");
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
+            for (peer, address) in peers {
+                learn_peer_address(swarm, peer, address);
+            }
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
+            for (peer, address) in peers {
+                swarm.behaviour_mut().kad.remove_address(&peer, &address);
+            }
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
+            peer_id,
+            info,
+            ..
+        })) => {
+            for address in info.listen_addrs {
+                learn_peer_address(swarm, peer_id, address);
+            }
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Error {
+            peer_id,
+            error,
+            ..
+        })) => {
+            eprintln!("identify with {peer_id} failed: {error}");
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn learn_peer_address(swarm: &mut Swarm<Behaviour>, peer: Libp2pPeerId, address: Multiaddr) {
+    if peer == *swarm.local_peer_id() {
+        return;
+    }
+
+    swarm
+        .behaviour_mut()
+        .kad
+        .add_address(&peer, address.clone());
+
+    let dial_address = peer_dial_address(peer, address);
+    if let Err(error) = swarm.dial(dial_address) {
+        eprintln!("dial discovered peer {peer} failed: {error}");
+    }
+}
+
+fn peer_dial_address(peer: Libp2pPeerId, address: Multiaddr) -> Multiaddr {
+    address.with_p2p(peer).unwrap_or_else(|address| address)
 }
 
 fn print_metrics(metrics: &RuntimeMetrics, queue: crate::queue::QueueStats) {
@@ -225,5 +271,32 @@ impl From<ForwardError> for RunnerError {
 impl From<TunRuntimeError> for RunnerError {
     fn from(error: TunRuntimeError) -> Self {
         Self::Tun(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use libp2p::identity::Keypair;
+
+    use super::*;
+
+    #[test]
+    fn peer_dial_address_appends_p2p_component() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        let dial = peer_dial_address(peer, address);
+
+        assert!(dial.to_string().ends_with(&format!("/p2p/{peer}")));
+    }
+
+    #[test]
+    fn peer_dial_address_preserves_existing_p2p_address() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("address");
+
+        assert_eq!(peer_dial_address(peer, address.clone()), address);
     }
 }

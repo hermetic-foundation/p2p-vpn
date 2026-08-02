@@ -13,6 +13,12 @@ substrate while making the VPN data plane packet-oriented:
 - path scoring and promotion from relay to direct paths
 - first-class metrics for packet, queue, route, and path behavior
 
+Discovery is overlay-scoped. Configure bootstrap peers and relay-capable peers
+that intentionally participate in the VPN; do not rely on the public IPFS DHT
+as the membership or routing authority. Public libp2p relays can be useful for
+experiments only when they support the needed relay reservations and are
+acceptable for the deployment's trust and availability requirements.
+
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. It is intentionally reusable over libp2p streams now and QUIC
 datagrams later.
