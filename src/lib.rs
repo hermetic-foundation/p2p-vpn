@@ -1,4 +1,5 @@
 pub mod config;
+pub mod path;
 pub mod queue;
 pub mod route;
 pub mod wire;

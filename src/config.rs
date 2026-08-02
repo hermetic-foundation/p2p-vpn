@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     PathKind, PeerId,
+    path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
 };
 
@@ -114,6 +115,11 @@ impl Default for RuntimeDefaults {
             initial_mtu: 1_280,
         }
     }
+}
+
+#[must_use]
+pub fn empty_path_state() -> PathSet {
+    PathSet::new()
 }
 
 #[derive(Debug)]
