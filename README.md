@@ -18,8 +18,8 @@ packet payload. It is intentionally reusable over libp2p streams now and QUIC
 datagrams later.
 
 The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
-request-response streams. Inbound packet handling is intended to check the
-configured peer allowlist and route ownership before writing to TUN.
+request-response streams. Inbound packet handling checks the configured peer
+allowlist and route ownership before writing to TUN.
 
 ## Development
 
@@ -51,7 +51,18 @@ nix build .#default
 {
   "network": {
     "name": "lab",
-    "local_peer": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    "local_peer": "12D3KooW...",
+    "private_key": "CAES...",
+    "listen_addresses": [
+      "/ip4/0.0.0.0/tcp/0",
+      "/ip4/0.0.0.0/udp/0/quic-v1"
+    ],
+    "bootstrap_peers": [
+      {
+        "id": "12D3KooW...",
+        "address": "/dns4/bootstrap.example.net/tcp/4001"
+      }
+    ]
   },
   "interface": {
     "name": "hs0",
@@ -63,8 +74,12 @@ nix build .#default
   },
   "peers": [
     {
-      "id": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+      "id": "12D3KooW...",
       "name": "node-a",
+      "addresses": [
+        "/ip4/192.0.2.10/tcp/4001",
+        "/ip4/192.0.2.10/udp/4001/quic-v1"
+      ],
       "routes": [
         {
           "prefix": "10.42.0.0/24",

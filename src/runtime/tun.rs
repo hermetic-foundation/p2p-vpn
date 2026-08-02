@@ -200,6 +200,9 @@ mod tests {
             network: NetworkConfig {
                 name: "lab".to_owned(),
                 local_peer: local.to_string(),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -225,6 +228,9 @@ mod tests {
             network: NetworkConfig {
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -233,6 +239,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: peer_hex(2),
                 name: Some("node-b".to_owned()),
+                addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.99/24".to_owned(),
                     metric: 10,

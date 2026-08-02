@@ -216,6 +216,9 @@ mod tests {
                     .public()
                     .to_peer_id()
                     .to_string(),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -224,6 +227,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: Some("remote".to_owned()),
+                addresses: Vec::new(),
                 routes: Vec::new(),
             }],
             queue: QueueConfig {

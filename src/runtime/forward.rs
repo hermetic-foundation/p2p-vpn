@@ -225,6 +225,9 @@ mod tests {
                     .public()
                     .to_peer_id()
                     .to_string(),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -233,6 +236,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: Some("remote".to_owned()),
+                addresses: Vec::new(),
                 routes: Vec::new(),
             }],
             queue: QueueConfig {
@@ -325,6 +329,7 @@ mod tests {
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
         })
         .expect("node");
         let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));

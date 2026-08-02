@@ -33,6 +33,7 @@ pub struct HostConfig {
     pub mtu: u16,
     pub listen_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
+    pub known_peers: Vec<(PeerId, Multiaddr)>,
 }
 
 pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
@@ -76,7 +77,7 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm.listen_on(address)?;
     }
 
-    for (peer, address) in config.bootstrap_peers {
+    for (peer, address) in config.bootstrap_peers.into_iter().chain(config.known_peers) {
         swarm
             .behaviour_mut()
             .kad
@@ -164,6 +165,7 @@ mod tests {
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
         })
         .expect("node should build");
 
