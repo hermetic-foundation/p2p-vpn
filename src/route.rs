@@ -91,6 +91,16 @@ impl RouteTable {
     }
 
     #[must_use]
+    pub fn len(&self) -> usize {
+        self.routes.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    #[must_use]
     pub fn resolve(&self, destination: IpAddr) -> Option<Route> {
         self.routes
             .iter()

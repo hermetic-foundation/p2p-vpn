@@ -1,6 +1,9 @@
+pub mod config;
 pub mod queue;
 pub mod route;
 pub mod wire;
+
+use std::{fmt, str::FromStr};
 
 pub type Sequence = u64;
 pub type SessionId = u32;
@@ -17,6 +20,51 @@ impl PeerId {
     #[must_use]
     pub const fn as_bytes(self) -> [u8; 32] {
         self.0
+    }
+}
+
+impl fmt::Display for PeerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for PeerId {
+    type Err = PeerIdParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if input.len() != 64 {
+            return Err(PeerIdParseError::InvalidLength {
+                actual: input.len(),
+            });
+        }
+
+        let mut bytes = [0; 32];
+        for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
+            let high = decode_hex(chunk[0])?;
+            let low = decode_hex(chunk[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerIdParseError {
+    InvalidLength { actual: usize },
+    InvalidHex { byte: u8 },
+}
+
+fn decode_hex(byte: u8) -> Result<u8, PeerIdParseError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        other => Err(PeerIdParseError::InvalidHex { byte: other }),
     }
 }
 
@@ -37,5 +85,25 @@ impl PathKind {
             Self::DirectTcpStream => 60,
             Self::CircuitRelay => 30,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_id_round_trips_as_hex() {
+        let peer = PeerId::from_bytes([0xab; 32]);
+
+        assert_eq!(peer.to_string().parse::<PeerId>(), Ok(peer));
+    }
+
+    #[test]
+    fn peer_id_parse_rejects_wrong_length() {
+        assert_eq!(
+            "abcd".parse::<PeerId>(),
+            Err(PeerIdParseError::InvalidLength { actual: 4 })
+        );
     }
 }

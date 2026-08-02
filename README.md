@@ -30,3 +30,36 @@ cargo clippy --all-targets -- -D warnings
 nix flake check
 nix build .#default
 ```
+
+## Example Config
+
+```json
+{
+  "network": {
+    "name": "lab",
+    "local_peer": "local"
+  },
+  "queue": {
+    "max_packets_per_peer": 256,
+    "max_bytes_per_peer": 524288
+  },
+  "peers": [
+    {
+      "id": "0101010101010101010101010101010101010101010101010101010101010101",
+      "name": "node-a",
+      "routes": [
+        {
+          "prefix": "10.42.0.0/24",
+          "metric": 10
+        }
+      ]
+    }
+  ]
+}
+```
+
+Inspect the compiled local view:
+
+```sh
+cargo run -- status --config p2p-vpn.json
+```
