@@ -21,6 +21,12 @@ Enter the reproducible development shell:
 nix develop
 ```
 
+Generate a libp2p identity:
+
+```sh
+cargo run -- keygen
+```
+
 Run local checks:
 
 ```sh

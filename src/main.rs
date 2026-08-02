@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
     config::{Config, RuntimeDefaults},
+    identity::NodeIdentity,
     runtime::tun::{TunDevice, TunRuntimeConfig},
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -17,6 +18,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Keygen,
     Status {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
@@ -33,9 +35,19 @@ fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Keygen => keygen(),
         Command::Status { config } => status(&config),
         Command::Up { config, dry_run } => up(&config, dry_run),
     }
+}
+
+fn keygen() -> Result<(), String> {
+    let identity = NodeIdentity::generate_ed25519()
+        .map_err(|error| format!("failed to generate key: {error:?}"))?;
+
+    println!("peer_id: {}", identity.peer_id);
+    println!("private_key: {}", identity.private_key);
+    Ok(())
 }
 
 fn status(path: &PathBuf) -> Result<(), String> {

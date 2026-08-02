@@ -1,4 +1,5 @@
 pub mod config;
+pub mod identity;
 pub mod path;
 pub mod queue;
 pub mod route;
@@ -6,6 +7,8 @@ pub mod runtime;
 pub mod wire;
 
 use std::{fmt, str::FromStr};
+
+use sha2::{Digest, Sha256};
 
 pub type Sequence = u64;
 pub type SessionId = u32;
@@ -23,6 +26,14 @@ impl PeerId {
     pub const fn as_bytes(self) -> [u8; 32] {
         self.0
     }
+
+    #[must_use]
+    pub fn from_libp2p(peer_id: libp2p_identity::PeerId) -> Self {
+        let digest = Sha256::digest(peer_id.to_bytes());
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
+    }
 }
 
 impl fmt::Display for PeerId {
@@ -38,6 +49,10 @@ impl FromStr for PeerId {
     type Err = PeerIdParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if let Ok(peer_id) = input.parse::<libp2p_identity::PeerId>() {
+            return Ok(Self::from_libp2p(peer_id));
+        }
+
         if input.len() != 64 {
             return Err(PeerIdParseError::InvalidLength {
                 actual: input.len(),
