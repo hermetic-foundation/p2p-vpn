@@ -97,6 +97,12 @@ Inspect the compiled local view:
 cargo run -- status --config p2p-vpn.json
 ```
 
+Inspect the runtime metric names and startup snapshot:
+
+```sh
+cargo run -- metrics --config p2p-vpn.json
+```
+
 Inspect the Linux interface setup plan without requiring root:
 
 ```sh
@@ -107,4 +113,10 @@ Attempt to create the TUN device and install routes:
 
 ```sh
 sudo target/debug/p2p-vpn up --config p2p-vpn.json
+```
+
+Print live forwarding counters while the runtime is up:
+
+```sh
+sudo target/debug/p2p-vpn up --config p2p-vpn.json --metrics-interval-seconds 10
 ```

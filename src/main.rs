@@ -1,10 +1,12 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
     config::{Config, RuntimeDefaults},
     identity::NodeIdentity,
+    metrics::RuntimeMetrics,
+    queue::QueueStats,
     runtime::{
         runner,
         tun::{TunDevice, TunRuntimeConfig},
@@ -26,11 +28,17 @@ enum Command {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
     },
+    Metrics {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+    },
     Up {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        metrics_interval_seconds: Option<u64>,
     },
 }
 
@@ -41,7 +49,12 @@ async fn main() -> Result<(), String> {
     match cli.command {
         Command::Keygen => keygen(),
         Command::Status { config } => status(&config),
-        Command::Up { config, dry_run } => up(&config, dry_run).await,
+        Command::Metrics { config } => metrics(&config),
+        Command::Up {
+            config,
+            dry_run,
+            metrics_interval_seconds,
+        } => up(&config, dry_run, metrics_interval_seconds).await,
     }
 }
 
@@ -78,11 +91,46 @@ fn status(path: &PathBuf) -> Result<(), String> {
         defaults.preferred_path.default_score()
     );
     println!("compiled routes: {}", routes.len());
+    println!(
+        "listen addresses: {}",
+        config.network.listen_addresses.len()
+    );
+    println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
+    println!(
+        "configured peer addresses: {}",
+        config
+            .peers
+            .iter()
+            .map(|peer| peer.addresses.len())
+            .sum::<usize>()
+    );
 
     Ok(())
 }
 
-async fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
+fn metrics(path: &PathBuf) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let snapshot = RuntimeMetrics::default().snapshot(QueueStats {
+        queued_packets: 0,
+        queued_bytes: 0,
+        dropped_packets: 0,
+        dropped_bytes: 0,
+    });
+
+    println!("network: {}", config.network.name);
+    println!("runtime metrics:");
+    for line in snapshot.lines() {
+        println!("{line}");
+    }
+    println!("live output: run `up --metrics-interval-seconds N`");
+    Ok(())
+}
+
+async fn up(
+    path: &PathBuf,
+    dry_run: bool,
+    metrics_interval_seconds: Option<u64>,
+) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     let runtime = TunRuntimeConfig::from_config(&config)
         .map_err(|error| format!("failed to prepare TUN runtime: {error:?}"))?;
@@ -120,7 +168,8 @@ async fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
     }
 
     println!("starting libp2p packet forwarding runtime");
-    runner::run_config(config, device)
+    let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
+    runner::run_config(config, device, metrics_interval)
         .await
         .map_err(|error| format!("runtime failed: {error:?}"))
 }
