@@ -2,10 +2,13 @@ use std::error::Error;
 
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, dcutr, identify, identity::Keypair, kad, mdns, noise,
-    ping, relay, swarm::NetworkBehaviour, tcp, yamux,
+    ping, relay, request_response, swarm::NetworkBehaviour, tcp, yamux,
 };
 
-use crate::identity::{IdentityError, NodeIdentity};
+use crate::{
+    identity::{IdentityError, NodeIdentity},
+    runtime::packet::{self, PacketCodec},
+};
 
 const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
 
@@ -17,6 +20,7 @@ pub struct Behaviour {
     pub relay: relay::client::Behaviour,
     pub dcutr: dcutr::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
+    pub packet: request_response::Behaviour<PacketCodec>,
 }
 
 pub struct P2pNode {
@@ -26,6 +30,7 @@ pub struct P2pNode {
 
 pub struct HostConfig {
     pub identity: NodeIdentity,
+    pub mtu: u16,
     pub listen_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
 }
@@ -61,6 +66,7 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                     relay,
                     dcutr: dcutr::Behaviour::new(local_peer_id),
                     mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?,
+                    packet: packet::behaviour(config.mtu),
                 })
             },
         )?
@@ -155,6 +161,7 @@ mod tests {
 
         let node = build_node(HostConfig {
             identity,
+            mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
         })
