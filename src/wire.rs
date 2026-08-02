@@ -2,6 +2,7 @@ use crate::{Sequence, SessionId};
 
 pub const WIRE_VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 17;
+pub const MAX_PAYLOAD_LEN: usize = u16::MAX as usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadType {
@@ -94,6 +95,44 @@ pub enum DecodeError {
     UnknownPayloadType(u8),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Frame {
+    pub header: Header,
+    pub payload: Vec<u8>,
+}
+
+impl Frame {
+    pub fn packet(
+        session_id: SessionId,
+        sequence: Sequence,
+        payload: Vec<u8>,
+    ) -> Result<Self, FrameError> {
+        let payload_len =
+            u16::try_from(payload.len()).map_err(|_| FrameError::PayloadTooLarge {
+                actual: payload.len(),
+                max: MAX_PAYLOAD_LEN,
+            })?;
+
+        Ok(Self {
+            header: Header::new(PayloadType::IpPacket, session_id, sequence, payload_len),
+            payload,
+        })
+    }
+
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(HEADER_LEN + self.payload.len());
+        out.extend_from_slice(&self.header.encode());
+        out.extend_from_slice(&self.payload);
+        out
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameError {
+    PayloadTooLarge { actual: usize, max: usize },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +163,20 @@ mod tests {
                 actual: HEADER_LEN - 1,
                 expected: HEADER_LEN
             })
+        );
+    }
+
+    #[test]
+    fn frame_rejects_payloads_that_cannot_fit_header_len() {
+        let error = Frame::packet(1, 1, vec![0; MAX_PAYLOAD_LEN + 1])
+            .expect_err("payload length should be bounded");
+
+        assert_eq!(
+            error,
+            FrameError::PayloadTooLarge {
+                actual: MAX_PAYLOAD_LEN + 1,
+                max: MAX_PAYLOAD_LEN
+            }
         );
     }
 }

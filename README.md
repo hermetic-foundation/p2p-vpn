@@ -13,6 +13,10 @@ substrate while making the VPN data plane packet-oriented:
 - path scoring and promotion from relay to direct paths
 - first-class metrics for packet, queue, route, and path behavior
 
+The current stream data plane uses a fixed binary header followed by the raw IP
+packet payload. It is intentionally reusable over libp2p streams now and QUIC
+datagrams later.
+
 ## Development
 
 Enter the reproducible development shell:
