@@ -5,7 +5,10 @@ use p2p_vpn::{
     PathKind,
     config::{Config, RuntimeDefaults},
     identity::NodeIdentity,
-    runtime::tun::{TunDevice, TunRuntimeConfig},
+    runtime::{
+        runner,
+        tun::{TunDevice, TunRuntimeConfig},
+    },
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
@@ -31,13 +34,14 @@ enum Command {
     },
 }
 
-fn main() -> Result<(), String> {
+#[tokio::main]
+async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Keygen => keygen(),
         Command::Status { config } => status(&config),
-        Command::Up { config, dry_run } => up(&config, dry_run),
+        Command::Up { config, dry_run } => up(&config, dry_run).await,
     }
 }
 
@@ -78,7 +82,7 @@ fn status(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
+async fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     let runtime = TunRuntimeConfig::from_config(&config)
         .map_err(|error| format!("failed to prepare TUN runtime: {error:?}"))?;
@@ -115,8 +119,10 @@ fn up(path: &PathBuf, dry_run: bool) -> Result<(), String> {
         }
     }
 
-    println!("runtime packet forwarding is not implemented yet");
-    Ok(())
+    println!("starting libp2p packet forwarding runtime");
+    runner::run_config(config, device)
+        .await
+        .map_err(|error| format!("runtime failed: {error:?}"))
 }
 
 fn path_name(path: PathKind) -> &'static str {
