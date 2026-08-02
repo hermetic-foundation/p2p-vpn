@@ -28,7 +28,7 @@ impl PeerId {
     }
 
     #[must_use]
-    pub fn from_libp2p(peer_id: libp2p_identity::PeerId) -> Self {
+    pub fn from_libp2p(peer_id: libp2p::PeerId) -> Self {
         let digest = Sha256::digest(peer_id.to_bytes());
         let mut bytes = [0; 32];
         bytes.copy_from_slice(&digest);
@@ -49,7 +49,7 @@ impl FromStr for PeerId {
     type Err = PeerIdParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        if let Ok(peer_id) = input.parse::<libp2p_identity::PeerId>() {
+        if let Ok(peer_id) = input.parse::<libp2p::PeerId>() {
             return Ok(Self::from_libp2p(peer_id));
         }
 

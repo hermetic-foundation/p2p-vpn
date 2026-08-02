@@ -1,5 +1,5 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use libp2p_identity::Keypair;
+use libp2p::identity::Keypair;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NodeIdentity {
@@ -32,7 +32,7 @@ impl NodeIdentity {
 #[derive(Debug)]
 pub enum IdentityError {
     Base64(base64::DecodeError),
-    Libp2p(libp2p_identity::DecodingError),
+    Libp2p(libp2p::identity::DecodingError),
 }
 
 impl From<base64::DecodeError> for IdentityError {
@@ -41,8 +41,8 @@ impl From<base64::DecodeError> for IdentityError {
     }
 }
 
-impl From<libp2p_identity::DecodingError> for IdentityError {
-    fn from(error: libp2p_identity::DecodingError) -> Self {
+impl From<libp2p::identity::DecodingError> for IdentityError {
+    fn from(error: libp2p::identity::DecodingError) -> Self {
         Self::Libp2p(error)
     }
 }
