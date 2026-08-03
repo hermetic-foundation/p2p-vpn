@@ -818,6 +818,7 @@ fn handle_control_response(
     expected_network: &str,
     expected_membership_tag: Option<&str>,
 ) {
+    metrics.record_control_response_received();
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
             if let Some(reason) = validate_peer_capabilities(
@@ -833,7 +834,6 @@ fn handle_control_response(
             } else {
                 record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
                 metrics.record_control_capability_accept();
-                metrics.record_control_response_received();
                 eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
             }
         }
@@ -2309,6 +2309,64 @@ mod tests {
         assert_eq!(snapshot.control_capability_accepts, 0);
         assert_eq!(snapshot.control_capability_rejections, 1);
         assert_eq!(snapshot.control_reject_wrong_network, 1);
+        assert_eq!(snapshot.control_responses_received, 1);
+        assert_eq!(snapshot.control_failures, 1);
+    }
+
+    #[test]
+    fn incompatible_accepted_control_response_records_response_metrics() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+
+        handle_control_response(
+            &forwarder,
+            &mut peer_capabilities,
+            &metrics,
+            remote,
+            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("prod", None, 1200)),
+            "lab",
+            None,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert!(peer_capabilities.is_empty());
+        assert_eq!(snapshot.control_capability_accepts, 0);
+        assert_eq!(snapshot.control_capability_rejections, 1);
+        assert_eq!(snapshot.control_reject_wrong_network, 1);
+        assert_eq!(snapshot.control_responses_received, 1);
         assert_eq!(snapshot.control_failures, 1);
     }
 
