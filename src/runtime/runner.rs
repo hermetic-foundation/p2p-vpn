@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, Swarm,
+    Multiaddr, PeerId as Libp2pPeerId, Swarm, autonat,
     core::ConnectedPoint,
     dcutr, identify, kad, mdns,
     multiaddr::Protocol,
@@ -62,7 +62,7 @@ pub async fn run_config(
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
 
-    run_node(
+    Box::pin(run_node(
         node,
         forwarder,
         membership,
@@ -70,7 +70,7 @@ pub async fn run_config(
         config.effective_packet_mtu(),
         config.queue,
         metrics_interval,
-    )
+    ))
     .await
 }
 
@@ -169,6 +169,9 @@ fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
     }
     if startup.dcutr_enabled {
         eprintln!("dcutr hole punching enabled");
+    }
+    if startup.autonat_enabled {
+        eprintln!("autonat reachability probing enabled");
     }
     if startup.kademlia.bootstrap_started {
         eprintln!("kademlia bootstrap started");
@@ -498,6 +501,18 @@ fn handle_swarm_event(
             Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
             None => eprintln!("outgoing connection failed: {error}"),
         },
+        SwarmEvent::NewExternalAddrCandidate { address } => {
+            context.metrics.record_external_address_candidate();
+            eprintln!("external address candidate observed: {address}");
+        }
+        SwarmEvent::ExternalAddrConfirmed { address } => {
+            context.metrics.record_external_address_confirmed();
+            eprintln!("external address confirmed: {address}");
+        }
+        SwarmEvent::ExternalAddrExpired { address } => {
+            context.metrics.record_external_address_expired();
+            eprintln!("external address expired: {address}");
+        }
         _ => {}
     }
 
@@ -831,7 +846,24 @@ fn handle_behaviour_event(
             metrics.record_dcutr_result(result.is_ok());
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
         }
+        BehaviourEvent::Autonat(event) if discovery.autonat => {
+            handle_autonat_event(event);
+        }
         _ => {}
+    }
+}
+
+fn handle_autonat_event(event: autonat::Event) {
+    match event {
+        autonat::Event::StatusChanged { old, new } => {
+            eprintln!("autonat status changed: {old:?} -> {new:?}");
+        }
+        autonat::Event::OutboundProbe(event) => {
+            eprintln!("autonat outbound probe: {event:?}");
+        }
+        autonat::Event::InboundProbe(event) => {
+            eprintln!("autonat inbound probe: {event:?}");
+        }
     }
 }
 

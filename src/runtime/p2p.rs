@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, connection_limits, dcutr, identify,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, identify,
     identity::Keypair,
     kad, mdns,
     multiaddr::Protocol,
@@ -30,6 +30,7 @@ pub struct Behaviour {
     pub relay: relay::client::Behaviour,
     pub relay_server: Toggle<relay::Behaviour>,
     pub dcutr: Toggle<dcutr::Behaviour>,
+    pub autonat: Toggle<autonat::Behaviour>,
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
@@ -61,10 +62,12 @@ pub struct HostConfig {
     pub discovery: DiscoveryConfig,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StartupStatus {
     pub mdns_enabled: bool,
     pub dcutr_enabled: bool,
+    pub autonat_enabled: bool,
     pub external_addresses_configured: usize,
     pub kademlia: KademliaStartupStatus,
     pub relay_reservations_started: usize,
@@ -141,6 +144,10 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                         .dcutr
                         .then(|| dcutr::Behaviour::new(local_peer_id))
                         .into(),
+                    autonat: discovery
+                        .autonat
+                        .then(|| autonat::Behaviour::new(local_peer_id, autonat::Config::default()))
+                        .into(),
                     mdns: mdns.into(),
                     control: control::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
@@ -162,6 +169,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         startup: StartupStatus {
             mdns_enabled: config.discovery.mdns,
             dcutr_enabled: config.discovery.dcutr,
+            autonat_enabled: config.discovery.autonat,
             external_addresses_configured: config.external_addresses.len(),
             kademlia,
             relay_reservations_started,
@@ -348,8 +356,10 @@ mod tests {
         assert_eq!(node.local_peer_id, expected_peer_id);
         assert!(node.startup.mdns_enabled);
         assert!(node.startup.dcutr_enabled);
+        assert!(node.startup.autonat_enabled);
         assert!(node.swarm.behaviour().mdns.is_enabled());
         assert!(node.swarm.behaviour().dcutr.is_enabled());
+        assert!(node.swarm.behaviour().autonat.is_enabled());
         assert!(!node.startup.relay_server_enabled);
         assert!(!node.swarm.behaviour().relay_server.is_enabled());
     }
@@ -360,6 +370,7 @@ mod tests {
             mdns: false,
             kademlia: false,
             dcutr: false,
+            autonat: false,
         };
 
         let node = build_node(&HostConfig {
@@ -382,11 +393,13 @@ mod tests {
 
         assert!(!node.startup.mdns_enabled);
         assert!(!node.startup.dcutr_enabled);
+        assert!(!node.startup.autonat_enabled);
         assert!(!node.startup.kademlia.bootstrap_started);
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
         assert!(!node.swarm.behaviour().mdns.is_enabled());
         assert!(!node.swarm.behaviour().dcutr.is_enabled());
+        assert!(!node.swarm.behaviour().autonat.is_enabled());
     }
 
     #[tokio::test]
@@ -482,6 +495,7 @@ mod tests {
         assert!(node.startup.kademlia.rendezvous_lookup_started);
         assert!(node.startup.mdns_enabled);
         assert!(node.startup.dcutr_enabled);
+        assert!(node.startup.autonat_enabled);
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
@@ -656,6 +670,7 @@ mod tests {
             mdns: false,
             kademlia: false,
             dcutr: false,
+            autonat: false,
         };
         let mut relay = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("relay identity"),

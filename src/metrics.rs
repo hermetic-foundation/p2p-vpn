@@ -52,6 +52,9 @@ pub struct RuntimeMetrics {
     relay_server_circuits_accepted: AtomicU64,
     dcutr_successes: AtomicU64,
     dcutr_failures: AtomicU64,
+    external_address_candidates: AtomicU64,
+    external_addresses_confirmed: AtomicU64,
+    external_addresses_expired: AtomicU64,
     control_requests_sent: AtomicU64,
     control_requests_received: AtomicU64,
     control_responses_received: AtomicU64,
@@ -203,6 +206,21 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn record_external_address_candidate(&self) {
+        self.external_address_candidates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_external_address_confirmed(&self) {
+        self.external_addresses_confirmed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_external_address_expired(&self) {
+        self.external_addresses_expired
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_control_request_sent(&self) {
         self.control_requests_sent.fetch_add(1, Ordering::Relaxed);
     }
@@ -316,6 +334,9 @@ impl RuntimeMetrics {
                 .load(Ordering::Relaxed),
             dcutr_successes: self.dcutr_successes.load(Ordering::Relaxed),
             dcutr_failures: self.dcutr_failures.load(Ordering::Relaxed),
+            external_address_candidates: self.external_address_candidates.load(Ordering::Relaxed),
+            external_addresses_confirmed: self.external_addresses_confirmed.load(Ordering::Relaxed),
+            external_addresses_expired: self.external_addresses_expired.load(Ordering::Relaxed),
             control_requests_sent: self.control_requests_sent.load(Ordering::Relaxed),
             control_requests_received: self.control_requests_received.load(Ordering::Relaxed),
             control_responses_received: self.control_responses_received.load(Ordering::Relaxed),
@@ -367,6 +388,9 @@ pub struct RuntimeSnapshot {
     pub relay_server_circuits_accepted: u64,
     pub dcutr_successes: u64,
     pub dcutr_failures: u64,
+    pub external_address_candidates: u64,
+    pub external_addresses_confirmed: u64,
+    pub external_addresses_expired: u64,
     pub control_requests_sent: u64,
     pub control_requests_received: u64,
     pub control_responses_received: u64,
@@ -427,6 +451,18 @@ impl RuntimeSnapshot {
             ),
             format!("dcutr_successes {}", self.dcutr_successes),
             format!("dcutr_failures {}", self.dcutr_failures),
+            format!(
+                "external_address_candidates {}",
+                self.external_address_candidates
+            ),
+            format!(
+                "external_addresses_confirmed {}",
+                self.external_addresses_confirmed
+            ),
+            format!(
+                "external_addresses_expired {}",
+                self.external_addresses_expired
+            ),
             format!("control_requests_sent {}", self.control_requests_sent),
             format!(
                 "control_requests_received {}",
@@ -552,6 +588,9 @@ mod tests {
         metrics.record_relay_server_circuit_accepted();
         metrics.record_dcutr_result(true);
         metrics.record_dcutr_result(false);
+        metrics.record_external_address_candidate();
+        metrics.record_external_address_confirmed();
+        metrics.record_external_address_expired();
         metrics.record_control_request_sent();
         metrics.record_control_request_received();
         metrics.record_control_response_received();
@@ -611,6 +650,9 @@ mod tests {
         assert_eq!(snapshot.relay_server_circuits_accepted, 1);
         assert_eq!(snapshot.dcutr_successes, 1);
         assert_eq!(snapshot.dcutr_failures, 1);
+        assert_eq!(snapshot.external_address_candidates, 1);
+        assert_eq!(snapshot.external_addresses_confirmed, 1);
+        assert_eq!(snapshot.external_addresses_expired, 1);
         assert_eq!(snapshot.control_requests_sent, 1);
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
@@ -641,6 +683,9 @@ mod tests {
         assert_metric_line(&snapshot, "relayed_connections_established 1");
         assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");
         assert_metric_line(&snapshot, "dcutr_successes 1");
+        assert_metric_line(&snapshot, "external_address_candidates 1");
+        assert_metric_line(&snapshot, "external_addresses_confirmed 1");
+        assert_metric_line(&snapshot, "external_addresses_expired 1");
         assert_metric_line(&snapshot, "control_requests_sent 1");
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");

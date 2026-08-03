@@ -282,7 +282,7 @@ async fn run_ready_node(
     fs::write(ready_file, b"ready").expect("write ready file");
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
-    runner::run_node(
+    Box::pin(runner::run_node(
         node,
         forwarder,
         membership,
@@ -290,7 +290,7 @@ async fn run_ready_node(
         config.interface.mtu,
         config.queue,
         Some(Duration::from_secs(1)),
-    )
+    ))
     .await
 }
 

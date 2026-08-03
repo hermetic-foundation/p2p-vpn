@@ -13,7 +13,7 @@ substrate while making the VPN data plane packet-oriented:
 - separate control, packet, and service protocol surfaces
 - explicit route ownership and source-address authorization
 - path scoring and promotion from relay to direct paths
-- first-class metrics for packet, queue, route, relay, DCUtR, and path behavior
+- first-class metrics for packet, queue, route, relay, AutoNAT, DCUtR, and path behavior
 
 Discovery is overlay-scoped. Configure bootstrap peers and relay-capable peers
 that intentionally participate in the VPN; do not rely on the public IPFS DHT
@@ -35,7 +35,8 @@ packet source ownership is still checked separately against configured routes.
 
 Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the
-swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
+swarm; disabling AutoNAT prevents libp2p reachability probing; disabling
+Kademlia prevents overlay provider advertisement and lookup.
 
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
@@ -91,6 +92,13 @@ discovery event. Addresses learned from mDNS or identify are retained only for
 configured peers and are included in the same periodic redial loop; mDNS-expired
 addresses are removed from that transient address book. Redial attempts,
 connected-peer skips, and failures are exposed in the runtime metrics output.
+Observed external address candidates reported by libp2p identify are passed to
+AutoNAT when that behaviour is enabled. AutoNAT probes candidate reachability
+through connected peers and only confirmed public addresses enter the local
+swarm's advertised external address set, so later identify exchanges and
+Kademlia announcements can carry a tested public address. Candidate, confirmed,
+and expired external address events are exposed in metrics for NAT traversal
+diagnostics.
 
 Resource limits are part of the overlay config. The packet request-response
 fallback has a bounded concurrent stream limit, exposed through `resources`, so
@@ -147,7 +155,10 @@ stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
 `--bootstrap-peer PEER_ID=MULTIADDR` for overlay-scoped Kademlia bootstrap
 nodes. Repeat `--external-address MULTIADDR` for stable public or DNS
 addresses that libp2p should advertise to peers in addition to observed
-addresses learned through identify.
+addresses learned through identify and confirmed through AutoNAT. Use
+`--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
+`--disable-autonat` to omit optional discovery and NAT traversal behaviours
+from the generated config.
 
 Run local checks:
 
@@ -193,7 +204,8 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "discovery": {
       "mdns": true,
       "kademlia": true,
-      "dcutr": true
+      "dcutr": true,
+      "autonat": true
     },
     "relay": {
       "server": false,
@@ -286,12 +298,13 @@ The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons including expired outbound queue packets, direct versus
 relayed connection counts, relay reservation/circuit counts, relay-server
-accept counts, DCUtR success/failure counts, unauthorized connection drops,
-configured-peer redial counters, and queue-drain stalls caused by peers having
-no currently supported packet path. Those counters are intended to show whether
-a deployment is exchanging capabilities, using direct paths, relay fallback,
-hole-punching, enforcing membership, recovering connections, and waiting on
-path negotiation as expected.
+accept counts, DCUtR success/failure counts, observed external address
+candidate/confirmed/expired counts, unauthorized connection drops, configured
+peer redial counters, and queue-drain stalls caused by peers having no currently
+supported packet path. Those counters are intended to show whether a deployment
+is exchanging capabilities, advertising observed public addresses, using direct
+paths, relay fallback, hole-punching, enforcing membership, recovering
+connections, and waiting on path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 

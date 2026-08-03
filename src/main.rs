@@ -58,6 +58,8 @@ enum Command {
         #[arg(long)]
         disable_dcutr: bool,
         #[arg(long)]
+        disable_autonat: bool,
+        #[arg(long)]
         force: bool,
     },
     Status {
@@ -99,6 +101,7 @@ async fn main() -> Result<(), String> {
             disable_mdns,
             disable_kademlia,
             disable_dcutr,
+            disable_autonat,
             force,
         } => init_config(InitConfigArgs {
             output,
@@ -114,6 +117,7 @@ async fn main() -> Result<(), String> {
                 mdns: !disable_mdns,
                 kademlia: !disable_kademlia,
                 dcutr: !disable_dcutr,
+                autonat: !disable_autonat,
             },
             relay: RelayConfig {
                 server: relay_server,
@@ -315,10 +319,11 @@ fn status(path: &PathBuf) -> Result<(), String> {
     );
     println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
     println!(
-        "discovery: mdns={} kademlia={} dcutr={}",
+        "discovery: mdns={} kademlia={} dcutr={} autonat={}",
         config.network.discovery.mdns,
         config.network.discovery.kademlia,
-        config.network.discovery.dcutr
+        config.network.discovery.dcutr,
+        config.network.discovery.autonat
     );
     println!("relay server: {}", config.network.relay.server);
     println!(

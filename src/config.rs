@@ -162,6 +162,7 @@ impl BootstrapPeerConfig {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DiscoveryConfig {
     #[serde(default = "default_true")]
@@ -170,6 +171,8 @@ pub struct DiscoveryConfig {
     pub kademlia: bool,
     #[serde(default = "default_true")]
     pub dcutr: bool,
+    #[serde(default = "default_true")]
+    pub autonat: bool,
 }
 
 impl Default for DiscoveryConfig {
@@ -552,6 +555,7 @@ const fn default_discovery() -> DiscoveryConfig {
         mdns: true,
         kademlia: true,
         dcutr: true,
+        autonat: true,
     }
 }
 
@@ -924,6 +928,7 @@ mod tests {
                     mdns: false,
                     kademlia: true,
                     dcutr: true,
+                    autonat: true,
                 },
                 relay: RelayConfig {
                     server: true,
@@ -1201,6 +1206,7 @@ mod tests {
                 mdns: true,
                 kademlia: false,
                 dcutr: true,
+                autonat: true,
             },
             relay: RelayConfig {
                 server: true,
