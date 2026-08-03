@@ -12,7 +12,10 @@ use std::{
 use futures::StreamExt as _;
 use libp2p::swarm::SwarmEvent;
 use p2p_vpn::{
-    config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
+    config::{
+        Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig,
+        RouteConfig,
+    },
     identity::NodeIdentity,
     runtime::{
         forward::Forwarder,
@@ -24,6 +27,7 @@ use p2p_vpn::{
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 
 #[test]
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
@@ -71,7 +75,8 @@ fn run_orchestrator() {
         "hse2eb",
         &identity_b,
         "/ip4/10.250.0.2/tcp/42102",
-        peer_config(&identity_a, Some("/ip4/10.250.0.1/tcp/42101")),
+        Vec::new(),
+        peer_config(&identity_a, Some("/ip4/10.250.0.1/tcp/42101"), Vec::new()),
     );
     let address_b = TunRuntimeConfig::from_config(&config_b)
         .expect("node B TUN config")
@@ -91,7 +96,8 @@ fn run_orchestrator() {
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
     thread::sleep(Duration::from_secs(4));
-    let ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let routed_ping = ping_from_namespace(node_b.id(), "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
@@ -99,9 +105,39 @@ fn run_orchestrator() {
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
+    assert_ping_success(
+        "overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    assert_ping_success(
+        "overlay routed-prefix ping",
+        &routed_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+fn assert_ping_success(
+    context: &str,
+    ping: &Output,
+    temp_dir: &Path,
+    initiator_addresses: &Output,
+    initiator_routes: &Output,
+    responder_addresses: &Output,
+    responder_routes: &Output,
+) {
     assert!(
         ping.status.success(),
-        "overlay ping failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a ip addr:\n{}\nnode-a routes:\n{}\nnode-b ip addr:\n{}\nnode-b routes:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
+        "{context} failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a ip addr:\n{}\nnode-a routes:\n{}\nnode-b ip addr:\n{}\nnode-b routes:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
         ping.status,
         String::from_utf8_lossy(&ping.stdout),
         String::from_utf8_lossy(&ping.stderr),
@@ -112,7 +148,6 @@ fn run_orchestrator() {
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log"))
     );
-    let _ = fs::remove_dir_all(temp_dir);
 }
 
 fn spawn_node(
@@ -224,14 +259,29 @@ fn run_node_child() {
     let temp_dir = PathBuf::from(required_env("P2P_VPN_TUN_E2E_TEMP"));
     wait_for_file(&start_file);
 
-    let (name, interface, listen, remote_address) = match role.as_str() {
+    let (name, interface, listen, remote_address, local_routes, peer_routes) = match role.as_str() {
         "a" => (
             "tun-e2e-a",
             "hse2ea",
             "/ip4/10.250.0.1/tcp/42101",
             Some("/ip4/10.250.0.2/tcp/42102"),
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+            Vec::new(),
         ),
-        "b" => ("tun-e2e-b", "hse2eb", "/ip4/10.250.0.2/tcp/42102", None),
+        "b" => (
+            "tun-e2e-b",
+            "hse2eb",
+            "/ip4/10.250.0.2/tcp/42102",
+            None,
+            Vec::new(),
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+        ),
         other => panic!("unknown node role {other}"),
     };
     let config = node_config(
@@ -239,10 +289,23 @@ fn run_node_child() {
         interface,
         &local,
         listen,
-        peer_config(&remote, remote_address),
+        local_routes,
+        peer_config(&remote, remote_address, peer_routes),
     );
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
     let device = open_and_configure_tun(&runtime);
+    if role == "a" {
+        run_command(
+            "ip",
+            &[
+                "addr",
+                "add",
+                &format!("{NODE_A_LOCAL_ROUTE_ADDRESS}/32"),
+                "dev",
+                interface,
+            ],
+        );
+    }
     configure_tun_sysctls(interface);
 
     tokio::runtime::Builder::new_multi_thread()
@@ -319,6 +382,7 @@ fn node_config(
     interface: &str,
     identity: &NodeIdentity,
     listen_address: &str,
+    local_routes: Vec<RouteConfig>,
     peer: PeerConfig,
 ) -> Config {
     Config {
@@ -327,7 +391,7 @@ fn node_config(
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),
             membership_key: None,
-            routes: Vec::new(),
+            routes: local_routes,
             listen_addresses: vec![listen_address.to_owned()],
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -348,12 +412,16 @@ fn node_config(
     }
 }
 
-fn peer_config(identity: &NodeIdentity, address: Option<&str>) -> PeerConfig {
+fn peer_config(
+    identity: &NodeIdentity,
+    address: Option<&str>,
+    routes: Vec<RouteConfig>,
+) -> PeerConfig {
     PeerConfig {
         id: identity.peer_id.clone(),
         name: None,
         addresses: address.into_iter().map(str::to_owned).collect(),
-        routes: Vec::new(),
+        routes,
     }
 }
 

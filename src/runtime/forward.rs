@@ -9,7 +9,7 @@ use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError, RouteConfig},
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
+    route::{RouteError, RouteTable},
     runtime::{
         control::ControlRoute,
         p2p::Behaviour,
@@ -292,11 +292,9 @@ impl Forwarder {
     }
 
     fn authorize_local_destination(&self, destination: IpAddr) -> Result<(), ForwardError> {
-        match destination {
-            IpAddr::V4(address) if address == builtin_ipv4(self.local_peer) => Ok(()),
-            IpAddr::V6(address) if address == builtin_ipv6(self.local_peer) => Ok(()),
-            _ => Err(ForwardError::UnauthorizedLocalDestination { destination }),
-        }
+        self.routes
+            .authorize_source(self.local_peer, destination)
+            .map_err(|_| ForwardError::UnauthorizedLocalDestination { destination })
     }
 
     pub fn send_packet_response(
@@ -675,6 +673,27 @@ mod tests {
                 destination: IpAddr::V4(destination)
             }) if destination == Ipv4Addr::new(100, 64, 9, 9)
         ));
+    }
+
+    #[test]
+    fn inbound_packet_can_target_configured_local_route() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut config = config_for(remote);
+        config.network.routes.push(RouteConfig {
+            prefix: "10.41.0.0/24".to_owned(),
+            metric: 75,
+        });
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), Ipv4Addr::new(10, 41, 0, 9));
+        let frame = Frame::packet(0, 1, packet).expect("frame");
+
+        assert_eq!(
+            forwarder
+                .accept_inbound_packet(remote, &frame)
+                .expect("packet accepted"),
+            frame.payload.as_slice()
+        );
     }
 
     #[test]
