@@ -12,7 +12,7 @@ use std::{
 use futures::StreamExt as _;
 use libp2p::swarm::SwarmEvent;
 use p2p_vpn::{
-    config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig},
+    config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
     identity::NodeIdentity,
     runtime::{
         forward::Forwarder,
@@ -265,7 +265,8 @@ async fn run_ready_node(
     let mut node = build_node(HostConfig {
         identity: config.identity()?,
         network_name: config.network.name.clone(),
-        mtu: config.interface.mtu,
+        mtu: config.effective_packet_mtu(),
+        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
@@ -332,6 +333,7 @@ fn node_config(
             max_packets_per_peer: 64,
             max_bytes_per_peer: 128 * 1024,
         },
+        resources: ResourceConfig::default(),
     }
 }
 

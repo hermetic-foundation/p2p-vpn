@@ -268,7 +268,7 @@ mod tests {
     use libp2p::identity::Keypair;
 
     use crate::{
-        config::{InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig},
+        config::{InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
         route::{builtin_ipv4, builtin_ipv6},
         runtime::p2p::{HostConfig, build_node},
         wire::Header,
@@ -304,6 +304,7 @@ mod tests {
                 max_packets_per_peer: 4,
                 max_bytes_per_peer: 4096,
             },
+            resources: ResourceConfig::default(),
         }
     }
 
@@ -401,6 +402,7 @@ mod tests {
             identity: local_identity,
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),

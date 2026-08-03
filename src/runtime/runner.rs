@@ -37,7 +37,8 @@ pub async fn run_config(
     let node = build_node(HostConfig {
         identity,
         network_name: config.network.name.clone(),
-        mtu: config.interface.mtu,
+        mtu: config.effective_packet_mtu(),
+        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
@@ -51,7 +52,7 @@ pub async fn run_config(
         node,
         forwarder,
         device,
-        config.interface.mtu,
+        config.effective_packet_mtu(),
         config.queue,
         metrics_interval,
     )

@@ -94,6 +94,10 @@ fn status(path: &PathBuf) -> Result<(), String> {
         "queue: {} packets / {} bytes per peer",
         config.queue.max_packets_per_peer, config.queue.max_bytes_per_peer
     );
+    println!(
+        "resources: {} concurrent packet streams",
+        config.resources.packet_stream_limit()
+    );
     println!("wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header");
     println!(
         "preferred path: {} (score {})",

@@ -206,7 +206,10 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use crate::{
-        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, RouteConfig},
+        config::{
+            Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig,
+            RouteConfig,
+        },
         route::builtin_ipv4,
     };
 
@@ -238,6 +241,7 @@ mod tests {
                 max_packets_per_peer: 8,
                 max_bytes_per_peer: 4096,
             },
+            resources: ResourceConfig::default(),
         };
 
         let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
@@ -268,6 +272,7 @@ mod tests {
                 max_packets_per_peer: 8,
                 max_bytes_per_peer: 4096,
             },
+            resources: ResourceConfig::default(),
         };
 
         let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
@@ -304,6 +309,7 @@ mod tests {
                 max_packets_per_peer: 8,
                 max_bytes_per_peer: 4096,
             },
+            resources: ResourceConfig::default(),
         };
 
         let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");

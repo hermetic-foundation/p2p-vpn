@@ -21,6 +21,11 @@ impl PacketCodec {
     pub const fn new(max_payload_len: usize) -> Self {
         Self { max_payload_len }
     }
+
+    #[must_use]
+    pub const fn max_payload_len(&self) -> usize {
+        self.max_payload_len
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,7 +125,10 @@ impl AuthorizedPeers {
 }
 
 #[must_use]
-pub fn behaviour(mtu: u16) -> request_response::Behaviour<PacketCodec> {
+pub fn behaviour(
+    mtu: u16,
+    max_concurrent_streams: usize,
+) -> request_response::Behaviour<PacketCodec> {
     let max_payload_len = usize::from(mtu).min(MAX_PAYLOAD_LEN);
     let protocols = [(
         StreamProtocol::new(PACKET_PROTOCOL),
@@ -131,7 +139,7 @@ pub fn behaviour(mtu: u16) -> request_response::Behaviour<PacketCodec> {
     request_response::Behaviour::with_codec(
         PacketCodec::new(max_payload_len),
         protocols,
-        config.with_max_concurrent_streams(256),
+        config.with_max_concurrent_streams(max_concurrent_streams.max(1)),
     )
 }
 
@@ -166,7 +174,7 @@ mod tests {
     use libp2p::identity::Keypair;
 
     use crate::{
-        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig},
+        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
         wire::PayloadType,
     };
 
@@ -206,6 +214,13 @@ mod tests {
     }
 
     #[test]
+    fn packet_codec_reports_configured_payload_limit() {
+        let codec = PacketCodec::new(1280);
+
+        assert_eq!(codec.max_payload_len(), 1280);
+    }
+
+    #[test]
     fn authorized_peers_are_derived_from_libp2p_peer_ids() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let other = Keypair::generate_ed25519().public().to_peer_id();
@@ -236,6 +251,7 @@ mod tests {
                 max_packets_per_peer: 4,
                 max_bytes_per_peer: 4096,
             },
+            resources: ResourceConfig::default(),
         };
 
         let authorized = AuthorizedPeers::from_config(&config);

@@ -24,6 +24,8 @@ pub struct Config {
     pub peers: Vec<PeerConfig>,
     #[serde(default = "default_queue")]
     pub queue: QueueConfig,
+    #[serde(default)]
+    pub resources: ResourceConfig,
 }
 
 impl Config {
@@ -206,6 +208,25 @@ pub struct QueueConfig {
     pub max_bytes_per_peer: usize,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub struct ResourceConfig {
+    #[serde(default = "default_max_concurrent_packet_streams")]
+    pub max_concurrent_packet_streams: usize,
+}
+
+impl Default for ResourceConfig {
+    fn default() -> Self {
+        default_resources()
+    }
+}
+
+impl ResourceConfig {
+    #[must_use]
+    pub fn packet_stream_limit(self) -> usize {
+        self.max_concurrent_packet_streams.max(1)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDefaults {
     pub preferred_path: PathKind,
@@ -283,6 +304,16 @@ fn default_queue() -> QueueConfig {
         max_packets_per_peer: 256,
         max_bytes_per_peer: 512 * 1_024,
     }
+}
+
+const fn default_resources() -> ResourceConfig {
+    ResourceConfig {
+        max_concurrent_packet_streams: default_max_concurrent_packet_streams(),
+    }
+}
+
+const fn default_max_concurrent_packet_streams() -> usize {
+    256
 }
 
 const fn default_true() -> bool {
@@ -405,6 +436,7 @@ mod tests {
                 }],
             }],
             queue: default_queue(),
+            resources: default_resources(),
         };
 
         let owner = config.peers[0].peer_id().expect("valid peer");
@@ -441,6 +473,7 @@ mod tests {
             },
             peers: Vec::new(),
             queue: default_queue(),
+            resources: default_resources(),
         };
 
         assert_eq!(config.effective_packet_mtu(), 1280);
@@ -492,6 +525,7 @@ mod tests {
                 },
             ],
             queue: default_queue(),
+            resources: default_resources(),
         };
 
         assert!(matches!(
@@ -540,6 +574,7 @@ mod tests {
                 routes: Vec::new(),
             }],
             queue: default_queue(),
+            resources: default_resources(),
         };
 
         assert_eq!(config.identity().expect("identity"), identity);
@@ -555,5 +590,44 @@ mod tests {
         );
         assert!(config.network.relay.server);
         assert!(!config.network.discovery.mdns);
+        assert_eq!(config.resources.packet_stream_limit(), 256);
+    }
+
+    #[test]
+    fn resource_config_defaults_and_clamps_packet_stream_limit() {
+        let config = serde_json::from_str::<Config>(
+            r#"{
+              "network": {
+                "name": "dev",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+              },
+              "interface": {
+                "name": "hs0",
+                "mtu": 1280
+              }
+            }"#,
+        )
+        .expect("config");
+
+        assert_eq!(config.resources.packet_stream_limit(), 256);
+
+        let config = serde_json::from_str::<Config>(
+            r#"{
+              "network": {
+                "name": "dev",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+              },
+              "interface": {
+                "name": "hs0",
+                "mtu": 1280
+              },
+              "resources": {
+                "max_concurrent_packet_streams": 0
+              }
+            }"#,
+        )
+        .expect("config");
+
+        assert_eq!(config.resources.packet_stream_limit(), 1);
     }
 }

@@ -55,6 +55,10 @@ network loss instead of depending on a one-shot startup dial or a future
 discovery event. Redial attempts, connected-peer skips, and failures are exposed
 in the runtime metrics output.
 
+Resource limits are part of the overlay config. The packet request-response
+fallback has a bounded concurrent stream limit, exposed through `resources`, so
+operators can tighten or relax stream pressure without changing code.
+
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
 field and is used consistently by the TUN setup and packet forwarder. The
@@ -129,6 +133,9 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "max_packets_per_peer": 256,
     "max_bytes_per_peer": 524288
   },
+  "resources": {
+    "max_concurrent_packet_streams": 256
+  },
   "peers": [
     {
       "id": "12D3KooW...",
@@ -172,9 +179,10 @@ cargo run -- metrics --config p2p-vpn.json
 
 The metrics output includes packet counters, queue occupancy and drops, direct
 versus relayed connection counts, relay reservation/circuit counts, relay-server
-accept counts, and DCUtR success/failure counts. Those counters are intended to
-show whether a deployment is using direct paths, relay fallback, and
-hole-punching as expected.
+accept counts, DCUtR success/failure counts, and configured-peer redial
+counters. Those counters are intended to show whether a deployment is using
+direct paths, relay fallback, hole-punching, and connection recovery as
+expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
