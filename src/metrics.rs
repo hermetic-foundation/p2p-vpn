@@ -243,6 +243,8 @@ impl RuntimeSnapshot {
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
             format!("queue_dropped_packets {}", self.queue.dropped_packets),
             format!("queue_dropped_bytes {}", self.queue.dropped_bytes),
+            format!("queue_expired_packets {}", self.queue.expired_packets),
+            format!("queue_expired_bytes {}", self.queue.expired_bytes),
         ]
     }
 }
@@ -280,6 +282,8 @@ mod tests {
             queued_bytes: 80,
             dropped_packets: 3,
             dropped_bytes: 120,
+            expired_packets: 2,
+            expired_bytes: 60,
         });
 
         assert_eq!(snapshot.tun_read_packets, 1);
@@ -322,5 +326,15 @@ mod tests {
                 .contains(&"redial_skipped_connected 1".to_owned())
         );
         assert!(snapshot.lines().contains(&"redial_failures 1".to_owned()));
+        assert!(
+            snapshot
+                .lines()
+                .contains(&"queue_expired_packets 2".to_owned())
+        );
+        assert!(
+            snapshot
+                .lines()
+                .contains(&"queue_expired_bytes 60".to_owned())
+        );
     }
 }

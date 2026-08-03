@@ -137,12 +137,7 @@ fn status(path: &PathBuf) -> Result<(), String> {
 
 fn metrics(path: &PathBuf) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
-    let snapshot = RuntimeMetrics::default().snapshot(QueueStats {
-        queued_packets: 0,
-        queued_bytes: 0,
-        dropped_packets: 0,
-        dropped_bytes: 0,
-    });
+    let snapshot = RuntimeMetrics::default().snapshot(QueueStats::default());
 
     println!("network: {}", config.network.name);
     println!("runtime metrics:");

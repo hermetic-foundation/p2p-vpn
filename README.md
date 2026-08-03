@@ -182,12 +182,12 @@ Inspect the runtime metric names and startup snapshot:
 cargo run -- metrics --config p2p-vpn.json
 ```
 
-The metrics output includes packet counters, queue occupancy and drops, direct
-versus relayed connection counts, relay reservation/circuit counts, relay-server
-accept counts, DCUtR success/failure counts, and configured-peer redial
-counters. Those counters are intended to show whether a deployment is using
-direct paths, relay fallback, hole-punching, and connection recovery as
-expected.
+The metrics output includes packet counters, queue occupancy, total queue drops,
+queue expiry drops, direct versus relayed connection counts, relay
+reservation/circuit counts, relay-server accept counts, DCUtR success/failure
+counts, and configured-peer redial counters. Those counters are intended to show
+whether a deployment is using direct paths, relay fallback, hole-punching, and
+connection recovery as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 

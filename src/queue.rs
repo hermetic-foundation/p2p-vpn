@@ -76,6 +76,8 @@ pub struct QueueStats {
     pub queued_bytes: usize,
     pub dropped_packets: u64,
     pub dropped_bytes: u64,
+    pub expired_packets: u64,
+    pub expired_bytes: u64,
 }
 
 impl QueueStats {
@@ -86,6 +88,8 @@ impl QueueStats {
             queued_bytes: self.queued_bytes + other.queued_bytes,
             dropped_packets: self.dropped_packets + other.dropped_packets,
             dropped_bytes: self.dropped_bytes + other.dropped_bytes,
+            expired_packets: self.expired_packets + other.expired_packets,
+            expired_bytes: self.expired_bytes + other.expired_bytes,
         }
     }
 }
@@ -165,14 +169,14 @@ impl PeerQueue {
             .position(|packet| !packet.is_expired(now, self.max_packet_age))
         else {
             while let Some(packet) = self.dequeue() {
-                self.record_drop(packet.len());
+                self.record_expire(packet.len());
             }
             return;
         };
 
         for _ in 0..first_fresh {
             if let Some(packet) = self.dequeue() {
-                self.record_drop(packet.len());
+                self.record_expire(packet.len());
             }
         }
     }
@@ -185,6 +189,12 @@ impl PeerQueue {
     fn record_drop(&mut self, packet_bytes: usize) {
         self.stats.dropped_packets += 1;
         self.stats.dropped_bytes += u64::try_from(packet_bytes).unwrap_or(u64::MAX);
+    }
+
+    fn record_expire(&mut self, packet_bytes: usize) {
+        self.record_drop(packet_bytes);
+        self.stats.expired_packets += 1;
+        self.stats.expired_bytes += u64::try_from(packet_bytes).unwrap_or(u64::MAX);
     }
 }
 
@@ -344,6 +354,8 @@ mod tests {
         assert_eq!(queue.stats().queued_bytes, 2);
         assert_eq!(queue.stats().dropped_packets, 1);
         assert_eq!(queue.stats().dropped_bytes, 3);
+        assert_eq!(queue.stats().expired_packets, 1);
+        assert_eq!(queue.stats().expired_bytes, 3);
         assert_eq!(queue.dequeue().expect("fresh packet remains").sequence(), 2);
     }
 
@@ -361,7 +373,9 @@ mod tests {
                 queued_packets: 1,
                 queued_bytes: 3,
                 dropped_packets: 0,
-                dropped_bytes: 0
+                dropped_bytes: 0,
+                expired_packets: 0,
+                expired_bytes: 0
             }
         );
 
@@ -385,6 +399,7 @@ mod tests {
 
         assert_eq!(error, EnqueueError::QueueFull { packet_bytes: 1 });
         assert_eq!(queue.stats().dropped_packets, 1);
+        assert_eq!(queue.stats().expired_packets, 0);
         assert_eq!(queue.dequeue().expect("first packet remains").sequence(), 1);
     }
 
@@ -404,6 +419,7 @@ mod tests {
             }
         );
         assert_eq!(queue.stats().dropped_bytes, 4);
+        assert_eq!(queue.stats().expired_bytes, 0);
         assert!(queue.dequeue().is_none());
     }
 
@@ -476,6 +492,7 @@ mod tests {
 
         assert_eq!(queues.peer_stats(peer(1)).dropped_packets, 1);
         assert_eq!(queues.peer_stats(peer(2)).dropped_bytes, 3);
+        assert_eq!(queues.total_stats().expired_packets, 0);
         assert_eq!(queues.total_stats().queued_packets, 1);
         assert_eq!(queues.total_stats().dropped_packets, 2);
     }
@@ -498,7 +515,10 @@ mod tests {
 
         assert_eq!(queues.peer_stats(peer(1)).queued_packets, 0);
         assert_eq!(queues.peer_stats(peer(1)).dropped_packets, 1);
+        assert_eq!(queues.peer_stats(peer(1)).expired_packets, 1);
+        assert_eq!(queues.peer_stats(peer(1)).expired_bytes, 1);
         assert_eq!(queues.total_stats().queued_packets, 1);
+        assert_eq!(queues.total_stats().expired_packets, 1);
         assert_eq!(
             queues
                 .dequeue_ready(|candidate| candidate == peer(2))
