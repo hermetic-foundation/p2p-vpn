@@ -13,7 +13,10 @@ use libp2p::{
 use crate::{
     config::DiscoveryConfig,
     identity::{IdentityError, NodeIdentity},
-    runtime::packet::{self, PacketCodec},
+    runtime::{
+        control::{self, ControlCodec},
+        packet::{self, PacketCodec},
+    },
 };
 
 const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
@@ -27,6 +30,7 @@ pub struct Behaviour {
     pub relay_server: Toggle<relay::Behaviour>,
     pub dcutr: Toggle<dcutr::Behaviour>,
     pub mdns: Toggle<mdns::tokio::Behaviour>,
+    pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
 }
 
@@ -43,6 +47,7 @@ pub struct HostConfig {
     pub identity: NodeIdentity,
     pub network_name: String,
     pub mtu: u16,
+    pub max_concurrent_control_streams: usize,
     pub max_concurrent_packet_streams: usize,
     pub listen_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
@@ -68,11 +73,17 @@ pub struct KademliaStartupStatus {
     pub rendezvous_lookup_started: bool,
 }
 
-pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
+pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let keypair = decode_keypair(&config.identity.private_key)?;
     let local_peer_id = keypair.public().to_peer_id();
     let bootstrap_peer_addresses = config.bootstrap_peers.clone();
     let configured_peer_addresses = config.known_peers.clone();
+
+    let discovery = config.discovery;
+    let relay_server = config.relay_server;
+    let mtu = config.mtu;
+    let control_streams = config.max_concurrent_control_streams;
+    let packet_streams = config.max_concurrent_packet_streams;
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -89,12 +100,12 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                 let store = kad::store::MemoryStore::new(local_peer_id);
                 let kad_config = kad::Config::new(libp2p::StreamProtocol::new("/p2p-vpn/kad/1"));
                 let mut kad = kad::Behaviour::with_config(local_peer_id, store, kad_config);
-                if config.discovery.kademlia {
+                if discovery.kademlia {
                     kad.set_mode(Some(kad::Mode::Server));
                 } else {
                     kad.set_mode(Some(kad::Mode::Client));
                 }
-                let mdns = if config.discovery.mdns {
+                let mdns = if discovery.mdns {
                     Some(mdns::tokio::Behaviour::new(
                         mdns::Config::default(),
                         local_peer_id,
@@ -111,52 +122,24 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                     ping: ping::Behaviour::default(),
                     kad,
                     relay,
-                    relay_server: config
-                        .relay_server
+                    relay_server: relay_server
                         .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default()))
                         .into(),
-                    dcutr: config
-                        .discovery
+                    dcutr: discovery
                         .dcutr
                         .then(|| dcutr::Behaviour::new(local_peer_id))
                         .into(),
                     mdns: mdns.into(),
-                    packet: packet::behaviour(config.mtu, config.max_concurrent_packet_streams),
+                    control: control::behaviour(control_streams),
+                    packet: packet::behaviour(mtu, packet_streams),
                 })
             },
         )?
         .build();
 
-    for address in config.listen_addresses {
-        swarm.listen_on(address)?;
-    }
-
     let relay_reservations_started = config.relay_reservations.len();
-    for address in config.relay_reservations {
-        swarm.listen_on(peer_dial_address(local_peer_id, address)?)?;
-    }
-
-    for (peer, address) in config.bootstrap_peers.into_iter().chain(config.known_peers) {
-        swarm
-            .behaviour_mut()
-            .kad
-            .add_address(&peer, address.clone());
-        let dial_address = peer_dial_address(peer, address)?;
-        swarm.dial(dial_address)?;
-    }
-
-    let rendezvous_key = kademlia_rendezvous_key(&config.network_name);
-    let (kad_bootstrap_started, kad_rendezvous_advertise_started, kad_rendezvous_lookup_started) =
-        if config.discovery.kademlia {
-            swarm
-                .behaviour_mut()
-                .kad
-                .start_providing(rendezvous_key.clone())?;
-            swarm.behaviour_mut().kad.get_providers(rendezvous_key);
-            (swarm.behaviour_mut().kad.bootstrap().is_ok(), true, true)
-        } else {
-            (false, false, false)
-        };
+    install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
+    let kademlia = start_kademlia(&mut swarm, config)?;
 
     Ok(P2pNode {
         local_peer_id,
@@ -167,14 +150,58 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         startup: StartupStatus {
             mdns_enabled: config.discovery.mdns,
             dcutr_enabled: config.discovery.dcutr,
-            kademlia: KademliaStartupStatus {
-                bootstrap_started: kad_bootstrap_started,
-                rendezvous_advertise_started: kad_rendezvous_advertise_started,
-                rendezvous_lookup_started: kad_rendezvous_lookup_started,
-            },
+            kademlia,
             relay_reservations_started,
             relay_server_enabled: config.relay_server,
         },
+    })
+}
+
+fn install_listeners_and_dials(
+    swarm: &mut Swarm<Behaviour>,
+    local_peer_id: PeerId,
+    config: &HostConfig,
+) -> Result<(), P2pBuildError> {
+    for address in &config.listen_addresses {
+        swarm.listen_on(address.clone())?;
+    }
+
+    for address in &config.relay_reservations {
+        swarm.listen_on(peer_dial_address(local_peer_id, address.clone())?)?;
+    }
+
+    for (peer, address) in config
+        .bootstrap_peers
+        .iter()
+        .chain(config.known_peers.iter())
+    {
+        swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        let dial_address = peer_dial_address(*peer, address.clone())?;
+        swarm.dial(dial_address)?;
+    }
+
+    Ok(())
+}
+
+fn start_kademlia(
+    swarm: &mut Swarm<Behaviour>,
+    config: &HostConfig,
+) -> Result<KademliaStartupStatus, P2pBuildError> {
+    if !config.discovery.kademlia {
+        return Ok(KademliaStartupStatus::default());
+    }
+
+    let rendezvous_key = kademlia_rendezvous_key(&config.network_name);
+    swarm
+        .behaviour_mut()
+        .kad
+        .start_providing(rendezvous_key.clone())?;
+    swarm.behaviour_mut().kad.get_providers(rendezvous_key);
+
+    Ok(KademliaStartupStatus {
+        bootstrap_started: swarm.behaviour_mut().kad.bootstrap().is_ok(),
+        rendezvous_advertise_started: true,
+        rendezvous_lookup_started: true,
     })
 }
 
@@ -271,7 +298,10 @@ mod tests {
         swarm::SwarmEvent,
     };
 
-    use crate::wire::{Frame, PayloadType};
+    use crate::{
+        runtime::control::{ControlCapabilities, ControlRequest, ControlResponse},
+        wire::{Frame, PayloadType},
+    };
 
     use super::*;
 
@@ -280,10 +310,11 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let expected_peer_id = identity.peer_id.parse::<PeerId>().expect("peer id");
 
-        let node = build_node(HostConfig {
+        let node = build_node(&HostConfig {
             identity,
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -311,10 +342,11 @@ mod tests {
             dcutr: false,
         };
 
-        let node = build_node(HostConfig {
+        let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -344,10 +376,11 @@ mod tests {
             .expect("relay p2p address")
             .with(libp2p::multiaddr::Protocol::P2pCircuit);
 
-        let node = build_node(HostConfig {
+        let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: vec![(relay, bootstrap_address)],
@@ -422,10 +455,11 @@ mod tests {
 
     #[tokio::test]
     async fn two_nodes_exchange_packet_request() {
-        let mut listener = build_node(HostConfig {
+        let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
             bootstrap_peers: Vec::new(),
@@ -437,10 +471,11 @@ mod tests {
         .expect("listener node");
         let listener_address = next_listen_address(&mut listener.swarm).await;
 
-        let mut dialer = build_node(HostConfig {
+        let mut dialer = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -466,16 +501,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_nodes_exchange_control_capabilities() {
+        let mut listener = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("listener node");
+        let listener_address = next_listen_address(&mut listener.swarm).await;
+
+        let mut dialer = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener.local_peer_id, listener_address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("dialer node");
+        let request = ControlRequest::Capabilities(ControlCapabilities::local(1280));
+        let request_id = dialer
+            .swarm
+            .behaviour_mut()
+            .control
+            .send_request(&listener.local_peer_id, request.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_control_response(
+                &mut listener.swarm,
+                &mut dialer.swarm,
+                request,
+                request_id,
+            ),
+        )
+        .await
+        .expect("control exchange timed out");
+    }
+
+    #[tokio::test]
     async fn relayed_nodes_exchange_packet_request() {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: false,
             dcutr: false,
         };
-        let mut relay = build_node(HostConfig {
+        let mut relay = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("relay identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
             bootstrap_peers: Vec::new(),
@@ -494,10 +582,11 @@ mod tests {
             .expect("relay p2p address")
             .with(Protocol::P2pCircuit);
 
-        let mut listener = build_node(HostConfig {
+        let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -524,10 +613,11 @@ mod tests {
         .await
         .expect("relay reservation timed out");
 
-        let mut dialer = build_node(HostConfig {
+        let mut dialer = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -677,6 +767,47 @@ mod tests {
                         assert_eq!(request_id, expected_request_id);
                         assert_eq!(response, packet::PacketResponse::Accepted);
                         assert_eq!(expected_frame.header.payload_type, PayloadType::IpPacket);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn exchange_until_control_response(
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        expected_request: ControlRequest,
+        expected_request_id: request_response::OutboundRequestId,
+    ) {
+        loop {
+            tokio::select! {
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. },
+                        ..
+                    })) = event {
+                        assert_eq!(request, expected_request);
+                        listener
+                            .behaviour_mut()
+                            .control
+                            .send_response(
+                                channel,
+                                ControlResponse::CapabilitiesAccepted(ControlCapabilities::local(1280)),
+                            )
+                            .expect("send response");
+                    }
+                }
+                event = dialer.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                        message: Message::Response { request_id, response },
+                        ..
+                    })) = event {
+                        assert_eq!(request_id, expected_request_id);
+                        assert_eq!(
+                            response,
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local(1280))
+                        );
                         return;
                     }
                 }

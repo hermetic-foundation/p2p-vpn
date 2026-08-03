@@ -468,10 +468,11 @@ mod tests {
         let mut config = config_for(remote);
         config.network.local_peer = local_identity.peer_id.clone();
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut node = build_node(HostConfig {
+        let mut node = build_node(&HostConfig {
             identity: local_identity,
             network_name: "lab".to_owned(),
             mtu: 1280,
+            max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),

@@ -23,6 +23,10 @@ pub struct RuntimeMetrics {
     relay_server_circuits_accepted: AtomicU64,
     dcutr_successes: AtomicU64,
     dcutr_failures: AtomicU64,
+    control_requests_sent: AtomicU64,
+    control_requests_received: AtomicU64,
+    control_responses_received: AtomicU64,
+    control_failures: AtomicU64,
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
@@ -110,6 +114,24 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn record_control_request_sent(&self) {
+        self.control_requests_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_control_request_received(&self) {
+        self.control_requests_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_control_response_received(&self) {
+        self.control_responses_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_control_failure(&self) {
+        self.control_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_redial_attempt(&self) {
         self.redial_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -157,6 +179,10 @@ impl RuntimeMetrics {
                 .load(Ordering::Relaxed),
             dcutr_successes: self.dcutr_successes.load(Ordering::Relaxed),
             dcutr_failures: self.dcutr_failures.load(Ordering::Relaxed),
+            control_requests_sent: self.control_requests_sent.load(Ordering::Relaxed),
+            control_requests_received: self.control_requests_received.load(Ordering::Relaxed),
+            control_responses_received: self.control_responses_received.load(Ordering::Relaxed),
+            control_failures: self.control_failures.load(Ordering::Relaxed),
             redial_attempts: self.redial_attempts.load(Ordering::Relaxed),
             redial_skipped_connected: self.redial_skipped_connected.load(Ordering::Relaxed),
             redial_failures: self.redial_failures.load(Ordering::Relaxed),
@@ -186,6 +212,10 @@ pub struct RuntimeSnapshot {
     pub relay_server_circuits_accepted: u64,
     pub dcutr_successes: u64,
     pub dcutr_failures: u64,
+    pub control_requests_sent: u64,
+    pub control_requests_received: u64,
+    pub control_responses_received: u64,
+    pub control_failures: u64,
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
@@ -236,6 +266,16 @@ impl RuntimeSnapshot {
             ),
             format!("dcutr_successes {}", self.dcutr_successes),
             format!("dcutr_failures {}", self.dcutr_failures),
+            format!("control_requests_sent {}", self.control_requests_sent),
+            format!(
+                "control_requests_received {}",
+                self.control_requests_received
+            ),
+            format!(
+                "control_responses_received {}",
+                self.control_responses_received
+            ),
+            format!("control_failures {}", self.control_failures),
             format!("redial_attempts {}", self.redial_attempts),
             format!("redial_skipped_connected {}", self.redial_skipped_connected),
             format!("redial_failures {}", self.redial_failures),
@@ -253,8 +293,7 @@ impl RuntimeSnapshot {
 mod tests {
     use super::*;
 
-    #[test]
-    fn metrics_snapshot_reports_runtime_and_queue_counters() {
+    fn populated_snapshot() -> RuntimeSnapshot {
         let metrics = RuntimeMetrics::default();
         metrics.record_tun_read(20);
         metrics.record_tun_write(40);
@@ -273,18 +312,31 @@ mod tests {
         metrics.record_relay_server_circuit_accepted();
         metrics.record_dcutr_result(true);
         metrics.record_dcutr_result(false);
+        metrics.record_control_request_sent();
+        metrics.record_control_request_received();
+        metrics.record_control_response_received();
+        metrics.record_control_failure();
         metrics.record_redial_attempt();
         metrics.record_redial_skipped_connected();
         metrics.record_redial_failure();
 
-        let snapshot = metrics.snapshot(QueueStats {
+        metrics.snapshot(QueueStats {
             queued_packets: 2,
             queued_bytes: 80,
             dropped_packets: 3,
             dropped_bytes: 120,
             expired_packets: 2,
             expired_bytes: 60,
-        });
+        })
+    }
+
+    fn assert_metric_line(snapshot: RuntimeSnapshot, line: &str) {
+        assert!(snapshot.lines().contains(&line.to_owned()));
+    }
+
+    #[test]
+    fn metrics_snapshot_reports_runtime_and_queue_counters() {
+        let snapshot = populated_snapshot();
 
         assert_eq!(snapshot.tun_read_packets, 1);
         assert_eq!(snapshot.tun_read_bytes, 20);
@@ -305,36 +357,30 @@ mod tests {
         assert_eq!(snapshot.relay_server_circuits_accepted, 1);
         assert_eq!(snapshot.dcutr_successes, 1);
         assert_eq!(snapshot.dcutr_failures, 1);
+        assert_eq!(snapshot.control_requests_sent, 1);
+        assert_eq!(snapshot.control_requests_received, 1);
+        assert_eq!(snapshot.control_responses_received, 1);
+        assert_eq!(snapshot.control_failures, 1);
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
-        assert!(
-            snapshot
-                .lines()
-                .contains(&"queue_queued_packets 2".to_owned())
-        );
-        assert!(
-            snapshot
-                .lines()
-                .contains(&"relayed_connections_established 1".to_owned())
-        );
-        assert!(snapshot.lines().contains(&"dcutr_successes 1".to_owned()));
-        assert!(snapshot.lines().contains(&"redial_attempts 1".to_owned()));
-        assert!(
-            snapshot
-                .lines()
-                .contains(&"redial_skipped_connected 1".to_owned())
-        );
-        assert!(snapshot.lines().contains(&"redial_failures 1".to_owned()));
-        assert!(
-            snapshot
-                .lines()
-                .contains(&"queue_expired_packets 2".to_owned())
-        );
-        assert!(
-            snapshot
-                .lines()
-                .contains(&"queue_expired_bytes 60".to_owned())
-        );
+    }
+
+    #[test]
+    fn metrics_snapshot_reports_runtime_and_queue_lines() {
+        let snapshot = populated_snapshot();
+
+        assert_metric_line(snapshot, "queue_queued_packets 2");
+        assert_metric_line(snapshot, "relayed_connections_established 1");
+        assert_metric_line(snapshot, "dcutr_successes 1");
+        assert_metric_line(snapshot, "control_requests_sent 1");
+        assert_metric_line(snapshot, "control_requests_received 1");
+        assert_metric_line(snapshot, "control_responses_received 1");
+        assert_metric_line(snapshot, "control_failures 1");
+        assert_metric_line(snapshot, "redial_attempts 1");
+        assert_metric_line(snapshot, "redial_skipped_connected 1");
+        assert_metric_line(snapshot, "redial_failures 1");
+        assert_metric_line(snapshot, "queue_expired_packets 2");
+        assert_metric_line(snapshot, "queue_expired_bytes 60");
     }
 }

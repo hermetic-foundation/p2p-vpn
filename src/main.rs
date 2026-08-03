@@ -97,7 +97,8 @@ fn status(path: &PathBuf) -> Result<(), String> {
         config.queue.max_packet_age().as_millis()
     );
     println!(
-        "resources: {} concurrent packet streams",
+        "resources: {} concurrent control streams / {} concurrent packet streams",
+        config.resources.control_stream_limit(),
         config.resources.packet_stream_limit()
     );
     println!("wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header");

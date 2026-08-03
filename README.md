@@ -28,6 +28,11 @@ Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the
 swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
 
+The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
+request-response stream. Peers exchange capabilities when a configured transport
+peer connects, including wire version, packet protocol, effective MTU, preferred
+path, and whether native QUIC datagrams are currently supported.
+
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
 the local peer identity plus a per-session packet sequence number. It is
@@ -140,6 +145,7 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "max_packet_age_millis": 1000
   },
   "resources": {
+    "max_concurrent_control_streams": 64,
     "max_concurrent_packet_streams": 256
   },
   "peers": [
@@ -183,12 +189,13 @@ Inspect the runtime metric names and startup snapshot:
 cargo run -- metrics --config p2p-vpn.json
 ```
 
-The metrics output includes packet counters, queue occupancy, total queue drops,
-queue expiry drops, direct versus relayed connection counts, relay
-reservation/circuit counts, relay-server accept counts, DCUtR success/failure
-counts, and configured-peer redial counters. Those counters are intended to show
-whether a deployment is using direct paths, relay fallback, hole-punching, and
-connection recovery as expected.
+The metrics output includes control-plane exchange counters, packet counters,
+queue occupancy, total queue drops, queue expiry drops, direct versus relayed
+connection counts, relay reservation/circuit counts, relay-server accept counts,
+DCUtR success/failure counts, and configured-peer redial counters. Those
+counters are intended to show whether a deployment is exchanging capabilities,
+using direct paths, relay fallback, hole-punching, and connection recovery as
+expected.
 
 Inspect the Linux interface setup plan without requiring root:
 

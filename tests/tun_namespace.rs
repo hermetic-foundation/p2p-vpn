@@ -262,10 +262,11 @@ async fn run_ready_node(
     device: TunDevice,
     ready_file: PathBuf,
 ) -> Result<(), runner::RunnerError> {
-    let mut node = build_node(HostConfig {
+    let mut node = build_node(&HostConfig {
         identity: config.identity()?,
         network_name: config.network.name.clone(),
         mtu: config.effective_packet_mtu(),
+        max_concurrent_control_streams: config.resources.control_stream_limit(),
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,

@@ -221,6 +221,8 @@ impl QueueConfig {
 pub struct ResourceConfig {
     #[serde(default = "default_max_concurrent_packet_streams")]
     pub max_concurrent_packet_streams: usize,
+    #[serde(default = "default_max_concurrent_control_streams")]
+    pub max_concurrent_control_streams: usize,
 }
 
 impl Default for ResourceConfig {
@@ -233,6 +235,11 @@ impl ResourceConfig {
     #[must_use]
     pub fn packet_stream_limit(self) -> usize {
         self.max_concurrent_packet_streams.max(1)
+    }
+
+    #[must_use]
+    pub fn control_stream_limit(self) -> usize {
+        self.max_concurrent_control_streams.max(1)
     }
 }
 
@@ -323,11 +330,16 @@ const fn default_max_packet_age_millis() -> u64 {
 const fn default_resources() -> ResourceConfig {
     ResourceConfig {
         max_concurrent_packet_streams: default_max_concurrent_packet_streams(),
+        max_concurrent_control_streams: default_max_concurrent_control_streams(),
     }
 }
 
 const fn default_max_concurrent_packet_streams() -> usize {
     256
+}
+
+const fn default_max_concurrent_control_streams() -> usize {
+    64
 }
 
 const fn default_true() -> bool {
@@ -608,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_config_defaults_and_clamps_packet_stream_limit() {
+    fn resource_config_defaults_and_clamps_stream_limits() {
         let config = serde_json::from_str::<Config>(
             r#"{
               "network": {
@@ -624,6 +636,7 @@ mod tests {
         .expect("config");
 
         assert_eq!(config.resources.packet_stream_limit(), 256);
+        assert_eq!(config.resources.control_stream_limit(), 64);
         assert_eq!(config.queue.max_packet_age_millis, 1_000);
 
         let config = serde_json::from_str::<Config>(
@@ -637,6 +650,7 @@ mod tests {
                 "mtu": 1280
               },
               "resources": {
+                "max_concurrent_control_streams": 0,
                 "max_concurrent_packet_streams": 0
               },
               "queue": {
@@ -649,6 +663,7 @@ mod tests {
         .expect("config");
 
         assert_eq!(config.resources.packet_stream_limit(), 1);
+        assert_eq!(config.resources.control_stream_limit(), 1);
         assert_eq!(
             config.queue.max_packet_age(),
             std::time::Duration::from_millis(1)

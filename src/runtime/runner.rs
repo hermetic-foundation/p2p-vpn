@@ -19,6 +19,7 @@ use crate::{
     path::PathSet,
     queue::PeerQueues,
     runtime::{
+        control::{ControlCapabilities, ControlRequest, ControlResponse},
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
@@ -35,10 +36,11 @@ pub async fn run_config(
     metrics_interval: Option<Duration>,
 ) -> Result<(), RunnerError> {
     let identity = config.identity()?;
-    let node = build_node(HostConfig {
+    let node = build_node(&HostConfig {
         identity,
         network_name: config.network.name.clone(),
         mtu: config.effective_packet_mtu(),
+        max_concurrent_control_streams: config.resources.control_stream_limit(),
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
@@ -81,6 +83,7 @@ pub async fn run_node(
     let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
     let mut queue_expiry_tick =
         tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
+    let local_capabilities = ControlCapabilities::local(mtu);
     redial_tick.tick().await;
     queue_expiry_tick.tick().await;
     let discovery = node.discovery;
@@ -120,7 +123,18 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
             }
             event = node.swarm.select_next_some() => {
-                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &mut paths, &metrics, discovery, event)?;
+                handle_swarm_event(
+                    &mut node.swarm,
+                    SwarmEventContext {
+                        forwarder: &forwarder,
+                        writer: &mut writer,
+                        paths: &mut paths,
+                        metrics: &metrics,
+                        local_capabilities: &local_capabilities,
+                        discovery,
+                    },
+                    event,
+                )?;
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
             }
             _ = redial_tick.tick() => {
@@ -255,61 +269,56 @@ fn drain_outbound_queue(
     }
 }
 
+struct SwarmEventContext<'a> {
+    forwarder: &'a Forwarder,
+    writer: &'a mut TunWriter,
+    paths: &'a mut PathSet,
+    metrics: &'a RuntimeMetrics,
+    local_capabilities: &'a ControlCapabilities,
+    discovery: DiscoveryConfig,
+}
+
 fn handle_swarm_event(
     swarm: &mut Swarm<Behaviour>,
-    forwarder: &Forwarder,
-    writer: &mut TunWriter,
-    paths: &mut PathSet,
-    metrics: &RuntimeMetrics,
-    discovery: DiscoveryConfig,
+    mut context: SwarmEventContext<'_>,
     event: SwarmEvent<BehaviourEvent>,
 ) -> Result<(), RunnerError> {
     match event {
-        SwarmEvent::Behaviour(BehaviourEvent::Packet(request_response::Event::Message {
-            peer,
-            message: Message::Request {
-                request, channel, ..
-            },
-            ..
-        })) => match forwarder.accept_inbound_packet(peer, &request) {
-            Ok(packet) => {
-                writer.write_packet(packet)?;
-                metrics.record_tun_write(packet.len());
-                metrics.record_inbound_accepted();
-                Forwarder::send_packet_response(swarm, channel)
-                    .map_err(|_| RunnerError::PacketResponseDropped)?;
-            }
-            Err(error) => {
-                metrics.record_inbound_drop();
-                eprintln!("dropping inbound packet from {peer}: {error:?}");
-            }
-        },
-        SwarmEvent::Behaviour(BehaviourEvent::Packet(
-            request_response::Event::OutboundFailure { peer, error, .. },
-        )) => {
-            metrics.record_outbound_failure();
-            eprintln!("packet request to {peer} failed: {error}");
+        SwarmEvent::Behaviour(BehaviourEvent::Control(event)) => {
+            handle_control_event(swarm, &context, event)?;
         }
-        SwarmEvent::Behaviour(BehaviourEvent::Packet(
-            request_response::Event::InboundFailure { peer, error, .. },
-        )) => {
-            metrics.record_inbound_failure();
-            eprintln!("packet request from {peer} failed: {error}");
+        SwarmEvent::Behaviour(BehaviourEvent::Packet(event)) => {
+            handle_packet_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(event) => {
-            handle_behaviour_event(swarm, forwarder, metrics, discovery, event);
+            handle_behaviour_event(
+                swarm,
+                context.forwarder,
+                context.metrics,
+                context.discovery,
+                event,
+            );
         }
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
-            record_path_established(paths, forwarder, peer_id, &endpoint);
-            metrics.record_connection_established(endpoint.is_relayed());
+            record_path_established(context.paths, context.forwarder, peer_id, &endpoint);
+            send_control_capabilities(
+                swarm,
+                context.forwarder,
+                peer_id,
+                context.local_capabilities,
+                context.metrics,
+            );
+            context
+                .metrics
+                .record_connection_established(endpoint.is_relayed());
             eprintln!("connection established with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::ConnectionClosed {
             peer_id, endpoint, ..
         } => {
-            record_path_closed(paths, forwarder, peer_id, &endpoint);
+            record_path_closed(context.paths, context.forwarder, peer_id, &endpoint);
             eprintln!("connection closed with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => match peer_id {
@@ -320,6 +329,149 @@ fn handle_swarm_event(
     }
 
     Ok(())
+}
+
+fn handle_control_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &SwarmEventContext<'_>,
+    event: request_response::Event<ControlRequest, ControlResponse>,
+) -> Result<(), RunnerError> {
+    match event {
+        request_response::Event::Message {
+            peer,
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
+        } => {
+            handle_control_request(
+                swarm,
+                context.metrics,
+                context.local_capabilities,
+                peer,
+                request,
+                channel,
+            )?;
+        }
+        request_response::Event::Message {
+            peer,
+            message: Message::Response { response, .. },
+            ..
+        } => {
+            handle_control_response(context.metrics, peer, response);
+        }
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            context.metrics.record_control_failure();
+            eprintln!("control request to {peer} failed: {error}");
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_control_failure();
+            eprintln!("control request from {peer} failed: {error}");
+        }
+        request_response::Event::ResponseSent { .. } => {}
+    }
+
+    Ok(())
+}
+
+fn handle_packet_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    event: request_response::Event<crate::wire::Frame, crate::runtime::packet::PacketResponse>,
+) -> Result<(), RunnerError> {
+    match event {
+        request_response::Event::Message {
+            peer,
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
+        } => match context.forwarder.accept_inbound_packet(peer, &request) {
+            Ok(packet) => {
+                context.writer.write_packet(packet)?;
+                context.metrics.record_tun_write(packet.len());
+                context.metrics.record_inbound_accepted();
+                Forwarder::send_packet_response(swarm, channel)
+                    .map_err(|_| RunnerError::PacketResponseDropped)?;
+            }
+            Err(error) => {
+                context.metrics.record_inbound_drop();
+                eprintln!("dropping inbound packet from {peer}: {error:?}");
+            }
+        },
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            context.metrics.record_outbound_failure();
+            eprintln!("packet request to {peer} failed: {error}");
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_inbound_failure();
+            eprintln!("packet request from {peer} failed: {error}");
+        }
+        request_response::Event::Message {
+            message: Message::Response { .. },
+            ..
+        }
+        | request_response::Event::ResponseSent { .. } => {}
+    }
+
+    Ok(())
+}
+
+fn handle_control_request(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    local_capabilities: &ControlCapabilities,
+    peer: Libp2pPeerId,
+    request: ControlRequest,
+    channel: request_response::ResponseChannel<ControlResponse>,
+) -> Result<(), RunnerError> {
+    match request {
+        ControlRequest::Capabilities(capabilities) => {
+            metrics.record_control_request_received();
+            eprintln!("control capabilities from {peer}: {capabilities:?}");
+            swarm
+                .behaviour_mut()
+                .control
+                .send_response(
+                    channel,
+                    ControlResponse::CapabilitiesAccepted(local_capabilities.clone()),
+                )
+                .map_err(|_| RunnerError::ControlResponseDropped)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_control_response(
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    response: ControlResponse,
+) {
+    match response {
+        ControlResponse::CapabilitiesAccepted(capabilities) => {
+            metrics.record_control_response_received();
+            eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+        }
+    }
+}
+
+fn send_control_capabilities(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    local_capabilities: &ControlCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    swarm.behaviour_mut().control.send_request(
+        &peer,
+        ControlRequest::Capabilities(local_capabilities.clone()),
+    );
+    metrics.record_control_request_sent();
 }
 
 fn record_path_established(
@@ -561,6 +713,7 @@ pub enum RunnerError {
     Forward(ForwardError),
     Tun(TunRuntimeError),
     PacketResponseDropped,
+    ControlResponseDropped,
 }
 
 impl From<crate::config::ConfigError> for RunnerError {
