@@ -55,6 +55,7 @@ pub struct RuntimeMetrics {
     external_address_candidates: AtomicU64,
     external_addresses_confirmed: AtomicU64,
     external_addresses_expired: AtomicU64,
+    autonat_probes_scheduled: AtomicU64,
     kademlia_provider_lookups: AtomicU64,
     kademlia_provider_advertisements: AtomicU64,
     kademlia_provider_advertisement_failures: AtomicU64,
@@ -224,6 +225,11 @@ impl RuntimeMetrics {
 
     pub fn record_external_address_expired(&self) {
         self.external_addresses_expired
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_autonat_probe_scheduled(&self) {
+        self.autonat_probes_scheduled
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -403,6 +409,7 @@ impl RuntimeMetrics {
             self.external_addresses_confirmed.load(Ordering::Relaxed);
         snapshot.external_addresses_expired =
             self.external_addresses_expired.load(Ordering::Relaxed);
+        snapshot.autonat_probes_scheduled = self.autonat_probes_scheduled.load(Ordering::Relaxed);
         snapshot.kademlia_provider_lookups = self.kademlia_provider_lookups.load(Ordering::Relaxed);
         snapshot.kademlia_provider_advertisements = self
             .kademlia_provider_advertisements
@@ -472,6 +479,7 @@ pub struct RuntimeSnapshot {
     pub external_address_candidates: u64,
     pub external_addresses_confirmed: u64,
     pub external_addresses_expired: u64,
+    pub autonat_probes_scheduled: u64,
     pub kademlia_provider_lookups: u64,
     pub kademlia_provider_advertisements: u64,
     pub kademlia_provider_advertisement_failures: u64,
@@ -557,6 +565,7 @@ impl RuntimeSnapshot {
                 "external_addresses_expired {}",
                 self.external_addresses_expired
             ),
+            format!("autonat_probes_scheduled {}", self.autonat_probes_scheduled),
             format!(
                 "kademlia_provider_lookups {}",
                 self.kademlia_provider_lookups
@@ -734,6 +743,7 @@ mod tests {
         metrics.record_external_address_candidate();
         metrics.record_external_address_confirmed();
         metrics.record_external_address_expired();
+        metrics.record_autonat_probe_scheduled();
         metrics.record_kademlia_provider_lookup();
         metrics.record_kademlia_provider_advertisement();
         metrics.record_kademlia_provider_advertisement_failure();
@@ -812,6 +822,7 @@ mod tests {
         assert_eq!(snapshot.external_address_candidates, 1);
         assert_eq!(snapshot.external_addresses_confirmed, 1);
         assert_eq!(snapshot.external_addresses_expired, 1);
+        assert_eq!(snapshot.autonat_probes_scheduled, 1);
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
@@ -857,6 +868,7 @@ mod tests {
         assert_metric_line(&snapshot, "external_address_candidates 1");
         assert_metric_line(&snapshot, "external_addresses_confirmed 1");
         assert_metric_line(&snapshot, "external_addresses_expired 1");
+        assert_metric_line(&snapshot, "autonat_probes_scheduled 1");
         assert_metric_line(&snapshot, "kademlia_provider_lookups 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisements 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisement_failures 1");

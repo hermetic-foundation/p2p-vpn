@@ -100,12 +100,13 @@ provider advertisement, reruns the provider lookup, and retries Kademlia
 bootstrap. That lets a long-running node find configured peers that join the DHT
 after startup rather than relying on the initial one-shot provider query.
 Observed external address candidates reported by libp2p identify are passed to
-AutoNAT when that behaviour is enabled. AutoNAT probes candidate reachability
-through connected peers and only confirmed public addresses enter the local
-swarm's advertised external address set, so later identify exchanges and
-Kademlia announcements can carry a tested public address. Candidate, confirmed,
-and expired external address events are exposed in metrics for NAT traversal
-diagnostics.
+AutoNAT when that behaviour is enabled, and configured bootstrap/peer addresses
+are registered as AutoNAT probe servers. AutoNAT probes candidate reachability
+through connected or configured probe peers, so later identify exchanges and
+Kademlia announcements can carry a tested public address alongside any
+operator-configured external addresses.
+Candidate, scheduled-probe, confirmed, and expired external address events are
+exposed in metrics for NAT traversal diagnostics.
 
 Resource limits are part of the overlay config. The packet request-response
 fallback has a bounded concurrent stream limit, exposed through `resources`, so
@@ -306,16 +307,16 @@ queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons including expired outbound queue packets, direct versus
 relayed connection counts, relay reservation/circuit counts, relay-server
 accept counts, DCUtR success/failure counts, observed external address
-candidate/confirmed/expired counts, Kademlia provider lookup/advertisement and
-bootstrap refresh counts, unauthorized connection drops, configured peer redial
-counters, rejected discovered-address counters, healthy path counts by transport
-kind, configured peers with and without a currently supported packet path, and
-queue-drain stalls caused by peers having no currently supported packet path.
-Those counters are intended to show whether a deployment is exchanging
-capabilities, advertising observed public addresses, refreshing DHT discovery,
-rejecting bad discovered addresses, using direct paths, relay fallback,
-hole-punching, enforcing membership, recovering connections, and waiting on
-path negotiation as expected.
+candidate/scheduled-probe/confirmed/expired counts, Kademlia provider
+lookup/advertisement and bootstrap refresh counts, unauthorized connection
+drops, configured peer redial counters, rejected discovered-address counters,
+healthy path counts by transport kind, configured peers with and without a
+currently supported packet path, and queue-drain stalls caused by peers having
+no currently supported packet path. Those counters are intended to show whether
+a deployment is exchanging capabilities, probing and advertising observed public
+addresses, refreshing DHT discovery, rejecting bad discovered addresses, using
+direct paths, relay fallback, hole-punching, enforcing membership, recovering
+connections, and waiting on path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 

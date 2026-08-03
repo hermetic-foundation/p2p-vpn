@@ -200,6 +200,12 @@ fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
     if startup.autonat_enabled {
         eprintln!("autonat reachability probing enabled");
     }
+    if startup.autonat_servers_registered > 0 {
+        eprintln!(
+            "autonat probe servers registered: {}",
+            startup.autonat_servers_registered
+        );
+    }
     if startup.kademlia.bootstrap_started {
         eprintln!("kademlia bootstrap started");
     }
@@ -867,7 +873,7 @@ fn handle_behaviour_event(
                     metrics,
                     peer,
                     address,
-                    discovery.kademlia,
+                    discovery,
                 );
             }
         }
@@ -880,6 +886,7 @@ fn handle_behaviour_event(
             }
         }
         BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+            let observed_addr = info.observed_addr.clone();
             for address in info.listen_addrs {
                 learn_peer_address(
                     swarm,
@@ -888,8 +895,11 @@ fn handle_behaviour_event(
                     metrics,
                     peer_id,
                     address,
-                    discovery.kademlia,
+                    discovery,
                 );
+            }
+            if discovery.autonat && observed_addr.iter().next().is_some() {
+                schedule_autonat_probe(swarm, metrics, &observed_addr);
             }
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
@@ -912,6 +922,20 @@ fn handle_behaviour_event(
         }
         _ => {}
     }
+}
+
+fn schedule_autonat_probe(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    address: &Multiaddr,
+) -> bool {
+    let Some(autonat) = swarm.behaviour_mut().autonat.as_mut() else {
+        return false;
+    };
+    autonat.probe_address(address.clone());
+    metrics.record_autonat_probe_scheduled();
+    eprintln!("autonat probe scheduled for observed address: {address}");
+    true
 }
 
 fn handle_autonat_event(event: autonat::Event) {
@@ -1022,7 +1046,7 @@ fn learn_peer_address(
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     address: Multiaddr,
-    add_to_kademlia: bool,
+    discovery: DiscoveryConfig,
 ) {
     if peer == *swarm.local_peer_id() {
         return;
@@ -1038,11 +1062,16 @@ fn learn_peer_address(
 
     discovered_peer_addresses.insert(peer, address.clone());
 
-    if add_to_kademlia {
+    if discovery.kademlia {
         swarm
             .behaviour_mut()
             .kad
             .add_address(&peer, address.clone());
+    }
+    if discovery.autonat
+        && let Some(autonat) = swarm.behaviour_mut().autonat.as_mut()
+    {
+        autonat.add_server(peer, Some(address.clone()));
     }
 
     if swarm.is_connected(&peer) {
@@ -1595,6 +1624,65 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.unauthorized_connections_dropped, 1);
+    }
+
+    #[tokio::test]
+    async fn schedule_autonat_probe_records_enabled_probe() {
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().expect("address");
+
+        assert!(schedule_autonat_probe(&mut node.swarm, &metrics, &address));
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.autonat_probes_scheduled, 1);
+    }
+
+    #[tokio::test]
+    async fn schedule_autonat_probe_is_noop_when_disabled() {
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig {
+                autonat: false,
+                ..DiscoveryConfig::default()
+            },
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().expect("address");
+
+        assert!(!schedule_autonat_probe(&mut node.swarm, &metrics, &address));
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.autonat_probes_scheduled, 0);
     }
 
     #[test]

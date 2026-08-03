@@ -69,6 +69,7 @@ pub struct StartupStatus {
     pub mdns_enabled: bool,
     pub dcutr_enabled: bool,
     pub autonat_enabled: bool,
+    pub autonat_servers_registered: usize,
     pub external_addresses_configured: usize,
     pub kademlia: KademliaStartupStatus,
     pub relay_reservations_started: usize,
@@ -159,6 +160,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     let relay_reservations_started = config.relay_reservations.len();
     install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
+    let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
     let kademlia_rendezvous_key = config
         .discovery
         .kademlia
@@ -176,12 +178,30 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
             mdns_enabled: config.discovery.mdns,
             dcutr_enabled: config.discovery.dcutr,
             autonat_enabled: config.discovery.autonat,
+            autonat_servers_registered,
             external_addresses_configured: config.external_addresses.len(),
             kademlia,
             relay_reservations_started,
             relay_server_enabled: config.relay_server,
         },
     })
+}
+
+fn register_autonat_servers(swarm: &mut Swarm<Behaviour>, config: &HostConfig) -> usize {
+    let Some(autonat) = swarm.behaviour_mut().autonat.as_mut() else {
+        return 0;
+    };
+    let mut registered = 0;
+    for (peer, address) in config
+        .bootstrap_peers
+        .iter()
+        .chain(config.known_peers.iter())
+    {
+        autonat.add_server(*peer, Some(address.clone()));
+        registered += 1;
+    }
+
+    registered
 }
 
 fn install_listeners_and_dials(
@@ -402,6 +422,7 @@ mod tests {
         assert!(!node.startup.mdns_enabled);
         assert!(!node.startup.dcutr_enabled);
         assert!(!node.startup.autonat_enabled);
+        assert_eq!(node.startup.autonat_servers_registered, 0);
         assert!(!node.startup.kademlia.bootstrap_started);
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
@@ -504,6 +525,7 @@ mod tests {
         assert!(node.startup.mdns_enabled);
         assert!(node.startup.dcutr_enabled);
         assert!(node.startup.autonat_enabled);
+        assert_eq!(node.startup.autonat_servers_registered, 1);
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
