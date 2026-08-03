@@ -94,6 +94,9 @@ refreshed when rediscovered, removed when mDNS expires them, and aged out after
 10 minutes so stale transient addresses are not retried indefinitely. Redial
 attempts, connected-peer skips, failures, and discovered-address expiry are
 exposed in the runtime metrics output.
+Relay peers named by configured reservation addresses are also kept as
+infrastructure redial targets, so relay fallback can recover even when the
+relay is not a packet-routing VPN peer.
 Discovered addresses that include an explicit `/p2p/<peer>` target are rejected
 when that target does not match the configured peer being learned, including
 relayed target addresses after `/p2p-circuit`.

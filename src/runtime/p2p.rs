@@ -42,6 +42,7 @@ pub struct P2pNode {
     pub discovery: DiscoveryConfig,
     pub kademlia_rendezvous_key: Option<kad::RecordKey>,
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
+    pub relay_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub startup: StartupStatus,
 }
@@ -87,6 +88,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let keypair = decode_keypair(&config.identity.private_key)?;
     let local_peer_id = keypair.public().to_peer_id();
     let bootstrap_peer_addresses = config.bootstrap_peers.clone();
+    let relay_peer_addresses = relay_peer_addresses_from_reservations(&config.relay_reservations);
     let configured_peer_addresses = config.known_peers.clone();
 
     let discovery = config.discovery.clone();
@@ -176,18 +178,33 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         discovery,
         kademlia_rendezvous_key,
         bootstrap_peer_addresses,
+        relay_peer_addresses,
         configured_peer_addresses,
-        startup: StartupStatus {
-            mdns_enabled: config.discovery.mdns,
-            dcutr_enabled: config.discovery.dcutr,
-            autonat_enabled: config.discovery.autonat,
-            autonat_servers_registered,
-            external_addresses_configured: config.external_addresses.len(),
+        startup: startup_status(
+            config,
             kademlia,
+            autonat_servers_registered,
             relay_reservations_started,
-            relay_server_enabled: config.relay_server,
-        },
+        ),
     })
+}
+
+fn startup_status(
+    config: &HostConfig,
+    kademlia: KademliaStartupStatus,
+    autonat_servers_registered: usize,
+    relay_reservations_started: usize,
+) -> StartupStatus {
+    StartupStatus {
+        mdns_enabled: config.discovery.mdns,
+        dcutr_enabled: config.discovery.dcutr,
+        autonat_enabled: config.discovery.autonat,
+        autonat_servers_registered,
+        external_addresses_configured: config.external_addresses.len(),
+        kademlia,
+        relay_reservations_started,
+        relay_server_enabled: config.relay_server,
+    }
 }
 
 fn register_autonat_servers(swarm: &mut Swarm<Behaviour>, config: &HostConfig) -> usize {
@@ -235,6 +252,30 @@ fn install_listeners_and_dials(
     }
 
     Ok(())
+}
+
+fn relay_peer_addresses_from_reservations(reservations: &[Multiaddr]) -> Vec<(PeerId, Multiaddr)> {
+    reservations
+        .iter()
+        .filter_map(relay_peer_address_from_reservation)
+        .collect()
+}
+
+fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerId, Multiaddr)> {
+    let mut relay_address = Multiaddr::empty();
+    let mut relay_peer = None;
+
+    for protocol in reservation {
+        if matches!(protocol, Protocol::P2pCircuit) {
+            break;
+        }
+        if let Protocol::P2p(peer) = protocol {
+            relay_peer = Some(peer);
+        }
+        relay_address.push(protocol);
+    }
+
+    relay_peer.map(|peer| (peer, relay_address))
 }
 
 fn start_kademlia(
@@ -607,7 +648,7 @@ mod tests {
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
-            bootstrap_peers: vec![(relay, bootstrap_address)],
+            bootstrap_peers: vec![(relay, bootstrap_address.clone())],
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation],
             relay_server: true,
@@ -625,8 +666,35 @@ mod tests {
         assert!(node.startup.autonat_enabled);
         assert_eq!(node.startup.autonat_servers_registered, 1);
         assert_eq!(node.startup.relay_reservations_started, 1);
+        assert_eq!(
+            node.relay_peer_addresses,
+            vec![(
+                relay,
+                bootstrap_address
+                    .with_p2p(relay)
+                    .expect("relay dial address")
+            )]
+        );
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
+    }
+
+    #[test]
+    fn relay_peer_address_is_derived_from_reservation() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let target = Keypair::generate_ed25519().public().to_peer_id();
+        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let reservation: Multiaddr = relay_address
+            .clone()
+            .with(Protocol::P2pCircuit)
+            .with(Protocol::P2p(target));
+
+        assert_eq!(
+            relay_peer_address_from_reservation(&reservation),
+            Some((relay, relay_address))
+        );
     }
 
     #[test]

@@ -146,15 +146,7 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
             }
             _ = redial_tick.tick() => {
-                expire_discovered_peer_addresses(&mut discovered_peer_addresses, &metrics);
-                let discovered_addresses = discovered_peer_addresses.as_vec();
-                redial_known_addresses(
-                    &mut node.swarm,
-                    &node.bootstrap_peer_addresses,
-                    &node.configured_peer_addresses,
-                    &discovered_addresses,
-                    &metrics,
-                );
+                handle_redial_tick(&mut node, &mut discovered_peer_addresses, &metrics);
             }
             () = async {
                 kademlia_refresh_tick
@@ -189,6 +181,23 @@ pub async fn run_node(
             }
         }
     }
+}
+
+fn handle_redial_tick(
+    node: &mut P2pNode,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+) {
+    expire_discovered_peer_addresses(discovered_peer_addresses, metrics);
+    let discovered_addresses = discovered_peer_addresses.as_vec();
+    redial_known_addresses(
+        &mut node.swarm,
+        &node.bootstrap_peer_addresses,
+        &node.relay_peer_addresses,
+        &node.configured_peer_addresses,
+        &discovered_addresses,
+        metrics,
+    );
 }
 
 fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
@@ -287,6 +296,7 @@ fn refresh_kademlia_rendezvous(
 fn redial_known_addresses(
     swarm: &mut Swarm<Behaviour>,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     metrics: &RuntimeMetrics,
@@ -295,6 +305,7 @@ fn redial_known_addresses(
     let targets = pending_redial_targets(
         local_peer,
         bootstrap_addresses,
+        relay_addresses,
         configured_peer_addresses,
         discovered_peer_addresses,
         |peer| swarm.is_connected(peer),
@@ -317,6 +328,7 @@ fn redial_known_addresses(
 fn pending_redial_targets(
     local_peer: Libp2pPeerId,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
@@ -326,6 +338,7 @@ fn pending_redial_targets(
     let mut seen = HashSet::new();
     for (peer, address) in bootstrap_addresses
         .iter()
+        .chain(relay_addresses.iter())
         .chain(configured_peer_addresses.iter())
         .chain(discovered_peer_addresses.iter())
     {
@@ -1560,6 +1573,7 @@ mod tests {
         let targets = pending_redial_targets(
             local,
             &[(connected, bootstrap_address)],
+            &[],
             &[(disconnected, peer_address.clone()), (local, local_address)],
             &[],
             |peer| *peer == connected,
@@ -1578,13 +1592,16 @@ mod tests {
     fn redial_targets_include_bootstrap_and_configured_peer_addresses() {
         let local = peer_id();
         let bootstrap = peer_id();
+        let relay = peer_id();
         let configured = peer_id();
         let bootstrap_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
-        let peer_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let relay_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let peer_address: Multiaddr = "/ip4/127.0.0.1/tcp/4003".parse().expect("address");
 
         let targets = pending_redial_targets(
             local,
             &[(bootstrap, bootstrap_address.clone())],
+            &[(relay, relay_address.clone())],
             &[(configured, peer_address.clone())],
             &[],
             |_| false,
@@ -1593,7 +1610,11 @@ mod tests {
         assert_eq!(
             targets,
             RedialTargets {
-                addresses: vec![(bootstrap, bootstrap_address), (configured, peer_address)],
+                addresses: vec![
+                    (bootstrap, bootstrap_address),
+                    (relay, relay_address),
+                    (configured, peer_address),
+                ],
                 skipped_connected: 0,
             }
         );
@@ -1609,6 +1630,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            &[],
             &[],
             &[(configured, configured_address.clone())],
             &[(discovered, discovered_address.clone())],
@@ -1635,6 +1657,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            &[(peer, address.clone())],
             &[(peer, address.clone())],
             &[],
             &[(peer, address.clone())],
