@@ -2,6 +2,7 @@ pub mod control;
 pub mod forward;
 pub mod p2p;
 pub mod packet;
+pub mod remote;
 pub mod runner;
 pub mod service;
 pub mod stream;

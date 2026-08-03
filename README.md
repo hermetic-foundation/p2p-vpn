@@ -449,6 +449,22 @@ Outbound drop-reason counters also include packet requests rejected by the
 remote peer, so peer-side MTU, authorization, replay, and payload validation
 failures remain visible on the sender.
 
+Query a configured peer's live control and service status without opening a
+TUN interface:
+
+```sh
+cargo run -- peer-status <peer-id> --config p2p-vpn.json --timeout-seconds 10
+```
+
+`peer-status` builds the local libp2p host from the config, dials the target
+when a configured address is available, and exchanges the same bounded
+control-plane capabilities and service-plane status messages used by the
+runtime. The target peer must already be present in `peers`; the response is
+accepted only when the remote advertises the expected network, membership tag,
+wire protocol, MTU shape, preferred path, and route ownership. The output shows
+the validated packet protocol, effective MTU, QUIC datagram support flag,
+preferred path, and advertised routes.
+
 Inspect the Linux interface setup plan without requiring root:
 
 ```sh
