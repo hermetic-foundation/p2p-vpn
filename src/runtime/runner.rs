@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     io,
     path::PathBuf,
@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     PathKind, PeerId,
-    config::{Config, ConfigError, DiscoveryConfig, QueueConfig},
+    config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
     metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics},
     path::{PathSet, PathTransportSupport},
     queue::{EnqueueError, PeerQueues},
@@ -78,6 +78,63 @@ fn local_packet_data_plane() -> LocalPacketDataPlane {
     LOCAL_PACKET_DATA_PLANE
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PacketRateBucket {
+    tokens: u32,
+    refilled_at: Instant,
+}
+
+#[derive(Debug)]
+struct PeerPacketRateLimiters {
+    limit_per_second: u32,
+    buckets: HashMap<Libp2pPeerId, PacketRateBucket>,
+}
+
+impl PeerPacketRateLimiters {
+    fn new(limit_per_second: u32) -> Self {
+        Self {
+            limit_per_second: limit_per_second.max(1),
+            buckets: HashMap::new(),
+        }
+    }
+
+    const fn limit_per_second(&self) -> u32 {
+        self.limit_per_second
+    }
+
+    fn allow(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+        let limit = self.limit_per_second;
+        let bucket = self.buckets.entry(peer).or_insert(PacketRateBucket {
+            tokens: limit,
+            refilled_at: now,
+        });
+
+        let elapsed = now.saturating_duration_since(bucket.refilled_at);
+        let refill = elapsed
+            .as_secs()
+            .saturating_mul(u64::from(limit))
+            .saturating_add(
+                u64::from(elapsed.subsec_nanos()).saturating_mul(u64::from(limit)) / 1_000_000_000,
+            );
+        if refill > 0 {
+            let refill = u32::try_from(refill).unwrap_or(u32::MAX);
+            bucket.tokens = bucket.tokens.saturating_add(refill).min(limit);
+            bucket.refilled_at = now;
+        }
+
+        if bucket.tokens == 0 {
+            return false;
+        }
+
+        bucket.tokens -= 1;
+        true
+    }
+
+    fn remove(&mut self, peer: Libp2pPeerId) {
+        self.buckets.remove(&peer);
+    }
+}
+
 pub async fn run_config(
     config: Config,
     device: TunDevice,
@@ -131,6 +188,7 @@ where
         device,
         config.effective_packet_mtu(),
         config.queue,
+        config.resources,
         metrics_interval,
         control_socket,
         shutdown,
@@ -159,22 +217,29 @@ pub async fn run_node(
     forwarder: Forwarder,
     membership: OverlayMembership,
     device: TunDevice,
-    mtu: u16,
-    queue_config: QueueConfig,
-    metrics_interval: Option<Duration>,
+    options: RuntimeNodeOptions,
 ) -> Result<(), RunnerError> {
     Box::pin(run_node_until(
         node,
         forwarder,
         membership,
         device,
-        mtu,
-        queue_config,
-        metrics_interval,
+        options.mtu,
+        options.queue,
+        options.resources,
+        options.metrics_interval,
         None,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeNodeOptions {
+    pub mtu: u16,
+    pub queue: QueueConfig,
+    pub resources: ResourceConfig,
+    pub metrics_interval: Option<Duration>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -186,6 +251,7 @@ pub async fn run_node_until<Shutdown>(
     device: TunDevice,
     mtu: u16,
     queue_config: QueueConfig,
+    resources: ResourceConfig,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
     shutdown: Shutdown,
@@ -204,6 +270,8 @@ where
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
     let mut discovered_peer_addresses = DiscoveredPeerAddresses::default();
+    let mut inbound_packet_rate_limiters =
+        PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let mut timers = RuntimeTimers::new(
         metrics_interval,
@@ -268,6 +336,7 @@ where
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
                         discovered_peer_addresses: &mut discovered_peer_addresses,
+                        inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
                         discovery: &discovery,
@@ -1242,6 +1311,7 @@ struct SwarmEventContext<'a> {
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
+    inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
     discovery: &'a DiscoveryConfig,
@@ -1353,6 +1423,9 @@ fn handle_swarm_event(
                 peer_id,
                 num_established,
             );
+            if num_established == 0 {
+                context.inbound_packet_rate_limiters.remove(peer_id);
+            }
             log_runtime_event(
                 LogLevel::Info,
                 "connection_closed",
@@ -1500,6 +1573,26 @@ fn handle_packet_request(
     request: &crate::wire::Frame,
     channel: request_response::ResponseChannel<PacketResponse>,
 ) -> Result<(), RunnerError> {
+    if !context
+        .inbound_packet_rate_limiters
+        .allow(peer, Instant::now())
+    {
+        context
+            .metrics
+            .record_inbound_drop(PacketDropReason::RateLimited);
+        audit_packet_rate_limit_rejection(
+            peer,
+            request,
+            context.inbound_packet_rate_limiters.limit_per_second(),
+        );
+        return Forwarder::send_packet_response(
+            swarm,
+            channel,
+            PacketResponse::Rejected(PacketRejectionReason::RateLimited),
+        )
+        .map_err(|_| RunnerError::PacketResponseDropped);
+    }
+
     let result = match request.header.payload_type {
         PayloadType::IpPacket => match context.forwarder.accept_inbound_packet(peer, request) {
             Ok(packet) => {
@@ -2414,6 +2507,12 @@ fn audit_packet_request_rejection(peer: Libp2pPeerId, frame: &Frame, error: &For
     );
 }
 
+fn audit_packet_rate_limit_rejection(peer: Libp2pPeerId, frame: &Frame, limit_per_second: u32) {
+    let mut fields = packet_base_audit_fields(peer, frame, "rate_limited");
+    fields.push(("limit_per_second", limit_per_second.to_string()));
+    log_runtime_event_owned(LogLevel::Warn, "packet_rejected", &fields);
+}
+
 fn audit_packet_response_rejection(peer: Libp2pPeerId, reason: PacketRejectionReason) {
     log_runtime_event_owned(
         LogLevel::Warn,
@@ -2460,9 +2559,13 @@ fn packet_rejection_audit_fields(
     frame: &Frame,
     error: &ForwardError,
 ) -> AuditFields {
+    packet_base_audit_fields(peer, frame, packet_rejection_error_name(error))
+}
+
+fn packet_base_audit_fields(peer: Libp2pPeerId, frame: &Frame, reason: &str) -> AuditFields {
     let mut fields = vec![
         ("peer", peer.to_string()),
-        ("reason", packet_rejection_error_name(error).to_owned()),
+        ("reason", reason.to_owned()),
         (
             "payload_type",
             payload_type_name(frame.header.payload_type).to_owned(),
@@ -2514,6 +2617,7 @@ fn packet_response_rejection_name(reason: PacketRejectionReason) -> &'static str
         PacketRejectionReason::UnauthorizedSource => "unauthorized_source",
         PacketRejectionReason::UnauthorizedDestination => "unauthorized_destination",
         PacketRejectionReason::UnexpectedPayload => "unexpected_payload",
+        PacketRejectionReason::RateLimited => "rate_limited",
     }
 }
 
@@ -2561,6 +2665,7 @@ fn packet_rejection_reason(reason: PacketDropReason) -> PacketRejectionReason {
         PacketDropReason::UnauthorizedSource => PacketRejectionReason::UnauthorizedSource,
         PacketDropReason::UnauthorizedDestination => PacketRejectionReason::UnauthorizedDestination,
         PacketDropReason::UnexpectedPayload => PacketRejectionReason::UnexpectedPayload,
+        PacketDropReason::RateLimited => PacketRejectionReason::RateLimited,
         PacketDropReason::MalformedPacket | PacketDropReason::NoRoute => {
             PacketRejectionReason::MalformedPacket
         }
@@ -2576,6 +2681,7 @@ fn packet_rejection_drop_reason(reason: PacketRejectionReason) -> PacketDropReas
         PacketRejectionReason::UnauthorizedSource => PacketDropReason::UnauthorizedSource,
         PacketRejectionReason::UnauthorizedDestination => PacketDropReason::UnauthorizedDestination,
         PacketRejectionReason::UnexpectedPayload => PacketDropReason::UnexpectedPayload,
+        PacketRejectionReason::RateLimited => PacketDropReason::RateLimited,
     }
 }
 
@@ -2813,6 +2919,10 @@ mod tests {
             "replay"
         );
         assert_eq!(
+            packet_response_rejection_name(PacketRejectionReason::RateLimited),
+            "rate_limited"
+        );
+        assert_eq!(
             control_rejection_name(ControlRejectionReason::UnauthorizedRouteAdvertisement),
             "unauthorized_route_advertisement"
         );
@@ -2821,6 +2931,34 @@ mod tests {
             "membership_mismatch"
         );
         assert_eq!(payload_type_name(PayloadType::PathProbe), "path_probe");
+    }
+
+    #[test]
+    fn peer_packet_rate_limiter_caps_each_peer_independently() {
+        let peer_a = peer_id();
+        let peer_b = peer_id();
+        let mut limiters = PeerPacketRateLimiters::new(2);
+        let now = Instant::now();
+
+        assert!(limiters.allow(peer_a, now));
+        assert!(limiters.allow(peer_a, now));
+        assert!(!limiters.allow(peer_a, now));
+        assert!(limiters.allow(peer_b, now));
+    }
+
+    #[test]
+    fn peer_packet_rate_limiter_refills_over_time_and_can_forget_peers() {
+        let peer = peer_id();
+        let mut limiters = PeerPacketRateLimiters::new(1);
+        let now = Instant::now();
+
+        assert!(limiters.allow(peer, now));
+        assert!(!limiters.allow(peer, now));
+        assert!(limiters.allow(peer, now + Duration::from_secs(1)));
+
+        assert!(!limiters.allow(peer, now + Duration::from_secs(1)));
+        limiters.remove(peer);
+        assert!(limiters.allow(peer, now + Duration::from_secs(1)));
     }
 
     #[test]
@@ -3687,6 +3825,10 @@ mod tests {
             PacketRejectionReason::UnexpectedPayload
         );
         assert_eq!(
+            packet_rejection_reason(PacketDropReason::RateLimited),
+            PacketRejectionReason::RateLimited
+        );
+        assert_eq!(
             packet_rejection_reason(PacketDropReason::NoRoute),
             PacketRejectionReason::MalformedPacket
         );
@@ -3717,6 +3859,10 @@ mod tests {
         assert_eq!(
             packet_rejection_drop_reason(PacketRejectionReason::UnexpectedPayload),
             PacketDropReason::UnexpectedPayload
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::RateLimited),
+            PacketDropReason::RateLimited
         );
     }
 

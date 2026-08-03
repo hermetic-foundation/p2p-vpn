@@ -854,9 +854,12 @@ async fn run_ready_node(
         forwarder,
         membership,
         device,
-        mtu,
-        config.queue,
-        Some(Duration::from_secs(1)),
+        runner::RuntimeNodeOptions {
+            mtu,
+            queue: config.queue,
+            resources: config.resources,
+            metrics_interval: Some(Duration::from_secs(1)),
+        },
     ))
     .await
 }

@@ -48,6 +48,7 @@ pub enum PacketRejectionReason {
     UnauthorizedSource,
     UnauthorizedDestination,
     UnexpectedPayload,
+    RateLimited,
 }
 
 impl PacketRejectionReason {
@@ -58,6 +59,7 @@ impl PacketRejectionReason {
     const UNAUTHORIZED_SOURCE_BYTE: u8 = 5;
     const UNAUTHORIZED_DESTINATION_BYTE: u8 = 6;
     const UNEXPECTED_PAYLOAD_BYTE: u8 = 7;
+    const RATE_LIMITED_BYTE: u8 = 8;
 
     fn encode(self) -> u8 {
         match self {
@@ -68,6 +70,7 @@ impl PacketRejectionReason {
             Self::UnauthorizedSource => Self::UNAUTHORIZED_SOURCE_BYTE,
             Self::UnauthorizedDestination => Self::UNAUTHORIZED_DESTINATION_BYTE,
             Self::UnexpectedPayload => Self::UNEXPECTED_PAYLOAD_BYTE,
+            Self::RateLimited => Self::RATE_LIMITED_BYTE,
         }
     }
 
@@ -80,6 +83,7 @@ impl PacketRejectionReason {
             Self::UNAUTHORIZED_SOURCE_BYTE => Ok(Self::UnauthorizedSource),
             Self::UNAUTHORIZED_DESTINATION_BYTE => Ok(Self::UnauthorizedDestination),
             Self::UNEXPECTED_PAYLOAD_BYTE => Ok(Self::UnexpectedPayload),
+            Self::RATE_LIMITED_BYTE => Ok(Self::RateLimited),
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown packet rejection reason {other}"),
@@ -277,21 +281,33 @@ mod tests {
 
     #[tokio::test]
     async fn packet_codec_round_trips_rejection_response() {
-        let mut codec = PacketCodec::new(1280);
-        let protocol = StreamProtocol::new(PACKET_PROTOCOL);
-        let response = PacketResponse::Rejected(PacketRejectionReason::UnauthorizedSource);
-        let mut written = Cursor::new(Vec::new());
+        for reason in [
+            PacketRejectionReason::MalformedPacket,
+            PacketRejectionReason::PacketTooLarge,
+            PacketRejectionReason::Replay,
+            PacketRejectionReason::UnauthorizedPeer,
+            PacketRejectionReason::UnauthorizedSource,
+            PacketRejectionReason::UnauthorizedDestination,
+            PacketRejectionReason::UnexpectedPayload,
+            PacketRejectionReason::RateLimited,
+        ] {
+            let mut codec = PacketCodec::new(1280);
+            let protocol = StreamProtocol::new(PACKET_PROTOCOL);
+            let response = PacketResponse::Rejected(reason);
+            let mut written = Cursor::new(Vec::new());
 
-        request_response::Codec::write_response(&mut codec, &protocol, &mut written, response)
-            .await
-            .expect("write");
+            request_response::Codec::write_response(&mut codec, &protocol, &mut written, response)
+                .await
+                .expect("write");
 
-        written.set_position(0);
-        let decoded = request_response::Codec::read_response(&mut codec, &protocol, &mut written)
-            .await
-            .expect("read");
+            written.set_position(0);
+            let decoded =
+                request_response::Codec::read_response(&mut codec, &protocol, &mut written)
+                    .await
+                    .expect("read");
 
-        assert_eq!(decoded, response);
+            assert_eq!(decoded, response);
+        }
     }
 
     #[tokio::test]

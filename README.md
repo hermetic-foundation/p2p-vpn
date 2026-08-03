@@ -183,9 +183,14 @@ fallback has a bounded concurrent stream limit, exposed through `resources`, so
 operators can tighten or relax stream pressure without changing code. Swarm
 connection limits are also exposed there so public bootstrap and relay-capable
 nodes can bound pending handshakes, established connections, and connections per
-peer. Runtime validation rejects zero per-peer packet queue capacity and zero
-total or per-peer established connection capacity, because those settings would
-make an otherwise valid node unable to forward VPN traffic.
+peer. The packet protocol also enforces
+`resources.max_inbound_packets_per_peer_per_second` as a per-peer inbound token
+bucket before writing any accepted packet to TUN; over-limit frames receive a
+compact `rate_limited` packet rejection and are counted separately in metrics.
+Runtime validation rejects zero per-peer packet queue capacity, zero inbound
+packet rate capacity, and zero total or per-peer established connection
+capacity, because those settings would make an otherwise valid node unable to
+forward VPN traffic.
 When `relay.server` is enabled, runtime validation also requires non-zero relay
 reservation, circuit, duration, and byte limits so the relay can actually accept
 reservations and carry fallback traffic.
@@ -300,9 +305,9 @@ advertisement; hand-written configs that set
 not runtime-ready. Use `--disable-kademlia-provider-advertisement` on
 bootstrap-only nodes that should route Kademlia queries without advertising
 themselves as VPN packet providers. Use the `--queue-*`, `--max-concurrent-*`,
-and `--max-*-connections*` flags to tune per-peer packet buffering, stream
-pressure, and swarm connection limits in generated configs instead of
-hand-editing JSON.
+`--max-inbound-packets-per-peer-per-second`, and `--max-*-connections*` flags to
+tune per-peer packet buffering, packet rate pressure, stream pressure, and swarm
+connection limits in generated configs instead of hand-editing JSON.
 Relay-capable nodes can also set `--relay-max-reservations`,
 `--relay-max-reservations-per-peer`, `--relay-reservation-duration-secs`,
 `--relay-max-circuits`, `--relay-max-circuits-per-peer`,
@@ -395,6 +400,7 @@ Kademlia/bootstrap peer discovery, and circuit-relay fallback.
   "resources": {
     "max_concurrent_control_streams": 64,
     "max_concurrent_packet_streams": 256,
+    "max_inbound_packets_per_peer_per_second": 4096,
     "max_pending_incoming_connections": 64,
     "max_pending_outgoing_connections": 64,
     "max_established_incoming_connections": 256,
@@ -546,8 +552,9 @@ acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/failure counters, inbound and outbound packet drop reasons
-including expired outbound queue packets, stream fallback sends, attempted
-native QUIC datagram sends, datagram-unavailable queue stalls, direct versus
+including rate-limited inbound frames and expired outbound queue packets, stream
+fallback sends, attempted native QUIC datagram sends, datagram-unavailable queue
+stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed

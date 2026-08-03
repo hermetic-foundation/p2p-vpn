@@ -21,6 +21,7 @@ pub enum PacketDropReason {
     UnauthorizedSource,
     UnauthorizedDestination,
     UnexpectedPayload,
+    RateLimited,
 }
 
 #[derive(Debug, Default)]
@@ -54,6 +55,7 @@ pub struct RuntimeMetrics {
     inbound_drop_unauthorized_source_packets: AtomicU64,
     inbound_drop_unauthorized_destination_packets: AtomicU64,
     inbound_drop_unexpected_payload_packets: AtomicU64,
+    inbound_drop_rate_limited_packets: AtomicU64,
     outbound_failures: AtomicU64,
     inbound_failures: AtomicU64,
     direct_connections_established: AtomicU64,
@@ -192,7 +194,8 @@ impl RuntimeMetrics {
             | PacketDropReason::Replay
             | PacketDropReason::UnauthorizedPeer
             | PacketDropReason::UnauthorizedDestination
-            | PacketDropReason::UnexpectedPayload => self
+            | PacketDropReason::UnexpectedPayload
+            | PacketDropReason::RateLimited => self
                 .outbound_drop_malformed_packets
                 .fetch_add(1, Ordering::Relaxed),
             PacketDropReason::NoRoute => self
@@ -243,6 +246,9 @@ impl RuntimeMetrics {
                 .fetch_add(1, Ordering::Relaxed),
             PacketDropReason::UnexpectedPayload => self
                 .inbound_drop_unexpected_payload_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::RateLimited => self
+                .inbound_drop_rate_limited_packets
                 .fetch_add(1, Ordering::Relaxed),
         };
     }
@@ -659,6 +665,9 @@ impl RuntimeMetrics {
         snapshot.inbound_drop_unexpected_payload_packets = self
             .inbound_drop_unexpected_payload_packets
             .load(Ordering::Relaxed);
+        snapshot.inbound_drop_rate_limited_packets = self
+            .inbound_drop_rate_limited_packets
+            .load(Ordering::Relaxed);
     }
 
     fn fill_transport_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
@@ -851,6 +860,7 @@ pub struct RuntimeSnapshot {
     pub inbound_drop_unauthorized_source_packets: u64,
     pub inbound_drop_unauthorized_destination_packets: u64,
     pub inbound_drop_unexpected_payload_packets: u64,
+    pub inbound_drop_rate_limited_packets: u64,
     pub outbound_failures: u64,
     pub inbound_failures: u64,
     pub direct_connections_established: u64,
@@ -1324,6 +1334,10 @@ impl RuntimeSnapshot {
                 "inbound_drop_unexpected_payload_packets {}",
                 self.inbound_drop_unexpected_payload_packets
             ),
+            format!(
+                "inbound_drop_rate_limited_packets {}",
+                self.inbound_drop_rate_limited_packets
+            ),
         ]);
     }
 }
@@ -1366,6 +1380,7 @@ mod tests {
         metrics.record_inbound_drop(PacketDropReason::UnauthorizedSource);
         metrics.record_inbound_drop(PacketDropReason::UnauthorizedDestination);
         metrics.record_inbound_drop(PacketDropReason::UnexpectedPayload);
+        metrics.record_inbound_drop(PacketDropReason::RateLimited);
         metrics.record_outbound_failure();
         metrics.record_inbound_failure();
     }
@@ -1477,6 +1492,40 @@ mod tests {
         assert!(snapshot.lines().contains(&line.to_owned()));
     }
 
+    fn assert_packet_drop_counters(snapshot: &RuntimeSnapshot) {
+        assert_eq!(snapshot.outbound_dropped_packets, 6);
+        assert_eq!(snapshot.inbound_dropped_packets, 8);
+        assert_eq!(snapshot.outbound_drop_no_route_packets, 1);
+        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.outbound_drop_queue_full_packets, 1);
+        assert_eq!(snapshot.outbound_drop_queue_expired_packets, 2);
+        assert_eq!(snapshot.outbound_drop_unauthorized_source_packets, 1);
+        assert_eq!(snapshot.inbound_drop_malformed_packets, 1);
+        assert_eq!(snapshot.inbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.inbound_drop_replay_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_peer_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_source_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_destination_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unexpected_payload_packets, 1);
+        assert_eq!(snapshot.inbound_drop_rate_limited_packets, 1);
+    }
+
+    fn assert_packet_drop_lines(snapshot: &RuntimeSnapshot) {
+        assert_metric_line(snapshot, "outbound_drop_no_route_packets 1");
+        assert_metric_line(snapshot, "outbound_drop_packet_too_large_packets 1");
+        assert_metric_line(snapshot, "outbound_drop_queue_full_packets 1");
+        assert_metric_line(snapshot, "outbound_drop_queue_expired_packets 2");
+        assert_metric_line(snapshot, "outbound_drop_unauthorized_source_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_malformed_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_packet_too_large_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_replay_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_unauthorized_peer_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_unauthorized_source_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_unauthorized_destination_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_unexpected_payload_packets 1");
+        assert_metric_line(snapshot, "inbound_drop_rate_limited_packets 1");
+    }
+
     #[test]
     fn metrics_snapshot_reports_runtime_and_queue_counters() {
         let snapshot = populated_snapshot();
@@ -1491,20 +1540,7 @@ mod tests {
         assert_eq!(snapshot.inbound_accepted_packets, 1);
         assert_eq!(snapshot.inbound_keepalives_accepted, 1);
         assert_eq!(snapshot.inbound_path_probes_accepted, 1);
-        assert_eq!(snapshot.outbound_dropped_packets, 6);
-        assert_eq!(snapshot.inbound_dropped_packets, 7);
-        assert_eq!(snapshot.outbound_drop_no_route_packets, 1);
-        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
-        assert_eq!(snapshot.outbound_drop_queue_full_packets, 1);
-        assert_eq!(snapshot.outbound_drop_queue_expired_packets, 2);
-        assert_eq!(snapshot.outbound_drop_unauthorized_source_packets, 1);
-        assert_eq!(snapshot.inbound_drop_malformed_packets, 1);
-        assert_eq!(snapshot.inbound_drop_packet_too_large_packets, 1);
-        assert_eq!(snapshot.inbound_drop_replay_packets, 1);
-        assert_eq!(snapshot.inbound_drop_unauthorized_peer_packets, 1);
-        assert_eq!(snapshot.inbound_drop_unauthorized_source_packets, 1);
-        assert_eq!(snapshot.inbound_drop_unauthorized_destination_packets, 1);
-        assert_eq!(snapshot.inbound_drop_unexpected_payload_packets, 1);
+        assert_packet_drop_counters(&snapshot);
         assert_eq!(snapshot.outbound_failures, 1);
         assert_eq!(snapshot.inbound_failures, 1);
         assert_eq!(snapshot.direct_connections_established, 1);
@@ -1612,18 +1648,7 @@ mod tests {
         assert_metric_line(&snapshot, "inbound_keepalives_accepted 1");
         assert_metric_line(&snapshot, "inbound_path_probes_accepted 1");
         assert_metric_line(&snapshot, "queue_oldest_packet_age_millis 45");
-        assert_metric_line(&snapshot, "outbound_drop_no_route_packets 1");
-        assert_metric_line(&snapshot, "outbound_drop_packet_too_large_packets 1");
-        assert_metric_line(&snapshot, "outbound_drop_queue_full_packets 1");
-        assert_metric_line(&snapshot, "outbound_drop_queue_expired_packets 2");
-        assert_metric_line(&snapshot, "outbound_drop_unauthorized_source_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_malformed_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_packet_too_large_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_replay_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_unauthorized_peer_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_unauthorized_source_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_unauthorized_destination_packets 1");
-        assert_metric_line(&snapshot, "inbound_drop_unexpected_payload_packets 1");
+        assert_packet_drop_lines(&snapshot);
         assert_metric_line(&snapshot, "relayed_connections_established 1");
         assert_metric_line(&snapshot, "path_promotions_to_direct 1");
         assert_metric_line(&snapshot, "path_fallbacks_to_relay 1");

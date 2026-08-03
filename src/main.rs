@@ -121,6 +121,8 @@ enum Command {
         max_concurrent_control_streams: usize,
         #[arg(long, default_value_t = 256)]
         max_concurrent_packet_streams: usize,
+        #[arg(long, default_value_t = 4096)]
+        max_inbound_packets_per_peer_per_second: u32,
         #[arg(long, default_value_t = 64)]
         max_pending_incoming_connections: u32,
         #[arg(long, default_value_t = 64)]
@@ -286,6 +288,7 @@ async fn main() -> Result<(), String> {
             queue_max_packet_age_millis,
             max_concurrent_control_streams,
             max_concurrent_packet_streams,
+            max_inbound_packets_per_peer_per_second,
             max_pending_incoming_connections,
             max_pending_outgoing_connections,
             max_established_incoming_connections,
@@ -343,6 +346,7 @@ async fn main() -> Result<(), String> {
             resources: ResourceConfig {
                 max_concurrent_packet_streams,
                 max_concurrent_control_streams,
+                max_inbound_packets_per_peer_per_second,
                 max_pending_incoming_connections,
                 max_pending_outgoing_connections,
                 max_established_incoming_connections,
@@ -2373,6 +2377,8 @@ mod tests {
             "11",
             "--max-concurrent-packet-streams",
             "22",
+            "--max-inbound-packets-per-peer-per-second",
+            "333",
             "--max-established-connections",
             "88",
         ])
@@ -2393,6 +2399,7 @@ mod tests {
             queue_max_packet_age_millis,
             max_concurrent_control_streams,
             max_concurrent_packet_streams,
+            max_inbound_packets_per_peer_per_second,
             max_established_connections,
             ..
         } = cli.command
@@ -2440,6 +2447,7 @@ mod tests {
         assert_eq!(queue_max_packet_age_millis, 250);
         assert_eq!(max_concurrent_control_streams, 11);
         assert_eq!(max_concurrent_packet_streams, 22);
+        assert_eq!(max_inbound_packets_per_peer_per_second, 333);
         assert_eq!(max_established_connections, 88);
     }
 
@@ -2922,6 +2930,7 @@ mod tests {
             resources: ResourceConfig {
                 max_concurrent_control_streams: 11,
                 max_concurrent_packet_streams: 22,
+                max_inbound_packets_per_peer_per_second: 333,
                 max_pending_incoming_connections: 33,
                 max_pending_outgoing_connections: 44,
                 max_established_incoming_connections: 55,
@@ -2961,6 +2970,7 @@ mod tests {
             ResourceConfig {
                 max_concurrent_control_streams: 11,
                 max_concurrent_packet_streams: 22,
+                max_inbound_packets_per_peer_per_second: 333,
                 max_pending_incoming_connections: 33,
                 max_pending_outgoing_connections: 44,
                 max_established_incoming_connections: 55,
