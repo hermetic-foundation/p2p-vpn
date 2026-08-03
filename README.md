@@ -132,7 +132,9 @@ fallback has a bounded concurrent stream limit, exposed through `resources`, so
 operators can tighten or relax stream pressure without changing code. Swarm
 connection limits are also exposed there so public bootstrap and relay-capable
 nodes can bound pending handshakes, established connections, and connections per
-peer.
+peer. Runtime validation rejects zero per-peer packet queue capacity and zero
+total or per-peer established connection capacity, because those settings would
+make an otherwise valid node unable to forward VPN traffic.
 
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length

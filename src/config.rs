@@ -89,12 +89,38 @@ impl Config {
         self.identity()?;
         self.membership_key_bytes()?;
         self.compile_routes()?;
+        self.validate_resources()?;
         self.listen_multiaddrs()?;
         self.external_multiaddrs()?;
         self.bootstrap_multiaddrs()?;
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
+        Ok(())
+    }
+
+    fn validate_resources(&self) -> Result<(), ConfigError> {
+        if self.queue.max_packets_per_peer == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::EmptyQueuePackets,
+            ));
+        }
+        if self.queue.max_bytes_per_peer == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::EmptyQueueBytes,
+            ));
+        }
+        if self.resources.max_established_connections_per_peer == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoEstablishedConnectionsPerPeer,
+            ));
+        }
+        if self.resources.max_established_connections == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoEstablishedConnections,
+            ));
+        }
+
         Ok(())
     }
 
@@ -492,6 +518,7 @@ pub enum ConfigError {
     Multiaddr(libp2p::multiaddr::Error),
     KademliaProtocol(String),
     Address(AddressValidationError),
+    Resource(ResourceValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
 }
@@ -544,6 +571,14 @@ pub enum AddressValidationError {
     UnexpectedRelayTarget {
         address: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResourceValidationError {
+    EmptyQueuePackets,
+    EmptyQueueBytes,
+    NoEstablishedConnectionsPerPeer,
+    NoEstablishedConnections,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1259,6 +1294,92 @@ mod tests {
         assert!(matches!(
             config.validate_runtime(),
             Err(ConfigError::IdentityPeerMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_empty_packet_queues() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        config.queue.max_packets_per_peer = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::EmptyQueuePackets
+            ))
+        ));
+
+        config.queue.max_packets_per_peer = 256;
+        config.queue.max_bytes_per_peer = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::EmptyQueueBytes
+            ))
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_zero_established_connection_capacity() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        config.resources.max_established_connections_per_peer = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoEstablishedConnectionsPerPeer
+            ))
+        ));
+
+        config.resources.max_established_connections_per_peer = 8;
+        config.resources.max_established_connections = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoEstablishedConnections
+            ))
         ));
     }
 
