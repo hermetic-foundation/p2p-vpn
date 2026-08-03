@@ -107,6 +107,11 @@ impl PeerCapabilities {
     }
 
     #[must_use]
+    pub fn contains(&self, peer: PeerId) -> bool {
+        self.peers.contains_key(&peer)
+    }
+
+    #[must_use]
     pub fn effective_mtu_for(&self, peer: PeerId, fallback_mtu: u16) -> u16 {
         self.peers
             .get(&peer)

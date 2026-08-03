@@ -36,6 +36,9 @@ An optional `network.membership_key` adds overlay-wide membership proof for
 configured peers. The base64 key is never sent on the wire; peers exchange a
 network-scoped SHA-256 membership tag in the control handshake and reject
 configured peers whose tag does not match.
+Outbound packets are not drained to a peer until that peer has passed the
+control-plane capability exchange, including network-name, membership-tag,
+protocol, MTU, path, and route-advertisement validation.
 
 Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the

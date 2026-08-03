@@ -536,7 +536,8 @@ fn drain_outbound_queue(
 ) {
     expire_outbound_queue(queues, metrics);
     while let Some(packet) = queues.dequeue_ready(|peer| {
-        paths.has_supported_path(peer, packet_transport_support(peer_capabilities, peer))
+        peer_capabilities.contains(peer)
+            && paths.has_supported_path(peer, packet_transport_support(peer_capabilities, peer))
     }) {
         let peer_mtu = peer_capabilities.effective_mtu_for(
             packet.peer(),
@@ -2494,6 +2495,92 @@ mod tests {
                 ControlRejectionReason::UnsupportedPacketProtocol
             )
         );
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_waits_for_validated_peer_capabilities() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+
+        drain_outbound_queue(
+            &mut node.swarm,
+            &forwarder,
+            &mut queues,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
+        assert_eq!(snapshot.queue.queued_packets, 1);
     }
 
     #[tokio::test]

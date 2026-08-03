@@ -27,6 +27,7 @@ use p2p_vpn::{
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 
 #[test]
@@ -71,7 +72,7 @@ fn run_orchestrator() {
     let start_b = temp_dir.join("start-b");
 
     let config_b = node_config(
-        "tun-e2e-b",
+        NETWORK_NAME,
         "hse2eb",
         &identity_b,
         "/ip4/10.250.0.2/tcp/42102",
@@ -261,7 +262,7 @@ fn run_node_child() {
 
     let (name, interface, listen, remote_address, local_routes, peer_routes) = match role.as_str() {
         "a" => (
-            "tun-e2e-a",
+            NETWORK_NAME,
             "hse2ea",
             "/ip4/10.250.0.1/tcp/42101",
             Some("/ip4/10.250.0.2/tcp/42102"),
@@ -272,7 +273,7 @@ fn run_node_child() {
             Vec::new(),
         ),
         "b" => (
-            "tun-e2e-b",
+            NETWORK_NAME,
             "hse2eb",
             "/ip4/10.250.0.2/tcp/42102",
             None,
