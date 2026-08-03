@@ -323,8 +323,8 @@ The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons including expired outbound queue packets, direct versus
 relayed connection counts, relay reservation/circuit counts, relay-server
-accept/deny/close/timeout counts, DCUtR success/failure counts, observed external address
-candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
+accept/deny/close/timeout counts, DCUtR success/failure counts, observed
+external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
 public/private/unknown reachability gauges and status-change counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap
 refresh counts, unauthorized connection drops, configured peer redial counters,
@@ -337,6 +337,9 @@ exchanging capabilities, probing and advertising observed public addresses,
 refreshing DHT discovery, rejecting bad discovered addresses, using direct
 paths, relay fallback, hole-punching, enforcing membership, recovering
 connections, and waiting on path negotiation as expected.
+Outbound drop-reason counters also include packet requests rejected by the
+remote peer, so peer-side MTU, authorization, replay, and payload validation
+failures remain visible on the sender.
 
 Inspect the Linux interface setup plan without requiring root:
 

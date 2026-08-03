@@ -726,6 +726,9 @@ fn handle_packet_event(
             PacketResponse::Accepted => {}
             PacketResponse::Rejected(reason) => {
                 context.metrics.record_outbound_failure();
+                context
+                    .metrics
+                    .record_outbound_drop(packet_rejection_drop_reason(reason));
                 eprintln!("packet request to {peer} was rejected: {reason:?}");
             }
         },
@@ -1311,6 +1314,18 @@ fn packet_rejection_reason(reason: PacketDropReason) -> PacketRejectionReason {
         PacketDropReason::MalformedPacket | PacketDropReason::NoRoute => {
             PacketRejectionReason::MalformedPacket
         }
+    }
+}
+
+fn packet_rejection_drop_reason(reason: PacketRejectionReason) -> PacketDropReason {
+    match reason {
+        PacketRejectionReason::MalformedPacket => PacketDropReason::MalformedPacket,
+        PacketRejectionReason::PacketTooLarge => PacketDropReason::PacketTooLarge,
+        PacketRejectionReason::Replay => PacketDropReason::Replay,
+        PacketRejectionReason::UnauthorizedPeer => PacketDropReason::UnauthorizedPeer,
+        PacketRejectionReason::UnauthorizedSource => PacketDropReason::UnauthorizedSource,
+        PacketRejectionReason::UnauthorizedDestination => PacketDropReason::UnauthorizedDestination,
+        PacketRejectionReason::UnexpectedPayload => PacketDropReason::UnexpectedPayload,
     }
 }
 
@@ -2013,6 +2028,48 @@ mod tests {
             packet_rejection_reason(PacketDropReason::NoRoute),
             PacketRejectionReason::MalformedPacket
         );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::MalformedPacket),
+            PacketDropReason::MalformedPacket
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::PacketTooLarge),
+            PacketDropReason::PacketTooLarge
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::Replay),
+            PacketDropReason::Replay
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::UnauthorizedPeer),
+            PacketDropReason::UnauthorizedPeer
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::UnauthorizedSource),
+            PacketDropReason::UnauthorizedSource
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::UnauthorizedDestination),
+            PacketDropReason::UnauthorizedDestination
+        );
+        assert_eq!(
+            packet_rejection_drop_reason(PacketRejectionReason::UnexpectedPayload),
+            PacketDropReason::UnexpectedPayload
+        );
+    }
+
+    #[test]
+    fn rejected_packet_responses_update_outbound_drop_metrics() {
+        let metrics = RuntimeMetrics::default();
+        let reason = packet_rejection_drop_reason(PacketRejectionReason::PacketTooLarge);
+
+        metrics.record_outbound_failure();
+        metrics.record_outbound_drop(reason);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_failures, 1);
+        assert_eq!(snapshot.outbound_dropped_packets, 1);
+        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
     }
 
     #[test]
