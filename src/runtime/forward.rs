@@ -162,8 +162,18 @@ impl Forwarder {
         let source = packet_source(&frame.payload)?;
         self.routes
             .authorize_source(PeerId::from_libp2p(peer), source)?;
+        let destination = packet_destination(&frame.payload)?;
+        self.authorize_local_destination(destination)?;
 
         Ok(&frame.payload)
+    }
+
+    fn authorize_local_destination(&self, destination: IpAddr) -> Result<(), ForwardError> {
+        match destination {
+            IpAddr::V4(address) if address == builtin_ipv4(self.local_peer) => Ok(()),
+            IpAddr::V6(address) if address == builtin_ipv6(self.local_peer) => Ok(()),
+            _ => Err(ForwardError::UnauthorizedLocalDestination { destination }),
+        }
     }
 
     pub fn send_packet_response(
@@ -248,6 +258,7 @@ pub enum ForwardError {
     NoTransportPeer(PeerId),
     PacketTooLarge { actual: usize, max: usize },
     UnauthorizedLocalSource { source: IpAddr },
+    UnauthorizedLocalDestination { destination: IpAddr },
     TruncatedIpPacket { actual: usize, expected: usize },
     UnsupportedIpVersion(u8),
     UnauthorizedPeer(Libp2pPeerId),
@@ -329,6 +340,10 @@ mod tests {
         builtin_ipv4(config.local_peer_id().expect("local peer id"))
     }
 
+    fn local_ipv6(config: &Config) -> Ipv6Addr {
+        builtin_ipv6(config.local_peer_id().expect("local peer id"))
+    }
+
     fn ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
         let mut packet = vec![0; 20];
         packet[0] = 0x45;
@@ -386,8 +401,9 @@ mod tests {
     fn inbound_packet_must_match_peer_route_ownership() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
-        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
-        let packet = ipv4_packet(builtin_ipv4(remote_overlay), Ipv4Addr::new(100, 64, 9, 9));
+        let config = config_for(remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
         let frame = Frame::packet(0, 1, packet).expect("frame");
 
         assert_eq!(
@@ -409,6 +425,39 @@ mod tests {
             forwarder.accept_inbound_packet(remote, &frame),
             Err(ForwardError::Route(RouteError::UnauthorizedSource { .. }))
         ));
+    }
+
+    #[test]
+    fn inbound_packet_must_target_local_overlay_address() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), Ipv4Addr::new(100, 64, 9, 9));
+        let frame = Frame::packet(0, 1, packet).expect("frame");
+
+        assert!(matches!(
+            forwarder.accept_inbound_packet(remote, &frame),
+            Err(ForwardError::UnauthorizedLocalDestination {
+                destination: IpAddr::V4(destination)
+            }) if destination == Ipv4Addr::new(100, 64, 9, 9)
+        ));
+    }
+
+    #[test]
+    fn inbound_ipv6_packet_can_target_local_overlay_address() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv6_packet(builtin_ipv6(remote_overlay), local_ipv6(&config));
+        let frame = Frame::packet(0, 1, packet).expect("frame");
+
+        assert_eq!(
+            forwarder
+                .accept_inbound_packet(remote, &frame)
+                .expect("packet accepted"),
+            frame.payload.as_slice()
+        );
     }
 
     #[tokio::test]
