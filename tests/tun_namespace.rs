@@ -92,15 +92,23 @@ fn run_orchestrator() {
     wait_for_file(&temp_dir.join("ready-a"));
     thread::sleep(Duration::from_secs(4));
     let ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
     assert!(
         ping.status.success(),
-        "overlay ping failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
+        "overlay ping failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a ip addr:\n{}\nnode-a routes:\n{}\nnode-b ip addr:\n{}\nnode-b routes:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
         ping.status,
         String::from_utf8_lossy(&ping.stdout),
         String::from_utf8_lossy(&ping.stderr),
+        String::from_utf8_lossy(&initiator_addresses.stdout),
+        String::from_utf8_lossy(&initiator_routes.stdout),
+        String::from_utf8_lossy(&responder_addresses.stdout),
+        String::from_utf8_lossy(&responder_routes.stdout),
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log"))
     );

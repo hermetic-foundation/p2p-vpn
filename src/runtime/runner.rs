@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use libp2p::{
@@ -18,7 +15,7 @@ use crate::{
     runtime::{
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
-        tun::{TunDevice, TunRuntimeError},
+        tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
     },
 };
 
@@ -58,9 +55,9 @@ pub async fn run_node(
     queue_config: QueueConfig,
     metrics_interval: Option<Duration>,
 ) -> Result<(), RunnerError> {
-    let device = Arc::new(Mutex::new(device));
+    let (reader, mut writer) = device.split();
     let metrics = Arc::new(RuntimeMetrics::default());
-    let mut tun_rx = spawn_tun_reader(Arc::clone(&device), Arc::clone(&metrics), mtu);
+    let mut tun_rx = spawn_tun_reader(reader, Arc::clone(&metrics), mtu);
     let mut queues = PeerQueues::new(
         queue_config.max_packets_per_peer,
         queue_config.max_bytes_per_peer,
@@ -77,7 +74,7 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
             }
             event = node.swarm.select_next_some() => {
-                handle_swarm_event(&mut node.swarm, &forwarder, &device, &metrics, event)?;
+                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &metrics, event)?;
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
             }
             () = async {
@@ -94,7 +91,7 @@ pub async fn run_node(
 }
 
 fn spawn_tun_reader(
-    device: Arc<Mutex<TunDevice>>,
+    mut reader: TunReader,
     metrics: Arc<RuntimeMetrics>,
     mtu: u16,
 ) -> mpsc::Receiver<Vec<u8>> {
@@ -102,12 +99,7 @@ fn spawn_tun_reader(
     std::thread::spawn(move || {
         let mut buffer = vec![0; usize::from(mtu)];
         loop {
-            let read = {
-                let mut device = device.lock().expect("TUN mutex poisoned");
-                device.read_packet(&mut buffer)
-            };
-
-            match read {
+            match reader.read_packet(&mut buffer) {
                 Ok(length) => {
                     metrics.record_tun_read(length);
                     if tx.blocking_send(buffer[..length].to_vec()).is_err() {
@@ -143,7 +135,7 @@ fn drain_outbound_queue(
 fn handle_swarm_event(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
-    device: &Arc<Mutex<TunDevice>>,
+    writer: &mut TunWriter,
     metrics: &RuntimeMetrics,
     event: SwarmEvent<BehaviourEvent>,
 ) -> Result<(), RunnerError> {
@@ -156,10 +148,7 @@ fn handle_swarm_event(
             ..
         })) => match forwarder.accept_inbound_packet(peer, &request) {
             Ok(packet) => {
-                {
-                    let mut device = device.lock().expect("TUN mutex poisoned");
-                    device.write_packet(packet)?;
-                }
+                writer.write_packet(packet)?;
                 metrics.record_tun_write(packet.len());
                 metrics.record_inbound_accepted();
                 Forwarder::send_packet_response(swarm, channel)

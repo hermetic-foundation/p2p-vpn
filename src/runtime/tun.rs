@@ -125,6 +125,16 @@ pub struct TunDevice {
 }
 
 #[cfg(target_os = "linux")]
+pub struct TunReader {
+    reader: tun::Reader,
+}
+
+#[cfg(target_os = "linux")]
+pub struct TunWriter {
+    writer: tun::Writer,
+}
+
+#[cfg(target_os = "linux")]
 impl TunDevice {
     pub fn open(config: &TunRuntimeConfig) -> Result<Self, TunRuntimeError> {
         let mut tun_config = tun::Configuration::default();
@@ -144,12 +154,25 @@ impl TunDevice {
         Ok(tun::AbstractDevice::tun_name(&self.device)?)
     }
 
-    pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
-        Ok(self.device.read(buffer)?)
+    #[must_use]
+    pub fn split(self) -> (TunReader, TunWriter) {
+        let (reader, writer) = self.device.split();
+        (TunReader { reader }, TunWriter { writer })
     }
+}
 
+#[cfg(target_os = "linux")]
+impl TunReader {
+    pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
+        Ok(self.reader.read(buffer)?)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl TunWriter {
     pub fn write_packet(&mut self, packet: &[u8]) -> Result<usize, TunRuntimeError> {
-        Ok(self.device.write(packet)?)
+        self.writer.write_all(packet)?;
+        Ok(packet.len())
     }
 }
 
