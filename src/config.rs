@@ -431,8 +431,6 @@ pub struct InitConfigTemplate {
     pub peers: Vec<InitPeer>,
     pub discovery: DiscoveryConfig,
     pub relay: RelayConfig,
-    pub queue: QueueConfig,
-    pub resources: ResourceConfig,
 }
 
 impl InitConfigTemplate {
@@ -470,8 +468,8 @@ impl InitConfigTemplate {
                 mtu: self.mtu,
             },
             peers,
-            queue: self.queue,
-            resources: self.resources,
+            queue: default_queue(),
+            resources: default_resources(),
         }
     }
 }
@@ -1513,21 +1511,6 @@ mod tests {
                     max_circuit_bytes: 4096,
                 },
             },
-            queue: QueueConfig {
-                max_packets_per_peer: 12,
-                max_bytes_per_peer: 8192,
-                max_packet_age_millis: 250,
-            },
-            resources: ResourceConfig {
-                max_concurrent_control_streams: 11,
-                max_concurrent_packet_streams: 22,
-                max_pending_incoming_connections: 33,
-                max_pending_outgoing_connections: 44,
-                max_established_incoming_connections: 55,
-                max_established_outgoing_connections: 66,
-                max_established_connections_per_peer: 7,
-                max_established_connections: 88,
-            },
         }
         .into_config();
         let rendered = serde_json::to_string_pretty(&config).expect("rendered config");
@@ -1566,27 +1549,8 @@ mod tests {
                 max_circuit_bytes: 4096,
             }
         );
-        assert_eq!(
-            decoded.queue,
-            QueueConfig {
-                max_packets_per_peer: 12,
-                max_bytes_per_peer: 8192,
-                max_packet_age_millis: 250,
-            }
-        );
-        assert_eq!(
-            decoded.resources,
-            ResourceConfig {
-                max_concurrent_control_streams: 11,
-                max_concurrent_packet_streams: 22,
-                max_pending_incoming_connections: 33,
-                max_pending_outgoing_connections: 44,
-                max_established_incoming_connections: 55,
-                max_established_outgoing_connections: 66,
-                max_established_connections_per_peer: 7,
-                max_established_connections: 88,
-            }
-        );
+        assert_eq!(decoded.queue, QueueConfig::default());
+        assert_eq!(decoded.resources, ResourceConfig::default());
         assert!(!decoded.network.discovery.kademlia);
         assert_eq!(decoded.peers.len(), 1);
         assert_eq!(decoded.peers[0].addresses.len(), 2);

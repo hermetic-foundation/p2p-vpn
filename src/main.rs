@@ -373,7 +373,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         None => NodeIdentity::generate_ed25519()
             .map_err(|error| format!("failed to generate key: {error:?}"))?,
     };
-    let config = InitConfigTemplate {
+    let mut config = InitConfigTemplate {
         identity,
         network_name: args.network,
         membership_key: args.membership_key,
@@ -394,10 +394,10 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
         relay: args.relay,
-        queue: args.queue,
-        resources: args.resources,
     }
     .into_config();
+    config.queue = args.queue;
+    config.resources = args.resources;
     config
         .validate_runtime()
         .map_err(|error| format!("generated config is invalid: {error:?}"))?;
@@ -957,5 +957,100 @@ mod tests {
         assert_eq!(max_concurrent_control_streams, 11);
         assert_eq!(max_concurrent_packet_streams, 22);
         assert_eq!(max_established_connections, 88);
+    }
+
+    #[test]
+    fn init_config_writes_custom_queue_and_resource_limits() {
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-init-config-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig {
+                server: true,
+                reservations: Vec::new(),
+                resources: RelayResourceConfig {
+                    max_reservations: 17,
+                    max_reservations_per_peer: 3,
+                    reservation_duration_secs: 45,
+                    max_circuits: 19,
+                    max_circuits_per_peer: 5,
+                    max_circuit_duration_secs: 23,
+                    max_circuit_bytes: 4096,
+                },
+            },
+            queue: QueueConfig {
+                max_packets_per_peer: 12,
+                max_bytes_per_peer: 8192,
+                max_packet_age_millis: 250,
+            },
+            resources: ResourceConfig {
+                max_concurrent_control_streams: 11,
+                max_concurrent_packet_streams: 22,
+                max_pending_incoming_connections: 33,
+                max_pending_outgoing_connections: 44,
+                max_established_incoming_connections: 55,
+                max_established_outgoing_connections: 66,
+                max_established_connections_per_peer: 7,
+                max_established_connections: 88,
+            },
+            force: true,
+        })
+        .expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        assert_eq!(
+            config.network.relay.resources,
+            RelayResourceConfig {
+                max_reservations: 17,
+                max_reservations_per_peer: 3,
+                reservation_duration_secs: 45,
+                max_circuits: 19,
+                max_circuits_per_peer: 5,
+                max_circuit_duration_secs: 23,
+                max_circuit_bytes: 4096,
+            }
+        );
+        assert_eq!(
+            config.queue,
+            QueueConfig {
+                max_packets_per_peer: 12,
+                max_bytes_per_peer: 8192,
+                max_packet_age_millis: 250,
+            }
+        );
+        assert_eq!(
+            config.resources,
+            ResourceConfig {
+                max_concurrent_control_streams: 11,
+                max_concurrent_packet_streams: 22,
+                max_pending_incoming_connections: 33,
+                max_pending_outgoing_connections: 44,
+                max_established_incoming_connections: 55,
+                max_established_outgoing_connections: 66,
+                max_established_connections_per_peer: 7,
+                max_established_connections: 88,
+            }
+        );
     }
 }
