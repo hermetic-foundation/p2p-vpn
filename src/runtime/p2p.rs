@@ -3,7 +3,9 @@ use std::error::Error;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, dcutr, identify,
     identity::Keypair,
-    kad, mdns, noise, ping, relay, request_response,
+    kad, mdns,
+    multiaddr::Protocol,
+    noise, ping, relay, request_response,
     swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
     tcp, yamux,
 };
@@ -108,9 +110,7 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
             .behaviour_mut()
             .kad
             .add_address(&peer, address.clone());
-        let dial_address = address
-            .with_p2p(peer)
-            .map_err(|address| P2pBuildError::InvalidP2pAddress(Box::new(address)))?;
+        let dial_address = peer_dial_address(peer, address)?;
         swarm.dial(dial_address)?;
     }
 
@@ -136,6 +136,19 @@ fn decode_keypair(encoded: &str) -> Result<Keypair, IdentityError> {
         identity.private_key,
     )?;
     Ok(Keypair::from_protobuf_encoding(&bytes)?)
+}
+
+fn peer_dial_address(peer: PeerId, address: Multiaddr) -> Result<Multiaddr, P2pBuildError> {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2p(address_peer) if address_peer == peer))
+    {
+        return Ok(address);
+    }
+
+    address
+        .with_p2p(peer)
+        .map_err(|address| P2pBuildError::InvalidP2pAddress(Box::new(address)))
 }
 
 #[derive(Debug)]
@@ -248,6 +261,30 @@ mod tests {
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
+    }
+
+    #[test]
+    fn peer_dial_address_appends_missing_target_peer() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        let dial = peer_dial_address(peer, address).expect("dial address");
+
+        assert!(dial.to_string().ends_with(&format!("/p2p/{peer}")));
+    }
+
+    #[test]
+    fn peer_dial_address_preserves_full_relayed_target_address() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let target = Keypair::generate_ed25519().public().to_peer_id();
+        let address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+                .parse()
+                .expect("relayed address");
+
+        let dial = peer_dial_address(target, address.clone()).expect("dial address");
+
+        assert_eq!(dial, address);
     }
 
     #[tokio::test]
