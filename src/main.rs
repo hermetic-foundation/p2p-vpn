@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, str::FromStr, time::Duration};
+use std::{fs, net::IpAddr, path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, Subcommand};
 use p2p_vpn::{
@@ -144,6 +144,12 @@ enum Command {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
     },
+    Routes {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        resolve: Option<IpAddr>,
+    },
     Metrics {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
@@ -275,6 +281,7 @@ async fn main() -> Result<(), String> {
             force,
         }),
         Command::Status { config } => status(&config),
+        Command::Routes { config, resolve } => routes(&config, resolve),
         Command::Metrics { config } => metrics(&config),
         Command::Peers {
             config,
@@ -665,6 +672,83 @@ fn status_lines(config: &Config) -> Result<Vec<String>, String> {
     push_route_ownership_status(&mut lines, config, &routes);
 
     Ok(lines)
+}
+
+fn routes(path: &PathBuf, resolve: Option<IpAddr>) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    for line in route_lines(&config, resolve)? {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn route_lines(config: &Config, resolve: Option<IpAddr>) -> Result<Vec<String>, String> {
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+    let routes = config
+        .compile_routes()
+        .map_err(|error| format!("failed to compile routes: {error:?}"))?;
+    let mut lines = Vec::new();
+
+    lines.push(format!("compiled routes: {}", routes.len()));
+    if let Some(destination) = resolve {
+        push_route_resolution_line(&mut lines, config, &routes, destination);
+    }
+    for route in routes.routes() {
+        let (owner_kind, owner_id, owner_name, source) = route_owner_details(config, *route);
+        lines.push(format!(
+            "route: {} owner {} {} name {} metric {} {}",
+            route.prefix, owner_kind, owner_id, owner_name, route.metric, source
+        ));
+    }
+
+    Ok(lines)
+}
+
+fn push_route_resolution_line(
+    lines: &mut Vec<String>,
+    config: &Config,
+    routes: &p2p_vpn::route::RouteTable,
+    destination: IpAddr,
+) {
+    if let Some(route) = routes.resolve(destination) {
+        let (owner_kind, owner_id, owner_name, source) = route_owner_details(config, route);
+        lines.push(format!(
+            "resolve: {} -> {} owner {} {} name {} metric {} {}",
+            destination, route.prefix, owner_kind, owner_id, owner_name, route.metric, source
+        ));
+    } else {
+        lines.push(format!("resolve: {destination} -> no route"));
+    }
+}
+
+fn route_owner_details(
+    config: &Config,
+    route: p2p_vpn::route::Route,
+) -> (&'static str, String, String, &'static str) {
+    let local_peer = config.local_peer_id().expect("route config is valid");
+    if route.owner == local_peer {
+        return (
+            "local",
+            config.network.local_peer.clone(),
+            "-".to_owned(),
+            route_source(&config.network.routes, route),
+        );
+    }
+
+    let peer = config
+        .peers
+        .iter()
+        .find(|peer| peer.peer_id().is_ok_and(|peer_id| peer_id == route.owner))
+        .expect("compiled route owner is configured");
+    (
+        "peer",
+        peer.id.clone(),
+        peer.name.clone().unwrap_or_else(|| "-".to_owned()),
+        route_source(&peer.routes, route),
+    )
 }
 
 fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
@@ -1234,6 +1318,107 @@ mod tests {
     }
 
     #[test]
+    fn route_lines_report_compiled_ownership_and_resolution() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 50,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![p2p_vpn::config::PeerConfig {
+                id: remote.peer_id.clone(),
+                name: Some("remote".to_owned()),
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines =
+            route_lines(&config, Some("10.42.0.9".parse().expect("destination"))).expect("routes");
+
+        assert!(lines.iter().any(|line| line == "compiled routes: 6"));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "resolve: 10.42.0.9 -> 10.42.0.0/24 owner peer {} name remote metric 100 configured",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "route: 10.41.0.0/24 owner local {} name - metric 50 configured",
+                local.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "route: 10.42.0.0/24 owner peer {} name remote metric 100 configured",
+                remote.peer_id
+            )));
+    }
+
+    #[test]
+    fn route_lines_report_unresolved_destination() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = route_lines(&config, Some("203.0.113.9".parse().expect("destination")))
+            .expect("routes");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "resolve: 203.0.113.9 -> no route")
+        );
+    }
+
+    #[test]
     fn peer_status_lines_report_remote_capabilities() {
         let peer = libp2p::identity::Keypair::generate_ed25519()
             .public()
@@ -1505,6 +1690,26 @@ mod tests {
         assert_eq!(peer, "12D3KooWPeer");
         assert_eq!(config, PathBuf::from("node-a.json"));
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_routes_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "routes",
+            "--config",
+            "node-a.json",
+            "--resolve",
+            "10.42.0.9",
+        ])
+        .expect("cli");
+
+        let Command::Routes { config, resolve } = cli.command else {
+            panic!("expected routes command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(resolve, Some("10.42.0.9".parse().expect("destination")));
     }
 
     #[test]

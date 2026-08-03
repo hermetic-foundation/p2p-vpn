@@ -416,6 +416,19 @@ addresses plus built-in and configured route ownership lines, which are the
 claims peers must mirror in their `peer.routes` entries before accepting routed
 traffic from this node.
 
+Inspect the compiled route table or resolve a destination address:
+
+```sh
+cargo run -- routes --config p2p-vpn.json
+cargo run -- routes --config p2p-vpn.json --resolve 10.42.0.9
+```
+
+`routes` prints every built-in and configured route after validation, including
+the owning local or peer identity, peer name when configured, metric, and
+whether the route came from explicit config or generated host-route ownership.
+With `--resolve`, it also shows the exact route owner selected by the current
+longest-prefix and metric ordering for the destination.
+
 List configured peers and their route/address inventory:
 
 ```sh
