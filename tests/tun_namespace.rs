@@ -10,23 +10,24 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use libp2p::swarm::SwarmEvent;
+use libp2p::{Multiaddr, multiaddr::Protocol, relay, swarm::SwarmEvent};
 use p2p_vpn::{
     config::{
-        Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig,
-        RouteConfig,
+        Config, DiscoveryConfig, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
+        RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
     },
     identity::NodeIdentity,
     runtime::{
         forward::Forwarder,
-        p2p::{HostConfig, build_node},
+        p2p::{BehaviourEvent, HostConfig, build_node},
         runner,
         tun::{TunDevice, TunRuntimeConfig},
     },
 };
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
-const TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 
@@ -34,13 +35,23 @@ const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
 fn tun_namespace_ping_crosses_two_node_overlay() {
     match env::var(CHILD_ENV).as_deref() {
-        Ok("orchestrator") => run_orchestrator(),
+        Ok("orchestrator") => run_direct_orchestrator(),
         Ok("node") => run_node_child(),
-        _ => reexec_orchestrator(),
+        _ => reexec_orchestrator(DIRECT_TEST_NAME),
     }
 }
 
-fn reexec_orchestrator() {
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_ping_crosses_relay_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_relay_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(RELAY_TEST_NAME),
+    }
+}
+
+fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
     let output = command_output(
         "unshare",
@@ -51,7 +62,7 @@ fn reexec_orchestrator() {
             "--net",
             current_exe.to_str().expect("test binary path is utf-8"),
             "--ignored",
-            TEST_NAME,
+            test_name,
             "--exact",
             "--nocapture",
         ],
@@ -63,7 +74,7 @@ fn reexec_orchestrator() {
     assert_output_success("unshare tun e2e orchestrator", &output);
 }
 
-fn run_orchestrator() {
+fn run_direct_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-tun-e2e-{}", std::process::id()));
@@ -84,8 +95,24 @@ fn run_orchestrator() {
         .addresses
         .ipv4;
 
-    let mut node_a = spawn_node("a", &identity_a, &identity_b, &temp_dir, &start_a);
-    let mut node_b = spawn_node("b", &identity_b, &identity_a, &temp_dir, &start_b);
+    let mut node_a = spawn_node(
+        DIRECT_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        None,
+        &temp_dir,
+        &start_a,
+    );
+    let mut node_b = spawn_node(
+        DIRECT_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        None,
+        &temp_dir,
+        &start_b,
+    );
     wait_for_child_namespace(node_a.id());
     wait_for_child_namespace(node_b.id());
     configure_underlay(node_a.id(), node_b.id());
@@ -127,6 +154,93 @@ fn run_orchestrator() {
     let _ = fs::remove_dir_all(temp_dir);
 }
 
+fn run_relay_orchestrator() {
+    let identity_relay = NodeIdentity::generate_ed25519().expect("relay identity");
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!("p2p-vpn-relay-tun-e2e-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let start_relay = temp_dir.join("start-relay");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_b = relay_overlay_config("b", &identity_b, &identity_a, &identity_relay);
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+
+    let mut relay = spawn_node(
+        RELAY_TEST_NAME,
+        "relay",
+        &identity_relay,
+        None,
+        None,
+        &temp_dir,
+        &start_relay,
+    );
+    let mut node_b = spawn_node(
+        RELAY_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_b,
+    );
+    let mut node_a = spawn_node(
+        RELAY_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_a,
+    );
+    wait_for_child_namespace(relay.id());
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_relay_underlay(relay.id(), node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+
+    fs::write(&start_relay, b"start").expect("write relay start file");
+    wait_for_file(&temp_dir.join("ready-relay"));
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    thread::sleep(Duration::from_secs(2));
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    thread::sleep(Duration::from_secs(1));
+
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    stop_child(&mut relay);
+    assert_ping_success(
+        "relayed overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let relay_log = read_log(&temp_dir.join("node-relay.log"));
+    assert!(
+        relay_log.contains("CircuitReqAccepted"),
+        "relay did not accept a circuit\nrelay log:\n{relay_log}\nnode-a log:\n{}\nnode-b log:\n{}",
+        read_log(&temp_dir.join("node-a.log")),
+        read_log(&temp_dir.join("node-b.log"))
+    );
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
 fn assert_ping_success(
     context: &str,
     ping: &Output,
@@ -147,26 +261,29 @@ fn assert_ping_success(
         String::from_utf8_lossy(&responder_addresses.stdout),
         String::from_utf8_lossy(&responder_routes.stdout),
         read_log(&temp_dir.join("node-a.log")),
-        read_log(&temp_dir.join("node-b.log"))
+        read_log(&temp_dir.join("node-b.log")),
     );
 }
 
 fn spawn_node(
+    test_name: &str,
     role: &str,
     local: &NodeIdentity,
-    remote: &NodeIdentity,
+    remote: Option<&NodeIdentity>,
+    relay: Option<&NodeIdentity>,
     temp_dir: &Path,
     start_file: &Path,
 ) -> Child {
     let current_exe = env::current_exe().expect("current test binary");
     let log = File::create(temp_dir.join(format!("node-{role}.log"))).expect("create node log");
     let log_err = log.try_clone().expect("clone node log");
-    Command::new("unshare")
+    let mut command = Command::new("unshare");
+    command
         .args([
             "--net",
             current_exe.to_str().expect("test binary path is utf-8"),
             "--ignored",
-            TEST_NAME,
+            test_name,
             "--exact",
             "--nocapture",
         ])
@@ -174,9 +291,15 @@ fn spawn_node(
         .env("P2P_VPN_TUN_E2E_ROLE", role)
         .env("P2P_VPN_TUN_E2E_LOCAL_PEER", &local.peer_id)
         .env("P2P_VPN_TUN_E2E_LOCAL_KEY", &local.private_key)
-        .env("P2P_VPN_TUN_E2E_REMOTE_PEER", &remote.peer_id)
         .env("P2P_VPN_TUN_E2E_TEMP", temp_dir)
-        .env("P2P_VPN_TUN_E2E_START", start_file)
+        .env("P2P_VPN_TUN_E2E_START", start_file);
+    if let Some(remote) = remote {
+        command.env("P2P_VPN_TUN_E2E_REMOTE_PEER", &remote.peer_id);
+    }
+    if let Some(relay) = relay {
+        command.env("P2P_VPN_TUN_E2E_RELAY_PEER", &relay.peer_id);
+    }
+    command
         .stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log_err)
@@ -229,6 +352,30 @@ fn configure_underlay(pid_a: u32, pid_b: u32) {
     ns_command(pid_b, "ip", &["link", "set", "veth-b", "up"]);
 }
 
+fn configure_relay_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
+    run_command("ip", &["link", "add", "br-relay", "type", "bridge"]);
+    run_command("ip", &["link", "set", "br-relay", "up"]);
+    attach_veth_to_bridge(pid_relay, "relay", "10.251.0.254/24");
+    attach_veth_to_bridge(pid_a, "a", "10.251.0.1/24");
+    attach_veth_to_bridge(pid_b, "b", "10.251.0.2/24");
+}
+
+fn attach_veth_to_bridge(pid: u32, suffix: &str, address: &str) {
+    let host = format!("veth-{suffix}-host");
+    let child = format!("veth-{suffix}");
+    run_command(
+        "ip",
+        &["link", "add", &host, "type", "veth", "peer", "name", &child],
+    );
+    run_command("ip", &["link", "set", &host, "master", "br-relay"]);
+    run_command("ip", &["link", "set", &host, "up"]);
+    run_command("ip", &["link", "set", &child, "netns", &pid.to_string()]);
+    ns_command(pid, "ip", &["link", "set", "lo", "up"]);
+    configure_sysctls(pid);
+    ns_command(pid, "ip", &["addr", "add", address, "dev", &child]);
+    ns_command(pid, "ip", &["link", "set", &child, "up"]);
+}
+
 fn configure_sysctls(pid: u32) {
     ns_command(pid, "sysctl", &["-w", "net.ipv4.conf.all.rp_filter=0"]);
     ns_command(pid, "sysctl", &["-w", "net.ipv4.conf.default.rp_filter=0"]);
@@ -252,15 +399,68 @@ fn run_node_child() {
         peer_id: required_env("P2P_VPN_TUN_E2E_LOCAL_PEER"),
         private_key: required_env("P2P_VPN_TUN_E2E_LOCAL_KEY"),
     };
-    let remote = NodeIdentity {
-        peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
-        private_key: String::new(),
-    };
     let start_file = PathBuf::from(required_env("P2P_VPN_TUN_E2E_START"));
     let temp_dir = PathBuf::from(required_env("P2P_VPN_TUN_E2E_TEMP"));
     wait_for_file(&start_file);
 
-    let (name, interface, listen, remote_address, local_routes, peer_routes) = match role.as_str() {
+    if role == "relay" {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(run_relay_child(local, temp_dir.join("ready-relay")))
+            .expect("relay runtime");
+        return;
+    }
+
+    let remote = NodeIdentity {
+        peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
+        private_key: String::new(),
+    };
+    let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
+        .ok()
+        .map(|peer_id| NodeIdentity {
+            peer_id,
+            private_key: String::new(),
+        });
+    let config = if let Some(relay) = relay.as_ref() {
+        relay_overlay_config(&role, &local, &remote, relay)
+    } else {
+        direct_overlay_config(&role, &local, &remote)
+    };
+    let interface = config.interface.name.clone();
+    let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
+    let effective_mtu = runtime.mtu;
+    let device = open_and_configure_tun(&runtime);
+    if role == "a" {
+        run_command(
+            "ip",
+            &[
+                "addr",
+                "add",
+                &format!("{NODE_A_LOCAL_ROUTE_ADDRESS}/32"),
+                "dev",
+                &interface,
+            ],
+        );
+    }
+    configure_tun_sysctls(&interface);
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(run_ready_node(
+            config,
+            device,
+            effective_mtu,
+            temp_dir.join(format!("ready-{role}")),
+        ))
+        .expect("node runtime");
+}
+
+fn direct_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
+    let (name, interface, listen, remote_address, local_routes, peer_routes) = match role {
         "a" => (
             NETWORK_NAME,
             "hse2ea",
@@ -285,42 +485,63 @@ fn run_node_child() {
         ),
         other => panic!("unknown node role {other}"),
     };
-    let config = node_config(
+    node_config(
         name,
         interface,
-        &local,
+        local,
         listen,
         local_routes,
-        peer_config(&remote, remote_address, peer_routes),
-    );
-    let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
-    let effective_mtu = runtime.mtu;
-    let device = open_and_configure_tun(&runtime);
-    if role == "a" {
-        run_command(
-            "ip",
-            &[
-                "addr",
-                "add",
-                &format!("{NODE_A_LOCAL_ROUTE_ADDRESS}/32"),
-                "dev",
-                interface,
-            ],
-        );
-    }
-    configure_tun_sysctls(interface);
+        peer_config(remote, remote_address, peer_routes),
+    )
+}
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-        .block_on(run_ready_node(
-            config,
-            device,
-            effective_mtu,
-            temp_dir.join(format!("ready-{role}")),
-        ))
-        .expect("node runtime");
+fn relay_overlay_config(
+    role: &str,
+    local: &NodeIdentity,
+    remote: &NodeIdentity,
+    relay: &NodeIdentity,
+) -> Config {
+    let relay_base = format!(
+        "/ip4/10.251.0.254/tcp/42200/p2p/{}/p2p-circuit",
+        relay.peer_id
+    );
+    let (interface, listen, remote_address, local_routes, peer_routes, relay_reservations) =
+        match role {
+            "a" => (
+                "hse2ea",
+                "/ip4/10.251.0.1/tcp/42201",
+                Some(format!("{relay_base}/p2p/{}", remote.peer_id)),
+                vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                Vec::new(),
+                Vec::new(),
+            ),
+            "b" => (
+                "hse2eb",
+                "/ip4/10.251.0.2/tcp/42202",
+                None,
+                Vec::new(),
+                vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                vec![relay_base],
+            ),
+            other => panic!("unknown relay node role {other}"),
+        };
+    let mut config = node_config(
+        NETWORK_NAME,
+        interface,
+        local,
+        listen,
+        local_routes,
+        peer_config(remote, remote_address.as_deref(), peer_routes),
+    );
+    config.network.discovery = relay_test_discovery();
+    config.network.relay.reservations = relay_reservations;
+    config
 }
 
 async fn run_ready_node(
@@ -346,7 +567,7 @@ async fn run_ready_node(
         resources: config.resources,
         discovery: config.network.discovery.clone(),
     })?;
-    wait_for_listen_address(&mut node).await;
+    wait_for_node_ready(&mut node, &config).await;
     fs::write(ready_file, b"ready").expect("write ready file");
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
@@ -360,6 +581,88 @@ async fn run_ready_node(
         Some(Duration::from_secs(1)),
     ))
     .await
+}
+
+async fn run_relay_child(
+    identity: NodeIdentity,
+    ready_file: PathBuf,
+) -> Result<(), runner::RunnerError> {
+    let config = relay_config(&identity);
+    let mut node = build_node(&HostConfig {
+        identity: config.identity()?,
+        network_name: config.network.name.clone(),
+        membership_tag: config.membership_tag()?,
+        mtu: config.effective_packet_mtu(),
+        max_concurrent_control_streams: config.resources.control_stream_limit(),
+        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
+        listen_addresses: config.listen_multiaddrs()?,
+        external_addresses: config.external_multiaddrs()?,
+        bootstrap_peers: config.bootstrap_multiaddrs()?,
+        known_peers: config.peer_multiaddrs()?,
+        relay_reservations: config.relay_reservation_multiaddrs()?,
+        relay_server: config.network.relay.server,
+        relay_resources: config.network.relay.resources,
+        resources: config.resources,
+        discovery: config.network.discovery.clone(),
+    })?;
+    wait_for_listen_address(&mut node).await;
+    fs::write(ready_file, b"ready").expect("write relay ready file");
+    while let Some(event) = node.swarm.next().await {
+        eprintln!("{event:?}");
+    }
+    Ok(())
+}
+
+async fn wait_for_node_ready(node: &mut p2p_vpn::runtime::p2p::P2pNode, config: &Config) {
+    let expected_relayed_addresses = expected_relayed_addresses(node, config);
+    if expected_relayed_addresses.is_empty() {
+        wait_for_listen_address(node).await;
+        return;
+    }
+
+    let mut physical_listen = false;
+    let mut relay_reservation = false;
+    let mut relayed_listen = false;
+    while !(physical_listen && relay_reservation && relayed_listen) {
+        match node.swarm.select_next_some().await {
+            SwarmEvent::NewListenAddr { address, .. } => {
+                eprintln!("observed listen address {address}");
+                if expected_relayed_addresses
+                    .iter()
+                    .any(|expected| expected == &address)
+                {
+                    relayed_listen = true;
+                } else {
+                    physical_listen = true;
+                }
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                relay::client::Event::ReservationReqAccepted {
+                    relay_peer_id,
+                    renewal,
+                    ..
+                },
+            )) => {
+                eprintln!("relay reservation accepted by {relay_peer_id} renewal={renewal}");
+                relay_reservation = true;
+            }
+            event => {
+                eprintln!("readiness event {event:?}");
+            }
+        }
+    }
+}
+
+fn expected_relayed_addresses(
+    node: &p2p_vpn::runtime::p2p::P2pNode,
+    config: &Config,
+) -> Vec<Multiaddr> {
+    config
+        .relay_reservation_multiaddrs()
+        .expect("valid relay reservation addresses")
+        .into_iter()
+        .map(|address| address.with(Protocol::P2p(node.local_peer_id)))
+        .collect()
 }
 
 async fn wait_for_listen_address(node: &mut p2p_vpn::runtime::p2p::P2pNode) {
@@ -413,6 +716,48 @@ fn node_config(
             max_packet_age_millis: 1_000,
         },
         resources: ResourceConfig::default(),
+    }
+}
+
+fn relay_config(identity: &NodeIdentity) -> Config {
+    Config {
+        network: NetworkConfig {
+            name: NETWORK_NAME.to_owned(),
+            local_peer: identity.peer_id.clone(),
+            private_key: Some(identity.private_key.clone()),
+            membership_key: None,
+            routes: Vec::new(),
+            listen_addresses: vec!["/ip4/10.251.0.254/tcp/42200".to_owned()],
+            external_addresses: vec!["/ip4/10.251.0.254/tcp/42200".to_owned()],
+            bootstrap_peers: Vec::new(),
+            discovery: relay_test_discovery(),
+            relay: RelayConfig {
+                server: true,
+                reservations: Vec::new(),
+                resources: RelayResourceConfig::default(),
+            },
+        },
+        interface: InterfaceConfig {
+            name: "unused-relay".to_owned(),
+            mtu: 1280,
+        },
+        peers: Vec::new(),
+        queue: QueueConfig {
+            max_packets_per_peer: 64,
+            max_bytes_per_peer: 128 * 1024,
+            max_packet_age_millis: 1_000,
+        },
+        resources: ResourceConfig::default(),
+    }
+}
+
+fn relay_test_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        mdns: false,
+        kademlia: false,
+        kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+        dcutr: false,
+        autonat: false,
     }
 }
 

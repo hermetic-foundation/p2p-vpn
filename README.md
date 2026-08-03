@@ -115,12 +115,15 @@ zero is treated as a one millisecond effective age.
 Configured bootstrap and peer addresses are redialed periodically when they are
 not already connected. This keeps the overlay trying to recover after transient
 network loss instead of depending on a one-shot startup dial or a future
-discovery event. Addresses learned from mDNS or identify are retained only for
-configured peers and are included in the same periodic redial loop. They are
-refreshed when rediscovered, removed when mDNS expires them, and aged out after
-10 minutes so stale transient addresses are not retried indefinitely. Redial
-attempts, connected-peer skips, failures, and discovered-address expiry are
-exposed in the runtime metrics output.
+discovery event. If outbound packets are queued for a configured peer with no
+currently supported path, the runtime also makes a targeted dial attempt for
+that blocked peer instead of waiting for the next periodic redial tick.
+Addresses learned from mDNS or identify are retained only for configured peers
+and are included in the same periodic redial loop. They are refreshed when
+rediscovered, removed when mDNS expires them, and aged out after 10 minutes so
+stale transient addresses are not retried indefinitely. Redial attempts,
+connected-peer skips, failures, and discovered-address expiry are exposed in the
+runtime metrics output.
 Direct configured peer addresses are dialed during startup. Configured peer
 addresses that go through `/p2p-circuit` are kept for the periodic redial loop
 instead, so relay reservations and relay connections can come up before the node

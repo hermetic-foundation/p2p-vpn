@@ -107,22 +107,16 @@ pub async fn run_node(
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
     let mut discovered_peer_addresses = DiscoveredPeerAddresses::default();
-    let mut metrics_tick = metrics_interval.map(tokio::time::interval);
-    let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
-    let mut kademlia_refresh_tick = kademlia_rendezvous_key
-        .as_ref()
-        .map(|_| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL));
-    let mut queue_expiry_tick =
-        tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
+    let mut timers = RuntimeTimers::new(
+        metrics_interval,
+        kademlia_rendezvous_key.is_some(),
+        queue_config,
+    );
     let local_capabilities =
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
             .with_advertised_routes(forwarder.local_advertised_routes());
-    redial_tick.tick().await;
-    if let Some(tick) = &mut kademlia_refresh_tick {
-        tick.tick().await;
-    }
-    queue_expiry_tick.tick().await;
+    timers.prime().await;
     let discovery = node.discovery.clone();
 
     log_startup_status(node.startup);
@@ -134,7 +128,7 @@ pub async fn run_node(
                     metrics.record_outbound_drop(outbound_drop_reason(&error));
                     eprintln!("dropping outbound packet: {error:?}");
                 }
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
+                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &discovered_peer_addresses, &metrics);
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(
@@ -152,18 +146,18 @@ pub async fn run_node(
                     },
                     event,
                 )?;
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
+                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &discovered_peer_addresses, &metrics);
             }
-            _ = redial_tick.tick() => {
+            _ = timers.redial.tick() => {
                 handle_redial_tick(&mut node, &mut discovered_peer_addresses, &metrics);
             }
             () = async {
-                kademlia_refresh_tick
+                timers.kademlia_refresh
                     .as_mut()
                     .expect("kademlia refresh interval is present")
                     .tick()
                     .await;
-            }, if kademlia_refresh_tick.is_some() => {
+            }, if timers.kademlia_refresh.is_some() => {
                 refresh_kademlia_rendezvous(
                     &mut node.swarm,
                     kademlia_rendezvous_key
@@ -172,16 +166,16 @@ pub async fn run_node(
                     &metrics,
                 );
             }
-            _ = queue_expiry_tick.tick() => {
+            _ = timers.queue_expiry.tick() => {
                 expire_outbound_queue(&mut queues, &metrics);
             }
             () = async {
-                metrics_tick
+                timers.metrics
                     .as_mut()
                     .expect("metrics interval is present")
                     .tick()
                     .await;
-            }, if metrics_tick.is_some() => {
+            }, if timers.metrics.is_some() => {
                 print_metrics(
                     &metrics,
                     queues.total_stats(),
@@ -189,6 +183,39 @@ pub async fn run_node(
                 );
             }
         }
+    }
+}
+
+struct RuntimeTimers {
+    metrics: Option<tokio::time::Interval>,
+    redial: tokio::time::Interval,
+    kademlia_refresh: Option<tokio::time::Interval>,
+    queue_expiry: tokio::time::Interval,
+}
+
+impl RuntimeTimers {
+    fn new(
+        metrics_interval: Option<Duration>,
+        kademlia_enabled: bool,
+        queue_config: QueueConfig,
+    ) -> Self {
+        Self {
+            metrics: metrics_interval.map(tokio::time::interval),
+            redial: tokio::time::interval(REDIAL_INTERVAL),
+            kademlia_refresh: kademlia_enabled
+                .then(|| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL)),
+            queue_expiry: tokio::time::interval(queue_expiry_interval(
+                queue_config.max_packet_age(),
+            )),
+        }
+    }
+
+    async fn prime(&mut self) {
+        self.redial.tick().await;
+        if let Some(tick) = &mut self.kademlia_refresh {
+            tick.tick().await;
+        }
+        self.queue_expiry.tick().await;
     }
 }
 
@@ -325,6 +352,38 @@ fn redial_known_addresses(
     }
 
     for (peer, address) in targets.addresses {
+        metrics.record_redial_attempt();
+        let dial_address = peer_dial_address(peer, address);
+        if let Err(error) = swarm.dial(dial_address) {
+            metrics.record_redial_failure();
+            eprintln!("redial {peer} failed: {error}");
+        }
+    }
+}
+
+fn redial_selected_addresses(
+    swarm: &mut Swarm<Behaviour>,
+    selected_peers: &HashSet<Libp2pPeerId>,
+    bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    metrics: &RuntimeMetrics,
+) {
+    let local_peer = *swarm.local_peer_id();
+    let targets = pending_redial_targets(
+        local_peer,
+        bootstrap_addresses,
+        relay_addresses,
+        configured_peer_addresses,
+        discovered_peer_addresses,
+        |peer| swarm.is_connected(peer),
+    );
+
+    for (peer, address) in targets.addresses {
+        if !selected_peers.contains(&peer) {
+            continue;
+        }
         metrics.record_redial_attempt();
         let dial_address = peer_dial_address(peer, address);
         if let Err(error) = swarm.dial(dial_address) {
@@ -532,33 +591,100 @@ fn spawn_tun_reader(
     rx
 }
 
-fn drain_outbound_queue(
-    swarm: &mut Swarm<Behaviour>,
+fn drain_runtime_outbound_queue(
+    node: &mut P2pNode,
     forwarder: &Forwarder,
     queues: &mut PeerQueues,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    discovered_peer_addresses: &DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
 ) {
-    expire_outbound_queue(queues, metrics);
+    let discovered_addresses = discovered_peer_addresses.as_vec();
+    drain_outbound_queue(
+        &mut node.swarm,
+        forwarder,
+        queues,
+        &QueueDrainContext {
+            paths,
+            peer_capabilities,
+            bootstrap_addresses: &node.bootstrap_peer_addresses,
+            relay_addresses: &node.relay_peer_addresses,
+            configured_peer_addresses: &node.configured_peer_addresses,
+            discovered_peer_addresses: &discovered_addresses,
+            metrics,
+        },
+    );
+}
+
+fn drain_outbound_queue(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    queues: &mut PeerQueues,
+    context: &QueueDrainContext<'_>,
+) {
+    expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready(|peer| {
-        peer_capabilities.contains(peer)
-            && paths.has_supported_path(peer, packet_transport_support(peer_capabilities, peer))
+        context.peer_capabilities.contains(peer)
+            && context.paths.has_supported_path(
+                peer,
+                packet_transport_support(context.peer_capabilities, peer),
+            )
     }) {
-        let peer_mtu = peer_capabilities.effective_mtu_for(
+        let peer_mtu = context.peer_capabilities.effective_mtu_for(
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
         if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
-            metrics.record_outbound_drop(outbound_drop_reason(&error));
+            context
+                .metrics
+                .record_outbound_drop(outbound_drop_reason(&error));
             eprintln!("dropping queued outbound packet: {error:?}");
         } else {
-            metrics.record_outbound_sent();
+            context.metrics.record_outbound_sent();
         }
     }
     if queues.total_stats().queued_packets > 0 {
-        metrics.record_outbound_queue_blocked_no_supported_path();
+        context
+            .metrics
+            .record_outbound_queue_blocked_no_supported_path();
+        dial_blocked_queue_peers(swarm, forwarder, queues, context);
     }
+}
+
+struct QueueDrainContext<'a> {
+    paths: &'a PathSet,
+    peer_capabilities: &'a PeerCapabilities,
+    bootstrap_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    metrics: &'a RuntimeMetrics,
+}
+
+fn dial_blocked_queue_peers(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    queues: &PeerQueues,
+    context: &QueueDrainContext<'_>,
+) {
+    let blocked_transport_peers = queues
+        .queued_peers()
+        .filter_map(|peer| forwarder.transport_peer_for_overlay(peer))
+        .collect::<HashSet<_>>();
+    if blocked_transport_peers.is_empty() {
+        return;
+    }
+
+    redial_selected_addresses(
+        swarm,
+        &blocked_transport_peers,
+        context.bootstrap_addresses,
+        context.relay_addresses,
+        context.configured_peer_addresses,
+        context.discovered_peer_addresses,
+        context.metrics,
+    );
 }
 
 fn packet_transport_support(
@@ -1705,6 +1831,22 @@ mod tests {
         packet[12..16].copy_from_slice(&source.octets());
         packet[16..20].copy_from_slice(&destination.octets());
         packet
+    }
+
+    fn queue_drain_context<'a>(
+        paths: &'a PathSet,
+        peer_capabilities: &'a PeerCapabilities,
+        metrics: &'a RuntimeMetrics,
+    ) -> QueueDrainContext<'a> {
+        QueueDrainContext {
+            paths,
+            peer_capabilities,
+            bootstrap_addresses: &[],
+            relay_addresses: &[],
+            configured_peer_addresses: &[],
+            discovered_peer_addresses: &[],
+            metrics,
+        }
     }
 
     fn config_with_peer(
@@ -3377,9 +3519,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut queues,
-            &paths,
-            &peer_capabilities,
-            &metrics,
+            &queue_drain_context(&paths, &peer_capabilities, &metrics),
         );
 
         let snapshot = metrics.snapshot(queues.total_stats());
@@ -3464,9 +3604,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut queues,
-            &paths,
-            &peer_capabilities,
-            &metrics,
+            &queue_drain_context(&paths, &peer_capabilities, &metrics),
         );
 
         let snapshot = metrics.snapshot(queues.total_stats());
@@ -3553,9 +3691,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut queues,
-            &paths,
-            &peer_capabilities,
-            &metrics,
+            &queue_drain_context(&paths, &peer_capabilities, &metrics),
         );
 
         let snapshot = metrics.snapshot(queues.total_stats());

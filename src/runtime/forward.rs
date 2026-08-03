@@ -166,6 +166,11 @@ impl Forwarder {
     }
 
     #[must_use]
+    pub fn transport_peer_for_overlay(&self, peer: PeerId) -> Option<Libp2pPeerId> {
+        self.peers.get(&peer).copied()
+    }
+
+    #[must_use]
     pub fn local_advertised_routes(&self) -> Vec<ControlRoute> {
         self.routes
             .routes_for(self.local_peer)

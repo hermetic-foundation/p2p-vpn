@@ -344,6 +344,12 @@ impl PeerQueues {
             })
     }
 
+    pub fn queued_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.queues
+            .iter()
+            .filter_map(|(peer, queue)| (queue.stats().queued_packets > 0).then_some(*peer))
+    }
+
     fn queue_mut(&mut self, peer: PeerId) -> &mut PeerQueue {
         self.queues.entry(peer).or_insert_with(|| {
             PeerQueue::with_packet_ttl(
@@ -361,6 +367,8 @@ fn duration_millis(now: Instant, then: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     fn peer(seed: u8) -> PeerId {
@@ -608,5 +616,23 @@ mod tests {
                 .sequence(),
             2
         );
+    }
+
+    #[test]
+    fn peer_queues_reports_peers_with_pending_packets() {
+        let mut queues = PeerQueues::new(4, 4096);
+        queues
+            .enqueue(Packet::new(peer(1), 1, vec![1]))
+            .expect("peer 1 packet");
+        queues
+            .enqueue(Packet::new(peer(2), 2, vec![2]))
+            .expect("peer 2 packet");
+        queues
+            .dequeue_ready(|candidate| candidate == peer(1))
+            .expect("dequeue peer 1");
+
+        let pending_peers = queues.queued_peers().collect::<HashSet<_>>();
+
+        assert_eq!(pending_peers, HashSet::from([peer(2)]));
     }
 }
