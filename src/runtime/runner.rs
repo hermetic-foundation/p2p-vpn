@@ -23,6 +23,7 @@ use crate::{
         control::{ControlCapabilities, ControlRequest, ControlResponse, PeerCapabilities},
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
+        packet::{PacketRejectionReason, PacketResponse},
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
     },
 };
@@ -399,14 +400,30 @@ fn handle_packet_event(
                 context.writer.write_packet(packet)?;
                 context.metrics.record_tun_write(packet.len());
                 context.metrics.record_inbound_accepted();
-                Forwarder::send_packet_response(swarm, channel)
+                Forwarder::send_packet_response(swarm, channel, PacketResponse::Accepted)
                     .map_err(|_| RunnerError::PacketResponseDropped)?;
             }
             Err(error) => {
-                context
-                    .metrics
-                    .record_inbound_drop(inbound_drop_reason(&error));
+                let drop_reason = inbound_drop_reason(&error);
+                context.metrics.record_inbound_drop(drop_reason);
                 eprintln!("dropping inbound packet from {peer}: {error:?}");
+                Forwarder::send_packet_response(
+                    swarm,
+                    channel,
+                    PacketResponse::Rejected(packet_rejection_reason(drop_reason)),
+                )
+                .map_err(|_| RunnerError::PacketResponseDropped)?;
+            }
+        },
+        request_response::Event::Message {
+            peer,
+            message: Message::Response { response, .. },
+            ..
+        } => match response {
+            PacketResponse::Accepted => {}
+            PacketResponse::Rejected(reason) => {
+                context.metrics.record_outbound_failure();
+                eprintln!("packet request to {peer} was rejected: {reason:?}");
             }
         },
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -417,11 +434,7 @@ fn handle_packet_event(
             context.metrics.record_inbound_failure();
             eprintln!("packet request from {peer} failed: {error}");
         }
-        request_response::Event::Message {
-            message: Message::Response { .. },
-            ..
-        }
-        | request_response::Event::ResponseSent { .. } => {}
+        request_response::Event::ResponseSent { .. } => {}
     }
 
     Ok(())
@@ -788,6 +801,24 @@ fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
     }
 }
 
+fn packet_rejection_reason(reason: PacketDropReason) -> PacketRejectionReason {
+    match reason {
+        PacketDropReason::PacketTooLarge | PacketDropReason::QueueFull => {
+            PacketRejectionReason::PacketTooLarge
+        }
+        PacketDropReason::Replay => PacketRejectionReason::Replay,
+        PacketDropReason::UnauthorizedPeer | PacketDropReason::NoTransportPeer => {
+            PacketRejectionReason::UnauthorizedPeer
+        }
+        PacketDropReason::UnauthorizedSource => PacketRejectionReason::UnauthorizedSource,
+        PacketDropReason::UnauthorizedDestination => PacketRejectionReason::UnauthorizedDestination,
+        PacketDropReason::UnexpectedPayload => PacketRejectionReason::UnexpectedPayload,
+        PacketDropReason::MalformedPacket | PacketDropReason::NoRoute => {
+            PacketRejectionReason::MalformedPacket
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum RunnerError {
     Config(crate::config::ConfigError),
@@ -968,6 +999,50 @@ mod tests {
                 send_back_addr: "/ip4/127.0.0.1/tcp/5000".parse().expect("send back"),
             }),
             PathKind::DirectTcpStream
+        );
+    }
+
+    #[test]
+    fn packet_drop_reasons_map_to_packet_rejections() {
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::MalformedPacket),
+            PacketRejectionReason::MalformedPacket
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::PacketTooLarge),
+            PacketRejectionReason::PacketTooLarge
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::QueueFull),
+            PacketRejectionReason::PacketTooLarge
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::Replay),
+            PacketRejectionReason::Replay
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::UnauthorizedPeer),
+            PacketRejectionReason::UnauthorizedPeer
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::NoTransportPeer),
+            PacketRejectionReason::UnauthorizedPeer
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::UnauthorizedSource),
+            PacketRejectionReason::UnauthorizedSource
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::UnauthorizedDestination),
+            PacketRejectionReason::UnauthorizedDestination
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::UnexpectedPayload),
+            PacketRejectionReason::UnexpectedPayload
+        );
+        assert_eq!(
+            packet_rejection_reason(PacketDropReason::NoRoute),
+            PacketRejectionReason::MalformedPacket
         );
     }
 

@@ -48,7 +48,10 @@ request-response streams. Inbound packet handling checks the configured peer
 allowlist, source-route ownership, and local overlay destination ownership
 before writing to TUN. Outbound packets read from the local TUN interface must
 also use the local peer's built-in overlay source address before they are queued
-for a remote peer.
+for a remote peer. Accepted packet requests receive a compact success response;
+rejected requests return a compact rejection reason such as oversized packet,
+replay, unauthorized peer, unauthorized source, unauthorized destination,
+unexpected payload, or malformed packet instead of relying on request timeout.
 
 Route ownership is static and exclusive. Each configured peer may own its
 built-in host routes plus any advertised prefixes, but route compilation rejects

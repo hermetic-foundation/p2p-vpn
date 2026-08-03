@@ -31,10 +31,61 @@ impl PacketCodec {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketResponse {
     Accepted,
+    Rejected(PacketRejectionReason),
 }
 
 impl PacketResponse {
     const ACCEPTED_BYTE: u8 = 1;
+    const REJECTED_BYTE: u8 = 2;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PacketRejectionReason {
+    MalformedPacket,
+    PacketTooLarge,
+    Replay,
+    UnauthorizedPeer,
+    UnauthorizedSource,
+    UnauthorizedDestination,
+    UnexpectedPayload,
+}
+
+impl PacketRejectionReason {
+    const MALFORMED_PACKET_BYTE: u8 = 1;
+    const PACKET_TOO_LARGE_BYTE: u8 = 2;
+    const REPLAY_BYTE: u8 = 3;
+    const UNAUTHORIZED_PEER_BYTE: u8 = 4;
+    const UNAUTHORIZED_SOURCE_BYTE: u8 = 5;
+    const UNAUTHORIZED_DESTINATION_BYTE: u8 = 6;
+    const UNEXPECTED_PAYLOAD_BYTE: u8 = 7;
+
+    fn encode(self) -> u8 {
+        match self {
+            Self::MalformedPacket => Self::MALFORMED_PACKET_BYTE,
+            Self::PacketTooLarge => Self::PACKET_TOO_LARGE_BYTE,
+            Self::Replay => Self::REPLAY_BYTE,
+            Self::UnauthorizedPeer => Self::UNAUTHORIZED_PEER_BYTE,
+            Self::UnauthorizedSource => Self::UNAUTHORIZED_SOURCE_BYTE,
+            Self::UnauthorizedDestination => Self::UNAUTHORIZED_DESTINATION_BYTE,
+            Self::UnexpectedPayload => Self::UNEXPECTED_PAYLOAD_BYTE,
+        }
+    }
+
+    fn decode(byte: u8) -> io::Result<Self> {
+        match byte {
+            Self::MALFORMED_PACKET_BYTE => Ok(Self::MalformedPacket),
+            Self::PACKET_TOO_LARGE_BYTE => Ok(Self::PacketTooLarge),
+            Self::REPLAY_BYTE => Ok(Self::Replay),
+            Self::UNAUTHORIZED_PEER_BYTE => Ok(Self::UnauthorizedPeer),
+            Self::UNAUTHORIZED_SOURCE_BYTE => Ok(Self::UnauthorizedSource),
+            Self::UNAUTHORIZED_DESTINATION_BYTE => Ok(Self::UnauthorizedDestination),
+            Self::UNEXPECTED_PAYLOAD_BYTE => Ok(Self::UnexpectedPayload),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unknown packet rejection reason {other}"),
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -62,10 +113,17 @@ impl request_response::Codec for PacketCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut response = [0];
-        io.read_exact(&mut response).await?;
-        match response[0] {
+        let mut status = [0];
+        io.read_exact(&mut status).await?;
+        match status[0] {
             PacketResponse::ACCEPTED_BYTE => Ok(PacketResponse::Accepted),
+            PacketResponse::REJECTED_BYTE => {
+                let mut reason = [0];
+                io.read_exact(&mut reason).await?;
+                Ok(PacketResponse::Rejected(PacketRejectionReason::decode(
+                    reason[0],
+                )?))
+            }
             other => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown packet response {other}"),
@@ -97,6 +155,10 @@ impl request_response::Codec for PacketCodec {
     {
         match response {
             PacketResponse::Accepted => io.write_all(&[PacketResponse::ACCEPTED_BYTE]).await?,
+            PacketResponse::Rejected(reason) => {
+                io.write_all(&[PacketResponse::REJECTED_BYTE, reason.encode()])
+                    .await?;
+            }
         }
         io.close().await
     }
@@ -209,6 +271,38 @@ mod tests {
         let error = request_response::Codec::read_request(&mut codec, &protocol, &mut input)
             .await
             .expect_err("oversized request should be invalid");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn packet_codec_round_trips_rejection_response() {
+        let mut codec = PacketCodec::new(1280);
+        let protocol = StreamProtocol::new(PACKET_PROTOCOL);
+        let response = PacketResponse::Rejected(PacketRejectionReason::UnauthorizedSource);
+        let mut written = Cursor::new(Vec::new());
+
+        request_response::Codec::write_response(&mut codec, &protocol, &mut written, response)
+            .await
+            .expect("write");
+
+        written.set_position(0);
+        let decoded = request_response::Codec::read_response(&mut codec, &protocol, &mut written)
+            .await
+            .expect("read");
+
+        assert_eq!(decoded, response);
+    }
+
+    #[tokio::test]
+    async fn packet_codec_rejects_unknown_rejection_reason() {
+        let mut codec = PacketCodec::new(1280);
+        let protocol = StreamProtocol::new(PACKET_PROTOCOL);
+        let mut input = Cursor::new(vec![PacketResponse::REJECTED_BYTE, 99]);
+
+        let error = request_response::Codec::read_response(&mut codec, &protocol, &mut input)
+            .await
+            .expect_err("unknown rejection reason should be invalid");
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }

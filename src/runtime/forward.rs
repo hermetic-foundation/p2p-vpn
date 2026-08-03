@@ -271,11 +271,12 @@ impl Forwarder {
     pub fn send_packet_response(
         swarm: &mut Swarm<Behaviour>,
         channel: request_response::ResponseChannel<PacketResponse>,
+        response: PacketResponse,
     ) -> Result<(), PacketResponse> {
         swarm
             .behaviour_mut()
             .packet
-            .send_response(channel, PacketResponse::Accepted)
+            .send_response(channel, response)
     }
 }
 
