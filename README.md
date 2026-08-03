@@ -620,7 +620,12 @@ and exits successfully. Runtime lifecycle and high-value network events are
 written to stderr as key-value lines such as
 `level=info event=connection_established peer=<peer-id> relayed=false`, which
 keeps journald output grep-friendly without requiring a separate logging
-collector.
+collector. Rejected packet, control, and service requests emit warn-level audit
+events (`packet_rejected`, `packet_response_rejected`,
+`control_capabilities_rejected`, and `service_status_rejected`) with the peer,
+reason, and safe packet metadata such as payload type, session, sequence,
+payload length, and parsed IP endpoints when present. Packet payload bytes and
+secrets are not logged.
 
 Inspect the Linux interface setup plan without requiring root:
 

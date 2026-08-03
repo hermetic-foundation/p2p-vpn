@@ -24,7 +24,7 @@ use crate::{
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig},
     metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics},
     path::{PathSet, PathTransportSupport},
-    queue::PeerQueues,
+    queue::{EnqueueError, PeerQueues},
     route::RouteError,
     runtime::{
         control::{
@@ -33,7 +33,7 @@ use crate::{
             validate_capabilities,
         },
         control_socket::{ControlSocket, RuntimeControlRequest},
-        forward::{ForwardError, Forwarder},
+        forward::{ForwardError, Forwarder, packet_destination, packet_source},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
         service::{
@@ -42,7 +42,7 @@ use crate::{
         },
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
     },
-    wire::PayloadType,
+    wire::{Frame, PayloadType},
 };
 
 const TUN_READ_CHANNEL: usize = 1024;
@@ -1467,7 +1467,7 @@ fn handle_packet_event(
                 context
                     .metrics
                     .record_outbound_drop(packet_rejection_drop_reason(reason));
-                eprintln!("packet request to {peer} was rejected: {reason:?}");
+                audit_packet_response_rejection(peer, reason);
             }
         },
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -1517,7 +1517,7 @@ fn handle_packet_request(
         Err(error) => {
             let drop_reason = inbound_drop_reason(&error);
             context.metrics.record_inbound_drop(drop_reason);
-            eprintln!("dropping inbound packet frame from {peer}: {error:?}");
+            audit_packet_request_rejection(peer, request, &error);
             Forwarder::send_packet_response(
                 swarm,
                 channel,
@@ -1600,7 +1600,7 @@ fn handle_control_request(
                 ControlResponse::CapabilitiesRejected(reason) => {
                     context.metrics.record_control_capability_rejection(*reason);
                     context.metrics.record_control_failure();
-                    eprintln!("rejecting control capabilities from {peer}: {reason:?}");
+                    audit_control_capabilities_rejection(peer, *reason);
                 }
             }
             swarm
@@ -1636,7 +1636,7 @@ fn handle_service_request(
                 ServiceResponse::Rejected(reason) => {
                     context.metrics.record_service_status_rejection(*reason);
                     context.metrics.record_service_failure();
-                    eprintln!("rejecting service status request from {peer}: {reason:?}");
+                    audit_service_status_rejection(peer, *reason);
                 }
             }
             swarm
@@ -2395,6 +2395,151 @@ fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
     }
 }
 
+type AuditFields = Vec<(&'static str, String)>;
+
+fn audit_packet_request_rejection(peer: Libp2pPeerId, frame: &Frame, error: &ForwardError) {
+    log_runtime_event_owned(
+        LogLevel::Warn,
+        "packet_rejected",
+        &packet_rejection_audit_fields(peer, frame, error),
+    );
+}
+
+fn audit_packet_response_rejection(peer: Libp2pPeerId, reason: PacketRejectionReason) {
+    log_runtime_event_owned(
+        LogLevel::Warn,
+        "packet_response_rejected",
+        &vec![
+            ("peer", peer.to_string()),
+            ("reason", packet_response_rejection_name(reason).to_owned()),
+        ],
+    );
+}
+
+fn audit_control_capabilities_rejection(peer: Libp2pPeerId, reason: ControlRejectionReason) {
+    log_runtime_event_owned(
+        LogLevel::Warn,
+        "control_capabilities_rejected",
+        &vec![
+            ("peer", peer.to_string()),
+            ("reason", control_rejection_name(reason).to_owned()),
+        ],
+    );
+}
+
+fn audit_service_status_rejection(peer: Libp2pPeerId, reason: ServiceRejectionReason) {
+    log_runtime_event_owned(
+        LogLevel::Warn,
+        "service_status_rejected",
+        &vec![
+            ("peer", peer.to_string()),
+            ("reason", service_rejection_name(reason).to_owned()),
+        ],
+    );
+}
+
+fn log_runtime_event_owned(level: LogLevel, event: &str, fields: &AuditFields) {
+    let fields = fields
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+    log_runtime_event(level, event, &fields);
+}
+
+fn packet_rejection_audit_fields(
+    peer: Libp2pPeerId,
+    frame: &Frame,
+    error: &ForwardError,
+) -> AuditFields {
+    let mut fields = vec![
+        ("peer", peer.to_string()),
+        ("reason", packet_rejection_error_name(error).to_owned()),
+        (
+            "payload_type",
+            payload_type_name(frame.header.payload_type).to_owned(),
+        ),
+        ("session_id", frame.header.session_id.to_string()),
+        ("sequence", frame.header.sequence.to_string()),
+        ("payload_len", frame.payload.len().to_string()),
+    ];
+
+    if let Ok(source) = packet_source(&frame.payload) {
+        fields.push(("source", source.to_string()));
+    }
+    if let Ok(destination) = packet_destination(&frame.payload) {
+        fields.push(("destination", destination.to_string()));
+    }
+
+    fields
+}
+
+fn packet_rejection_error_name(error: &ForwardError) -> &'static str {
+    match error {
+        ForwardError::UnauthorizedPeer(_) => "unauthorized_peer",
+        ForwardError::Route(RouteError::UnauthorizedSource { .. })
+        | ForwardError::UnauthorizedLocalSource { .. } => "unauthorized_source",
+        ForwardError::UnauthorizedLocalDestination { .. } => "unauthorized_destination",
+        ForwardError::ReplayedPacket { .. } => "replayed_packet",
+        ForwardError::PacketOutsideReplayWindow { .. } => "packet_outside_replay_window",
+        ForwardError::PacketTooLarge { .. }
+        | ForwardError::Enqueue(EnqueueError::PacketTooLarge { .. }) => "packet_too_large",
+        ForwardError::UnexpectedPayload(_) => "unexpected_payload",
+        ForwardError::PayloadLengthMismatch { .. } => "payload_length_mismatch",
+        ForwardError::TruncatedIpPacket { .. } => "truncated_ip_packet",
+        ForwardError::UnsupportedIpVersion(_) => "unsupported_ip_version",
+        ForwardError::Frame(_) => "malformed_frame",
+        ForwardError::Route(_) => "route_authorization_failed",
+        ForwardError::NoRoute(_) => "no_route",
+        ForwardError::NoTransportPeer(_) => "no_transport_peer",
+        ForwardError::Config(_) => "configuration_error",
+        ForwardError::Enqueue(EnqueueError::QueueFull { .. }) => "queue_full",
+    }
+}
+
+fn packet_response_rejection_name(reason: PacketRejectionReason) -> &'static str {
+    match reason {
+        PacketRejectionReason::MalformedPacket => "malformed_packet",
+        PacketRejectionReason::PacketTooLarge => "packet_too_large",
+        PacketRejectionReason::Replay => "replay",
+        PacketRejectionReason::UnauthorizedPeer => "unauthorized_peer",
+        PacketRejectionReason::UnauthorizedSource => "unauthorized_source",
+        PacketRejectionReason::UnauthorizedDestination => "unauthorized_destination",
+        PacketRejectionReason::UnexpectedPayload => "unexpected_payload",
+    }
+}
+
+fn control_rejection_name(reason: ControlRejectionReason) -> &'static str {
+    match reason {
+        ControlRejectionReason::UnauthorizedPeer => "unauthorized_peer",
+        ControlRejectionReason::WrongNetwork => "wrong_network",
+        ControlRejectionReason::MembershipMismatch => "membership_mismatch",
+        ControlRejectionReason::UnsupportedWireVersion => "unsupported_wire_version",
+        ControlRejectionReason::UnsupportedPacketProtocol => "unsupported_packet_protocol",
+        ControlRejectionReason::UnsupportedPacketHeaderLength => "unsupported_packet_header_length",
+        ControlRejectionReason::InvalidEffectiveMtu => "invalid_effective_mtu",
+        ControlRejectionReason::UnsupportedPreferredPath => "unsupported_preferred_path",
+        ControlRejectionReason::UnauthorizedRouteAdvertisement => {
+            "unauthorized_route_advertisement"
+        }
+    }
+}
+
+fn service_rejection_name(reason: ServiceRejectionReason) -> &'static str {
+    match reason {
+        ServiceRejectionReason::UnauthorizedPeer => "unauthorized_peer",
+        ServiceRejectionReason::WrongNetwork => "wrong_network",
+        ServiceRejectionReason::MembershipMismatch => "membership_mismatch",
+    }
+}
+
+fn payload_type_name(payload_type: PayloadType) -> &'static str {
+    match payload_type {
+        PayloadType::IpPacket => "ip_packet",
+        PayloadType::Keepalive => "keepalive",
+        PayloadType::PathProbe => "path_probe",
+    }
+}
+
 fn packet_rejection_reason(reason: PacketDropReason) -> PacketRejectionReason {
     match reason {
         PacketDropReason::PacketTooLarge | PacketDropReason::QueueFull => {
@@ -2621,6 +2766,52 @@ mod tests {
             ),
             "level=warn event=connection_closed peer=12D3KooWPeer error=\"dial failed \\\"hard\\\"\""
         );
+    }
+
+    #[test]
+    fn packet_rejection_audit_fields_include_safe_packet_metadata() {
+        let peer = peer_id();
+        let source = Ipv4Addr::new(100, 64, 1, 10);
+        let destination = Ipv4Addr::new(100, 64, 2, 20);
+        let frame = Frame::new(
+            PayloadType::IpPacket,
+            42,
+            9,
+            ipv4_packet(source, destination),
+        )
+        .expect("valid frame");
+        let error = ForwardError::Route(RouteError::UnauthorizedSource {
+            peer: PeerId::from_libp2p(peer),
+            source: source.into(),
+        });
+
+        let fields = packet_rejection_audit_fields(peer, &frame, &error);
+
+        assert!(fields.contains(&("peer", peer.to_string())));
+        assert!(fields.contains(&("reason", "unauthorized_source".to_owned())));
+        assert!(fields.contains(&("payload_type", "ip_packet".to_owned())));
+        assert!(fields.contains(&("session_id", "42".to_owned())));
+        assert!(fields.contains(&("sequence", "9".to_owned())));
+        assert!(fields.contains(&("payload_len", "20".to_owned())));
+        assert!(fields.contains(&("source", source.to_string())));
+        assert!(fields.contains(&("destination", destination.to_string())));
+    }
+
+    #[test]
+    fn audit_rejection_reason_names_are_stable() {
+        assert_eq!(
+            packet_response_rejection_name(PacketRejectionReason::Replay),
+            "replay"
+        );
+        assert_eq!(
+            control_rejection_name(ControlRejectionReason::UnauthorizedRouteAdvertisement),
+            "unauthorized_route_advertisement"
+        );
+        assert_eq!(
+            service_rejection_name(ServiceRejectionReason::MembershipMismatch),
+            "membership_mismatch"
+        );
+        assert_eq!(payload_type_name(PayloadType::PathProbe), "path_probe");
     }
 
     #[test]
