@@ -89,6 +89,7 @@ impl Config {
         self.identity()?;
         self.membership_key_bytes()?;
         self.compile_routes()?;
+        self.validate_interface()?;
         self.validate_resources()?;
         self.listen_multiaddrs()?;
         self.external_multiaddrs()?;
@@ -96,6 +97,14 @@ impl Config {
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
+        Ok(())
+    }
+
+    fn validate_interface(&self) -> Result<(), ConfigError> {
+        if self.interface.mtu == 0 {
+            return Err(ConfigError::Interface(InterfaceValidationError::ZeroMtu));
+        }
+
         Ok(())
     }
 
@@ -522,6 +531,7 @@ pub enum ConfigError {
     Multiaddr(libp2p::multiaddr::Error),
     KademliaProtocol(String),
     Address(AddressValidationError),
+    Interface(InterfaceValidationError),
     Resource(ResourceValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
@@ -575,6 +585,11 @@ pub enum AddressValidationError {
     UnexpectedRelayTarget {
         address: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InterfaceValidationError {
+    ZeroMtu,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1333,6 +1348,37 @@ mod tests {
         assert!(matches!(
             config.validate_runtime(),
             Err(ConfigError::IdentityPeerMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_zero_interface_mtu() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 0,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Interface(InterfaceValidationError::ZeroMtu))
         ));
     }
 

@@ -141,8 +141,9 @@ reservations and carry fallback traffic.
 
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
-field and is used consistently by the TUN setup and packet forwarder. The
-`status` and `up` commands print both configured and effective MTU values.
+field and is used consistently by the TUN setup and packet forwarder. Runtime
+validation rejects a zero interface MTU. The `status` and `up` commands print
+both configured and effective MTU values.
 
 ## Development
 
@@ -364,8 +365,8 @@ valid base64 key material, configured routes compile, all listen and external
 multiaddrs parse, bootstrap and peer multiaddrs either omit an explicit peer id
 or match the configured peer, and relay reservation multiaddrs contain
 `/p2p/<relay>/p2p-circuit`. It also checks that packet queues, established
-connection capacity, and enabled relay-server limits are non-zero. The output
-includes the local overlay IPv4/IPv6
+connection capacity, enabled relay-server limits, and the configured interface
+MTU are non-zero. The output includes the local overlay IPv4/IPv6
 addresses plus built-in and configured route ownership lines, which are the
 claims peers must mirror in their `peer.routes` entries before accepting routed
 traffic from this node.

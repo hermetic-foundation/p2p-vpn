@@ -294,6 +294,7 @@ fn run_node_child() {
         peer_config(&remote, remote_address, peer_routes),
     );
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
+    let effective_mtu = runtime.mtu;
     let device = open_and_configure_tun(&runtime);
     if role == "a" {
         run_command(
@@ -316,6 +317,7 @@ fn run_node_child() {
         .block_on(run_ready_node(
             config,
             device,
+            effective_mtu,
             temp_dir.join(format!("ready-{role}")),
         ))
         .expect("node runtime");
@@ -324,6 +326,7 @@ fn run_node_child() {
 async fn run_ready_node(
     config: Config,
     device: TunDevice,
+    mtu: u16,
     ready_file: PathBuf,
 ) -> Result<(), runner::RunnerError> {
     let mut node = build_node(&HostConfig {
@@ -352,7 +355,7 @@ async fn run_ready_node(
         forwarder,
         membership,
         device,
-        config.interface.mtu,
+        mtu,
         config.queue,
         Some(Duration::from_secs(1)),
     ))
