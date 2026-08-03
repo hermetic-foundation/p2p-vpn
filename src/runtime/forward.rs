@@ -432,6 +432,7 @@ mod tests {
                     .to_peer_id()
                     .to_string(),
                 private_key: None,
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -675,6 +676,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: local_identity,
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -772,6 +774,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: local_identity,
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,

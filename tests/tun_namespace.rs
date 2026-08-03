@@ -265,6 +265,7 @@ async fn run_ready_node(
     let mut node = build_node(&HostConfig {
         identity: config.identity()?,
         network_name: config.network.name.clone(),
+        membership_tag: config.membership_tag()?,
         mtu: config.effective_packet_mtu(),
         max_concurrent_control_streams: config.resources.control_stream_limit(),
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
@@ -325,6 +326,7 @@ fn node_config(
             name: name.to_owned(),
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),
+            membership_key: None,
             listen_addresses: vec![listen_address.to_owned()],
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),

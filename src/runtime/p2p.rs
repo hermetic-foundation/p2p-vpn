@@ -39,6 +39,7 @@ pub struct Behaviour {
 pub struct P2pNode {
     pub local_peer_id: PeerId,
     pub network_name: String,
+    pub membership_tag: Option<String>,
     pub swarm: Swarm<Behaviour>,
     pub discovery: DiscoveryConfig,
     pub kademlia_rendezvous_key: Option<kad::RecordKey>,
@@ -51,6 +52,7 @@ pub struct P2pNode {
 pub struct HostConfig {
     pub identity: NodeIdentity,
     pub network_name: String,
+    pub membership_tag: Option<String>,
     pub mtu: u16,
     pub max_concurrent_control_streams: usize,
     pub max_concurrent_packet_streams: usize,
@@ -176,6 +178,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     Ok(P2pNode {
         local_peer_id,
         network_name: config.network_name.clone(),
+        membership_tag: config.membership_tag.clone(),
         swarm,
         discovery,
         kademlia_rendezvous_key,
@@ -418,6 +421,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity,
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -457,6 +461,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -494,6 +499,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -519,6 +525,7 @@ mod tests {
         let result = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -552,6 +559,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -583,6 +591,7 @@ mod tests {
         let result = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -613,6 +622,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -645,6 +655,7 @@ mod tests {
         let node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -756,6 +767,7 @@ mod tests {
         let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -775,6 +787,7 @@ mod tests {
         let mut dialer = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -809,6 +822,7 @@ mod tests {
         let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -828,6 +842,7 @@ mod tests {
         let mut dialer = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -842,7 +857,7 @@ mod tests {
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
-        let request = ControlRequest::Capabilities(ControlCapabilities::local("lab", 1280));
+        let request = ControlRequest::Capabilities(ControlCapabilities::local("lab", None, 1280));
         let request_id = dialer
             .swarm
             .behaviour_mut()
@@ -864,16 +879,11 @@ mod tests {
 
     #[tokio::test]
     async fn relayed_nodes_exchange_packet_request() {
-        let discovery = DiscoveryConfig {
-            mdns: false,
-            kademlia: false,
-            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
-            dcutr: false,
-            autonat: false,
-        };
+        let discovery = relay_test_discovery();
         let mut relay = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("relay identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -900,6 +910,7 @@ mod tests {
         let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -934,6 +945,7 @@ mod tests {
         let mut dialer = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -974,6 +986,16 @@ mod tests {
             if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
                 return address;
             }
+        }
+    }
+
+    fn relay_test_discovery() -> DiscoveryConfig {
+        DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
         }
     }
 
@@ -1114,7 +1136,7 @@ mod tests {
                             .control
                             .send_response(
                                 channel,
-                                ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", 1280)),
+                                ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280)),
                             )
                             .expect("send response");
                     }
@@ -1127,7 +1149,7 @@ mod tests {
                         assert_eq!(request_id, expected_request_id);
                         assert_eq!(
                             response,
-                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", 1280))
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))
                         );
                         return;
                     }

@@ -52,6 +52,7 @@ pub async fn run_config(
     let node = build_node(&HostConfig {
         identity,
         network_name: config.network.name.clone(),
+        membership_tag: config.membership_tag()?,
         mtu: config.effective_packet_mtu(),
         max_concurrent_control_streams: config.resources.control_stream_limit(),
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
@@ -108,7 +109,8 @@ pub async fn run_node(
         .map(|_| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL));
     let mut queue_expiry_tick =
         tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
-    let local_capabilities = ControlCapabilities::local(&node.network_name, mtu);
+    let local_capabilities =
+        ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu);
     redial_tick.tick().await;
     if let Some(tick) = &mut kademlia_refresh_tick {
         tick.tick().await;
@@ -684,6 +686,7 @@ fn handle_control_event(
                 peer,
                 response,
                 &context.local_capabilities.network_name,
+                context.local_capabilities.membership_tag.as_deref(),
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -809,10 +812,13 @@ fn handle_control_response(
     peer: Libp2pPeerId,
     response: ControlResponse,
     expected_network: &str,
+    expected_membership_tag: Option<&str>,
 ) {
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            if let Some(reason) = validate_capabilities(&capabilities, expected_network) {
+            if let Some(reason) =
+                validate_capabilities(&capabilities, expected_network, expected_membership_tag)
+            {
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
             } else {
@@ -838,7 +844,11 @@ fn capability_response_for_peer(
         return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
     }
 
-    if let Some(reason) = validate_capabilities(capabilities, &local_capabilities.network_name) {
+    if let Some(reason) = validate_capabilities(
+        capabilities,
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.as_deref(),
+    ) {
         return rejected_capabilities_response(reason);
     }
 
@@ -1471,6 +1481,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -1508,6 +1519,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1537,6 +1549,7 @@ mod tests {
                 private_key: local_identity.private_key,
             },
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -1739,6 +1752,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: vec![BootstrapPeerConfig {
@@ -1871,6 +1885,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -1899,6 +1914,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -2106,6 +2122,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2130,13 +2147,13 @@ mod tests {
             resources: ResourceConfig::default(),
         };
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let local_capabilities = ControlCapabilities::local("lab", 1280);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
 
         assert_eq!(
             capability_response_for_peer(
                 &forwarder,
                 remote,
-                &ControlCapabilities::local("lab", 1200),
+                &ControlCapabilities::local("lab", None, 1200),
                 &local_capabilities,
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
@@ -2152,6 +2169,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2181,10 +2199,56 @@ mod tests {
             capability_response_for_peer(
                 &forwarder,
                 remote,
-                &ControlCapabilities::local("prod", 1280),
-                &ControlCapabilities::local("lab", 1280),
+                &ControlCapabilities::local("prod", None, 1280),
+                &ControlCapabilities::local("lab", None, 1280),
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::WrongNetwork)
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_wrong_membership_tag() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &ControlCapabilities::local("lab", Some("remote-tag".to_owned()), 1280),
+                &ControlCapabilities::local("lab", Some("local-tag".to_owned()), 1280),
+            ),
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::MembershipMismatch)
         );
     }
 
@@ -2198,6 +2262,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2227,8 +2292,8 @@ mod tests {
             capability_response_for_peer(
                 &forwarder,
                 unconfigured,
-                &ControlCapabilities::local("lab", 1280),
-                &ControlCapabilities::local("lab", 1280),
+                &ControlCapabilities::local("lab", None, 1280),
+                &ControlCapabilities::local("lab", None, 1280),
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
         );
@@ -2243,6 +2308,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2267,7 +2333,7 @@ mod tests {
             resources: ResourceConfig::default(),
         };
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut capabilities = ControlCapabilities::local("lab", 1280);
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities.packet_protocol = "/other/packet/1".to_owned();
 
         assert_eq!(
@@ -2275,7 +2341,7 @@ mod tests {
                 &forwarder,
                 remote,
                 &capabilities,
-                &ControlCapabilities::local("lab", 1280),
+                &ControlCapabilities::local("lab", None, 1280),
             ),
             ControlResponse::CapabilitiesRejected(
                 ControlRejectionReason::UnsupportedPacketProtocol
@@ -2297,6 +2363,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2323,6 +2390,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: local_identity,
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -2348,7 +2416,7 @@ mod tests {
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         let mut peer_capabilities = PeerCapabilities::default();
-        peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", 19));
+        peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 19));
         let metrics = RuntimeMetrics::default();
 
         drain_outbound_queue(
@@ -2381,6 +2449,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2407,6 +2476,7 @@ mod tests {
         let mut node = build_node(&HostConfig {
             identity: local_identity,
             network_name: "lab".to_owned(),
+            membership_tag: None,
             mtu: 1280,
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
@@ -2432,7 +2502,7 @@ mod tests {
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
-        let mut capabilities = ControlCapabilities::local("lab", 1280);
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities.supports_quic_datagrams = true;
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
@@ -2465,6 +2535,7 @@ mod tests {
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -2501,8 +2572,11 @@ mod tests {
         paths.record_established(stream_overlay, PathKind::DirectQuicStream);
         paths.record_established(datagram_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
-        peer_capabilities.record(stream_overlay, ControlCapabilities::local("lab", 1280));
-        let mut datagram_capabilities = ControlCapabilities::local("lab", 1280);
+        peer_capabilities.record(
+            stream_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let mut datagram_capabilities = ControlCapabilities::local("lab", None, 1280);
         datagram_capabilities.supports_quic_datagrams = true;
         peer_capabilities.record(datagram_overlay, datagram_capabilities);
 

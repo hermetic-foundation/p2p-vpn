@@ -326,6 +326,7 @@ mod tests {
                     .to_peer_id()
                     .to_string(),
                 private_key: None,
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),

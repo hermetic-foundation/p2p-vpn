@@ -36,6 +36,8 @@ enum Command {
         network: String,
         #[arg(long)]
         private_key: Option<String>,
+        #[arg(long)]
+        membership_key: Option<String>,
         #[arg(long, default_value = "hs0")]
         interface: String,
         #[arg(long, default_value_t = 1_280)]
@@ -95,6 +97,7 @@ async fn main() -> Result<(), String> {
             output,
             network,
             private_key,
+            membership_key,
             interface,
             mtu,
             listen_addresses,
@@ -114,6 +117,7 @@ async fn main() -> Result<(), String> {
             output,
             network,
             private_key,
+            membership_key,
             interface,
             mtu,
             listen_addresses,
@@ -150,6 +154,7 @@ struct InitConfigArgs {
     output: PathBuf,
     network: String,
     private_key: Option<String>,
+    membership_key: Option<String>,
     interface: String,
     mtu: u16,
     listen_addresses: Vec<String>,
@@ -267,6 +272,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
     let config = InitConfigTemplate {
         identity,
         network_name: args.network,
+        membership_key: args.membership_key,
         interface_name: args.interface,
         mtu: args.mtu,
         listen_addresses: args.listen_addresses,
@@ -332,6 +338,10 @@ fn status(path: &PathBuf) -> Result<(), String> {
     let defaults = RuntimeDefaults::default();
 
     println!("network: {}", config.network.name);
+    println!(
+        "membership key configured: {}",
+        config.network.membership_key.is_some()
+    );
     println!(
         "interface: {} mtu {}",
         config.interface.name, config.interface.mtu
@@ -622,6 +632,8 @@ mod tests {
             "init-config",
             "--kademlia-protocol",
             "/ipfs/kad/1.0.0",
+            "--membership-key",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "--peer",
             "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
             "--peer-route",
@@ -633,6 +645,7 @@ mod tests {
             peers,
             peer_routes,
             kademlia_protocol,
+            membership_key,
             ..
         } = cli.command
         else {
@@ -657,5 +670,9 @@ mod tests {
             }]
         );
         assert_eq!(kademlia_protocol, "/ipfs/kad/1.0.0");
+        assert_eq!(
+            membership_key.as_deref(),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
     }
 }

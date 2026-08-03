@@ -32,6 +32,10 @@ peers, and relay peers named in reservation addresses are allowed to remain
 connected; other peers are disconnected and counted as unauthorized connection
 drops. This connection-level membership does not grant routing authority:
 packet source ownership is still checked separately against configured routes.
+An optional `network.membership_key` adds overlay-wide membership proof for
+configured peers. The base64 key is never sent on the wire; peers exchange a
+network-scoped SHA-256 membership tag in the control handshake and reject
+configured peers whose tag does not match.
 
 Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the
@@ -49,8 +53,8 @@ the peer's advertised effective MTU and drops oversized packets before sending
 them to the packet stream fallback. Capability requests from unconfigured peers
 are rejected, and configured peers are only accepted when they advertise the
 same overlay network name, compatible wire version, packet protocol, packet
-header length, known preferred path, coherent datagram support, and non-zero
-effective MTU.
+header length, matching membership tag when a key is configured, known
+preferred path, coherent datagram support, and non-zero effective MTU.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
@@ -146,6 +150,7 @@ Generate a starter node config with a new private key:
 cargo run -- init-config \
   --network lab \
   --output node-a.json \
+  --membership-key <base64-32-byte-or-longer-secret> \
   --listen-address /ip4/0.0.0.0/tcp/0 \
   --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
   --external-address /dns4/node-a.example.net/udp/4001/quic-v1
@@ -166,7 +171,9 @@ cargo run -- init-config \
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
-stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
+stdout. Use the same `--membership-key` value on every node that should join
+the private overlay; it must decode to at least 32 bytes. Repeat
+`--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
 `--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is allowed to
 originate. The default generated route metric is `100`, preserving the built-in
 host routes at metric `0`. Repeat `--bootstrap-peer PEER_ID=MULTIADDR` for
@@ -210,6 +217,7 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "name": "lab",
     "local_peer": "12D3KooW...",
     "private_key": "CAES...",
+    "membership_key": "base64-encoded-32-byte-or-longer-secret",
     "listen_addresses": [
       "/ip4/0.0.0.0/tcp/0",
       "/ip4/0.0.0.0/udp/0/quic-v1"
@@ -312,10 +320,11 @@ cargo run -- status --config p2p-vpn.json
 ```
 
 `status` validates the config before printing the compiled view. It checks that
-the private key matches `network.local_peer`, configured routes compile, all
-listen and external multiaddrs parse, bootstrap and peer multiaddrs either omit
-an explicit peer id or match the configured peer, and relay reservation
-multiaddrs contain `/p2p/<relay>/p2p-circuit`.
+the private key matches `network.local_peer`, the optional membership key is
+valid base64 key material, configured routes compile, all listen and external
+multiaddrs parse, bootstrap and peer multiaddrs either omit an explicit peer id
+or match the configured peer, and relay reservation multiaddrs contain
+`/p2p/<relay>/p2p-circuit`.
 
 Inspect the runtime metric names and startup snapshot:
 

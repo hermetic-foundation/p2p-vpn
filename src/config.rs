@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     PathKind, PeerId,
@@ -66,6 +68,7 @@ impl Config {
 
     pub fn validate_runtime(&self) -> Result<(), ConfigError> {
         self.identity()?;
+        self.membership_key_bytes()?;
         self.compile_routes()?;
         self.listen_multiaddrs()?;
         self.external_multiaddrs()?;
@@ -95,6 +98,21 @@ impl Config {
         }
 
         Ok(identity)
+    }
+
+    pub fn membership_key_bytes(&self) -> Result<Option<Vec<u8>>, ConfigError> {
+        self.network
+            .membership_key
+            .as_deref()
+            .map(decode_membership_key)
+            .transpose()
+    }
+
+    pub fn membership_tag(&self) -> Result<Option<String>, ConfigError> {
+        let Some(key) = self.membership_key_bytes()? else {
+            return Ok(None);
+        };
+        Ok(Some(membership_tag(&self.network.name, &key)))
     }
 
     pub fn listen_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
@@ -139,6 +157,8 @@ pub struct NetworkConfig {
     pub local_peer: String,
     #[serde(default)]
     pub private_key: Option<String>,
+    #[serde(default)]
+    pub membership_key: Option<String>,
     #[serde(default)]
     pub listen_addresses: Vec<String>,
     #[serde(default)]
@@ -374,6 +394,7 @@ pub struct InitPeer {
 pub struct InitConfigTemplate {
     pub identity: NodeIdentity,
     pub network_name: String,
+    pub membership_key: Option<String>,
     pub interface_name: String,
     pub mtu: u16,
     pub listen_addresses: Vec<String>,
@@ -397,6 +418,7 @@ impl InitConfigTemplate {
                 name: self.network_name,
                 local_peer: self.identity.peer_id,
                 private_key: Some(self.identity.private_key),
+                membership_key: self.membership_key,
                 listen_addresses: self.listen_addresses,
                 external_addresses: self.external_addresses,
                 bootstrap_peers: self
@@ -435,6 +457,7 @@ pub enum ConfigError {
     Identity(crate::identity::IdentityError),
     MissingPrivateKey,
     IdentityPeerMismatch { expected: String, actual: String },
+    MembershipKey(MembershipKeyError),
     PeerId(crate::PeerIdParseError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
@@ -493,6 +516,14 @@ pub enum AddressValidationError {
         address: String,
     },
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MembershipKeyError {
+    InvalidBase64,
+    TooShort { actual: usize, minimum: usize },
+}
+
+const MIN_MEMBERSHIP_KEY_LEN: usize = 32;
 
 fn default_queue() -> QueueConfig {
     QueueConfig {
@@ -602,6 +633,29 @@ fn default_interface() -> InterfaceConfig {
         name: "hs0".to_owned(),
         mtu: 1_280,
     }
+}
+
+fn decode_membership_key(input: &str) -> Result<Vec<u8>, ConfigError> {
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|_| ConfigError::MembershipKey(MembershipKeyError::InvalidBase64))?;
+    if key.len() < MIN_MEMBERSHIP_KEY_LEN {
+        return Err(ConfigError::MembershipKey(MembershipKeyError::TooShort {
+            actual: key.len(),
+            minimum: MIN_MEMBERSHIP_KEY_LEN,
+        }));
+    }
+    Ok(key)
+}
+
+#[must_use]
+pub fn membership_tag(network_name: &str, membership_key: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"p2p-vpn membership tag v1");
+    hasher.update(network_name.as_bytes());
+    hasher.update([0]);
+    hasher.update(membership_key);
+    base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
 }
 
 #[must_use]
@@ -800,6 +854,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn membership_keys_are_validated_and_tagged() {
+        let key = base64::engine::general_purpose::STANDARD.encode([7_u8; 32]);
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                membership_key: Some(key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        let first = config.membership_tag().expect("membership tag");
+        config.network.name = "prod".to_owned();
+        let second = config.membership_tag().expect("membership tag");
+
+        assert!(first.is_some());
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn membership_key_rejects_invalid_or_short_material() {
+        assert!(matches!(
+            decode_membership_key("not-base64"),
+            Err(ConfigError::MembershipKey(
+                MembershipKeyError::InvalidBase64
+            ))
+        ));
+        assert!(matches!(
+            decode_membership_key(&base64::engine::general_purpose::STANDARD.encode([1_u8; 8])),
+            Err(ConfigError::MembershipKey(MembershipKeyError::TooShort {
+                actual: 8,
+                minimum: MIN_MEMBERSHIP_KEY_LEN
+            }))
+        ));
+    }
+
+    #[test]
     fn config_compiles_builtin_and_advertised_routes() {
         let config = Config {
             network: NetworkConfig {
@@ -807,6 +911,7 @@ mod tests {
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
                 private_key: None,
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -853,6 +958,7 @@ mod tests {
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
                 private_key: None,
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -893,6 +999,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -925,6 +1032,7 @@ mod tests {
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
                 private_key: None,
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -981,6 +1089,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),
+                membership_key: None,
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
                 bootstrap_peers: vec![BootstrapPeerConfig {
@@ -1040,6 +1149,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(other.private_key),
+                membership_key: None,
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1072,6 +1182,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
+                membership_key: None,
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1126,6 +1237,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: vec![BootstrapPeerConfig {
@@ -1183,6 +1295,7 @@ mod tests {
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
+                membership_key: None,
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1241,6 +1354,7 @@ mod tests {
         let config = InitConfigTemplate {
             identity: identity.clone(),
             network_name: "lab".to_owned(),
+            membership_key: None,
             interface_name: "hs-lab".to_owned(),
             mtu: 1_400,
             listen_addresses: vec![
