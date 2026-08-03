@@ -27,6 +27,7 @@ use crate::{
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 
 pub async fn run_config(
     config: Config,
@@ -78,7 +79,10 @@ pub async fn run_node(
     let mut paths = PathSet::new();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
+    let mut queue_expiry_tick =
+        tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
     redial_tick.tick().await;
+    queue_expiry_tick.tick().await;
     let discovery = node.discovery;
 
     if node.startup.mdns_enabled {
@@ -122,6 +126,9 @@ pub async fn run_node(
             _ = redial_tick.tick() => {
                 redial_configured_addresses(&mut node.swarm, &node.bootstrap_peer_addresses, &node.configured_peer_addresses, &metrics);
             }
+            _ = queue_expiry_tick.tick() => {
+                expire_outbound_queue(&mut queues);
+            }
             () = async {
                 metrics_tick
                     .as_mut()
@@ -133,6 +140,14 @@ pub async fn run_node(
             }
         }
     }
+}
+
+fn queue_expiry_interval(max_packet_age: Duration) -> Duration {
+    max_packet_age.clamp(MIN_QUEUE_EXPIRY_INTERVAL, REDIAL_INTERVAL)
+}
+
+fn expire_outbound_queue(queues: &mut PeerQueues) {
+    queues.drop_expired(std::time::Instant::now());
 }
 
 fn redial_configured_addresses(
@@ -229,7 +244,7 @@ fn drain_outbound_queue(
     paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
-    queues.drop_expired(std::time::Instant::now());
+    expire_outbound_queue(queues);
     while let Some(packet) = queues.dequeue_ready(|peer| paths.has_healthy_path(peer)) {
         if let Err(error) = forwarder.send_queued_packet(swarm, &packet) {
             metrics.record_outbound_drop();
@@ -583,6 +598,22 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    #[test]
+    fn queue_expiry_interval_is_bounded_by_ttl_and_redial_interval() {
+        assert_eq!(
+            queue_expiry_interval(Duration::from_millis(1)),
+            MIN_QUEUE_EXPIRY_INTERVAL
+        );
+        assert_eq!(
+            queue_expiry_interval(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            queue_expiry_interval(Duration::from_secs(11)),
+            REDIAL_INTERVAL
+        );
     }
 
     #[test]

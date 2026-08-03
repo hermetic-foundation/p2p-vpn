@@ -50,7 +50,8 @@ unhealthy when their connections close, and only drains a peer's bounded queue
 while that peer has a healthy path. Packets for disconnected peers remain
 bounded by the per-peer queue limits instead of expanding into unbounded stream
 requests. Queued packets also have a configurable age limit; stale packets are
-dropped rather than sent after a long outage.
+dropped on a runtime expiry tick rather than sent after a long outage. A
+configured age of zero is treated as a one millisecond effective age.
 
 Configured bootstrap and peer addresses are redialed periodically when they are
 not already connected. This keeps the overlay trying to recover after transient

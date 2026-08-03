@@ -212,8 +212,8 @@ pub struct QueueConfig {
 
 impl QueueConfig {
     #[must_use]
-    pub const fn max_packet_age(self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.max_packet_age_millis)
+    pub fn max_packet_age(self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.max_packet_age_millis.max(1))
     }
 }
 
@@ -638,11 +638,20 @@ mod tests {
               },
               "resources": {
                 "max_concurrent_packet_streams": 0
+              },
+              "queue": {
+                "max_packets_per_peer": 256,
+                "max_bytes_per_peer": 524288,
+                "max_packet_age_millis": 0
               }
             }"#,
         )
         .expect("config");
 
         assert_eq!(config.resources.packet_stream_limit(), 1);
+        assert_eq!(
+            config.queue.max_packet_age(),
+            std::time::Duration::from_millis(1)
+        );
     }
 }
