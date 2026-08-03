@@ -38,6 +38,7 @@ pub struct Behaviour {
 
 pub struct P2pNode {
     pub local_peer_id: PeerId,
+    pub network_name: String,
     pub swarm: Swarm<Behaviour>,
     pub discovery: DiscoveryConfig,
     pub kademlia_rendezvous_key: Option<kad::RecordKey>,
@@ -174,6 +175,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     Ok(P2pNode {
         local_peer_id,
+        network_name: config.network_name.clone(),
         swarm,
         discovery,
         kademlia_rendezvous_key,
@@ -840,7 +842,7 @@ mod tests {
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
-        let request = ControlRequest::Capabilities(ControlCapabilities::local(1280));
+        let request = ControlRequest::Capabilities(ControlCapabilities::local("lab", 1280));
         let request_id = dialer
             .swarm
             .behaviour_mut()
@@ -1112,7 +1114,7 @@ mod tests {
                             .control
                             .send_response(
                                 channel,
-                                ControlResponse::CapabilitiesAccepted(ControlCapabilities::local(1280)),
+                                ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", 1280)),
                             )
                             .expect("send response");
                     }
@@ -1125,7 +1127,7 @@ mod tests {
                         assert_eq!(request_id, expected_request_id);
                         assert_eq!(
                             response,
-                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local(1280))
+                            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", 1280))
                         );
                         return;
                     }

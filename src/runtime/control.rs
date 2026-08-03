@@ -19,6 +19,7 @@ pub struct ControlCodec;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ControlCapabilities {
+    pub network_name: String,
     pub wire_version: u8,
     pub packet_protocol: String,
     pub packet_header_len: usize,
@@ -29,9 +30,10 @@ pub struct ControlCapabilities {
 
 impl ControlCapabilities {
     #[must_use]
-    pub fn local(effective_mtu: u16) -> Self {
+    pub fn local(network_name: &str, effective_mtu: u16) -> Self {
         let preferred_path = PathKind::DirectQuicStream;
         Self {
+            network_name: network_name.to_owned(),
             wire_version: WIRE_VERSION,
             packet_protocol: PACKET_PROTOCOL.to_owned(),
             packet_header_len: HEADER_LEN,
@@ -56,6 +58,7 @@ pub enum ControlResponse {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ControlRejectionReason {
     UnauthorizedPeer,
+    WrongNetwork,
     UnsupportedWireVersion,
     UnsupportedPacketProtocol,
     UnsupportedPacketHeaderLength,
@@ -100,7 +103,13 @@ impl PeerCapabilities {
 }
 
 #[must_use]
-pub fn validate_capabilities(capabilities: &ControlCapabilities) -> Option<ControlRejectionReason> {
+pub fn validate_capabilities(
+    capabilities: &ControlCapabilities,
+    expected_network: &str,
+) -> Option<ControlRejectionReason> {
+    if capabilities.network_name != expected_network {
+        return Some(ControlRejectionReason::WrongNetwork);
+    }
     if capabilities.wire_version != WIRE_VERSION {
         return Some(ControlRejectionReason::UnsupportedWireVersion);
     }
@@ -266,7 +275,7 @@ mod tests {
     async fn control_codec_round_trips_capabilities() {
         let mut codec = ControlCodec;
         let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
-        let request = ControlRequest::Capabilities(ControlCapabilities::local(1280));
+        let request = ControlRequest::Capabilities(ControlCapabilities::local("lab", 1280));
         let mut written = Cursor::new(Vec::new());
 
         request_response::Codec::write_request(
@@ -327,8 +336,9 @@ mod tests {
 
     #[test]
     fn local_capabilities_describe_packet_surface() {
-        let capabilities = ControlCapabilities::local(1420);
+        let capabilities = ControlCapabilities::local("lab", 1420);
 
+        assert_eq!(capabilities.network_name, "lab");
         assert_eq!(capabilities.wire_version, WIRE_VERSION);
         assert_eq!(capabilities.packet_protocol, PACKET_PROTOCOL);
         assert_eq!(capabilities.packet_header_len, HEADER_LEN);
@@ -344,10 +354,10 @@ mod tests {
 
         assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
 
-        capabilities.record(peer, ControlCapabilities::local(1200));
+        capabilities.record(peer, ControlCapabilities::local("lab", 1200));
         assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1200);
 
-        capabilities.record(peer, ControlCapabilities::local(1420));
+        capabilities.record(peer, ControlCapabilities::local("lab", 1420));
         assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
     }
 
@@ -358,7 +368,7 @@ mod tests {
 
         assert!(!capabilities.supports_quic_datagrams_for(peer));
 
-        let mut peer_capabilities = ControlCapabilities::local(1280);
+        let mut peer_capabilities = ControlCapabilities::local("lab", 1280);
         peer_capabilities.supports_quic_datagrams = true;
         capabilities.record(peer, peer_capabilities);
 
@@ -367,51 +377,56 @@ mod tests {
 
     #[test]
     fn capability_validation_rejects_incompatible_protocol_surfaces() {
-        let mut capabilities = ControlCapabilities::local(1280);
-        assert_eq!(validate_capabilities(&capabilities), None);
+        let mut capabilities = ControlCapabilities::local("lab", 1280);
+        assert_eq!(validate_capabilities(&capabilities, "lab"), None);
+
+        assert_eq!(
+            validate_capabilities(&capabilities, "prod"),
+            Some(ControlRejectionReason::WrongNetwork)
+        );
 
         capabilities.wire_version = WIRE_VERSION.saturating_add(1);
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::UnsupportedWireVersion)
         );
 
-        capabilities = ControlCapabilities::local(1280);
+        capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.packet_protocol = "/different/packet/1".to_owned();
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::UnsupportedPacketProtocol)
         );
 
-        capabilities = ControlCapabilities::local(1280);
+        capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.packet_header_len = HEADER_LEN + 1;
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::UnsupportedPacketHeaderLength)
         );
 
-        capabilities = ControlCapabilities::local(0);
+        capabilities = ControlCapabilities::local("lab", 0);
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::InvalidEffectiveMtu)
         );
 
-        capabilities = ControlCapabilities::local(1280);
+        capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.preferred_path = "not_a_path".to_owned();
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::UnsupportedPreferredPath)
         );
 
-        capabilities = ControlCapabilities::local(1280);
+        capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
         capabilities.supports_quic_datagrams = false;
         assert_eq!(
-            validate_capabilities(&capabilities),
+            validate_capabilities(&capabilities, "lab"),
             Some(ControlRejectionReason::UnsupportedPreferredPath)
         );
 
         capabilities.supports_quic_datagrams = true;
-        assert_eq!(validate_capabilities(&capabilities), None);
+        assert_eq!(validate_capabilities(&capabilities, "lab"), None);
     }
 }

@@ -108,7 +108,7 @@ pub async fn run_node(
         .map(|_| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL));
     let mut queue_expiry_tick =
         tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
-    let local_capabilities = ControlCapabilities::local(mtu);
+    let local_capabilities = ControlCapabilities::local(&node.network_name, mtu);
     redial_tick.tick().await;
     if let Some(tick) = &mut kademlia_refresh_tick {
         tick.tick().await;
@@ -683,6 +683,7 @@ fn handle_control_event(
                 context.metrics,
                 peer,
                 response,
+                &context.local_capabilities.network_name,
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -807,10 +808,11 @@ fn handle_control_response(
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     response: ControlResponse,
+    expected_network: &str,
 ) {
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            if let Some(reason) = validate_capabilities(&capabilities) {
+            if let Some(reason) = validate_capabilities(&capabilities, expected_network) {
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
             } else {
@@ -836,7 +838,7 @@ fn capability_response_for_peer(
         return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
     }
 
-    if let Some(reason) = validate_capabilities(capabilities) {
+    if let Some(reason) = validate_capabilities(capabilities, &local_capabilities.network_name) {
         return rejected_capabilities_response(reason);
     }
 
@@ -2128,16 +2130,61 @@ mod tests {
             resources: ResourceConfig::default(),
         };
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let local_capabilities = ControlCapabilities::local(1280);
+        let local_capabilities = ControlCapabilities::local("lab", 1280);
 
         assert_eq!(
             capability_response_for_peer(
                 &forwarder,
                 remote,
-                &ControlCapabilities::local(1200),
+                &ControlCapabilities::local("lab", 1200),
                 &local_capabilities,
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_wrong_network() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &ControlCapabilities::local("prod", 1280),
+                &ControlCapabilities::local("lab", 1280),
+            ),
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::WrongNetwork)
         );
     }
 
@@ -2180,8 +2227,8 @@ mod tests {
             capability_response_for_peer(
                 &forwarder,
                 unconfigured,
-                &ControlCapabilities::local(1280),
-                &ControlCapabilities::local(1280),
+                &ControlCapabilities::local("lab", 1280),
+                &ControlCapabilities::local("lab", 1280),
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
         );
@@ -2220,7 +2267,7 @@ mod tests {
             resources: ResourceConfig::default(),
         };
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut capabilities = ControlCapabilities::local(1280);
+        let mut capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.packet_protocol = "/other/packet/1".to_owned();
 
         assert_eq!(
@@ -2228,7 +2275,7 @@ mod tests {
                 &forwarder,
                 remote,
                 &capabilities,
-                &ControlCapabilities::local(1280),
+                &ControlCapabilities::local("lab", 1280),
             ),
             ControlResponse::CapabilitiesRejected(
                 ControlRejectionReason::UnsupportedPacketProtocol
@@ -2301,7 +2348,7 @@ mod tests {
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         let mut peer_capabilities = PeerCapabilities::default();
-        peer_capabilities.record(remote_overlay, ControlCapabilities::local(19));
+        peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", 19));
         let metrics = RuntimeMetrics::default();
 
         drain_outbound_queue(
@@ -2385,7 +2432,7 @@ mod tests {
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
-        let mut capabilities = ControlCapabilities::local(1280);
+        let mut capabilities = ControlCapabilities::local("lab", 1280);
         capabilities.supports_quic_datagrams = true;
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
@@ -2454,8 +2501,8 @@ mod tests {
         paths.record_established(stream_overlay, PathKind::DirectQuicStream);
         paths.record_established(datagram_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
-        peer_capabilities.record(stream_overlay, ControlCapabilities::local(1280));
-        let mut datagram_capabilities = ControlCapabilities::local(1280);
+        peer_capabilities.record(stream_overlay, ControlCapabilities::local("lab", 1280));
+        let mut datagram_capabilities = ControlCapabilities::local("lab", 1280);
         datagram_capabilities.supports_quic_datagrams = true;
         peer_capabilities.record(datagram_overlay, datagram_capabilities);
 

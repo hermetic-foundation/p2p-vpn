@@ -41,15 +41,16 @@ Kademlia prevents overlay provider advertisement and lookup.
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
-path, and whether native QUIC datagrams are currently supported. The current
-local capability advertises direct QUIC streams as preferred and native QUIC
-datagrams as unsupported, so peers do not negotiate an unreliable data path
-before one is implemented. Outbound queue draining respects the peer's
-advertised effective MTU and drops oversized packets before sending them to the
-packet stream fallback. Capability requests from unconfigured peers are
-rejected, and configured peers are only accepted when they advertise a
-compatible wire version, packet protocol, packet header length, known preferred
-path, coherent datagram support, and non-zero effective MTU.
+path, overlay network name, and whether native QUIC datagrams are currently
+supported. The current local capability advertises direct QUIC streams as
+preferred and native QUIC datagrams as unsupported, so peers do not negotiate an
+unreliable data path before one is implemented. Outbound queue draining respects
+the peer's advertised effective MTU and drops oversized packets before sending
+them to the packet stream fallback. Capability requests from unconfigured peers
+are rejected, and configured peers are only accepted when they advertise the
+same overlay network name, compatible wire version, packet protocol, packet
+header length, known preferred path, coherent datagram support, and non-zero
+effective MTU.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
