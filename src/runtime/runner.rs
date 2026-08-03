@@ -562,10 +562,9 @@ fn handle_swarm_event(
             record_path_closed(context.paths, context.forwarder, peer_id, &endpoint);
             eprintln!("connection closed with {peer_id} via {endpoint:?}");
         }
-        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => match peer_id {
-            Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
-            None => eprintln!("outgoing connection failed: {error}"),
-        },
+        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+            handle_outgoing_connection_error(context.metrics, peer_id, &error);
+        }
         SwarmEvent::NewExternalAddrCandidate { address } => {
             context.metrics.record_external_address_candidate();
             eprintln!("external address candidate observed: {address}");
@@ -582,6 +581,18 @@ fn handle_swarm_event(
     }
 
     Ok(())
+}
+
+fn handle_outgoing_connection_error(
+    metrics: &RuntimeMetrics,
+    peer_id: Option<Libp2pPeerId>,
+    error: &impl std::fmt::Display,
+) {
+    metrics.record_outgoing_connection_error();
+    match peer_id {
+        Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
+        None => eprintln!("outgoing connection failed: {error}"),
+    }
 }
 
 fn handle_control_event(
@@ -1634,6 +1645,17 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.unauthorized_connections_dropped, 1);
+    }
+
+    #[test]
+    fn outgoing_connection_errors_are_counted() {
+        let metrics = RuntimeMetrics::default();
+
+        handle_outgoing_connection_error(&metrics, Some(peer_id()), &"dial failed");
+        handle_outgoing_connection_error(&metrics, None, &"peer id unavailable");
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outgoing_connection_errors, 2);
     }
 
     #[tokio::test]

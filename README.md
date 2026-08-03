@@ -326,13 +326,14 @@ candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
 public/private/unknown reachability gauges and status-change counters, Kademlia
 provider lookup/advertisement and bootstrap refresh counts, unauthorized
 connection drops, configured peer redial counters, rejected discovered-address
-counters, healthy path counts by transport kind, configured peers with and
-without a currently supported packet path, and queue-drain stalls caused by
-peers having no currently supported packet path. Those counters are intended to
-show whether a deployment is exchanging capabilities, probing and advertising
-observed public addresses, refreshing DHT discovery, rejecting bad discovered
-addresses, using direct paths, relay fallback, hole-punching, enforcing
-membership, recovering connections, and waiting on path negotiation as expected.
+counters, asynchronous outgoing connection error counts, healthy path counts by
+transport kind, configured peers with and without a currently supported packet
+path, and queue-drain stalls caused by peers having no currently supported
+packet path. Those counters are intended to show whether a deployment is
+exchanging capabilities, probing and advertising observed public addresses,
+refreshing DHT discovery, rejecting bad discovered addresses, using direct
+paths, relay fallback, hole-punching, enforcing membership, recovering
+connections, and waiting on path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
