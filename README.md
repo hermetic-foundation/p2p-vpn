@@ -228,11 +228,12 @@ PEER_ID=MULTIADDR` for Kademlia bootstrap nodes. By default the generated
 config uses the private
 `/p2p-vpn/kad/1` Kademlia protocol; pass `--ipfs-kademlia` as shorthand for
 `--kademlia-protocol /ipfs/kad/1.0.0` only when you intentionally want
-IPFS/public-DHT protocol compatibility with your bootstrap peers. Public
-bootstrap peers are reachability infrastructure only: they can help route
-Kademlia queries, AutoNAT probes, and relay/DCUtR setup, but configured peer
-IDs and route ownership still define the VPN overlay. DNS multiaddrs, including
-`/dns4`, `/dns6`, `/dns`, and
+IPFS/public-DHT protocol compatibility with your bootstrap peers. Add
+`--ipfs-bootstrap-peers` with `--ipfs-kademlia` to include the well-known public
+IPFS bootstrap multiaddrs in the generated config. Public bootstrap peers are
+reachability infrastructure only: they can help route Kademlia queries, AutoNAT
+probes, and relay/DCUtR setup, but configured peer IDs and route ownership still
+define the VPN overlay. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
 `/dnsaddr`, are resolved by the libp2p transport for startup dials and redials.
 Repeat `--external-address MULTIADDR` for stable public or DNS addresses that
 libp2p should advertise to peers in addition to observed addresses learned
@@ -379,8 +380,10 @@ prefixes; other peers must configure matching `peer.routes` entries for this
 node before they will accept those packets.
 `discovery.kademlia_protocol` defaults to the private `/p2p-vpn/kad/1`
 protocol. Set it to `/ipfs/kad/1.0.0` only for deployments that explicitly use
-IPFS-compatible public bootstrap peers; those peers help discovery and NAT
-traversal, but do not grant overlay membership or route authority.
+IPFS-compatible public bootstrap peers; `init-config --ipfs-kademlia
+--ipfs-bootstrap-peers` writes the default public bootstrap multiaddrs into the
+config. Those peers help discovery and NAT traversal, but do not grant overlay
+membership or route authority.
 `external_addresses` are registered with the libp2p swarm as explicit
 advertised addresses; use them for stable public socket, DNS, or port-forwarded
 addresses that peers should prefer over wildcard listen addresses. Confirmed

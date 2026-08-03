@@ -21,6 +21,28 @@ use p2p_vpn::{
 
 const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
 const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
+const IPFS_BOOTSTRAP_PEERS: &[(&str, &str)] = &[
+    (
+        "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    ),
+    (
+        "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    ),
+    (
+        "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    ),
+    (
+        "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    ),
+    (
+        "QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+        "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+    ),
+];
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -52,6 +74,8 @@ enum Command {
         external_addresses: Vec<String>,
         #[arg(long = "bootstrap-peer")]
         bootstrap_peers: Vec<EndpointArg>,
+        #[arg(long)]
+        ipfs_bootstrap_peers: bool,
         #[arg(long = "peer")]
         peers: Vec<EndpointArg>,
         #[arg(long = "local-route")]
@@ -150,6 +174,7 @@ async fn main() -> Result<(), String> {
             listen_addresses,
             external_addresses,
             bootstrap_peers,
+            ipfs_bootstrap_peers,
             peers,
             local_routes,
             peer_routes,
@@ -191,6 +216,7 @@ async fn main() -> Result<(), String> {
             listen_addresses,
             external_addresses,
             bootstrap_peers,
+            ipfs_bootstrap_peers,
             peers,
             local_routes,
             peer_routes,
@@ -284,6 +310,7 @@ struct InitConfigArgs {
     listen_addresses: Vec<String>,
     external_addresses: Vec<String>,
     bootstrap_peers: Vec<EndpointArg>,
+    ipfs_bootstrap_peers: bool,
     peers: Vec<EndpointArg>,
     local_routes: Vec<LocalRouteArg>,
     peer_routes: Vec<PeerRouteArg>,
@@ -409,6 +436,17 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
             peer.id
         ));
     }
+    if args.ipfs_bootstrap_peers {
+        if !args.discovery.kademlia {
+            return Err("--ipfs-bootstrap-peers requires Kademlia discovery".to_owned());
+        }
+        if args.discovery.kademlia_protocol != IPFS_KADEMLIA_PROTOCOL {
+            return Err(
+                "--ipfs-bootstrap-peers requires --ipfs-kademlia or --kademlia-protocol /ipfs/kad/1.0.0"
+                    .to_owned(),
+            );
+        }
+    }
 
     let identity = match args.private_key {
         Some(private_key) => NodeIdentity::from_private_key(&private_key)
@@ -416,6 +454,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         None => NodeIdentity::generate_ed25519()
             .map_err(|error| format!("failed to generate key: {error:?}"))?,
     };
+    let bootstrap_peers = init_bootstrap_peers(args.bootstrap_peers, args.ipfs_bootstrap_peers);
     let mut config = InitConfigTemplate {
         identity,
         network_name: args.network,
@@ -429,11 +468,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         mtu: args.mtu,
         listen_addresses: args.listen_addresses,
         external_addresses: args.external_addresses,
-        bootstrap_peers: args
-            .bootstrap_peers
-            .into_iter()
-            .map(EndpointArg::into)
-            .collect(),
+        bootstrap_peers,
         peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
         relay: args.relay,
@@ -479,6 +514,25 @@ fn init_peers(addresses: Vec<EndpointArg>, routes: Vec<PeerRouteArg>) -> Vec<Ini
             routes: vec![route.route],
         }))
         .collect()
+}
+
+fn init_bootstrap_peers(mut peers: Vec<EndpointArg>, include_ipfs_defaults: bool) -> Vec<InitPeer> {
+    if include_ipfs_defaults {
+        for (id, address) in IPFS_BOOTSTRAP_PEERS {
+            if peers
+                .iter()
+                .any(|peer| peer.id == *id && peer.address.as_deref() == Some(*address))
+            {
+                continue;
+            }
+            peers.push(EndpointArg {
+                id: (*id).to_owned(),
+                address: Some((*address).to_owned()),
+            });
+        }
+    }
+
+    peers.into_iter().map(EndpointArg::into).collect()
 }
 
 fn status(path: &PathBuf) -> Result<(), String> {
@@ -972,6 +1026,7 @@ mod tests {
 
         let Command::InitConfig {
             peers,
+            ipfs_bootstrap_peers,
             local_routes,
             peer_routes,
             kademlia_protocol,
@@ -998,6 +1053,7 @@ mod tests {
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
             }]
         );
+        assert!(!ipfs_bootstrap_peers);
         assert_eq!(
             local_routes,
             vec![LocalRouteArg {
@@ -1035,10 +1091,17 @@ mod tests {
 
     #[test]
     fn ipfs_kademlia_flag_selects_public_dht_protocol() {
-        let cli = Cli::try_parse_from(["p2p-vpn", "init-config", "--ipfs-kademlia"]).expect("cli");
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "init-config",
+            "--ipfs-kademlia",
+            "--ipfs-bootstrap-peers",
+        ])
+        .expect("cli");
         let Command::InitConfig {
             kademlia_protocol,
             ipfs_kademlia,
+            ipfs_bootstrap_peers,
             ..
         } = cli.command
         else {
@@ -1046,6 +1109,7 @@ mod tests {
         };
 
         assert!(ipfs_kademlia);
+        assert!(ipfs_bootstrap_peers);
         assert_eq!(
             selected_kademlia_protocol(kademlia_protocol, ipfs_kademlia),
             IPFS_KADEMLIA_PROTOCOL
@@ -1073,15 +1137,55 @@ mod tests {
     }
 
     #[test]
-    fn init_config_writes_custom_queue_and_resource_limits() {
-        let output = std::env::temp_dir().join(format!(
-            "p2p-vpn-init-config-{}-{}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock after epoch")
-                .as_nanos()
-        ));
+    fn ipfs_bootstrap_peers_require_ipfs_kademlia() {
+        let error = init_config(InitConfigArgs {
+            output: PathBuf::from("-"),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: true,
+            peers: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect_err("private kademlia must not use public IPFS bootstrap defaults");
+
+        assert!(error.contains("--ipfs-bootstrap-peers requires --ipfs-kademlia"));
+    }
+
+    #[test]
+    fn init_bootstrap_peers_adds_ipfs_defaults_without_duplicates() {
+        let peers = init_bootstrap_peers(
+            vec![EndpointArg {
+                id: IPFS_BOOTSTRAP_PEERS[0].0.to_owned(),
+                address: Some(IPFS_BOOTSTRAP_PEERS[0].1.to_owned()),
+            }],
+            true,
+        );
+
+        assert_eq!(peers.len(), IPFS_BOOTSTRAP_PEERS.len());
+        for (id, address) in IPFS_BOOTSTRAP_PEERS {
+            assert!(peers.iter().any(|peer| {
+                peer.id == *id
+                    && peer.address.as_deref() == Some(*address)
+                    && peer.routes.is_empty()
+            }));
+        }
+    }
+
+    #[test]
+    fn init_config_writes_runtime_valid_ipfs_bootstrap_defaults() {
+        let output = temp_config_path("p2p-vpn-ipfs-bootstrap-config");
 
         init_config(InitConfigArgs {
             output: output.clone(),
@@ -1093,6 +1197,61 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: true,
+            peers: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: InitDiscoveryFlags {
+                disable_mdns: false,
+                disable_kademlia: false,
+                disable_kademlia_provider_advertisement: false,
+                disable_dcutr: false,
+                disable_autonat: false,
+            }
+            .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), true),
+            relay: RelayConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(
+            config.network.discovery.kademlia_protocol,
+            IPFS_KADEMLIA_PROTOCOL
+        );
+        assert_eq!(
+            config.network.bootstrap_peers.len(),
+            IPFS_BOOTSTRAP_PEERS.len()
+        );
+        assert_eq!(
+            config
+                .bootstrap_multiaddrs()
+                .expect("bootstrap multiaddrs")
+                .len(),
+            IPFS_BOOTSTRAP_PEERS.len()
+        );
+    }
+
+    #[test]
+    fn init_config_writes_custom_queue_and_resource_limits() {
+        let output = temp_config_path("p2p-vpn-init-config");
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
             peers: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
@@ -1165,5 +1324,16 @@ mod tests {
                 max_established_connections: 88,
             }
         );
+    }
+
+    fn temp_config_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ))
     }
 }
