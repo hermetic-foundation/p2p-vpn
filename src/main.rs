@@ -13,7 +13,7 @@ use p2p_vpn::{
     runtime::{
         forward::session_id_for_peer,
         runner,
-        tun::{TunDevice, TunRuntimeConfig},
+        tun::{TunAddresses, TunDevice, TunRuntimeConfig},
     },
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -359,6 +359,14 @@ fn init_peers(addresses: Vec<EndpointArg>, routes: Vec<PeerRouteArg>) -> Vec<Ini
 
 fn status(path: &PathBuf) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    for line in status_lines(&config)? {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn status_lines(config: &Config) -> Result<Vec<String>, String> {
     config
         .validate_runtime()
         .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
@@ -366,38 +374,45 @@ fn status(path: &PathBuf) -> Result<(), String> {
         .compile_routes()
         .map_err(|error| format!("failed to compile routes: {error:?}"))?;
     let defaults = RuntimeDefaults::default();
+    let local_peer = config
+        .local_peer_id()
+        .map_err(|error| format!("failed to parse local peer id: {error:?}"))?;
+    let local_addresses = TunAddresses::for_peer(local_peer);
+    let mut lines = Vec::new();
 
-    println!("network: {}", config.network.name);
-    println!(
+    lines.push(format!("network: {}", config.network.name));
+    lines.push(format!(
         "membership key configured: {}",
         config.network.membership_key.is_some()
-    );
-    println!(
+    ));
+    lines.push(format!(
         "interface: {} mtu {}",
         config.interface.name, config.interface.mtu
-    );
-    println!("effective packet mtu: {}", config.effective_packet_mtu());
-    println!(
+    ));
+    lines.push(format!(
+        "effective packet mtu: {}",
+        config.effective_packet_mtu()
+    ));
+    lines.push(format!("local peer: {}", config.network.local_peer));
+    lines.push(format!("local overlay ipv4: {}", local_addresses.ipv4));
+    lines.push(format!("local overlay ipv6: {}", local_addresses.ipv6));
+    lines.push(format!(
         "packet session: {}",
-        session_id_for_peer(
-            config
-                .local_peer_id()
-                .map_err(|error| format!("failed to parse local peer id: {error:?}"))?
-        )
-    );
-    println!("peers: {}", config.peers.len());
-    println!(
+        session_id_for_peer(local_peer)
+    ));
+    lines.push(format!("peers: {}", config.peers.len()));
+    lines.push(format!(
         "queue: {} packets / {} bytes / {} ms per peer",
         config.queue.max_packets_per_peer,
         config.queue.max_bytes_per_peer,
         config.queue.max_packet_age().as_millis()
-    );
-    println!(
+    ));
+    lines.push(format!(
         "resources: {} concurrent control streams / {} concurrent packet streams",
         config.resources.control_stream_limit(),
         config.resources.packet_stream_limit()
-    );
-    println!(
+    ));
+    lines.push(format!(
         "connection limits: {} pending in / {} pending out / {} established in / {} established out / {} per peer / {} total",
         config.resources.max_pending_incoming_connections,
         config.resources.max_pending_outgoing_connections,
@@ -405,67 +420,76 @@ fn status(path: &PathBuf) -> Result<(), String> {
         config.resources.max_established_outgoing_connections,
         config.resources.max_established_connections_per_peer,
         config.resources.max_established_connections
-    );
-    println!("wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header");
-    println!(
+    ));
+    lines.push(format!(
+        "wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header"
+    ));
+    lines.push(format!(
         "preferred path: {} (score {})",
         path_name(defaults.preferred_path),
         defaults.preferred_path.default_score()
-    );
-    println!("compiled routes: {}", routes.len());
-    print_discovery_status(&config);
-    print_relay_status(&config);
-    println!(
+    ));
+    lines.push(format!("compiled routes: {}", routes.len()));
+    push_discovery_status(&mut lines, config);
+    push_relay_status(&mut lines, config);
+    lines.push(format!(
         "configured peer addresses: {}",
         config
             .peers
             .iter()
             .map(|peer| peer.addresses.len())
             .sum::<usize>()
-    );
-    println!("configured local routes: {}", config.network.routes.len());
-    println!(
+    ));
+    lines.push(format!(
+        "configured local routes: {}",
+        config.network.routes.len()
+    ));
+    lines.push(format!(
         "configured peer routes: {}",
         config
             .peers
             .iter()
             .map(|peer| peer.routes.len())
             .sum::<usize>()
-    );
+    ));
+    push_route_ownership_status(&mut lines, config, &routes);
 
-    Ok(())
+    Ok(lines)
 }
 
-fn print_discovery_status(config: &Config) {
-    println!(
+fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
+    lines.push(format!(
         "listen addresses: {}",
         config.network.listen_addresses.len()
-    );
-    println!(
+    ));
+    lines.push(format!(
         "external addresses: {}",
         config.network.external_addresses.len()
-    );
-    println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
-    println!(
+    ));
+    lines.push(format!(
+        "bootstrap peers: {}",
+        config.network.bootstrap_peers.len()
+    ));
+    lines.push(format!(
         "discovery: mdns={} kademlia={} dcutr={} autonat={}",
         config.network.discovery.mdns,
         config.network.discovery.kademlia,
         config.network.discovery.dcutr,
         config.network.discovery.autonat
-    );
-    println!(
+    ));
+    lines.push(format!(
         "kademlia protocol: {}",
         config.network.discovery.kademlia_protocol
-    );
+    ));
 }
 
-fn print_relay_status(config: &Config) {
-    println!("relay server: {}", config.network.relay.server);
-    println!(
+fn push_relay_status(lines: &mut Vec<String>, config: &Config) {
+    lines.push(format!("relay server: {}", config.network.relay.server));
+    lines.push(format!(
         "relay reservations: {}",
         config.network.relay.reservations.len()
-    );
-    println!(
+    ));
+    lines.push(format!(
         "relay resources: {} reservations / {} per peer / {}s reservation / {} circuits / {} per peer / {}s circuit / {} bytes",
         config.network.relay.resources.max_reservations,
         config.network.relay.resources.max_reservations_per_peer,
@@ -474,7 +498,45 @@ fn print_relay_status(config: &Config) {
         config.network.relay.resources.max_circuits_per_peer,
         config.network.relay.resources.max_circuit_duration_secs,
         config.network.relay.resources.max_circuit_bytes
-    );
+    ));
+}
+
+fn push_route_ownership_status(
+    lines: &mut Vec<String>,
+    config: &Config,
+    routes: &p2p_vpn::route::RouteTable,
+) {
+    let local_peer = config.local_peer_id().expect("status config is valid");
+    for route in routes.routes_for(local_peer) {
+        let source = route_source(&config.network.routes, route);
+        lines.push(format!(
+            "local route: {} metric {} {source}",
+            route.prefix, route.metric
+        ));
+    }
+    for peer in &config.peers {
+        let owner = peer.peer_id().expect("status config is valid");
+        for route in routes.routes_for(owner) {
+            let source = route_source(&peer.routes, route);
+            lines.push(format!(
+                "peer route: {} {} metric {} {source}",
+                peer.id, route.prefix, route.metric
+            ));
+        }
+    }
+}
+
+fn route_source(configured_routes: &[RouteConfig], route: p2p_vpn::route::Route) -> &'static str {
+    if configured_routes.iter().any(|configured| {
+        configured.metric == route.metric
+            && configured
+                .prefix()
+                .is_ok_and(|prefix| prefix == route.prefix)
+    }) {
+        "configured"
+    } else {
+        "built-in"
+    }
 }
 
 fn metrics(path: &PathBuf) -> Result<(), String> {
@@ -654,6 +716,71 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn status_lines_report_overlay_addresses_and_route_ownership() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 0,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![p2p_vpn::config::PeerConfig {
+                id: remote.peer_id.clone(),
+                name: Some("remote".to_owned()),
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 0,
+                }],
+            }],
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = status_lines(&config).expect("status lines");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("local overlay ipv4: "))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("local overlay ipv6: "))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local route: 10.41.0.0/24 metric 0 configured")
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer route: {} 10.42.0.0/24 metric 0 configured",
+                remote.peer_id
+            )));
     }
 
     #[test]

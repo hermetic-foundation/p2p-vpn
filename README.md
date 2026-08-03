@@ -343,7 +343,10 @@ the private key matches `network.local_peer`, the optional membership key is
 valid base64 key material, configured routes compile, all listen and external
 multiaddrs parse, bootstrap and peer multiaddrs either omit an explicit peer id
 or match the configured peer, and relay reservation multiaddrs contain
-`/p2p/<relay>/p2p-circuit`.
+`/p2p/<relay>/p2p-circuit`. The output includes the local overlay IPv4/IPv6
+addresses plus built-in and configured route ownership lines, which are the
+claims peers must mirror in their `peer.routes` entries before accepting routed
+traffic from this node.
 
 Inspect the runtime metric names and startup snapshot:
 
