@@ -106,6 +106,10 @@ impl PeerCapabilities {
         self.peers.insert(peer, capabilities);
     }
 
+    pub fn remove(&mut self, peer: PeerId) {
+        self.peers.remove(&peer);
+    }
+
     #[must_use]
     pub fn contains(&self, peer: PeerId) -> bool {
         self.peers.contains_key(&peer)
@@ -434,6 +438,18 @@ mod tests {
         capabilities.record(peer, peer_capabilities);
 
         assert!(capabilities.supports_quic_datagrams_for(peer));
+    }
+
+    #[test]
+    fn peer_capabilities_can_be_invalidated() {
+        let peer = PeerId::from_bytes([1; 32]);
+        let mut capabilities = PeerCapabilities::default();
+
+        capabilities.record(peer, ControlCapabilities::local("lab", None, 1280));
+        assert!(capabilities.contains(peer));
+
+        capabilities.remove(peer);
+        assert!(!capabilities.contains(peer));
     }
 
     #[test]

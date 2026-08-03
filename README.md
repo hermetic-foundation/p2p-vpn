@@ -39,6 +39,9 @@ configured peers whose tag does not match.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
+Validated capabilities are scoped to the active peer connection set; after a
+peer fully disconnects, the next connection must complete a fresh capability
+exchange before queued packets can drain again.
 
 Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the

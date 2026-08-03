@@ -600,7 +600,10 @@ fn handle_swarm_event(
             );
         }
         SwarmEvent::ConnectionEstablished {
-            peer_id, endpoint, ..
+            peer_id,
+            endpoint,
+            num_established,
+            ..
         } => {
             if !authorize_established_connection(context.membership, context.metrics, peer_id) {
                 eprintln!("disconnecting unauthorized peer {peer_id}");
@@ -609,6 +612,12 @@ fn handle_swarm_event(
                 }
                 return Ok(());
             }
+            invalidate_peer_capabilities_on_first_connection(
+                context.forwarder,
+                context.peer_capabilities,
+                peer_id,
+                num_established.get(),
+            );
             record_path_established(context.paths, context.forwarder, peer_id, &endpoint);
             send_control_capabilities(
                 swarm,
@@ -623,9 +632,18 @@ fn handle_swarm_event(
             eprintln!("connection established with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::ConnectionClosed {
-            peer_id, endpoint, ..
+            peer_id,
+            endpoint,
+            num_established,
+            ..
         } => {
             record_path_closed(context.paths, context.forwarder, peer_id, &endpoint);
+            invalidate_peer_capabilities_when_disconnected(
+                context.forwarder,
+                context.peer_capabilities,
+                peer_id,
+                num_established,
+            );
             eprintln!("connection closed with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -900,6 +918,38 @@ fn record_peer_capabilities(
 ) {
     if forwarder.is_configured_transport_peer(peer) {
         peer_capabilities.record(PeerId::from_libp2p(peer), capabilities);
+    }
+}
+
+fn invalidate_peer_capabilities_on_first_connection(
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
+    peer: Libp2pPeerId,
+    established_connections: u32,
+) {
+    if established_connections == 1 {
+        invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
+    }
+}
+
+fn invalidate_peer_capabilities_when_disconnected(
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
+    peer: Libp2pPeerId,
+    remaining_connections: u32,
+) {
+    if remaining_connections == 0 {
+        invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
+    }
+}
+
+fn invalidate_peer_capabilities(
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
+    peer: Libp2pPeerId,
+) {
+    if forwarder.is_configured_transport_peer(peer) {
+        peer_capabilities.remove(PeerId::from_libp2p(peer));
     }
 }
 
@@ -2368,6 +2418,117 @@ mod tests {
         assert_eq!(snapshot.control_reject_wrong_network, 1);
         assert_eq!(snapshot.control_responses_received, 1);
         assert_eq!(snapshot.control_failures, 1);
+    }
+
+    #[test]
+    fn first_connection_invalidates_stale_peer_capabilities() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        invalidate_peer_capabilities_on_first_connection(
+            &forwarder,
+            &mut peer_capabilities,
+            remote,
+            1,
+        );
+
+        assert!(!peer_capabilities.contains(remote_overlay));
+    }
+
+    #[test]
+    fn peer_capabilities_survive_until_final_connection_closes() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            remote,
+            1,
+        );
+        assert!(peer_capabilities.contains(remote_overlay));
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            remote,
+            0,
+        );
+        assert!(!peer_capabilities.contains(remote_overlay));
     }
 
     #[test]
