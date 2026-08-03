@@ -71,12 +71,17 @@ coherent datagram support, non-zero effective MTU, and no route prefixes outside
 their configured ownership.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
-packet payload. The header includes a non-zero packet session id derived from
-the local peer identity plus a per-session packet sequence number. It is
+packet payload. The header includes a fresh non-zero packet session id for the
+daemon process plus a per-session packet sequence number. It is
 intentionally reusable over libp2p streams now and QUIC datagrams later.
 Inbound packet acceptance keeps a 64-packet replay window per configured
 peer/session pair, so duplicate frames and frames older than the current window
-are dropped before they can be written to TUN.
+are dropped before they can be written to TUN. Replay windows expire after 15
+minutes of inactivity and are capped at 4096 active peer/session windows, which
+keeps stale sessions from becoming permanent daemon memory. `daemon-state`
+reports the active `replay_windows` count, and the daemon emits a structured
+`replay_sessions_expired` log event when periodic maintenance removes stale
+replay state.
 
 The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
 request-response streams. Inbound packet handling checks the configured peer

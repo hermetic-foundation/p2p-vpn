@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    time::{Duration, Instant},
 };
 
-use libp2p::{PeerId as Libp2pPeerId, Swarm, request_response};
+use libp2p::{PeerId as Libp2pPeerId, Swarm, identity::Keypair as Libp2pKeypair, request_response};
 
 use crate::{
     PeerId, Sequence, SessionId,
@@ -25,17 +26,22 @@ pub struct Forwarder {
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
+    replay_session_ttl: Duration,
+    max_replay_windows: usize,
     session_id: SessionId,
     next_sequence: Sequence,
     mtu: usize,
 }
 
 const REPLAY_WINDOW_BITS: u64 = 64;
+const DEFAULT_REPLAY_SESSION_TTL: Duration = Duration::from_mins(15);
+const MAX_REPLAY_WINDOWS: usize = 4096;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplayWindow {
     highest: Option<Sequence>,
     seen: u64,
+    updated_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,10 +51,19 @@ enum ReplayAcceptError {
 }
 
 impl ReplayWindow {
-    fn accept(&mut self, sequence: Sequence) -> Result<(), ReplayAcceptError> {
+    fn new(now: Instant) -> Self {
+        Self {
+            highest: None,
+            seen: 0,
+            updated_at: now,
+        }
+    }
+
+    fn accept(&mut self, sequence: Sequence, now: Instant) -> Result<(), ReplayAcceptError> {
         let Some(highest) = self.highest else {
             self.highest = Some(sequence);
             self.seen = 1;
+            self.updated_at = now;
             return Ok(());
         };
 
@@ -60,6 +75,7 @@ impl ReplayWindow {
                 (self.seen << shift) | 1
             };
             self.highest = Some(sequence);
+            self.updated_at = now;
             return Ok(());
         }
 
@@ -73,7 +89,12 @@ impl ReplayWindow {
         }
 
         self.seen |= bit;
+        self.updated_at = now;
         Ok(())
+    }
+
+    fn is_expired(self, now: Instant, ttl: Duration) -> bool {
+        now.saturating_duration_since(self.updated_at) > ttl
     }
 }
 
@@ -96,7 +117,9 @@ impl Forwarder {
             peers,
             authorized_peers: AuthorizedPeers::from_config(config),
             replay_windows: HashMap::new(),
-            session_id: session_id_for_peer(local_peer),
+            replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
+            max_replay_windows: MAX_REPLAY_WINDOWS,
+            session_id: fresh_session_id_for_peer(local_peer),
             next_sequence: 0,
             mtu: usize::from(config.effective_packet_mtu()),
         })
@@ -163,6 +186,15 @@ impl Forwarder {
 
     pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
         self.peers.keys().copied()
+    }
+
+    #[must_use]
+    pub fn replay_window_count(&self) -> usize {
+        self.replay_windows.len()
+    }
+
+    pub fn expire_replay_sessions(&mut self) -> usize {
+        self.expire_replay_windows_at(Instant::now())
     }
 
     #[must_use]
@@ -334,8 +366,29 @@ impl Forwarder {
         session_id: SessionId,
         sequence: Sequence,
     ) -> Result<(), ForwardError> {
-        let window = self.replay_windows.entry((peer, session_id)).or_default();
-        window.accept(sequence).map_err(|error| match error {
+        self.accept_sequence_at(peer, session_id, sequence, Instant::now())
+    }
+
+    fn accept_sequence_at(
+        &mut self,
+        peer: PeerId,
+        session_id: SessionId,
+        sequence: Sequence,
+        now: Instant,
+    ) -> Result<(), ForwardError> {
+        self.expire_replay_windows_at(now);
+        let key = (peer, session_id);
+        if self.replay_windows.len() >= self.max_replay_windows.max(1)
+            && !self.replay_windows.contains_key(&key)
+        {
+            self.prune_oldest_replay_window();
+        }
+
+        let window = self
+            .replay_windows
+            .entry(key)
+            .or_insert_with(|| ReplayWindow::new(now));
+        window.accept(sequence, now).map_err(|error| match error {
             ReplayAcceptError::Duplicate => ForwardError::ReplayedPacket {
                 peer,
                 session_id,
@@ -347,6 +400,26 @@ impl Forwarder {
                 sequence,
             },
         })
+    }
+
+    fn expire_replay_windows_at(&mut self, now: Instant) -> usize {
+        let before = self.replay_windows.len();
+        let ttl = self.replay_session_ttl;
+        self.replay_windows
+            .retain(|_, window| !window.is_expired(now, ttl));
+        before - self.replay_windows.len()
+    }
+
+    fn prune_oldest_replay_window(&mut self) {
+        let Some(oldest) = self
+            .replay_windows
+            .iter()
+            .min_by_key(|(_, window)| window.updated_at)
+            .map(|(key, _)| *key)
+        else {
+            return;
+        };
+        self.replay_windows.remove(&oldest);
     }
 
     fn authorize_local_destination(&self, destination: IpAddr) -> Result<(), ForwardError> {
@@ -372,6 +445,18 @@ pub fn session_id_for_peer(peer: PeerId) -> SessionId {
     let bytes = peer.as_bytes();
     let session_id = SessionId::from_be_bytes(bytes[..4].try_into().expect("fixed slice length"));
     session_id.max(1)
+}
+
+fn fresh_session_id_for_peer(peer: PeerId) -> SessionId {
+    let entropy = Libp2pKeypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_bytes();
+    let mut bytes = [0; 4];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = peer.as_bytes()[index] ^ entropy[index % entropy.len()];
+    }
+    SessionId::from_be_bytes(bytes).max(1)
 }
 
 pub fn packet_source(packet: &[u8]) -> Result<IpAddr, ForwardError> {
@@ -495,7 +580,7 @@ impl From<EnqueueError> for ForwardError {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use libp2p::identity::Keypair;
 
@@ -855,6 +940,61 @@ mod tests {
     }
 
     #[test]
+    fn replay_window_expires_after_session_ttl() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        forwarder.replay_session_ttl = Duration::from_secs(1);
+        let start = Instant::now();
+
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 42, start)
+            .expect("sequence accepted");
+        assert_eq!(forwarder.replay_window_count(), 1);
+        assert!(matches!(
+            forwarder.accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_millis(500)),
+            Err(ForwardError::ReplayedPacket {
+                peer,
+                session_id: 7,
+                sequence: 42
+            }) if peer == remote_overlay
+        ));
+
+        assert_eq!(
+            forwarder.expire_replay_windows_at(start + Duration::from_secs(2)),
+            1
+        );
+        assert_eq!(forwarder.replay_window_count(), 0);
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_secs(2))
+            .expect("expired session starts a fresh replay window");
+    }
+
+    #[test]
+    fn replay_windows_are_bounded() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        forwarder.max_replay_windows = 1;
+        let start = Instant::now();
+
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 42, start)
+            .expect("first session accepted");
+        forwarder
+            .accept_sequence_at(remote_overlay, 8, 42, start + Duration::from_millis(1))
+            .expect("second session accepted");
+
+        assert_eq!(forwarder.replay_window_count(), 1);
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_millis(2))
+            .expect("oldest evicted session starts fresh");
+        assert_eq!(forwarder.replay_window_count(), 1);
+    }
+
+    #[test]
     fn inbound_keepalive_is_authorized_and_replay_checked() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -995,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn outbound_frame_carries_local_session_and_packet_sequence() {
+    fn outbound_frame_carries_current_session_and_packet_sequence() {
         let local = PeerId::from_bytes([
             0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0,
@@ -1014,7 +1154,8 @@ mod tests {
         let queued_packet = queues.dequeue().expect("queued packet");
         let frame = forwarder.packet_frame(&queued_packet).expect("frame");
 
-        assert_eq!(frame.header.session_id, 0xdead_beef);
+        assert_ne!(frame.header.session_id, 0);
+        assert_eq!(frame.header.session_id, forwarder.session_id);
         assert_eq!(frame.header.sequence, 0);
         assert_eq!(frame.header.payload_len, 20);
     }

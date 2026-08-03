@@ -274,6 +274,11 @@ where
             }
             _ = timers.queue_expiry.tick() => {
                 expire_outbound_queue(&mut queues, &metrics);
+                let expired_replay_sessions = forwarder.expire_replay_sessions();
+                if expired_replay_sessions > 0 {
+                    let count = expired_replay_sessions.to_string();
+                    log_runtime_event(LogLevel::Info, "replay_sessions_expired", &[("count", &count)]);
+                }
             }
             _ = timers.path_probe.tick() => {
                 send_path_probes(
@@ -440,6 +445,7 @@ fn runtime_state_lines(
         "daemon state: running".to_owned(),
         format!("configured peers: {}", peers.len()),
         format!("validated peers: {}", peer_capabilities.len()),
+        format!("replay_windows {}", forwarder.replay_window_count()),
         format!(
             "outbound_path_probes_sent {}",
             snapshot.outbound_path_probes_sent
@@ -2427,6 +2433,7 @@ mod tests {
         assert!(lines.contains(&"daemon state: running".to_owned()));
         assert!(lines.contains(&"configured peers: 1".to_owned()));
         assert!(lines.contains(&"validated peers: 1".to_owned()));
+        assert!(lines.contains(&"replay_windows 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
