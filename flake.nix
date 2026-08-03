@@ -98,16 +98,20 @@
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
             timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
+            runtimeDirectory = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectory;
+            runtimeDirectoryMode = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectoryMode;
             tcpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedTCPPorts;
             udpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedUDPPorts;
             kernelModules = builtins.toJSON moduleEval.config.boot.kernelModules;
           } ''
             case "$execStart" in
-              *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10"*) ;;
+              *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
             esac
             test "$killSignal" = SIGTERM
             test "$timeoutStopSec" = 30s
+            test "$runtimeDirectory" = p2p-vpn-node-a
+            test "$runtimeDirectoryMode" = 0750
             test "$tcpPorts" = '[4001]'
             test "$udpPorts" = '[4001]'
             case "$kernelModules" in

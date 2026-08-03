@@ -1,6 +1,8 @@
 use std::{
     collections::HashSet,
     future::Future,
+    io,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -30,6 +32,7 @@ use crate::{
             PeerCapabilities, accepted_capabilities_response, rejected_capabilities_response,
             validate_capabilities,
         },
+        control_socket::{ControlSocket, RuntimeControlRequest},
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
@@ -61,6 +64,7 @@ pub async fn run_config(
         config,
         device,
         metrics_interval,
+        None,
         std::future::pending::<ShutdownReason>(),
     )
     .await
@@ -70,6 +74,7 @@ pub async fn run_config_until<Shutdown>(
     config: Config,
     device: TunDevice,
     metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -104,6 +109,7 @@ where
         config.effective_packet_mtu(),
         config.queue,
         metrics_interval,
+        control_socket,
         shutdown,
     ))
     .await
@@ -142,6 +148,7 @@ pub async fn run_node(
         mtu,
         queue_config,
         metrics_interval,
+        None,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -157,6 +164,7 @@ pub async fn run_node_until<Shutdown>(
     mtu: u16,
     queue_config: QueueConfig,
     metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -184,6 +192,18 @@ where
             .with_advertised_routes(forwarder.local_advertised_routes());
     timers.prime().await;
     let discovery = node.discovery.clone();
+    let (_control_socket, mut control_rx) = match control_socket {
+        Some(path) => {
+            let (socket, rx) = ControlSocket::bind(path)?;
+            log_runtime_event(
+                LogLevel::Info,
+                "control_socket_listening",
+                &[("path", &socket.path().display().to_string())],
+            );
+            (Some(socket), Some(rx))
+        }
+        None => (None, None),
+    };
 
     log_startup_status(node.startup);
     log_runtime_event(
@@ -262,6 +282,20 @@ where
                     &paths,
                     &peer_capabilities,
                     &metrics,
+                );
+            }
+            Some(request) = async {
+                control_rx
+                    .as_mut()
+                    .expect("control socket receiver is present")
+                    .recv()
+                    .await
+            }, if control_rx.is_some() => {
+                handle_runtime_control_request(
+                    request,
+                    &metrics,
+                    queues.total_stats(),
+                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                 );
             }
             () = async {
@@ -345,6 +379,30 @@ fn send_path_probes(
             }
         }
     }
+}
+
+fn handle_runtime_control_request(
+    request: RuntimeControlRequest,
+    metrics: &RuntimeMetrics,
+    queue: crate::queue::QueueStats,
+    path: crate::path::PathRuntimeStats,
+) {
+    match request {
+        RuntimeControlRequest::Status { respond_to } => {
+            let lines = runtime_status_lines(metrics, queue, path);
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket status response receiver dropped");
+            }
+        }
+    }
+}
+
+fn runtime_status_lines(
+    metrics: &RuntimeMetrics,
+    queue: crate::queue::QueueStats,
+    path: crate::path::PathRuntimeStats,
+) -> Vec<String> {
+    metrics.snapshot_with_paths(queue, path).lines()
 }
 
 fn handle_redial_tick(
@@ -2024,6 +2082,7 @@ pub enum RunnerError {
     P2p(P2pBuildError),
     Forward(ForwardError),
     Tun(TunRuntimeError),
+    ControlSocket(io::Error),
     PacketResponseDropped,
     ControlResponseDropped,
     ServiceResponseDropped,
@@ -2050,6 +2109,12 @@ impl From<ForwardError> for RunnerError {
 impl From<TunRuntimeError> for RunnerError {
     fn from(error: TunRuntimeError) -> Self {
         Self::Tun(error)
+    }
+}
+
+impl From<io::Error> for RunnerError {
+    fn from(error: io::Error) -> Self {
+        Self::ControlSocket(error)
     }
 }
 

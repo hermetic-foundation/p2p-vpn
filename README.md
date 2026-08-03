@@ -591,3 +591,20 @@ Print live forwarding counters while the runtime is up:
 ```sh
 sudo target/debug/p2p-vpn up --config p2p-vpn.json --metrics-interval-seconds 10
 ```
+
+Expose the daemon's live status over a local Unix socket:
+
+```sh
+sudo target/debug/p2p-vpn up \
+  --config p2p-vpn.json \
+  --control-socket /run/p2p-vpn/control.sock
+
+cargo run -- daemon-status --socket /run/p2p-vpn/control.sock
+```
+
+The control socket currently serves a bounded, read-only `status` request. Its
+output uses the same line-oriented metric names as `metrics`, but comes from the
+running daemon's current queue and path state instead of a startup snapshot.
+NixOS instances enable this by default at
+`/run/p2p-vpn-<instance>/control.sock` through a `0750` runtime directory; set
+`services.p2p-vpn.instances.<name>.controlSocket = null` to disable it.

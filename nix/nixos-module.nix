@@ -51,6 +51,16 @@ let
           '';
         };
 
+        controlSocket = mkOption {
+          type = types.nullOr types.str;
+          default = "/run/p2p-vpn-${name}/control.sock";
+          example = "/run/p2p-vpn/${name}.sock";
+          description = ''
+            Unix socket path for read-only daemon status queries. Set to null
+            to disable the local control socket.
+          '';
+        };
+
         extraArgs = mkOption {
           type = types.listOf types.str;
           default = [ ];
@@ -102,6 +112,10 @@ let
             "--metrics-interval-seconds"
             (toString instance.metricsIntervalSeconds)
           ]
+          ++ optionals (instance.controlSocket != null) [
+            "--control-socket"
+            instance.controlSocket
+          ]
           ++ instance.extraArgs
         );
         Restart = "on-failure";
@@ -117,6 +131,8 @@ let
           "CAP_NET_RAW"
         ];
         DeviceAllow = [ "/dev/net/tun rw" ];
+        RuntimeDirectory = "p2p-vpn-${name}";
+        RuntimeDirectoryMode = "0750";
         NoNewPrivileges = true;
       };
     };

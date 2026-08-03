@@ -1,4 +1,5 @@
 pub mod control;
+pub mod control_socket;
 pub mod forward;
 pub mod p2p;
 pub mod packet;

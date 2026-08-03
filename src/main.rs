@@ -1,4 +1,10 @@
-use std::{fs, net::IpAddr, path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    fs,
+    net::IpAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 
 use clap::{Parser, Subcommand};
 use p2p_vpn::{
@@ -178,6 +184,12 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
     },
+    DaemonStatus {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
     PeerStatus {
         peer: String,
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -192,6 +204,8 @@ enum Command {
         dry_run: bool,
         #[arg(long)]
         metrics_interval_seconds: Option<u64>,
+        #[arg(long)]
+        control_socket: Option<PathBuf>,
     },
 }
 
@@ -314,6 +328,10 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(capabilities(&config, live, timeout_seconds)).await,
+        Command::DaemonStatus {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_status(&socket, timeout_seconds)).await,
         Command::PeerStatus {
             peer,
             config,
@@ -323,7 +341,16 @@ async fn main() -> Result<(), String> {
             config,
             dry_run,
             metrics_interval_seconds,
-        } => Box::pin(up(&config, dry_run, metrics_interval_seconds)).await,
+            control_socket,
+        } => {
+            Box::pin(up(
+                &config,
+                dry_run,
+                metrics_interval_seconds,
+                control_socket,
+            ))
+            .await
+        }
     }
 }
 
@@ -1302,6 +1329,21 @@ async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result
     Ok(())
 }
 
+async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_status(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon status query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
 fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
     let mut lines = vec![
         format!("peer: {}", status.peer),
@@ -1345,6 +1387,7 @@ async fn up(
     path: &PathBuf,
     dry_run: bool,
     metrics_interval_seconds: Option<u64>,
+    control_socket: Option<PathBuf>,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -1382,6 +1425,9 @@ async fn up(
         })? {
             println!("libp2p listen {address}");
         }
+        if let Some(socket) = &control_socket {
+            println!("control socket {socket}", socket = socket.display());
+        }
         if config.network.relay.server {
             println!("libp2p relay server enabled");
         }
@@ -1412,6 +1458,7 @@ async fn up(
         config,
         device,
         metrics_interval,
+        control_socket,
         shutdown_signal(),
     ))
     .await
@@ -2312,6 +2359,58 @@ mod tests {
         assert_eq!(config, PathBuf::from("node-a.json"));
         assert!(live);
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_daemon_status_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "daemon-status",
+            "--socket",
+            "/run/p2p-vpn-node-a/control.sock",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::DaemonStatus {
+            socket,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected daemon-status command");
+        };
+
+        assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_up_control_socket() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "up",
+            "--config",
+            "node-a.json",
+            "--control-socket",
+            "/run/p2p-vpn-node-a/control.sock",
+        ])
+        .expect("cli");
+
+        let Command::Up {
+            config,
+            control_socket,
+            ..
+        } = cli.command
+        else {
+            panic!("expected up command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(
+            control_socket,
+            Some(PathBuf::from("/run/p2p-vpn-node-a/control.sock"))
+        );
     }
 
     #[test]
