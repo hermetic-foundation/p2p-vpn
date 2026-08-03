@@ -110,6 +110,10 @@ Outbound packet draining is path-aware. The runtime records direct TCP, direct
 QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
 unhealthy when their connections close, and only drains a peer's bounded queue
 while that peer has a healthy path that the negotiated packet transport can use.
+The drain decision is explicit: native QUIC datagram, stream fallback, or
+blocked with a reason. The locked libp2p-quic transport currently disables QUIC
+datagram receive buffers internally, so the daemon advertises datagrams as
+unsupported and uses the stream fallback for direct QUIC/TCP/relay paths.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames over the packet protocol, giving operators liveness
 traffic that does not depend on user IP packets.
@@ -120,8 +124,10 @@ estimate as an additional ceiling below the peer-advertised effective MTU, so
 an oversized packet is dropped predictably instead of being pushed onto a path
 that is known to be smaller.
 Until native datagram sending is implemented, datagram-only paths do not release
-packets into the stream fallback. Packets for disconnected peers remain bounded
-by the per-peer queue limits instead of expanding into unbounded stream requests.
+packets into the stream fallback; they increment
+`outbound_quic_datagram_unavailable_packets` while they remain queued. Packets
+for disconnected peers remain bounded by the per-peer queue limits instead of
+expanding into unbounded stream requests.
 Queued packets also have a configurable age limit; stale packets are dropped on
 a runtime expiry tick rather than sent after a long outage. A configured age of
 zero is treated as a one millisecond effective age.
@@ -529,11 +535,12 @@ acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/failure counters, inbound and outbound packet drop reasons
-including expired outbound queue packets, direct versus relayed connection
-counts, relay reservation/circuit counts, relay-server
+including expired outbound queue packets, stream fallback sends, attempted
+native QUIC datagram sends, datagram-unavailable queue stalls, direct versus
+relayed connection counts, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
-external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
-public/private/unknown reachability gauges and status-change counters,
+external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
+current public/private/unknown reachability gauges and status-change counters,
 service-plane request/response/status/rejection/failure counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap
 refresh counts, unauthorized connection drops, configured peer redial counters,
@@ -541,8 +548,7 @@ accepted/dialed/rejected/expired discovered-address counters, asynchronous
 outgoing connection error counts, healthy path counts by transport kind,
 configured peers with and without a currently supported packet path, and
 queue-drain stalls caused by peers having no currently supported packet path.
-Those counters are
-intended to show whether a deployment is
+Those counters are intended to show whether a deployment is
 exchanging capabilities, checking service status, probing and advertising
 observed public addresses, refreshing DHT discovery, rejecting bad discovered
 addresses, using direct paths, relay fallback, hole-punching, enforcing

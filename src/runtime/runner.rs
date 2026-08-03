@@ -447,6 +447,18 @@ fn runtime_state_lines(
         format!("validated peers: {}", peer_capabilities.len()),
         format!("replay_windows {}", forwarder.replay_window_count()),
         format!(
+            "outbound_stream_fallback_packets {}",
+            snapshot.outbound_stream_fallback_packets
+        ),
+        format!(
+            "outbound_quic_datagram_packets {}",
+            snapshot.outbound_quic_datagram_packets
+        ),
+        format!(
+            "outbound_quic_datagram_unavailable_packets {}",
+            snapshot.outbound_quic_datagram_unavailable_packets
+        ),
+        format!(
             "outbound_path_probes_sent {}",
             snapshot.outbound_path_probes_sent
         ),
@@ -1049,11 +1061,7 @@ fn drain_outbound_queue(
 ) {
     expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready(|peer| {
-        context.peer_capabilities.contains(peer)
-            && context.paths.has_supported_path(
-                peer,
-                packet_transport_support(context.peer_capabilities, peer),
-            )
+        packet_transport_decision(context.paths, context.peer_capabilities, peer).can_send()
     }) {
         let peer_mtu = selected_path_mtu(
             context.paths,
@@ -1061,16 +1069,40 @@ fn drain_outbound_queue(
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
-        if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
-            context
-                .metrics
-                .record_outbound_drop(outbound_drop_reason(&error));
-            eprintln!("dropping queued outbound packet: {error:?}");
-        } else {
-            context.metrics.record_outbound_sent();
+        match packet_transport_decision(context.paths, context.peer_capabilities, packet.peer()) {
+            PacketTransportDecision::StreamFallback { .. } => {
+                if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu)
+                {
+                    context
+                        .metrics
+                        .record_outbound_drop(outbound_drop_reason(&error));
+                    eprintln!("dropping queued outbound packet: {error:?}");
+                } else {
+                    context.metrics.record_outbound_sent();
+                    context.metrics.record_outbound_stream_fallback();
+                }
+            }
+            PacketTransportDecision::NativeQuicDatagram { .. } => {
+                context.metrics.record_outbound_quic_datagram();
+                context.metrics.record_outbound_sent();
+            }
+            PacketTransportDecision::Blocked { reason, .. } => {
+                if reason == PacketTransportBlockReason::LocalQuicDatagramsUnavailable {
+                    context.metrics.record_outbound_quic_datagram_unavailable();
+                }
+            }
         }
     }
     if queues.total_stats().queued_packets > 0 {
+        for peer in queues.queued_peers() {
+            if let PacketTransportDecision::Blocked {
+                reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
+                ..
+            } = packet_transport_decision(context.paths, context.peer_capabilities, peer)
+            {
+                context.metrics.record_outbound_quic_datagram_unavailable();
+            }
+        }
         context
             .metrics
             .record_outbound_queue_blocked_no_supported_path();
@@ -1111,6 +1143,69 @@ fn dial_blocked_queue_peers(
         context.discovered_peer_addresses,
         context.metrics,
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketTransportDecision {
+    NativeQuicDatagram {
+        path: PathKind,
+    },
+    StreamFallback {
+        path: PathKind,
+    },
+    Blocked {
+        reason: PacketTransportBlockReason,
+        best_path: Option<PathKind>,
+    },
+}
+
+impl PacketTransportDecision {
+    const fn can_send(self) -> bool {
+        matches!(
+            self,
+            Self::NativeQuicDatagram { .. } | Self::StreamFallback { .. }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketTransportBlockReason {
+    MissingCapabilities,
+    NoHealthyPath,
+    LocalQuicDatagramsUnavailable,
+}
+
+fn packet_transport_decision(
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+) -> PacketTransportDecision {
+    if !peer_capabilities.contains(peer) {
+        return PacketTransportDecision::Blocked {
+            reason: PacketTransportBlockReason::MissingCapabilities,
+            best_path: paths.best_for(peer).map(|path| path.kind),
+        };
+    }
+
+    let support = packet_transport_support(peer_capabilities, peer);
+    if let Some(path) = paths.best_supported_for(peer, support) {
+        return if path.kind.requires_quic_datagrams() {
+            PacketTransportDecision::NativeQuicDatagram { path: path.kind }
+        } else {
+            PacketTransportDecision::StreamFallback { path: path.kind }
+        };
+    }
+
+    let best_path = paths.best_for(peer).map(|path| path.kind);
+    let reason = if best_path.is_some_and(PathKind::requires_quic_datagrams)
+        && peer_capabilities.supports_quic_datagrams_for(peer)
+        && !LOCAL_QUIC_DATAGRAMS_SUPPORTED
+    {
+        PacketTransportBlockReason::LocalQuicDatagramsUnavailable
+    } else {
+        PacketTransportBlockReason::NoHealthyPath
+    };
+    PacketTransportDecision::Blocked { reason, best_path }
 }
 
 fn packet_transport_support(
@@ -2434,6 +2529,9 @@ mod tests {
         assert!(lines.contains(&"configured peers: 1".to_owned()));
         assert!(lines.contains(&"validated peers: 1".to_owned()));
         assert!(lines.contains(&"replay_windows 0".to_owned()));
+        assert!(lines.contains(&"outbound_stream_fallback_packets 0".to_owned()));
+        assert!(lines.contains(&"outbound_quic_datagram_packets 0".to_owned()));
+        assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
@@ -4261,6 +4359,7 @@ mod tests {
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
@@ -4349,6 +4448,7 @@ mod tests {
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
@@ -4437,8 +4537,49 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.outbound_quic_datagram_unavailable_packets, 1);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+    }
+
+    #[test]
+    fn packet_transport_decision_uses_stream_fallback_for_stream_paths() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        assert_eq!(
+            packet_transport_decision(&paths, &peer_capabilities, remote_overlay),
+            PacketTransportDecision::StreamFallback {
+                path: PathKind::DirectQuicStream
+            }
+        );
+    }
+
+    #[test]
+    fn packet_transport_decision_blocks_datagram_only_paths_until_local_support_exists() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.supports_quic_datagrams = true;
+        peer_capabilities.record(remote_overlay, capabilities);
+
+        assert_eq!(
+            packet_transport_decision(&paths, &peer_capabilities, remote_overlay),
+            PacketTransportDecision::Blocked {
+                reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
+                best_path: Some(PathKind::DirectQuicDatagram)
+            }
+        );
     }
 
     #[tokio::test]
