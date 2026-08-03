@@ -35,6 +35,27 @@
 
         checks = {
           package = self.packages.${system}.default;
+          clippy = pkgs.rustPlatform.buildRustPackage {
+            pname = "p2p-vpn-clippy";
+            version = "0.1.0";
+            src = self;
+            cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = [
+              pkgs.clippy
+              pkgs.pkg-config
+            ];
+            buildPhase = ''
+              runHook preBuild
+              cargo clippy --all-targets -- -D warnings
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              touch $out
+              runHook postInstall
+            '';
+            doCheck = false;
+          };
           fmt = pkgs.runCommand "p2p-vpn-fmt" { nativeBuildInputs = [ cargo pkgs.rustfmt ]; } ''
             cd ${self}
             cargo fmt --check

@@ -131,6 +131,9 @@ nix flake check
 nix build .#default
 ```
 
+`nix flake check` builds and tests the package, checks formatting, and runs
+clippy with warnings denied.
+
 Run the Linux TUN end-to-end smoke test on hosts that allow unprivileged user
 and network namespaces:
 
