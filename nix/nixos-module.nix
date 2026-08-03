@@ -106,6 +106,8 @@ let
         );
         Restart = "on-failure";
         RestartSec = "5s";
+        KillSignal = "SIGTERM";
+        TimeoutStopSec = "30s";
         AmbientCapabilities = [
           "CAP_NET_ADMIN"
           "CAP_NET_RAW"

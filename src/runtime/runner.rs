@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -56,6 +57,24 @@ pub async fn run_config(
     device: TunDevice,
     metrics_interval: Option<Duration>,
 ) -> Result<(), RunnerError> {
+    run_config_until(
+        config,
+        device,
+        metrics_interval,
+        std::future::pending::<ShutdownReason>(),
+    )
+    .await
+}
+
+pub async fn run_config_until<Shutdown>(
+    config: Config,
+    device: TunDevice,
+    metrics_interval: Option<Duration>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
     let identity = config.identity()?;
     let node = build_node(&HostConfig {
         identity,
@@ -77,7 +96,7 @@ pub async fn run_config(
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
 
-    Box::pin(run_node(
+    Box::pin(run_node_until(
         node,
         forwarder,
         membership,
@@ -85,11 +104,52 @@ pub async fn run_config(
         config.effective_packet_mtu(),
         config.queue,
         metrics_interval,
+        shutdown,
     ))
     .await
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShutdownReason {
+    Interrupt,
+    Terminate,
+}
+
+impl ShutdownReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Interrupt => "interrupt",
+            Self::Terminate => "terminate",
+        }
+    }
+}
+
 pub async fn run_node(
+    node: P2pNode,
+    forwarder: Forwarder,
+    membership: OverlayMembership,
+    device: TunDevice,
+    mtu: u16,
+    queue_config: QueueConfig,
+    metrics_interval: Option<Duration>,
+) -> Result<(), RunnerError> {
+    Box::pin(run_node_until(
+        node,
+        forwarder,
+        membership,
+        device,
+        mtu,
+        queue_config,
+        metrics_interval,
+        std::future::pending::<ShutdownReason>(),
+    ))
+    .await
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_node_until<Shutdown>(
     mut node: P2pNode,
     mut forwarder: Forwarder,
     membership: OverlayMembership,
@@ -97,7 +157,11 @@ pub async fn run_node(
     mtu: u16,
     queue_config: QueueConfig,
     metrics_interval: Option<Duration>,
-) -> Result<(), RunnerError> {
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
     let (reader, mut writer) = device.split();
     let metrics = Arc::new(RuntimeMetrics::default());
     let mut tun_rx = spawn_tun_reader(reader, Arc::clone(&metrics), mtu);
@@ -122,9 +186,28 @@ pub async fn run_node(
     let discovery = node.discovery.clone();
 
     log_startup_status(node.startup);
+    log_runtime_event(
+        LogLevel::Info,
+        "runtime_started",
+        &[("network", &node.network_name)],
+    );
+    tokio::pin!(shutdown);
 
     loop {
         tokio::select! {
+            reason = &mut shutdown => {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "runtime_shutdown",
+                    &[("reason", reason.as_str())],
+                );
+                print_metrics(
+                    &metrics,
+                    queues.total_stats(),
+                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                );
+                return Ok(());
+            }
             Some(packet) = tun_rx.recv() => {
                 if let Err(error) = forwarder.enqueue_tun_packet(&mut queues, packet) {
                     metrics.record_outbound_drop(outbound_drop_reason(&error));
@@ -283,44 +366,101 @@ fn handle_redial_tick(
 
 fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
     if startup.mdns_enabled {
-        eprintln!("mdns discovery enabled");
+        log_runtime_event(LogLevel::Info, "mdns_enabled", &[]);
     }
     if startup.external_addresses_configured > 0 {
-        eprintln!(
-            "external addresses configured: {}",
-            startup.external_addresses_configured
+        log_runtime_event(
+            LogLevel::Info,
+            "external_addresses_configured",
+            &[("count", &startup.external_addresses_configured.to_string())],
         );
     }
     if startup.dcutr_enabled {
-        eprintln!("dcutr hole punching enabled");
+        log_runtime_event(LogLevel::Info, "dcutr_enabled", &[]);
     }
     if startup.autonat_enabled {
-        eprintln!("autonat reachability probing enabled");
+        log_runtime_event(LogLevel::Info, "autonat_enabled", &[]);
     }
     if startup.autonat_servers_registered > 0 {
-        eprintln!(
-            "autonat probe servers registered: {}",
-            startup.autonat_servers_registered
+        log_runtime_event(
+            LogLevel::Info,
+            "autonat_servers_registered",
+            &[("count", &startup.autonat_servers_registered.to_string())],
         );
     }
     if startup.kademlia.bootstrap_started {
-        eprintln!("kademlia bootstrap started");
+        log_runtime_event(LogLevel::Info, "kademlia_bootstrap_started", &[]);
     }
     if startup.kademlia.rendezvous_advertise_started {
-        eprintln!("kademlia overlay provider advertisement started");
+        log_runtime_event(LogLevel::Info, "kademlia_provider_advertise_started", &[]);
     }
     if startup.kademlia.rendezvous_lookup_started {
-        eprintln!("kademlia overlay provider lookup started");
+        log_runtime_event(LogLevel::Info, "kademlia_provider_lookup_started", &[]);
     }
     if startup.relay_reservations_started > 0 {
-        eprintln!(
-            "relay reservation listeners started: {}",
-            startup.relay_reservations_started
+        log_runtime_event(
+            LogLevel::Info,
+            "relay_reservation_listeners_started",
+            &[("count", &startup.relay_reservations_started.to_string())],
         );
     }
     if startup.relay_server_enabled {
-        eprintln!("relay server enabled");
+        log_runtime_event(LogLevel::Info, "relay_server_enabled", &[]);
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
+fn log_runtime_event(level: LogLevel, event: &str, fields: &[(&str, &str)]) {
+    eprintln!("{}", runtime_log_line(level, event, fields));
+}
+
+fn runtime_log_line(level: LogLevel, event: &str, fields: &[(&str, &str)]) -> String {
+    let mut line = format!("level={} event={}", level.as_str(), event);
+    for (key, value) in fields {
+        line.push(' ');
+        line.push_str(key);
+        line.push('=');
+        push_log_value(&mut line, value);
+    }
+    line
+}
+
+fn push_log_value(line: &mut String, value: &str) {
+    if value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'/')
+    }) {
+        line.push_str(value);
+        return;
+    }
+
+    line.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => line.push_str("\\\""),
+            '\\' => line.push_str("\\\\"),
+            '\n' => line.push_str("\\n"),
+            '\r' => line.push_str("\\r"),
+            '\t' => line.push_str("\\t"),
+            other => line.push(other),
+        }
+    }
+    line.push('"');
 }
 
 fn queue_expiry_interval(max_packet_age: Duration) -> Duration {
@@ -357,7 +497,11 @@ fn refresh_kademlia_rendezvous(
             Ok(_) => metrics.record_kademlia_provider_advertisement(),
             Err(error) => {
                 metrics.record_kademlia_provider_advertisement_failure();
-                eprintln!("kademlia provider advertisement refresh failed: {error:?}");
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "kademlia_provider_advertisement_failed",
+                    &[("error", &format!("{error:?}"))],
+                );
             }
         }
     }
@@ -372,7 +516,11 @@ fn refresh_kademlia_rendezvous(
         Ok(_) => metrics.record_kademlia_bootstrap_refresh(),
         Err(error) => {
             metrics.record_kademlia_bootstrap_failure();
-            eprintln!("kademlia bootstrap refresh failed: {error:?}");
+            log_runtime_event(
+                LogLevel::Warn,
+                "kademlia_bootstrap_failed",
+                &[("error", &format!("{error:?}"))],
+            );
         }
     }
 }
@@ -404,7 +552,11 @@ fn redial_known_addresses(
         let dial_address = peer_dial_address(peer, address);
         if let Err(error) = swarm.dial(dial_address) {
             metrics.record_redial_failure();
-            eprintln!("redial {peer} failed: {error}");
+            log_runtime_event(
+                LogLevel::Warn,
+                "redial_failed",
+                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+            );
         }
     }
 }
@@ -436,7 +588,11 @@ fn redial_selected_addresses(
         let dial_address = peer_dial_address(peer, address);
         if let Err(error) = swarm.dial(dial_address) {
             metrics.record_redial_failure();
-            eprintln!("redial {peer} failed: {error}");
+            log_runtime_event(
+                LogLevel::Warn,
+                "redial_failed",
+                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+            );
         }
     }
 }
@@ -630,7 +786,11 @@ fn spawn_tun_reader(
                     }
                 }
                 Err(error) => {
-                    eprintln!("failed to read TUN packet: {error:?}");
+                    log_runtime_event(
+                        LogLevel::Error,
+                        "tun_read_failed",
+                        &[("error", &format!("{error:?}"))],
+                    );
                     return;
                 }
             }
@@ -757,6 +917,7 @@ struct SwarmEventContext<'a> {
     discovery: &'a DiscoveryConfig,
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_swarm_event(
     swarm: &mut Swarm<Behaviour>,
     mut context: SwarmEventContext<'_>,
@@ -789,9 +950,17 @@ fn handle_swarm_event(
             ..
         } => {
             if !authorize_established_connection(context.membership, context.metrics, peer_id) {
-                eprintln!("disconnecting unauthorized peer {peer_id}");
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "unauthorized_peer_disconnected",
+                    &[("peer", &peer_id.to_string())],
+                );
                 if swarm.disconnect_peer_id(peer_id).is_err() {
-                    eprintln!("unauthorized peer {peer_id} was already disconnected");
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "unauthorized_peer_already_disconnected",
+                        &[("peer", &peer_id.to_string())],
+                    );
                 }
                 return Ok(());
             }
@@ -819,7 +988,15 @@ fn handle_swarm_event(
             context
                 .metrics
                 .record_connection_established(endpoint.is_relayed());
-            eprintln!("connection established with {peer_id} via {endpoint:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "connection_established",
+                &[
+                    ("peer", &peer_id.to_string()),
+                    ("relayed", &endpoint.is_relayed().to_string()),
+                    ("endpoint", &format!("{endpoint:?}")),
+                ],
+            );
         }
         SwarmEvent::ConnectionClosed {
             peer_id,
@@ -834,22 +1011,42 @@ fn handle_swarm_event(
                 peer_id,
                 num_established,
             );
-            eprintln!("connection closed with {peer_id} via {endpoint:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "connection_closed",
+                &[
+                    ("peer", &peer_id.to_string()),
+                    ("relayed", &endpoint.is_relayed().to_string()),
+                    ("endpoint", &format!("{endpoint:?}")),
+                ],
+            );
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             handle_outgoing_connection_error(context.metrics, peer_id, &error);
         }
         SwarmEvent::NewExternalAddrCandidate { address } => {
             context.metrics.record_external_address_candidate();
-            eprintln!("external address candidate observed: {address}");
+            log_runtime_event(
+                LogLevel::Info,
+                "external_address_candidate",
+                &[("address", &address.to_string())],
+            );
         }
         SwarmEvent::ExternalAddrConfirmed { address } => {
             context.metrics.record_external_address_confirmed();
-            eprintln!("external address confirmed: {address}");
+            log_runtime_event(
+                LogLevel::Info,
+                "external_address_confirmed",
+                &[("address", &address.to_string())],
+            );
         }
         SwarmEvent::ExternalAddrExpired { address } => {
             context.metrics.record_external_address_expired();
-            eprintln!("external address expired: {address}");
+            log_runtime_event(
+                LogLevel::Info,
+                "external_address_expired",
+                &[("address", &address.to_string())],
+            );
         }
         _ => {}
     }
@@ -1938,6 +2135,24 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    #[test]
+    fn shutdown_reason_has_stable_log_values() {
+        assert_eq!(ShutdownReason::Interrupt.as_str(), "interrupt");
+        assert_eq!(ShutdownReason::Terminate.as_str(), "terminate");
+    }
+
+    #[test]
+    fn runtime_log_line_is_key_value_structured_and_quoted() {
+        assert_eq!(
+            runtime_log_line(
+                LogLevel::Warn,
+                "connection_closed",
+                &[("peer", "12D3KooWPeer"), ("error", "dial failed \"hard\"")],
+            ),
+            "level=warn event=connection_closed peer=12D3KooWPeer error=\"dial failed \\\"hard\\\"\""
+        );
     }
 
     #[test]

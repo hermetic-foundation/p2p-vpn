@@ -96,6 +96,8 @@
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
           nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
+            killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
+            timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
             tcpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedTCPPorts;
             udpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedUDPPorts;
             kernelModules = builtins.toJSON moduleEval.config.boot.kernelModules;
@@ -104,6 +106,8 @@
               *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10"*) ;;
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
             esac
+            test "$killSignal" = SIGTERM
+            test "$timeoutStopSec" = 30s
             test "$tcpPorts" = '[4001]'
             test "$udpPorts" = '[4001]'
             case "$kernelModules" in

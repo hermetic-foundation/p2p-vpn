@@ -13,7 +13,7 @@ use p2p_vpn::{
     runtime::{
         forward::session_id_for_peer,
         remote::{RemotePeerStatus, query_peer_status},
-        runner,
+        runner::{self, ShutdownReason},
         service::SERVICE_PROTOCOL,
         tun::{TunAddresses, TunDevice, TunRuntimeConfig},
     },
@@ -893,9 +893,38 @@ async fn up(
 
     println!("starting libp2p packet forwarding runtime");
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
-    Box::pin(runner::run_config(config, device, metrics_interval))
-        .await
-        .map_err(|error| format!("runtime failed: {error:?}"))
+    Box::pin(runner::run_config_until(
+        config,
+        device,
+        metrics_interval,
+        shutdown_signal(),
+    ))
+    .await
+    .map_err(|error| format!("runtime failed: {error:?}"))
+}
+
+async fn shutdown_signal() -> ShutdownReason {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.expect("failed to install SIGINT handler");
+                ShutdownReason::Interrupt
+            }
+            _ = terminate.recv() => ShutdownReason::Terminate,
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install interrupt handler");
+        ShutdownReason::Interrupt
+    }
 }
 
 fn path_name(path: PathKind) -> &'static str {

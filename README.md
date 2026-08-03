@@ -502,6 +502,14 @@ firewall. Keep JSON configs that contain `network.private_key` or
 deployment skeleton is available as the `nixos-mesh` flake template in
 `examples/nixos-mesh`.
 
+The daemon handles Ctrl-C and systemd's SIGTERM as orderly shutdown requests.
+On shutdown it stops the libp2p runtime loop, prints a final metrics snapshot,
+and exits successfully. Runtime lifecycle and high-value network events are
+written to stderr as key-value lines such as
+`level=info event=connection_established peer=<peer-id> relayed=false`, which
+keeps journald output grep-friendly without requiring a separate logging
+collector.
+
 Inspect the Linux interface setup plan without requiring root:
 
 ```sh
