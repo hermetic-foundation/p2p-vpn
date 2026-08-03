@@ -34,6 +34,8 @@ pub struct P2pNode {
     pub local_peer_id: PeerId,
     pub swarm: Swarm<Behaviour>,
     pub discovery: DiscoveryConfig,
+    pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
+    pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub startup: StartupStatus,
 }
 
@@ -68,6 +70,8 @@ pub struct KademliaStartupStatus {
 pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
     let keypair = decode_keypair(&config.identity.private_key)?;
     let local_peer_id = keypair.public().to_peer_id();
+    let bootstrap_peer_addresses = config.bootstrap_peers.clone();
+    let configured_peer_addresses = config.known_peers.clone();
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -157,6 +161,8 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         local_peer_id,
         swarm,
         discovery: config.discovery,
+        bootstrap_peer_addresses,
+        configured_peer_addresses,
         startup: StartupStatus {
             mdns_enabled: config.discovery.mdns,
             dcutr_enabled: config.discovery.dcutr,

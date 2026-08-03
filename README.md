@@ -49,6 +49,12 @@ while that peer has a healthy path. Packets for disconnected peers remain
 bounded by the per-peer queue limits instead of expanding into unbounded stream
 requests.
 
+Configured bootstrap and peer addresses are redialed periodically when they are
+not already connected. This keeps the overlay trying to recover after transient
+network loss instead of depending on a one-shot startup dial or a future
+discovery event. Redial attempts, connected-peer skips, and failures are exposed
+in the runtime metrics output.
+
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
 field and is used consistently by the TUN setup and packet forwarder. The

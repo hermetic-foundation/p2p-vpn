@@ -23,6 +23,9 @@ pub struct RuntimeMetrics {
     relay_server_circuits_accepted: AtomicU64,
     dcutr_successes: AtomicU64,
     dcutr_failures: AtomicU64,
+    redial_attempts: AtomicU64,
+    redial_skipped_connected: AtomicU64,
+    redial_failures: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -107,6 +110,19 @@ impl RuntimeMetrics {
         }
     }
 
+    pub fn record_redial_attempt(&self) {
+        self.redial_attempts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_redial_skipped_connected(&self) {
+        self.redial_skipped_connected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_redial_failure(&self) {
+        self.redial_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
         RuntimeSnapshot {
@@ -141,6 +157,9 @@ impl RuntimeMetrics {
                 .load(Ordering::Relaxed),
             dcutr_successes: self.dcutr_successes.load(Ordering::Relaxed),
             dcutr_failures: self.dcutr_failures.load(Ordering::Relaxed),
+            redial_attempts: self.redial_attempts.load(Ordering::Relaxed),
+            redial_skipped_connected: self.redial_skipped_connected.load(Ordering::Relaxed),
+            redial_failures: self.redial_failures.load(Ordering::Relaxed),
             queue,
         }
     }
@@ -167,6 +186,9 @@ pub struct RuntimeSnapshot {
     pub relay_server_circuits_accepted: u64,
     pub dcutr_successes: u64,
     pub dcutr_failures: u64,
+    pub redial_attempts: u64,
+    pub redial_skipped_connected: u64,
+    pub redial_failures: u64,
     pub queue: QueueStats,
 }
 
@@ -214,6 +236,9 @@ impl RuntimeSnapshot {
             ),
             format!("dcutr_successes {}", self.dcutr_successes),
             format!("dcutr_failures {}", self.dcutr_failures),
+            format!("redial_attempts {}", self.redial_attempts),
+            format!("redial_skipped_connected {}", self.redial_skipped_connected),
+            format!("redial_failures {}", self.redial_failures),
             format!("queue_queued_packets {}", self.queue.queued_packets),
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
             format!("queue_dropped_packets {}", self.queue.dropped_packets),
@@ -246,6 +271,9 @@ mod tests {
         metrics.record_relay_server_circuit_accepted();
         metrics.record_dcutr_result(true);
         metrics.record_dcutr_result(false);
+        metrics.record_redial_attempt();
+        metrics.record_redial_skipped_connected();
+        metrics.record_redial_failure();
 
         let snapshot = metrics.snapshot(QueueStats {
             queued_packets: 2,
@@ -273,6 +301,9 @@ mod tests {
         assert_eq!(snapshot.relay_server_circuits_accepted, 1);
         assert_eq!(snapshot.dcutr_successes, 1);
         assert_eq!(snapshot.dcutr_failures, 1);
+        assert_eq!(snapshot.redial_attempts, 1);
+        assert_eq!(snapshot.redial_skipped_connected, 1);
+        assert_eq!(snapshot.redial_failures, 1);
         assert!(
             snapshot
                 .lines()
@@ -284,5 +315,12 @@ mod tests {
                 .contains(&"relayed_connections_established 1".to_owned())
         );
         assert!(snapshot.lines().contains(&"dcutr_successes 1".to_owned()));
+        assert!(snapshot.lines().contains(&"redial_attempts 1".to_owned()));
+        assert!(
+            snapshot
+                .lines()
+                .contains(&"redial_skipped_connected 1".to_owned())
+        );
+        assert!(snapshot.lines().contains(&"redial_failures 1".to_owned()));
     }
 }

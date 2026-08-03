@@ -26,6 +26,7 @@ use crate::{
 };
 
 const TUN_READ_CHANNEL: usize = 1024;
+const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 
 pub async fn run_config(
     config: Config,
@@ -74,6 +75,8 @@ pub async fn run_node(
     );
     let mut paths = PathSet::new();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
+    let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
+    redial_tick.tick().await;
     let discovery = node.discovery;
 
     if node.startup.mdns_enabled {
@@ -114,6 +117,9 @@ pub async fn run_node(
                 handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &mut paths, &metrics, discovery, event)?;
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
             }
+            _ = redial_tick.tick() => {
+                redial_configured_addresses(&mut node.swarm, &node.bootstrap_peer_addresses, &node.configured_peer_addresses, &metrics);
+            }
             () = async {
                 metrics_tick
                     .as_mut()
@@ -125,6 +131,67 @@ pub async fn run_node(
             }
         }
     }
+}
+
+fn redial_configured_addresses(
+    swarm: &mut Swarm<Behaviour>,
+    bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    metrics: &RuntimeMetrics,
+) {
+    let local_peer = *swarm.local_peer_id();
+    let targets = pending_redial_targets(
+        local_peer,
+        bootstrap_addresses,
+        configured_peer_addresses,
+        |peer| swarm.is_connected(peer),
+    );
+
+    for _ in 0..targets.skipped_connected {
+        metrics.record_redial_skipped_connected();
+    }
+
+    for (peer, address) in targets.addresses {
+        metrics.record_redial_attempt();
+        let dial_address = peer_dial_address(peer, address);
+        if let Err(error) = swarm.dial(dial_address) {
+            metrics.record_redial_failure();
+            eprintln!("redial {peer} failed: {error}");
+        }
+    }
+}
+
+fn pending_redial_targets(
+    local_peer: Libp2pPeerId,
+    bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
+) -> RedialTargets {
+    let mut addresses = Vec::new();
+    let mut skipped_connected = 0;
+    for (peer, address) in bootstrap_addresses
+        .iter()
+        .chain(configured_peer_addresses.iter())
+    {
+        if *peer == local_peer {
+            continue;
+        }
+        if is_connected(peer) {
+            skipped_connected += 1;
+            continue;
+        }
+        addresses.push((*peer, address.clone()));
+    }
+    RedialTargets {
+        addresses,
+        skipped_connected,
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RedialTargets {
+    addresses: Vec<(Libp2pPeerId, Multiaddr)>,
+    skipped_connected: usize,
 }
 
 fn spawn_tun_reader(
@@ -513,6 +580,55 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    #[test]
+    fn redial_targets_skip_self_and_connected_peers() {
+        let local = peer_id();
+        let connected = peer_id();
+        let disconnected = peer_id();
+        let bootstrap_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let peer_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let local_address: Multiaddr = "/ip4/127.0.0.1/tcp/4003".parse().expect("address");
+
+        let targets = pending_redial_targets(
+            local,
+            &[(connected, bootstrap_address)],
+            &[(disconnected, peer_address.clone()), (local, local_address)],
+            |peer| *peer == connected,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![(disconnected, peer_address)],
+                skipped_connected: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn redial_targets_include_bootstrap_and_configured_peer_addresses() {
+        let local = peer_id();
+        let bootstrap = peer_id();
+        let configured = peer_id();
+        let bootstrap_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let peer_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+
+        let targets = pending_redial_targets(
+            local,
+            &[(bootstrap, bootstrap_address.clone())],
+            &[(configured, peer_address.clone())],
+            |_| false,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![(bootstrap, bootstrap_address), (configured, peer_address)],
+                skipped_connected: 0,
+            }
+        );
     }
 
     #[test]
