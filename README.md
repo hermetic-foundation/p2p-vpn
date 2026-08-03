@@ -153,9 +153,9 @@ cargo run -- init-config \
   --output node-b.json \
   --listen-address /ip4/0.0.0.0/tcp/0 \
   --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
-  --peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1 \
+  --peer <node-a-peer-id>=/dns4/<node-a-hostname>/udp/4001/quic-v1 \
   --peer-route <node-a-peer-id>=10.42.0.0/24,100 \
-  --bootstrap-peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1
+  --bootstrap-peer <node-a-peer-id>=/dns4/<node-a-hostname>/udp/4001/quic-v1
 ```
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
@@ -167,9 +167,11 @@ host routes at metric `0`. Repeat `--bootstrap-peer PEER_ID=MULTIADDR` for
 Kademlia bootstrap nodes. By default the generated config uses the private
 `/p2p-vpn/kad/1` Kademlia protocol; pass `--kademlia-protocol /ipfs/kad/1.0.0`
 only when you intentionally want IPFS/public-DHT protocol compatibility with
-your bootstrap peers. Repeat `--external-address MULTIADDR` for stable public
-or DNS addresses that libp2p should advertise to peers in addition to observed
-addresses learned through identify and confirmed through AutoNAT. Use
+your bootstrap peers. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
+`/dnsaddr`, are resolved by the libp2p transport for startup dials and redials.
+Repeat `--external-address MULTIADDR` for stable public or DNS addresses that
+libp2p should advertise to peers in addition to observed addresses learned
+through identify and confirmed through AutoNAT. Use
 `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
 the generated config.
@@ -277,8 +279,10 @@ cargo test --test tun_namespace -- --ignored --nocapture
 ```
 
 `bootstrap_peers` are dialed and added to the configured Kademlia routing table
-when Kademlia discovery is enabled. Kademlia nodes advertise themselves under
-the network provider key and query that same key for other configured peers.
+when Kademlia discovery is enabled. TCP and QUIC startup dials support DNS
+multiaddrs, including `/dns4`, `/dns6`, `/dns`, and `/dnsaddr`. Kademlia nodes
+advertise themselves under the network provider key and query that same key for
+other configured peers.
 `discovery.kademlia_protocol` defaults to the private `/p2p-vpn/kad/1`
 protocol. Set it to `/ipfs/kad/1.0.0` only for deployments that explicitly use
 IPFS-compatible public bootstrap peers; those peers help discovery and NAT

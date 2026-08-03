@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, identify,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, dns, identify,
     identity::Keypair,
     kad, mdns,
     multiaddr::Protocol,
@@ -107,6 +107,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
             yamux::Config::default,
         )?
         .with_quic()
+        .with_dns_config(dns::ResolverConfig::default(), dns::ResolverOpts::default())
         .with_relay_client(noise::Config::new, yamux::Config::default)?
         .with_behaviour(
             |keypair, relay| -> Result<Behaviour, Box<dyn Error + Send + Sync>> {
@@ -557,6 +558,35 @@ mod tests {
         });
 
         assert!(matches!(result, Err(P2pBuildError::Dial(_))));
+    }
+
+    #[tokio::test]
+    async fn build_node_accepts_dns_peer_addresses_for_startup_dials() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address = "/dns4/example.invalid/tcp/4001"
+            .parse()
+            .expect("dns address");
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: vec![(peer, address)],
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node should build and queue DNS dial");
+
+        assert_eq!(node.bootstrap_peer_addresses.len(), 1);
+        assert!(node.startup.kademlia.bootstrap_started);
     }
 
     #[tokio::test]
