@@ -323,7 +323,7 @@ The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons including expired outbound queue packets, direct versus
 relayed connection counts, relay reservation/circuit counts, relay-server
-accept counts, DCUtR success/failure counts, observed external address
+accept/deny/close/timeout counts, DCUtR success/failure counts, observed external address
 candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
 public/private/unknown reachability gauges and status-change counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap

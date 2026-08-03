@@ -56,7 +56,12 @@ pub struct RuntimeMetrics {
     relay_outbound_circuits_established: AtomicU64,
     relay_inbound_circuits_established: AtomicU64,
     relay_server_reservations_accepted: AtomicU64,
+    relay_server_reservations_denied: AtomicU64,
+    relay_server_reservations_closed: AtomicU64,
+    relay_server_reservations_timed_out: AtomicU64,
     relay_server_circuits_accepted: AtomicU64,
+    relay_server_circuits_denied: AtomicU64,
+    relay_server_circuits_closed: AtomicU64,
     dcutr_successes: AtomicU64,
     dcutr_failures: AtomicU64,
     external_address_candidates: AtomicU64,
@@ -218,8 +223,33 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_relay_server_reservation_denied(&self) {
+        self.relay_server_reservations_denied
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_reservation_closed(&self) {
+        self.relay_server_reservations_closed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_reservation_timed_out(&self) {
+        self.relay_server_reservations_timed_out
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_relay_server_circuit_accepted(&self) {
         self.relay_server_circuits_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_circuit_denied(&self) {
+        self.relay_server_circuits_denied
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_circuit_closed(&self) {
+        self.relay_server_circuits_closed
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -464,8 +494,21 @@ impl RuntimeMetrics {
         snapshot.relay_server_reservations_accepted = self
             .relay_server_reservations_accepted
             .load(Ordering::Relaxed);
+        snapshot.relay_server_reservations_denied = self
+            .relay_server_reservations_denied
+            .load(Ordering::Relaxed);
+        snapshot.relay_server_reservations_closed = self
+            .relay_server_reservations_closed
+            .load(Ordering::Relaxed);
+        snapshot.relay_server_reservations_timed_out = self
+            .relay_server_reservations_timed_out
+            .load(Ordering::Relaxed);
         snapshot.relay_server_circuits_accepted =
             self.relay_server_circuits_accepted.load(Ordering::Relaxed);
+        snapshot.relay_server_circuits_denied =
+            self.relay_server_circuits_denied.load(Ordering::Relaxed);
+        snapshot.relay_server_circuits_closed =
+            self.relay_server_circuits_closed.load(Ordering::Relaxed);
         snapshot.dcutr_successes = self.dcutr_successes.load(Ordering::Relaxed);
         snapshot.dcutr_failures = self.dcutr_failures.load(Ordering::Relaxed);
     }
@@ -569,7 +612,12 @@ pub struct RuntimeSnapshot {
     pub relay_outbound_circuits_established: u64,
     pub relay_inbound_circuits_established: u64,
     pub relay_server_reservations_accepted: u64,
+    pub relay_server_reservations_denied: u64,
+    pub relay_server_reservations_closed: u64,
+    pub relay_server_reservations_timed_out: u64,
     pub relay_server_circuits_accepted: u64,
+    pub relay_server_circuits_denied: u64,
+    pub relay_server_circuits_closed: u64,
     pub dcutr_successes: u64,
     pub dcutr_failures: u64,
     pub external_address_candidates: u64,
@@ -617,12 +665,13 @@ impl RuntimeSnapshot {
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
         ];
         self.extend_drop_lines(&mut lines);
-        self.extend_path_and_discovery_lines(&mut lines);
+        self.extend_transport_lines(&mut lines);
+        self.extend_discovery_lines(&mut lines);
         self.extend_control_and_queue_lines(&mut lines);
         lines
     }
 
-    fn extend_path_and_discovery_lines(&self, lines: &mut Vec<String>) {
+    fn extend_transport_lines(&self, lines: &mut Vec<String>) {
         lines.extend([
             format!("outbound_failures {}", self.outbound_failures),
             format!("inbound_failures {}", self.inbound_failures),
@@ -655,9 +704,34 @@ impl RuntimeSnapshot {
                 self.relay_server_reservations_accepted
             ),
             format!(
+                "relay_server_reservations_denied {}",
+                self.relay_server_reservations_denied
+            ),
+            format!(
+                "relay_server_reservations_closed {}",
+                self.relay_server_reservations_closed
+            ),
+            format!(
+                "relay_server_reservations_timed_out {}",
+                self.relay_server_reservations_timed_out
+            ),
+            format!(
                 "relay_server_circuits_accepted {}",
                 self.relay_server_circuits_accepted
             ),
+            format!(
+                "relay_server_circuits_denied {}",
+                self.relay_server_circuits_denied
+            ),
+            format!(
+                "relay_server_circuits_closed {}",
+                self.relay_server_circuits_closed
+            ),
+        ]);
+    }
+
+    fn extend_discovery_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
             format!("dcutr_successes {}", self.dcutr_successes),
             format!("dcutr_failures {}", self.dcutr_failures),
             format!(
@@ -876,7 +950,12 @@ mod tests {
         metrics.record_relay_outbound_circuit_established();
         metrics.record_relay_inbound_circuit_established();
         metrics.record_relay_server_reservation_accepted();
+        metrics.record_relay_server_reservation_denied();
+        metrics.record_relay_server_reservation_closed();
+        metrics.record_relay_server_reservation_timed_out();
         metrics.record_relay_server_circuit_accepted();
+        metrics.record_relay_server_circuit_denied();
+        metrics.record_relay_server_circuit_closed();
         metrics.record_dcutr_result(true);
         metrics.record_dcutr_result(false);
         metrics.record_external_address_candidate();
@@ -962,7 +1041,12 @@ mod tests {
         assert_eq!(snapshot.relay_outbound_circuits_established, 1);
         assert_eq!(snapshot.relay_inbound_circuits_established, 1);
         assert_eq!(snapshot.relay_server_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_server_reservations_denied, 1);
+        assert_eq!(snapshot.relay_server_reservations_closed, 1);
+        assert_eq!(snapshot.relay_server_reservations_timed_out, 1);
         assert_eq!(snapshot.relay_server_circuits_accepted, 1);
+        assert_eq!(snapshot.relay_server_circuits_denied, 1);
+        assert_eq!(snapshot.relay_server_circuits_closed, 1);
         assert_eq!(snapshot.dcutr_successes, 1);
         assert_eq!(snapshot.dcutr_failures, 1);
         assert_eq!(snapshot.external_address_candidates, 1);
@@ -1021,6 +1105,11 @@ mod tests {
         assert_metric_line(&snapshot, "inbound_drop_unexpected_payload_packets 1");
         assert_metric_line(&snapshot, "relayed_connections_established 1");
         assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");
+        assert_metric_line(&snapshot, "relay_server_reservations_denied 1");
+        assert_metric_line(&snapshot, "relay_server_reservations_closed 1");
+        assert_metric_line(&snapshot, "relay_server_reservations_timed_out 1");
+        assert_metric_line(&snapshot, "relay_server_circuits_denied 1");
+        assert_metric_line(&snapshot, "relay_server_circuits_closed 1");
         assert_metric_line(&snapshot, "dcutr_successes 1");
         assert_metric_line(&snapshot, "external_address_candidates 1");
         assert_metric_line(&snapshot, "external_addresses_confirmed 1");

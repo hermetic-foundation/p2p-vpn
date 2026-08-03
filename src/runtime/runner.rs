@@ -1069,12 +1069,15 @@ fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
             src_peer_id,
             status,
         } => {
+            metrics.record_relay_server_reservation_denied();
             eprintln!("relay server denied reservation from {src_peer_id}: {status:?}");
         }
         relay::Event::ReservationClosed { src_peer_id } => {
+            metrics.record_relay_server_reservation_closed();
             eprintln!("relay server reservation closed for {src_peer_id}");
         }
         relay::Event::ReservationTimedOut { src_peer_id } => {
+            metrics.record_relay_server_reservation_timed_out();
             eprintln!("relay server reservation timed out for {src_peer_id}");
         }
         relay::Event::CircuitReqDenied {
@@ -1082,6 +1085,7 @@ fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
             dst_peer_id,
             status,
         } => {
+            metrics.record_relay_server_circuit_denied();
             eprintln!("relay server denied circuit {src_peer_id} -> {dst_peer_id}: {status:?}");
         }
         relay::Event::CircuitReqAccepted {
@@ -1096,6 +1100,7 @@ fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
             dst_peer_id,
             error,
         } => {
+            metrics.record_relay_server_circuit_closed();
             eprintln!("relay server circuit closed {src_peer_id} -> {dst_peer_id}: {error:?}");
         }
         _ => {}
@@ -2432,14 +2437,44 @@ mod tests {
         );
         handle_relay_server_event(
             &metrics,
+            &relay::Event::ReservationReqDenied {
+                src_peer_id,
+                status: relay::StatusCode::ResourceLimitExceeded,
+            },
+        );
+        handle_relay_server_event(&metrics, &relay::Event::ReservationClosed { src_peer_id });
+        handle_relay_server_event(&metrics, &relay::Event::ReservationTimedOut { src_peer_id });
+        handle_relay_server_event(
+            &metrics,
+            &relay::Event::CircuitReqDenied {
+                src_peer_id,
+                dst_peer_id,
+                status: relay::StatusCode::NoReservation,
+            },
+        );
+        handle_relay_server_event(
+            &metrics,
             &relay::Event::CircuitReqAccepted {
                 src_peer_id,
                 dst_peer_id,
             },
         );
+        handle_relay_server_event(
+            &metrics,
+            &relay::Event::CircuitClosed {
+                src_peer_id,
+                dst_peer_id,
+                error: None,
+            },
+        );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.relay_server_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_server_reservations_denied, 1);
+        assert_eq!(snapshot.relay_server_reservations_closed, 1);
+        assert_eq!(snapshot.relay_server_reservations_timed_out, 1);
         assert_eq!(snapshot.relay_server_circuits_accepted, 1);
+        assert_eq!(snapshot.relay_server_circuits_denied, 1);
+        assert_eq!(snapshot.relay_server_circuits_closed, 1);
     }
 }
