@@ -97,6 +97,7 @@ impl Config {
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
         self.validate_peer_reachability()?;
+        self.validate_discovery()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
         Ok(())
     }
@@ -119,6 +120,18 @@ impl Config {
                 AddressValidationError::UnreachablePeer {
                     peer: peer.id.clone(),
                 },
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_discovery(&self) -> Result<(), ConfigError> {
+        if !self.network.discovery.kademlia
+            && self.network.discovery.kademlia_provider_advertisement
+        {
+            return Err(ConfigError::Discovery(
+                DiscoveryValidationError::ProviderAdvertisementWithoutKademlia,
             ));
         }
 
@@ -552,6 +565,7 @@ pub enum ConfigError {
     Address(AddressValidationError),
     Interface(InterfaceValidationError),
     Resource(ResourceValidationError),
+    Discovery(DiscoveryValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
 }
@@ -627,6 +641,11 @@ pub enum ResourceValidationError {
     RelayServerNoCircuitsPerPeer,
     RelayServerNoCircuitDuration,
     RelayServerNoCircuitBytes,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscoveryValidationError {
+    ProviderAdvertisementWithoutKademlia,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1221,6 +1240,46 @@ mod tests {
         assert!(matches!(
             config.validate_runtime(),
             Err(ConfigError::KademliaProtocol(protocol)) if protocol == "ipfs/kad/1.0.0"
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_provider_advertisement_without_kademlia() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig {
+                    mdns: true,
+                    kademlia: false,
+                    kademlia_provider_advertisement: true,
+                    kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+                    dcutr: true,
+                    autonat: true,
+                },
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Discovery(
+                DiscoveryValidationError::ProviderAdvertisementWithoutKademlia
+            ))
         ));
     }
 

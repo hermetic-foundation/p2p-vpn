@@ -256,7 +256,8 @@ impl InitDiscoveryFlags {
         DiscoveryConfig {
             mdns: !self.disable_mdns,
             kademlia: !self.disable_kademlia,
-            kademlia_provider_advertisement: !self.disable_kademlia_provider_advertisement,
+            kademlia_provider_advertisement: !self.disable_kademlia
+                && !self.disable_kademlia_provider_advertisement,
             kademlia_protocol: selected_kademlia_protocol(kademlia_protocol, ipfs_kademlia),
             dcutr: !self.disable_dcutr,
             autonat: !self.disable_autonat,
@@ -1054,6 +1055,21 @@ mod tests {
             "ipfs-compatible public dht"
         );
         assert_eq!(kademlia_scope("/custom/kad/1"), "custom");
+    }
+
+    #[test]
+    fn disabling_kademlia_disables_provider_advertisement() {
+        let discovery = InitDiscoveryFlags {
+            disable_mdns: false,
+            disable_kademlia: true,
+            disable_kademlia_provider_advertisement: false,
+            disable_dcutr: false,
+            disable_autonat: false,
+        }
+        .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), false);
+
+        assert!(!discovery.kademlia);
+        assert!(!discovery.kademlia_provider_advertisement);
     }
 
     #[test]

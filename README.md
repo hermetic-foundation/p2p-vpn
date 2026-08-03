@@ -236,11 +236,15 @@ libp2p should advertise to peers in addition to observed addresses learned
 through identify and confirmed through AutoNAT. Use
 `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
-the generated config. Use `--disable-kademlia-provider-advertisement` on
+the generated config. `--disable-kademlia` also disables provider
+advertisement; hand-written configs that set
+`kademlia_provider_advertisement=true` while `kademlia=false` are rejected as
+not runtime-ready. Use `--disable-kademlia-provider-advertisement` on
 bootstrap-only nodes that should route Kademlia queries without advertising
-themselves as VPN packet providers. Use the `--queue-*`, `--max-concurrent-*`, and
-`--max-*-connections*` flags to tune per-peer packet buffering, stream pressure,
-and swarm connection limits in generated configs instead of hand-editing JSON.
+themselves as VPN packet providers. Use the `--queue-*`, `--max-concurrent-*`,
+and `--max-*-connections*` flags to tune per-peer packet buffering, stream
+pressure, and swarm connection limits in generated configs instead of
+hand-editing JSON.
 Relay-capable nodes can also set `--relay-max-reservations`,
 `--relay-max-reservations-per-peer`, `--relay-reservation-duration-secs`,
 `--relay-max-circuits`, `--relay-max-circuits-per-peer`,
