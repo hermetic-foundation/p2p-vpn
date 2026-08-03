@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{collections::HashMap, io, time::Duration};
 
 use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -6,7 +6,7 @@ use libp2p::{StreamProtocol, request_response};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PathKind,
+    PathKind, PeerId,
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -50,6 +50,35 @@ pub enum ControlRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ControlResponse {
     CapabilitiesAccepted(ControlCapabilities),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PeerCapabilities {
+    peers: HashMap<PeerId, ControlCapabilities>,
+}
+
+impl PeerCapabilities {
+    pub fn record(&mut self, peer: PeerId, capabilities: ControlCapabilities) {
+        self.peers.insert(peer, capabilities);
+    }
+
+    #[must_use]
+    pub fn effective_mtu_for(&self, peer: PeerId, fallback_mtu: u16) -> u16 {
+        self.peers
+            .get(&peer)
+            .map_or(fallback_mtu, |capabilities| capabilities.effective_mtu)
+            .min(fallback_mtu)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.peers.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
+    }
 }
 
 #[async_trait]
@@ -238,5 +267,19 @@ mod tests {
         assert_eq!(capabilities.effective_mtu, 1420);
         assert_eq!(capabilities.preferred_path, "direct_quic_datagram");
         assert!(!capabilities.supports_quic_datagrams);
+    }
+
+    #[test]
+    fn peer_capabilities_bound_effective_peer_mtu() {
+        let peer = PeerId::from_bytes([1; 32]);
+        let mut capabilities = PeerCapabilities::default();
+
+        assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
+
+        capabilities.record(peer, ControlCapabilities::local(1200));
+        assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1200);
+
+        capabilities.record(peer, ControlCapabilities::local(1420));
+        assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
     }
 }

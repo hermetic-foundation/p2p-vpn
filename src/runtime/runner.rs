@@ -19,7 +19,7 @@ use crate::{
     path::PathSet,
     queue::PeerQueues,
     runtime::{
-        control::{ControlCapabilities, ControlRequest, ControlResponse},
+        control::{ControlCapabilities, ControlRequest, ControlResponse, PeerCapabilities},
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
@@ -79,6 +79,7 @@ pub async fn run_node(
         queue_config.max_packet_age(),
     );
     let mut paths = PathSet::new();
+    let mut peer_capabilities = PeerCapabilities::default();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
     let mut queue_expiry_tick =
@@ -120,7 +121,7 @@ pub async fn run_node(
                     metrics.record_outbound_drop();
                     eprintln!("dropping outbound packet: {error:?}");
                 }
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(
@@ -129,13 +130,14 @@ pub async fn run_node(
                         forwarder: &forwarder,
                         writer: &mut writer,
                         paths: &mut paths,
+                        peer_capabilities: &mut peer_capabilities,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
                         discovery,
                     },
                     event,
                 )?;
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
             }
             _ = redial_tick.tick() => {
                 redial_configured_addresses(&mut node.swarm, &node.bootstrap_peer_addresses, &node.configured_peer_addresses, &metrics);
@@ -256,11 +258,16 @@ fn drain_outbound_queue(
     forwarder: &Forwarder,
     queues: &mut PeerQueues,
     paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
     metrics: &RuntimeMetrics,
 ) {
     expire_outbound_queue(queues);
     while let Some(packet) = queues.dequeue_ready(|peer| paths.has_healthy_path(peer)) {
-        if let Err(error) = forwarder.send_queued_packet(swarm, &packet) {
+        let peer_mtu = peer_capabilities.effective_mtu_for(
+            packet.peer(),
+            u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
+        );
+        if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
             metrics.record_outbound_drop();
             eprintln!("dropping queued outbound packet: {error:?}");
         } else {
@@ -273,6 +280,7 @@ struct SwarmEventContext<'a> {
     forwarder: &'a Forwarder,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
+    peer_capabilities: &'a mut PeerCapabilities,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
     discovery: DiscoveryConfig,
@@ -285,7 +293,7 @@ fn handle_swarm_event(
 ) -> Result<(), RunnerError> {
     match event {
         SwarmEvent::Behaviour(BehaviourEvent::Control(event)) => {
-            handle_control_event(swarm, &context, event)?;
+            handle_control_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(BehaviourEvent::Packet(event)) => {
             handle_packet_event(swarm, &mut context, event)?;
@@ -333,7 +341,7 @@ fn handle_swarm_event(
 
 fn handle_control_event(
     swarm: &mut Swarm<Behaviour>,
-    context: &SwarmEventContext<'_>,
+    context: &mut SwarmEventContext<'_>,
     event: request_response::Event<ControlRequest, ControlResponse>,
 ) -> Result<(), RunnerError> {
     match event {
@@ -344,21 +352,20 @@ fn handle_control_event(
             },
             ..
         } => {
-            handle_control_request(
-                swarm,
-                context.metrics,
-                context.local_capabilities,
-                peer,
-                request,
-                channel,
-            )?;
+            handle_control_request(swarm, context, peer, request, channel)?;
         }
         request_response::Event::Message {
             peer,
             message: Message::Response { response, .. },
             ..
         } => {
-            handle_control_response(context.metrics, peer, response);
+            handle_control_response(
+                context.forwarder,
+                context.peer_capabilities,
+                context.metrics,
+                peer,
+                response,
+            );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
             context.metrics.record_control_failure();
@@ -419,22 +426,27 @@ fn handle_packet_event(
 
 fn handle_control_request(
     swarm: &mut Swarm<Behaviour>,
-    metrics: &RuntimeMetrics,
-    local_capabilities: &ControlCapabilities,
+    context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
     request: ControlRequest,
     channel: request_response::ResponseChannel<ControlResponse>,
 ) -> Result<(), RunnerError> {
     match request {
         ControlRequest::Capabilities(capabilities) => {
-            metrics.record_control_request_received();
+            record_peer_capabilities(
+                context.forwarder,
+                context.peer_capabilities,
+                peer,
+                capabilities.clone(),
+            );
+            context.metrics.record_control_request_received();
             eprintln!("control capabilities from {peer}: {capabilities:?}");
             swarm
                 .behaviour_mut()
                 .control
                 .send_response(
                     channel,
-                    ControlResponse::CapabilitiesAccepted(local_capabilities.clone()),
+                    ControlResponse::CapabilitiesAccepted(context.local_capabilities.clone()),
                 )
                 .map_err(|_| RunnerError::ControlResponseDropped)?;
         }
@@ -444,15 +456,29 @@ fn handle_control_request(
 }
 
 fn handle_control_response(
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     response: ControlResponse,
 ) {
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
+            record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
             metrics.record_control_response_received();
             eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
         }
+    }
+}
+
+fn record_peer_capabilities(
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
+    peer: Libp2pPeerId,
+    capabilities: ControlCapabilities,
+) {
+    if forwarder.is_configured_transport_peer(peer) {
+        peer_capabilities.record(PeerId::from_libp2p(peer), capabilities);
     }
 }
 
@@ -742,15 +768,30 @@ impl From<TunRuntimeError> for RunnerError {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use libp2p::{
         core::{Endpoint, transport::PortUse},
         identity::Keypair,
+    };
+
+    use crate::{
+        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
+        route::builtin_ipv4,
     };
 
     use super::*;
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    fn ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
+        let mut packet = vec![0; 20];
+        packet[0] = 0x45;
+        packet[12..16].copy_from_slice(&source.octets());
+        packet[16..20].copy_from_slice(&destination.octets());
+        packet
     }
 
     #[test]
@@ -872,6 +913,85 @@ mod tests {
             }),
             PathKind::DirectTcpStream
         );
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_respects_peer_capability_mtu() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(remote_overlay, ControlCapabilities::local(19));
+        let metrics = RuntimeMetrics::default();
+
+        drain_outbound_queue(
+            &mut node.swarm,
+            &forwarder,
+            &mut queues,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 1);
+        assert_eq!(snapshot.queue.queued_packets, 0);
     }
 
     #[test]

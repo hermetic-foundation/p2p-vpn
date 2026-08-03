@@ -31,7 +31,9 @@ swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
-path, and whether native QUIC datagrams are currently supported.
+path, and whether native QUIC datagrams are currently supported. Outbound queue
+draining respects the peer's advertised effective MTU and drops oversized
+packets before sending them to the packet stream fallback.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from

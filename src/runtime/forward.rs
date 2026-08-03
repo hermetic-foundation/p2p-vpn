@@ -80,6 +80,23 @@ impl Forwarder {
         swarm: &mut Swarm<Behaviour>,
         packet: &Packet,
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        self.send_queued_packet_with_mtu(swarm, packet, self.mtu_u16())
+    }
+
+    pub fn send_queued_packet_with_mtu(
+        &self,
+        swarm: &mut Swarm<Behaviour>,
+        packet: &Packet,
+        peer_mtu: u16,
+    ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let max = self.mtu.min(usize::from(peer_mtu));
+        if packet.payload().len() > max {
+            return Err(ForwardError::PacketTooLarge {
+                actual: packet.payload().len(),
+                max,
+            });
+        }
+
         let peer = self
             .peers
             .get(&packet.peer())
@@ -100,6 +117,10 @@ impl Forwarder {
             packet.sequence(),
             packet.payload().to_vec(),
         )?)
+    }
+
+    fn mtu_u16(&self) -> u16 {
+        u16::try_from(self.mtu).unwrap_or(u16::MAX)
     }
 
     fn prepare_tun_packet(&mut self, packet: Vec<u8>) -> Result<Packet, ForwardError> {
@@ -550,6 +571,44 @@ mod tests {
         assert!(matches!(
             forwarder.enqueue_tun_packet(&mut queues, packet),
             Err(ForwardError::Enqueue(EnqueueError::QueueFull { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn queued_packet_respects_peer_advertised_mtu() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = config_for(remote);
+        config.network.local_peer = local_identity.peer_id.clone();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(1, 1280);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery: crate::config::DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("queued");
+        let queued_packet = queues.dequeue().expect("queued packet");
+
+        assert!(matches!(
+            forwarder.send_queued_packet_with_mtu(&mut node.swarm, &queued_packet, 19),
+            Err(ForwardError::PacketTooLarge {
+                actual: 20,
+                max: 19
+            })
         ));
     }
 
