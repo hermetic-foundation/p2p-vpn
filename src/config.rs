@@ -250,6 +250,8 @@ pub struct DiscoveryConfig {
     pub mdns: bool,
     #[serde(default = "default_true")]
     pub kademlia: bool,
+    #[serde(default = "default_true")]
+    pub kademlia_provider_advertisement: bool,
     #[serde(default = "default_kademlia_protocol")]
     pub kademlia_protocol: String,
     #[serde(default = "default_true")]
@@ -680,6 +682,7 @@ fn default_discovery() -> DiscoveryConfig {
     DiscoveryConfig {
         mdns: true,
         kademlia: true,
+        kademlia_provider_advertisement: true,
         kademlia_protocol: default_kademlia_protocol(),
         dcutr: true,
         autonat: true,
@@ -1278,6 +1281,7 @@ mod tests {
                 discovery: DiscoveryConfig {
                     mdns: false,
                     kademlia: true,
+                    kademlia_provider_advertisement: true,
                     kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
                     dcutr: true,
                     autonat: true,
@@ -1795,6 +1799,7 @@ mod tests {
             discovery: DiscoveryConfig {
                 mdns: true,
                 kademlia: false,
+                kademlia_provider_advertisement: false,
                 kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
                 dcutr: true,
                 autonat: true,

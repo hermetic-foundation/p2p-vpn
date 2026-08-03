@@ -99,6 +99,8 @@ enum Command {
         disable_mdns: bool,
         #[arg(long)]
         disable_kademlia: bool,
+        #[arg(long)]
+        disable_kademlia_provider_advertisement: bool,
         #[arg(long, default_value = "/p2p-vpn/kad/1")]
         kademlia_protocol: String,
         #[arg(long)]
@@ -127,6 +129,7 @@ enum Command {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
@@ -167,6 +170,7 @@ async fn main() -> Result<(), String> {
             max_established_connections,
             disable_mdns,
             disable_kademlia,
+            disable_kademlia_provider_advertisement,
             kademlia_protocol,
             disable_dcutr,
             disable_autonat,
@@ -184,13 +188,14 @@ async fn main() -> Result<(), String> {
             peers,
             local_routes,
             peer_routes,
-            discovery: DiscoveryConfig {
-                mdns: !disable_mdns,
-                kademlia: !disable_kademlia,
-                kademlia_protocol,
-                dcutr: !disable_dcutr,
-                autonat: !disable_autonat,
-            },
+            discovery: InitDiscoveryFlags {
+                disable_mdns,
+                disable_kademlia,
+                disable_kademlia_provider_advertisement,
+                disable_dcutr,
+                disable_autonat,
+            }
+            .into_config(kademlia_protocol),
             relay: RelayConfig {
                 server: relay_server,
                 reservations: relay_reservations,
@@ -228,6 +233,28 @@ async fn main() -> Result<(), String> {
             dry_run,
             metrics_interval_seconds,
         } => Box::pin(up(&config, dry_run, metrics_interval_seconds)).await,
+    }
+}
+
+#[allow(clippy::struct_excessive_bools)]
+struct InitDiscoveryFlags {
+    disable_mdns: bool,
+    disable_kademlia: bool,
+    disable_kademlia_provider_advertisement: bool,
+    disable_dcutr: bool,
+    disable_autonat: bool,
+}
+
+impl InitDiscoveryFlags {
+    fn into_config(self, kademlia_protocol: String) -> DiscoveryConfig {
+        DiscoveryConfig {
+            mdns: !self.disable_mdns,
+            kademlia: !self.disable_kademlia,
+            kademlia_provider_advertisement: !self.disable_kademlia_provider_advertisement,
+            kademlia_protocol,
+            dcutr: !self.disable_dcutr,
+            autonat: !self.disable_autonat,
+        }
     }
 }
 
@@ -559,9 +586,10 @@ fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
         config.network.bootstrap_peers.len()
     ));
     lines.push(format!(
-        "discovery: mdns={} kademlia={} dcutr={} autonat={}",
+        "discovery: mdns={} kademlia={} kademlia_provider_advertisement={} dcutr={} autonat={}",
         config.network.discovery.mdns,
         config.network.discovery.kademlia,
+        config.network.discovery.kademlia_provider_advertisement,
         config.network.discovery.dcutr,
         config.network.discovery.autonat
     ));
@@ -880,6 +908,7 @@ mod tests {
             "init-config",
             "--kademlia-protocol",
             "/ipfs/kad/1.0.0",
+            "--disable-kademlia-provider-advertisement",
             "--membership-key",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "--local-route",
@@ -912,6 +941,7 @@ mod tests {
             local_routes,
             peer_routes,
             kademlia_protocol,
+            disable_kademlia_provider_advertisement,
             membership_key,
             relay_max_reservations,
             relay_max_circuits,
@@ -954,6 +984,7 @@ mod tests {
             }]
         );
         assert_eq!(kademlia_protocol, "/ipfs/kad/1.0.0");
+        assert!(disable_kademlia_provider_advertisement);
         assert_eq!(
             membership_key.as_deref(),
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")

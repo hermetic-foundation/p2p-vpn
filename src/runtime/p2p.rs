@@ -172,11 +172,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let relay_reservations_started = config.relay_reservations.len();
     install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
-    let kademlia_rendezvous_key = config
-        .discovery
-        .kademlia
-        .then(|| kademlia_rendezvous_key(&config.network_name));
-    let kademlia = start_kademlia(&mut swarm, kademlia_rendezvous_key.as_ref())?;
+    let (kademlia_rendezvous_key, kademlia) = start_configured_kademlia(&mut swarm, config)?;
 
     Ok(P2pNode {
         local_peer_id,
@@ -213,6 +209,22 @@ fn startup_status(
         relay_reservations_started,
         relay_server_enabled: config.relay_server,
     }
+}
+
+fn start_configured_kademlia(
+    swarm: &mut Swarm<Behaviour>,
+    config: &HostConfig,
+) -> Result<(Option<kad::RecordKey>, KademliaStartupStatus), P2pBuildError> {
+    let rendezvous_key = config
+        .discovery
+        .kademlia
+        .then(|| kademlia_rendezvous_key(&config.network_name));
+    let startup = start_kademlia(
+        swarm,
+        rendezvous_key.as_ref(),
+        config.discovery.kademlia_provider_advertisement,
+    )?;
+    Ok((rendezvous_key, startup))
 }
 
 fn register_autonat_servers(swarm: &mut Swarm<Behaviour>, config: &HostConfig) -> usize {
@@ -301,15 +313,18 @@ fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerI
 fn start_kademlia(
     swarm: &mut Swarm<Behaviour>,
     rendezvous_key: Option<&kad::RecordKey>,
+    advertise_provider: bool,
 ) -> Result<KademliaStartupStatus, P2pBuildError> {
     let Some(rendezvous_key) = rendezvous_key else {
         return Ok(KademliaStartupStatus::default());
     };
 
-    swarm
-        .behaviour_mut()
-        .kad
-        .start_providing(rendezvous_key.clone())?;
+    if advertise_provider {
+        swarm
+            .behaviour_mut()
+            .kad
+            .start_providing(rendezvous_key.clone())?;
+    }
     swarm
         .behaviour_mut()
         .kad
@@ -317,7 +332,7 @@ fn start_kademlia(
 
     Ok(KademliaStartupStatus {
         bootstrap_started: swarm.behaviour_mut().kad.bootstrap().is_ok(),
-        rendezvous_advertise_started: true,
+        rendezvous_advertise_started: advertise_provider,
         rendezvous_lookup_started: true,
     })
 }
@@ -471,6 +486,7 @@ mod tests {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: false,
+            kademlia_provider_advertisement: false,
             kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,
@@ -1104,6 +1120,7 @@ mod tests {
         DiscoveryConfig {
             mdns: false,
             kademlia: false,
+            kademlia_provider_advertisement: false,
             kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,

@@ -230,7 +230,9 @@ libp2p should advertise to peers in addition to observed addresses learned
 through identify and confirmed through AutoNAT. Use
 `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
-the generated config. Use the `--queue-*`, `--max-concurrent-*`, and
+the generated config. Use `--disable-kademlia-provider-advertisement` on
+bootstrap-only nodes that should route Kademlia queries without advertising
+themselves as VPN packet providers. Use the `--queue-*`, `--max-concurrent-*`, and
 `--max-*-connections*` flags to tune per-peer packet buffering, stream pressure,
 and swarm connection limits in generated configs instead of hand-editing JSON.
 Relay-capable nodes can also set `--relay-max-reservations`,
@@ -289,6 +291,7 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "discovery": {
       "mdns": true,
       "kademlia": true,
+      "kademlia_provider_advertisement": true,
       "kademlia_protocol": "/p2p-vpn/kad/1",
       "dcutr": true,
       "autonat": true
@@ -350,8 +353,10 @@ cargo test --test tun_namespace -- --ignored --nocapture
 `bootstrap_peers` are dialed and added to the configured Kademlia routing table
 when Kademlia discovery is enabled. TCP and QUIC startup dials support DNS
 multiaddrs, including `/dns4`, `/dns6`, `/dns`, and `/dnsaddr`. Kademlia nodes
-advertise themselves under the network provider key and query that same key for
-other configured peers.
+query the network provider key for other configured peers. Nodes with
+`discovery.kademlia_provider_advertisement` enabled also advertise themselves
+under that key; disable it on public/bootstrap infrastructure that should help
+route discovery without claiming to be an overlay VPN endpoint.
 `network.routes` are local route-ownership claims. The node advertises them in
 the control handshake and accepts outbound TUN packets sourced from those
 prefixes; other peers must configure matching `peer.routes` entries for this

@@ -43,7 +43,7 @@ use crate::{
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
-const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
+const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
@@ -163,6 +163,7 @@ pub async fn run_node(
                     kademlia_rendezvous_key
                         .as_ref()
                         .expect("kademlia rendezvous key is present"),
+                    discovery.kademlia_provider_advertisement,
                     &metrics,
                 );
             }
@@ -300,17 +301,20 @@ fn expire_discovered_peer_addresses(
 fn refresh_kademlia_rendezvous(
     swarm: &mut Swarm<Behaviour>,
     rendezvous_key: &kad::RecordKey,
+    advertise_provider: bool,
     metrics: &RuntimeMetrics,
 ) {
-    match swarm
-        .behaviour_mut()
-        .kad
-        .start_providing(rendezvous_key.clone())
-    {
-        Ok(_) => metrics.record_kademlia_provider_advertisement(),
-        Err(error) => {
-            metrics.record_kademlia_provider_advertisement_failure();
-            eprintln!("kademlia provider advertisement refresh failed: {error:?}");
+    if advertise_provider {
+        match swarm
+            .behaviour_mut()
+            .kad
+            .start_providing(rendezvous_key.clone())
+        {
+            Ok(_) => metrics.record_kademlia_provider_advertisement(),
+            Err(error) => {
+                metrics.record_kademlia_provider_advertisement_failure();
+                eprintln!("kademlia provider advertisement refresh failed: {error:?}");
+            }
         }
     }
 
@@ -1577,6 +1581,12 @@ fn learn_peer_address(
     if peer == *swarm.local_peer_id() {
         return;
     }
+    if discovery.kademlia && address_targets_peer(peer, &address) {
+        swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer, address.clone());
+    }
     if !forwarder.is_configured_transport_peer(peer) {
         return;
     }
@@ -1589,12 +1599,6 @@ fn learn_peer_address(
     metrics.record_discovered_address_accepted();
     discovered_peer_addresses.insert(peer, address.clone());
 
-    if discovery.kademlia {
-        swarm
-            .behaviour_mut()
-            .kad
-            .add_address(&peer, address.clone());
-    }
     if discovery.autonat
         && let Some(autonat) = swarm.behaviour_mut().autonat.as_mut()
     {
@@ -1940,6 +1944,7 @@ mod tests {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: true,
+            kademlia_provider_advertisement: true,
             kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,
@@ -1965,7 +1970,7 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
 
-        refresh_kademlia_rendezvous(&mut node.swarm, &key, &metrics);
+        refresh_kademlia_rendezvous(&mut node.swarm, &key, true, &metrics);
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -1973,6 +1978,48 @@ mod tests {
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn kademlia_refresh_can_lookup_without_provider_advertisement() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+
+        assert!(!node.startup.kademlia.rendezvous_advertise_started);
+        assert!(node.startup.kademlia.rendezvous_lookup_started);
+
+        refresh_kademlia_rendezvous(&mut node.swarm, &key, false, &metrics);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 0);
+        assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use libp2p::{Multiaddr, multiaddr::Protocol, relay, swarm::SwarmEvent};
+use libp2p::{Multiaddr, identify, multiaddr::Protocol, relay, swarm::SwarmEvent};
 use p2p_vpn::{
     config::{
         Config, DiscoveryConfig, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
@@ -28,6 +28,7 @@ use p2p_vpn::{
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
+const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 
@@ -48,6 +49,16 @@ fn tun_namespace_ping_crosses_relay_overlay() {
         Ok("orchestrator") => run_relay_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(RELAY_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_ping_crosses_dht_discovered_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_dht_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(DHT_TEST_NAME),
     }
 }
 
@@ -241,6 +252,94 @@ fn run_relay_orchestrator() {
     let _ = fs::remove_dir_all(temp_dir);
 }
 
+fn run_dht_orchestrator() {
+    let identity_bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!("p2p-vpn-dht-tun-e2e-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let start_bootstrap = temp_dir.join("start-bootstrap");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_b = dht_overlay_config("b", &identity_b, &identity_a, &identity_bootstrap);
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+
+    let mut bootstrap = spawn_node(
+        DHT_TEST_NAME,
+        "bootstrap",
+        &identity_bootstrap,
+        None,
+        None,
+        &temp_dir,
+        &start_bootstrap,
+    );
+    let mut node_b = spawn_node(
+        DHT_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        Some(&identity_bootstrap),
+        &temp_dir,
+        &start_b,
+    );
+    let mut node_a = spawn_node(
+        DHT_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        Some(&identity_bootstrap),
+        &temp_dir,
+        &start_a,
+    );
+    wait_for_child_namespace(bootstrap.id());
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_three_node_underlay(bootstrap.id(), node_a.id(), node_b.id(), "dht", "10.252.0");
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.252.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.252.0.254"]);
+
+    fs::write(&start_bootstrap, b"start").expect("write bootstrap start file");
+    wait_for_file(&temp_dir.join("ready-bootstrap"));
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    thread::sleep(Duration::from_secs(4));
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    thread::sleep(Duration::from_secs(8));
+
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    stop_child(&mut bootstrap);
+    assert_ping_success(
+        "DHT-discovered overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let node_a_log = read_log(&temp_dir.join("node-a.log"));
+    assert!(
+        node_a_log.contains("kademlia query progressed")
+            && node_a_log.contains("control capabilities accepted"),
+        "node A did not discover and validate node B through Kademlia\nnode-a log:\n{node_a_log}\nnode-b log:\n{}\nbootstrap log:\n{}",
+        read_log(&temp_dir.join("node-b.log")),
+        read_log(&temp_dir.join("node-bootstrap.log"))
+    );
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
 fn assert_ping_success(
     context: &str,
     ping: &Output,
@@ -353,21 +452,26 @@ fn configure_underlay(pid_a: u32, pid_b: u32) {
 }
 
 fn configure_relay_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
-    run_command("ip", &["link", "add", "br-relay", "type", "bridge"]);
-    run_command("ip", &["link", "set", "br-relay", "up"]);
-    attach_veth_to_bridge(pid_relay, "relay", "10.251.0.254/24");
-    attach_veth_to_bridge(pid_a, "a", "10.251.0.1/24");
-    attach_veth_to_bridge(pid_b, "b", "10.251.0.2/24");
+    configure_three_node_underlay(pid_relay, pid_a, pid_b, "relay", "10.251.0");
 }
 
-fn attach_veth_to_bridge(pid: u32, suffix: &str, address: &str) {
+fn configure_three_node_underlay(pid_infra: u32, pid_a: u32, pid_b: u32, name: &str, prefix: &str) {
+    let bridge = format!("br-{name}");
+    run_command("ip", &["link", "add", &bridge, "type", "bridge"]);
+    run_command("ip", &["link", "set", &bridge, "up"]);
+    attach_veth_to_bridge(pid_infra, name, &format!("{prefix}.254/24"), &bridge);
+    attach_veth_to_bridge(pid_a, "a", &format!("{prefix}.1/24"), &bridge);
+    attach_veth_to_bridge(pid_b, "b", &format!("{prefix}.2/24"), &bridge);
+}
+
+fn attach_veth_to_bridge(pid: u32, suffix: &str, address: &str, bridge: &str) {
     let host = format!("veth-{suffix}-host");
     let child = format!("veth-{suffix}");
     run_command(
         "ip",
         &["link", "add", &host, "type", "veth", "peer", "name", &child],
     );
-    run_command("ip", &["link", "set", &host, "master", "br-relay"]);
+    run_command("ip", &["link", "set", &host, "master", bridge]);
     run_command("ip", &["link", "set", &host, "up"]);
     run_command("ip", &["link", "set", &child, "netns", &pid.to_string()]);
     ns_command(pid, "ip", &["link", "set", "lo", "up"]);
@@ -412,6 +516,15 @@ fn run_node_child() {
             .expect("relay runtime");
         return;
     }
+    if role == "bootstrap" {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(run_bootstrap_child(local, temp_dir.join("ready-bootstrap")))
+            .expect("bootstrap runtime");
+        return;
+    }
 
     let remote = NodeIdentity {
         peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
@@ -423,8 +536,12 @@ fn run_node_child() {
             peer_id,
             private_key: String::new(),
         });
-    let config = if let Some(relay) = relay.as_ref() {
-        relay_overlay_config(&role, &local, &remote, relay)
+    let config = if let Some(infra) = relay.as_ref() {
+        match role.as_str() {
+            "a" | "b" if is_dht_test_child() => dht_overlay_config(&role, &local, &remote, infra),
+            "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
+            other => panic!("unknown node role {other}"),
+        }
     } else {
         direct_overlay_config(&role, &local, &remote)
     };
@@ -544,6 +661,49 @@ fn relay_overlay_config(
     config
 }
 
+fn dht_overlay_config(
+    role: &str,
+    local: &NodeIdentity,
+    remote: &NodeIdentity,
+    bootstrap: &NodeIdentity,
+) -> Config {
+    let (interface, listen, local_routes, peer_routes) = match role {
+        "a" => (
+            "hse2ea",
+            "/ip4/10.252.0.1/tcp/42301",
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+            Vec::new(),
+        ),
+        "b" => (
+            "hse2eb",
+            "/ip4/10.252.0.2/tcp/42302",
+            Vec::new(),
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+        ),
+        other => panic!("unknown DHT node role {other}"),
+    };
+    let mut config = node_config(
+        NETWORK_NAME,
+        interface,
+        local,
+        listen,
+        local_routes,
+        peer_config(remote, None, peer_routes),
+    );
+    config.network.bootstrap_peers = vec![p2p_vpn::config::BootstrapPeerConfig {
+        id: bootstrap.peer_id.clone(),
+        address: format!("/ip4/10.252.0.254/tcp/42300/p2p/{}", bootstrap.peer_id),
+    }];
+    config.network.discovery = dht_test_discovery();
+    config
+}
+
 async fn run_ready_node(
     config: Config,
     device: TunDevice,
@@ -608,6 +768,49 @@ async fn run_relay_child(
     wait_for_listen_address(&mut node).await;
     fs::write(ready_file, b"ready").expect("write relay ready file");
     while let Some(event) = node.swarm.next().await {
+        eprintln!("{event:?}");
+    }
+    Ok(())
+}
+
+async fn run_bootstrap_child(
+    identity: NodeIdentity,
+    ready_file: PathBuf,
+) -> Result<(), runner::RunnerError> {
+    let config = bootstrap_config(&identity);
+    let mut node = build_node(&HostConfig {
+        identity: config.identity()?,
+        network_name: config.network.name.clone(),
+        membership_tag: config.membership_tag()?,
+        mtu: config.effective_packet_mtu(),
+        max_concurrent_control_streams: config.resources.control_stream_limit(),
+        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
+        listen_addresses: config.listen_multiaddrs()?,
+        external_addresses: config.external_multiaddrs()?,
+        bootstrap_peers: config.bootstrap_multiaddrs()?,
+        known_peers: config.peer_multiaddrs()?,
+        relay_reservations: config.relay_reservation_multiaddrs()?,
+        relay_server: config.network.relay.server,
+        relay_resources: config.network.relay.resources,
+        resources: config.resources,
+        discovery: config.network.discovery.clone(),
+    })?;
+    wait_for_listen_address(&mut node).await;
+    fs::write(ready_file, b"ready").expect("write bootstrap ready file");
+    while let Some(event) = node.swarm.next().await {
+        if let SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
+            peer_id,
+            info,
+            ..
+        })) = &event
+        {
+            for address in &info.listen_addrs {
+                node.swarm
+                    .behaviour_mut()
+                    .kad
+                    .add_address(peer_id, address.clone());
+            }
+        }
         eprintln!("{event:?}");
     }
     Ok(())
@@ -751,14 +954,69 @@ fn relay_config(identity: &NodeIdentity) -> Config {
     }
 }
 
+fn bootstrap_config(identity: &NodeIdentity) -> Config {
+    Config {
+        network: NetworkConfig {
+            name: NETWORK_NAME.to_owned(),
+            local_peer: identity.peer_id.clone(),
+            private_key: Some(identity.private_key.clone()),
+            membership_key: None,
+            routes: Vec::new(),
+            listen_addresses: vec!["/ip4/10.252.0.254/tcp/42300".to_owned()],
+            external_addresses: vec!["/ip4/10.252.0.254/tcp/42300".to_owned()],
+            bootstrap_peers: Vec::new(),
+            discovery: dht_bootstrap_discovery(),
+            relay: RelayConfig::default(),
+        },
+        interface: InterfaceConfig {
+            name: "unused-bootstrap".to_owned(),
+            mtu: 1280,
+        },
+        peers: Vec::new(),
+        queue: QueueConfig {
+            max_packets_per_peer: 64,
+            max_bytes_per_peer: 128 * 1024,
+            max_packet_age_millis: 1_000,
+        },
+        resources: ResourceConfig::default(),
+    }
+}
+
 fn relay_test_discovery() -> DiscoveryConfig {
     DiscoveryConfig {
         mdns: false,
         kademlia: false,
+        kademlia_provider_advertisement: false,
         kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
         dcutr: false,
         autonat: false,
     }
+}
+
+fn dht_test_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        mdns: false,
+        kademlia: true,
+        kademlia_provider_advertisement: true,
+        kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+        dcutr: false,
+        autonat: false,
+    }
+}
+
+fn dht_bootstrap_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        mdns: false,
+        kademlia: true,
+        kademlia_provider_advertisement: false,
+        kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+        dcutr: false,
+        autonat: false,
+    }
+}
+
+fn is_dht_test_child() -> bool {
+    env::args().any(|argument| argument == DHT_TEST_NAME)
 }
 
 fn peer_config(
