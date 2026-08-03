@@ -2,6 +2,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::queue::QueueStats;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PacketDropReason {
+    MalformedPacket,
+    NoRoute,
+    NoTransportPeer,
+    PacketTooLarge,
+    QueueFull,
+    Replay,
+    UnauthorizedPeer,
+    UnauthorizedSource,
+    UnauthorizedDestination,
+    UnexpectedPayload,
+}
+
 #[derive(Debug, Default)]
 pub struct RuntimeMetrics {
     tun_read_packets: AtomicU64,
@@ -12,6 +26,19 @@ pub struct RuntimeMetrics {
     inbound_accepted_packets: AtomicU64,
     outbound_dropped_packets: AtomicU64,
     inbound_dropped_packets: AtomicU64,
+    outbound_drop_malformed_packets: AtomicU64,
+    outbound_drop_no_route_packets: AtomicU64,
+    outbound_drop_no_transport_peer_packets: AtomicU64,
+    outbound_drop_packet_too_large_packets: AtomicU64,
+    outbound_drop_queue_full_packets: AtomicU64,
+    outbound_drop_unauthorized_source_packets: AtomicU64,
+    inbound_drop_malformed_packets: AtomicU64,
+    inbound_drop_packet_too_large_packets: AtomicU64,
+    inbound_drop_replay_packets: AtomicU64,
+    inbound_drop_unauthorized_peer_packets: AtomicU64,
+    inbound_drop_unauthorized_source_packets: AtomicU64,
+    inbound_drop_unauthorized_destination_packets: AtomicU64,
+    inbound_drop_unexpected_payload_packets: AtomicU64,
     outbound_failures: AtomicU64,
     inbound_failures: AtomicU64,
     direct_connections_established: AtomicU64,
@@ -54,13 +81,60 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_outbound_drop(&self) {
+    pub fn record_outbound_drop(&self, reason: PacketDropReason) {
         self.outbound_dropped_packets
             .fetch_add(1, Ordering::Relaxed);
+        match reason {
+            PacketDropReason::MalformedPacket
+            | PacketDropReason::Replay
+            | PacketDropReason::UnauthorizedPeer
+            | PacketDropReason::UnauthorizedDestination
+            | PacketDropReason::UnexpectedPayload => self
+                .outbound_drop_malformed_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::NoRoute => self
+                .outbound_drop_no_route_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::NoTransportPeer => self
+                .outbound_drop_no_transport_peer_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::PacketTooLarge => self
+                .outbound_drop_packet_too_large_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::QueueFull => self
+                .outbound_drop_queue_full_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::UnauthorizedSource => self
+                .outbound_drop_unauthorized_source_packets
+                .fetch_add(1, Ordering::Relaxed),
+        };
     }
 
-    pub fn record_inbound_drop(&self) {
+    pub fn record_inbound_drop(&self, reason: PacketDropReason) {
         self.inbound_dropped_packets.fetch_add(1, Ordering::Relaxed);
+        match reason {
+            PacketDropReason::MalformedPacket | PacketDropReason::NoRoute => self
+                .inbound_drop_malformed_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::PacketTooLarge | PacketDropReason::QueueFull => self
+                .inbound_drop_packet_too_large_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::Replay => self
+                .inbound_drop_replay_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::UnauthorizedPeer | PacketDropReason::NoTransportPeer => self
+                .inbound_drop_unauthorized_peer_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::UnauthorizedSource => self
+                .inbound_drop_unauthorized_source_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::UnauthorizedDestination => self
+                .inbound_drop_unauthorized_destination_packets
+                .fetch_add(1, Ordering::Relaxed),
+            PacketDropReason::UnexpectedPayload => self
+                .inbound_drop_unexpected_payload_packets
+                .fetch_add(1, Ordering::Relaxed),
+        };
     }
 
     pub fn record_outbound_failure(&self) {
@@ -156,6 +230,43 @@ impl RuntimeMetrics {
             inbound_accepted_packets: self.inbound_accepted_packets.load(Ordering::Relaxed),
             outbound_dropped_packets: self.outbound_dropped_packets.load(Ordering::Relaxed),
             inbound_dropped_packets: self.inbound_dropped_packets.load(Ordering::Relaxed),
+            outbound_drop_malformed_packets: self
+                .outbound_drop_malformed_packets
+                .load(Ordering::Relaxed),
+            outbound_drop_no_route_packets: self
+                .outbound_drop_no_route_packets
+                .load(Ordering::Relaxed),
+            outbound_drop_no_transport_peer_packets: self
+                .outbound_drop_no_transport_peer_packets
+                .load(Ordering::Relaxed),
+            outbound_drop_packet_too_large_packets: self
+                .outbound_drop_packet_too_large_packets
+                .load(Ordering::Relaxed),
+            outbound_drop_queue_full_packets: self
+                .outbound_drop_queue_full_packets
+                .load(Ordering::Relaxed),
+            outbound_drop_unauthorized_source_packets: self
+                .outbound_drop_unauthorized_source_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_malformed_packets: self
+                .inbound_drop_malformed_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_packet_too_large_packets: self
+                .inbound_drop_packet_too_large_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_replay_packets: self.inbound_drop_replay_packets.load(Ordering::Relaxed),
+            inbound_drop_unauthorized_peer_packets: self
+                .inbound_drop_unauthorized_peer_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_unauthorized_source_packets: self
+                .inbound_drop_unauthorized_source_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_unauthorized_destination_packets: self
+                .inbound_drop_unauthorized_destination_packets
+                .load(Ordering::Relaxed),
+            inbound_drop_unexpected_payload_packets: self
+                .inbound_drop_unexpected_payload_packets
+                .load(Ordering::Relaxed),
             outbound_failures: self.outbound_failures.load(Ordering::Relaxed),
             inbound_failures: self.inbound_failures.load(Ordering::Relaxed),
             direct_connections_established: self
@@ -201,6 +312,19 @@ pub struct RuntimeSnapshot {
     pub inbound_accepted_packets: u64,
     pub outbound_dropped_packets: u64,
     pub inbound_dropped_packets: u64,
+    pub outbound_drop_malformed_packets: u64,
+    pub outbound_drop_no_route_packets: u64,
+    pub outbound_drop_no_transport_peer_packets: u64,
+    pub outbound_drop_packet_too_large_packets: u64,
+    pub outbound_drop_queue_full_packets: u64,
+    pub outbound_drop_unauthorized_source_packets: u64,
+    pub inbound_drop_malformed_packets: u64,
+    pub inbound_drop_packet_too_large_packets: u64,
+    pub inbound_drop_replay_packets: u64,
+    pub inbound_drop_unauthorized_peer_packets: u64,
+    pub inbound_drop_unauthorized_source_packets: u64,
+    pub inbound_drop_unauthorized_destination_packets: u64,
+    pub inbound_drop_unexpected_payload_packets: u64,
     pub outbound_failures: u64,
     pub inbound_failures: u64,
     pub direct_connections_established: u64,
@@ -224,16 +348,17 @@ pub struct RuntimeSnapshot {
 
 impl RuntimeSnapshot {
     #[must_use]
-    pub fn lines(self) -> Vec<String> {
-        vec![
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![
             format!("tun_read_packets {}", self.tun_read_packets),
             format!("tun_read_bytes {}", self.tun_read_bytes),
             format!("tun_write_packets {}", self.tun_write_packets),
             format!("tun_write_bytes {}", self.tun_write_bytes),
             format!("outbound_sent_packets {}", self.outbound_sent_packets),
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
-            format!("outbound_dropped_packets {}", self.outbound_dropped_packets),
-            format!("inbound_dropped_packets {}", self.inbound_dropped_packets),
+        ];
+        self.extend_drop_lines(&mut lines);
+        lines.extend([
             format!("outbound_failures {}", self.outbound_failures),
             format!("inbound_failures {}", self.inbound_failures),
             format!(
@@ -285,7 +410,67 @@ impl RuntimeSnapshot {
             format!("queue_dropped_bytes {}", self.queue.dropped_bytes),
             format!("queue_expired_packets {}", self.queue.expired_packets),
             format!("queue_expired_bytes {}", self.queue.expired_bytes),
-        ]
+        ]);
+        lines
+    }
+
+    fn extend_drop_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
+            format!("outbound_dropped_packets {}", self.outbound_dropped_packets),
+            format!("inbound_dropped_packets {}", self.inbound_dropped_packets),
+            format!(
+                "outbound_drop_malformed_packets {}",
+                self.outbound_drop_malformed_packets
+            ),
+            format!(
+                "outbound_drop_no_route_packets {}",
+                self.outbound_drop_no_route_packets
+            ),
+            format!(
+                "outbound_drop_no_transport_peer_packets {}",
+                self.outbound_drop_no_transport_peer_packets
+            ),
+            format!(
+                "outbound_drop_packet_too_large_packets {}",
+                self.outbound_drop_packet_too_large_packets
+            ),
+            format!(
+                "outbound_drop_queue_full_packets {}",
+                self.outbound_drop_queue_full_packets
+            ),
+            format!(
+                "outbound_drop_unauthorized_source_packets {}",
+                self.outbound_drop_unauthorized_source_packets
+            ),
+            format!(
+                "inbound_drop_malformed_packets {}",
+                self.inbound_drop_malformed_packets
+            ),
+            format!(
+                "inbound_drop_packet_too_large_packets {}",
+                self.inbound_drop_packet_too_large_packets
+            ),
+            format!(
+                "inbound_drop_replay_packets {}",
+                self.inbound_drop_replay_packets
+            ),
+            format!(
+                "inbound_drop_unauthorized_peer_packets {}",
+                self.inbound_drop_unauthorized_peer_packets
+            ),
+            format!(
+                "inbound_drop_unauthorized_source_packets {}",
+                self.inbound_drop_unauthorized_source_packets
+            ),
+            format!(
+                "inbound_drop_unauthorized_destination_packets {}",
+                self.inbound_drop_unauthorized_destination_packets
+            ),
+            format!(
+                "inbound_drop_unexpected_payload_packets {}",
+                self.inbound_drop_unexpected_payload_packets
+            ),
+        ]);
     }
 }
 
@@ -299,8 +484,17 @@ mod tests {
         metrics.record_tun_write(40);
         metrics.record_outbound_sent();
         metrics.record_inbound_accepted();
-        metrics.record_outbound_drop();
-        metrics.record_inbound_drop();
+        metrics.record_outbound_drop(PacketDropReason::NoRoute);
+        metrics.record_outbound_drop(PacketDropReason::PacketTooLarge);
+        metrics.record_outbound_drop(PacketDropReason::QueueFull);
+        metrics.record_outbound_drop(PacketDropReason::UnauthorizedSource);
+        metrics.record_inbound_drop(PacketDropReason::MalformedPacket);
+        metrics.record_inbound_drop(PacketDropReason::PacketTooLarge);
+        metrics.record_inbound_drop(PacketDropReason::Replay);
+        metrics.record_inbound_drop(PacketDropReason::UnauthorizedPeer);
+        metrics.record_inbound_drop(PacketDropReason::UnauthorizedSource);
+        metrics.record_inbound_drop(PacketDropReason::UnauthorizedDestination);
+        metrics.record_inbound_drop(PacketDropReason::UnexpectedPayload);
         metrics.record_outbound_failure();
         metrics.record_inbound_failure();
         metrics.record_connection_established(false);
@@ -330,7 +524,7 @@ mod tests {
         })
     }
 
-    fn assert_metric_line(snapshot: RuntimeSnapshot, line: &str) {
+    fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
         assert!(snapshot.lines().contains(&line.to_owned()));
     }
 
@@ -344,8 +538,19 @@ mod tests {
         assert_eq!(snapshot.tun_write_bytes, 40);
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.inbound_accepted_packets, 1);
-        assert_eq!(snapshot.outbound_dropped_packets, 1);
-        assert_eq!(snapshot.inbound_dropped_packets, 1);
+        assert_eq!(snapshot.outbound_dropped_packets, 4);
+        assert_eq!(snapshot.inbound_dropped_packets, 7);
+        assert_eq!(snapshot.outbound_drop_no_route_packets, 1);
+        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.outbound_drop_queue_full_packets, 1);
+        assert_eq!(snapshot.outbound_drop_unauthorized_source_packets, 1);
+        assert_eq!(snapshot.inbound_drop_malformed_packets, 1);
+        assert_eq!(snapshot.inbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.inbound_drop_replay_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_peer_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_source_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unauthorized_destination_packets, 1);
+        assert_eq!(snapshot.inbound_drop_unexpected_payload_packets, 1);
         assert_eq!(snapshot.outbound_failures, 1);
         assert_eq!(snapshot.inbound_failures, 1);
         assert_eq!(snapshot.direct_connections_established, 1);
@@ -370,17 +575,28 @@ mod tests {
     fn metrics_snapshot_reports_runtime_and_queue_lines() {
         let snapshot = populated_snapshot();
 
-        assert_metric_line(snapshot, "queue_queued_packets 2");
-        assert_metric_line(snapshot, "relayed_connections_established 1");
-        assert_metric_line(snapshot, "dcutr_successes 1");
-        assert_metric_line(snapshot, "control_requests_sent 1");
-        assert_metric_line(snapshot, "control_requests_received 1");
-        assert_metric_line(snapshot, "control_responses_received 1");
-        assert_metric_line(snapshot, "control_failures 1");
-        assert_metric_line(snapshot, "redial_attempts 1");
-        assert_metric_line(snapshot, "redial_skipped_connected 1");
-        assert_metric_line(snapshot, "redial_failures 1");
-        assert_metric_line(snapshot, "queue_expired_packets 2");
-        assert_metric_line(snapshot, "queue_expired_bytes 60");
+        assert_metric_line(&snapshot, "queue_queued_packets 2");
+        assert_metric_line(&snapshot, "outbound_drop_no_route_packets 1");
+        assert_metric_line(&snapshot, "outbound_drop_packet_too_large_packets 1");
+        assert_metric_line(&snapshot, "outbound_drop_queue_full_packets 1");
+        assert_metric_line(&snapshot, "outbound_drop_unauthorized_source_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_malformed_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_packet_too_large_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_replay_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_unauthorized_peer_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_unauthorized_source_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_unauthorized_destination_packets 1");
+        assert_metric_line(&snapshot, "inbound_drop_unexpected_payload_packets 1");
+        assert_metric_line(&snapshot, "relayed_connections_established 1");
+        assert_metric_line(&snapshot, "dcutr_successes 1");
+        assert_metric_line(&snapshot, "control_requests_sent 1");
+        assert_metric_line(&snapshot, "control_requests_received 1");
+        assert_metric_line(&snapshot, "control_responses_received 1");
+        assert_metric_line(&snapshot, "control_failures 1");
+        assert_metric_line(&snapshot, "redial_attempts 1");
+        assert_metric_line(&snapshot, "redial_skipped_connected 1");
+        assert_metric_line(&snapshot, "redial_failures 1");
+        assert_metric_line(&snapshot, "queue_expired_packets 2");
+        assert_metric_line(&snapshot, "queue_expired_bytes 60");
     }
 }

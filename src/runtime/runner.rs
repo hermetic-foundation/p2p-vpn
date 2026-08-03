@@ -15,9 +15,10 @@ use tokio::sync::mpsc;
 use crate::{
     PathKind, PeerId,
     config::{Config, DiscoveryConfig, QueueConfig},
-    metrics::RuntimeMetrics,
+    metrics::{PacketDropReason, RuntimeMetrics},
     path::PathSet,
     queue::PeerQueues,
+    route::RouteError,
     runtime::{
         control::{ControlCapabilities, ControlRequest, ControlResponse, PeerCapabilities},
         forward::{ForwardError, Forwarder},
@@ -118,7 +119,7 @@ pub async fn run_node(
         tokio::select! {
             Some(packet) = tun_rx.recv() => {
                 if let Err(error) = forwarder.enqueue_tun_packet(&mut queues, packet) {
-                    metrics.record_outbound_drop();
+                    metrics.record_outbound_drop(outbound_drop_reason(&error));
                     eprintln!("dropping outbound packet: {error:?}");
                 }
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
@@ -268,7 +269,7 @@ fn drain_outbound_queue(
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
         if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
-            metrics.record_outbound_drop();
+            metrics.record_outbound_drop(outbound_drop_reason(&error));
             eprintln!("dropping queued outbound packet: {error:?}");
         } else {
             metrics.record_outbound_sent();
@@ -402,7 +403,9 @@ fn handle_packet_event(
                     .map_err(|_| RunnerError::PacketResponseDropped)?;
             }
             Err(error) => {
-                context.metrics.record_inbound_drop();
+                context
+                    .metrics
+                    .record_inbound_drop(inbound_drop_reason(&error));
                 eprintln!("dropping inbound packet from {peer}: {error:?}");
             }
         },
@@ -732,6 +735,59 @@ fn print_metrics(metrics: &RuntimeMetrics, queue: crate::queue::QueueStats) {
     }
 }
 
+fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
+    match error {
+        ForwardError::NoRoute(_) => PacketDropReason::NoRoute,
+        ForwardError::NoTransportPeer(_) => PacketDropReason::NoTransportPeer,
+        ForwardError::PacketTooLarge { .. } => PacketDropReason::PacketTooLarge,
+        ForwardError::UnauthorizedLocalSource { .. } => PacketDropReason::UnauthorizedSource,
+        ForwardError::TruncatedIpPacket { .. }
+        | ForwardError::UnsupportedIpVersion(_)
+        | ForwardError::PayloadLengthMismatch { .. }
+        | ForwardError::UnexpectedPayload(_)
+        | ForwardError::Frame(_)
+        | ForwardError::Config(_)
+        | ForwardError::Route(_)
+        | ForwardError::UnauthorizedPeer(_)
+        | ForwardError::UnauthorizedLocalDestination { .. }
+        | ForwardError::ReplayedPacket { .. }
+        | ForwardError::PacketOutsideReplayWindow { .. } => PacketDropReason::MalformedPacket,
+        ForwardError::Enqueue(crate::queue::EnqueueError::PacketTooLarge { .. }) => {
+            PacketDropReason::PacketTooLarge
+        }
+        ForwardError::Enqueue(crate::queue::EnqueueError::QueueFull { .. }) => {
+            PacketDropReason::QueueFull
+        }
+    }
+}
+
+fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
+    match error {
+        ForwardError::UnauthorizedPeer(_) => PacketDropReason::UnauthorizedPeer,
+        ForwardError::Route(RouteError::UnauthorizedSource { .. }) => {
+            PacketDropReason::UnauthorizedSource
+        }
+        ForwardError::UnauthorizedLocalDestination { .. } => {
+            PacketDropReason::UnauthorizedDestination
+        }
+        ForwardError::PacketTooLarge { .. } => PacketDropReason::PacketTooLarge,
+        ForwardError::UnexpectedPayload(_) => PacketDropReason::UnexpectedPayload,
+        ForwardError::ReplayedPacket { .. } | ForwardError::PacketOutsideReplayWindow { .. } => {
+            PacketDropReason::Replay
+        }
+        ForwardError::PayloadLengthMismatch { .. }
+        | ForwardError::TruncatedIpPacket { .. }
+        | ForwardError::UnsupportedIpVersion(_)
+        | ForwardError::Frame(_)
+        | ForwardError::Config(_)
+        | ForwardError::Route(_)
+        | ForwardError::NoRoute(_)
+        | ForwardError::NoTransportPeer(_)
+        | ForwardError::Enqueue(_)
+        | ForwardError::UnauthorizedLocalSource { .. } => PacketDropReason::MalformedPacket,
+    }
+}
+
 #[derive(Debug)]
 pub enum RunnerError {
     Config(crate::config::ConfigError),
@@ -991,6 +1047,7 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
+        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
     }
 
