@@ -9,7 +9,7 @@ use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError},
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{RouteError, RouteTable},
+    route::{RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
     runtime::{
         p2p::Behaviour,
         packet::{AuthorizedPeers, PacketResponse},
@@ -19,6 +19,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Forwarder {
+    local_peer: PeerId,
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
@@ -38,11 +39,14 @@ impl Forwarder {
             })
             .collect();
 
+        let local_peer = config.local_peer_id()?;
+
         Ok(Self {
+            local_peer,
             routes: config.compile_routes()?,
             peers,
             authorized_peers: AuthorizedPeers::from_config(config),
-            session_id: session_id_for_peer(config.local_peer_id()?),
+            session_id: session_id_for_peer(local_peer),
             next_sequence: 0,
             mtu: usize::from(config.effective_packet_mtu()),
         })
@@ -106,6 +110,9 @@ impl Forwarder {
             });
         }
 
+        let source = packet_source(&packet)?;
+        self.authorize_local_source(source)?;
+
         let destination = packet_destination(&packet)?;
         let route = self
             .routes
@@ -118,6 +125,14 @@ impl Forwarder {
         self.next_sequence = self.next_sequence.wrapping_add(1);
 
         Ok(Packet::new(route.owner, sequence, packet))
+    }
+
+    fn authorize_local_source(&self, source: IpAddr) -> Result<(), ForwardError> {
+        match source {
+            IpAddr::V4(address) if address == builtin_ipv4(self.local_peer) => Ok(()),
+            IpAddr::V6(address) if address == builtin_ipv6(self.local_peer) => Ok(()),
+            _ => Err(ForwardError::UnauthorizedLocalSource { source }),
+        }
     }
 
     pub fn accept_inbound_packet<'a>(
@@ -232,6 +247,7 @@ pub enum ForwardError {
     NoRoute(IpAddr),
     NoTransportPeer(PeerId),
     PacketTooLarge { actual: usize, max: usize },
+    UnauthorizedLocalSource { source: IpAddr },
     TruncatedIpPacket { actual: usize, expected: usize },
     UnsupportedIpVersion(u8),
     UnauthorizedPeer(Libp2pPeerId),
@@ -306,6 +322,10 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    fn local_ipv4(config: &Config) -> Ipv4Addr {
+        builtin_ipv4(config.local_peer_id().expect("local peer id"))
     }
 
     fn ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
@@ -411,7 +431,7 @@ mod tests {
             discovery: crate::config::DiscoveryConfig::default(),
         })
         .expect("node");
-        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
 
         let request_id = forwarder
             .send_tun_packet(&mut node.swarm, packet)
@@ -424,9 +444,10 @@ mod tests {
     fn outbound_packet_can_be_enqueued_before_send() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
-        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut queues = PeerQueues::new(1, 1280);
-        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
 
         forwarder
             .enqueue_tun_packet(&mut queues, packet)
@@ -448,7 +469,7 @@ mod tests {
         let mut config = config_for(remote);
         config.network.local_peer = local.to_string();
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
         let mut queues = PeerQueues::new(1, 1280);
 
         forwarder
@@ -466,9 +487,10 @@ mod tests {
     fn outbound_packet_reports_queue_backpressure() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
-        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut queues = PeerQueues::new(1, 1280);
-        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+        let packet = ipv4_packet(local_ipv4(&config), builtin_ipv4(remote_overlay));
 
         forwarder
             .enqueue_tun_packet(&mut queues, packet.clone())
@@ -477,6 +499,22 @@ mod tests {
         assert!(matches!(
             forwarder.enqueue_tun_packet(&mut queues, packet),
             Err(ForwardError::Enqueue(EnqueueError::QueueFull { .. }))
+        ));
+    }
+
+    #[test]
+    fn outbound_packet_rejects_local_source_spoofing() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut queues = PeerQueues::new(1, 1280);
+        let packet = ipv4_packet(Ipv4Addr::new(198, 51, 100, 1), builtin_ipv4(remote_overlay));
+
+        assert!(matches!(
+            forwarder.enqueue_tun_packet(&mut queues, packet),
+            Err(ForwardError::UnauthorizedLocalSource {
+                source: IpAddr::V4(source)
+            }) if source == Ipv4Addr::new(198, 51, 100, 1)
         ));
     }
 

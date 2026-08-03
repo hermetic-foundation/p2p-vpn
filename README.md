@@ -35,7 +35,9 @@ intentionally reusable over libp2p streams now and QUIC datagrams later.
 
 The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
 request-response streams. Inbound packet handling checks the configured peer
-allowlist and route ownership before writing to TUN.
+allowlist and route ownership before writing to TUN. Outbound packets read from
+the local TUN interface must also use the local peer's built-in overlay source
+address before they are queued for a remote peer.
 
 Route ownership is static and exclusive. Each configured peer may own its
 built-in host routes plus any advertised prefixes, but route compilation rejects
