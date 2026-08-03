@@ -206,6 +206,34 @@ impl Forwarder {
         )?)
     }
 
+    pub fn send_path_probe_with_mtu(
+        &mut self,
+        swarm: &mut Swarm<Behaviour>,
+        peer: PeerId,
+        peer_mtu: u16,
+        payload: &[u8],
+    ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let max = self.mtu.min(usize::from(peer_mtu));
+        if payload.len() > max {
+            return Err(ForwardError::PacketTooLarge {
+                actual: payload.len(),
+                max,
+            });
+        }
+
+        let transport_peer = self
+            .peers
+            .get(&peer)
+            .ok_or(ForwardError::NoTransportPeer(peer))?;
+        let frame = Frame::path_probe(self.session_id, self.next_sequence, payload.to_vec())?;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+
+        Ok(swarm
+            .behaviour_mut()
+            .packet
+            .send_request(transport_peer, frame))
+    }
+
     fn mtu_u16(&self) -> u16 {
         u16::try_from(self.mtu).unwrap_or(u16::MAX)
     }
@@ -862,6 +890,41 @@ mod tests {
 
         assert!(matches!(
             forwarder.accept_inbound_control_frame(remote, &rejected, PayloadType::PathProbe),
+            Err(ForwardError::PacketTooLarge { actual: 5, max: 4 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn outbound_path_probe_respects_peer_mtu() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: crate::config::DiscoveryConfig::default(),
+        })
+        .expect("node");
+
+        assert!(matches!(
+            forwarder.send_path_probe_with_mtu(
+                &mut node.swarm,
+                PeerId::from_libp2p(remote),
+                4,
+                b"probe",
+            ),
             Err(ForwardError::PacketTooLarge { actual: 5, max: 4 })
         ));
     }

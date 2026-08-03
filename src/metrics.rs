@@ -30,6 +30,8 @@ pub struct RuntimeMetrics {
     tun_write_packets: AtomicU64,
     tun_write_bytes: AtomicU64,
     outbound_sent_packets: AtomicU64,
+    outbound_path_probes_sent: AtomicU64,
+    outbound_path_probe_failures: AtomicU64,
     inbound_accepted_packets: AtomicU64,
     inbound_keepalives_accepted: AtomicU64,
     inbound_path_probes_accepted: AtomicU64,
@@ -135,6 +137,16 @@ impl RuntimeMetrics {
 
     pub fn record_outbound_sent(&self) {
         self.outbound_sent_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_path_probe_sent(&self) {
+        self.outbound_path_probes_sent
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_path_probe_failure(&self) {
+        self.outbound_path_probe_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_inbound_accepted(&self) {
@@ -557,6 +569,9 @@ impl RuntimeMetrics {
         snapshot.tun_write_packets = self.tun_write_packets.load(Ordering::Relaxed);
         snapshot.tun_write_bytes = self.tun_write_bytes.load(Ordering::Relaxed);
         snapshot.outbound_sent_packets = self.outbound_sent_packets.load(Ordering::Relaxed);
+        snapshot.outbound_path_probes_sent = self.outbound_path_probes_sent.load(Ordering::Relaxed);
+        snapshot.outbound_path_probe_failures =
+            self.outbound_path_probe_failures.load(Ordering::Relaxed);
         snapshot.inbound_accepted_packets = self.inbound_accepted_packets.load(Ordering::Relaxed);
         snapshot.inbound_keepalives_accepted =
             self.inbound_keepalives_accepted.load(Ordering::Relaxed);
@@ -773,6 +788,8 @@ pub struct RuntimeSnapshot {
     pub tun_write_packets: u64,
     pub tun_write_bytes: u64,
     pub outbound_sent_packets: u64,
+    pub outbound_path_probes_sent: u64,
+    pub outbound_path_probe_failures: u64,
     pub inbound_accepted_packets: u64,
     pub inbound_keepalives_accepted: u64,
     pub inbound_path_probes_accepted: u64,
@@ -874,6 +891,14 @@ impl RuntimeSnapshot {
             format!("tun_write_packets {}", self.tun_write_packets),
             format!("tun_write_bytes {}", self.tun_write_bytes),
             format!("outbound_sent_packets {}", self.outbound_sent_packets),
+            format!(
+                "outbound_path_probes_sent {}",
+                self.outbound_path_probes_sent
+            ),
+            format!(
+                "outbound_path_probe_failures {}",
+                self.outbound_path_probe_failures
+            ),
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
             format!(
                 "inbound_keepalives_accepted {}",
@@ -1260,6 +1285,8 @@ mod tests {
         metrics.record_tun_read(20);
         metrics.record_tun_write(40);
         metrics.record_outbound_sent();
+        metrics.record_outbound_path_probe_sent();
+        metrics.record_outbound_path_probe_failure();
         metrics.record_inbound_accepted();
         metrics.record_inbound_keepalive_accepted();
         metrics.record_inbound_path_probe_accepted();
@@ -1393,6 +1420,8 @@ mod tests {
         assert_eq!(snapshot.tun_write_packets, 1);
         assert_eq!(snapshot.tun_write_bytes, 40);
         assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_path_probes_sent, 1);
+        assert_eq!(snapshot.outbound_path_probe_failures, 1);
         assert_eq!(snapshot.inbound_accepted_packets, 1);
         assert_eq!(snapshot.inbound_keepalives_accepted, 1);
         assert_eq!(snapshot.inbound_path_probes_accepted, 1);
@@ -1492,6 +1521,8 @@ mod tests {
         let snapshot = populated_snapshot();
 
         assert_metric_line(&snapshot, "queue_queued_packets 2");
+        assert_metric_line(&snapshot, "outbound_path_probes_sent 1");
+        assert_metric_line(&snapshot, "outbound_path_probe_failures 1");
         assert_metric_line(&snapshot, "inbound_keepalives_accepted 1");
         assert_metric_line(&snapshot, "inbound_path_probes_accepted 1");
         assert_metric_line(&snapshot, "queue_oldest_packet_age_millis 45");

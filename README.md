@@ -105,6 +105,9 @@ Outbound packet draining is path-aware. The runtime records direct TCP, direct
 QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
 unhealthy when their connections close, and only drains a peer's bounded queue
 while that peer has a healthy path that the negotiated packet transport can use.
+Configured peers with validated capabilities and a supported path are also sent
+periodic path-probe frames over the packet protocol, giving operators liveness
+traffic that does not depend on user IP packets.
 Until native datagram sending is implemented, datagram-only paths do not release
 packets into the stream fallback. Packets for disconnected peers remain bounded
 by the per-peer queue limits instead of expanding into unbounded stream requests.
@@ -419,9 +422,9 @@ cargo run -- metrics --config p2p-vpn.json
 The metrics output includes control-plane exchange counters, capability
 acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
-inbound accepted IP packets, accepted keepalive and path-probe frames, inbound
-and outbound packet drop reasons including expired outbound queue packets,
-direct versus relayed connection
+inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
+path-probe send/failure counters, inbound and outbound packet drop reasons
+including expired outbound queue packets, direct versus relayed connection
 counts, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT current

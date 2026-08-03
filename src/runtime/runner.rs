@@ -44,10 +44,12 @@ use crate::{
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
 const SERVICE_STATUS_NONCE: u64 = 1;
+const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
 
 pub async fn run_config(
     config: Config,
@@ -170,6 +172,15 @@ pub async fn run_node(
             _ = timers.queue_expiry.tick() => {
                 expire_outbound_queue(&mut queues, &metrics);
             }
+            _ = timers.path_probe.tick() => {
+                send_path_probes(
+                    &mut node.swarm,
+                    &mut forwarder,
+                    &paths,
+                    &peer_capabilities,
+                    &metrics,
+                );
+            }
             () = async {
                 timers.metrics
                     .as_mut()
@@ -192,6 +203,7 @@ struct RuntimeTimers {
     redial: tokio::time::Interval,
     kademlia_refresh: Option<tokio::time::Interval>,
     queue_expiry: tokio::time::Interval,
+    path_probe: tokio::time::Interval,
 }
 
 impl RuntimeTimers {
@@ -208,6 +220,7 @@ impl RuntimeTimers {
             queue_expiry: tokio::time::interval(queue_expiry_interval(
                 queue_config.max_packet_age(),
             )),
+            path_probe: tokio::time::interval(PATH_PROBE_INTERVAL),
         }
     }
 
@@ -217,6 +230,37 @@ impl RuntimeTimers {
             tick.tick().await;
         }
         self.queue_expiry.tick().await;
+        self.path_probe.tick().await;
+    }
+}
+
+fn send_path_probes(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &mut Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+
+    for peer in peers {
+        if !peer_capabilities.contains(peer) {
+            continue;
+        }
+        let support = packet_transport_support(peer_capabilities, peer);
+        if !paths.has_supported_path(peer, support) {
+            continue;
+        }
+
+        let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+        match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD) {
+            Ok(_) => metrics.record_outbound_path_probe_sent(),
+            Err(error) => {
+                metrics.record_outbound_path_probe_failure();
+                eprintln!("path probe to {peer} failed: {error:?}");
+            }
+        }
     }
 }
 
@@ -3783,6 +3827,112 @@ mod tests {
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+    }
+
+    #[tokio::test]
+    async fn path_probes_wait_for_capabilities_and_supported_path() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        let mut peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+
+        send_path_probes(
+            &mut node.swarm,
+            &mut forwarder,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .outbound_path_probes_sent,
+            0
+        );
+
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        send_path_probes(
+            &mut node.swarm,
+            &mut forwarder,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_path_probes_sent, 1);
+        assert_eq!(snapshot.outbound_path_probe_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn path_probe_failures_are_counted() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 4));
+        let metrics = RuntimeMetrics::default();
+
+        send_path_probes(
+            &mut node.swarm,
+            &mut forwarder,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_path_probes_sent, 0);
+        assert_eq!(snapshot.outbound_path_probe_failures, 1);
     }
 
     #[test]
