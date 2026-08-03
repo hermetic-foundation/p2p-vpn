@@ -23,9 +23,57 @@ pub struct Forwarder {
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
+    replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
     session_id: SessionId,
     next_sequence: Sequence,
     mtu: usize,
+}
+
+const REPLAY_WINDOW_BITS: u64 = 64;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ReplayWindow {
+    highest: Option<Sequence>,
+    seen: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayAcceptError {
+    Duplicate,
+    TooOld,
+}
+
+impl ReplayWindow {
+    fn accept(&mut self, sequence: Sequence) -> Result<(), ReplayAcceptError> {
+        let Some(highest) = self.highest else {
+            self.highest = Some(sequence);
+            self.seen = 1;
+            return Ok(());
+        };
+
+        if sequence > highest {
+            let shift = sequence - highest;
+            self.seen = if shift >= REPLAY_WINDOW_BITS {
+                1
+            } else {
+                (self.seen << shift) | 1
+            };
+            self.highest = Some(sequence);
+            return Ok(());
+        }
+
+        let offset = highest - sequence;
+        if offset >= REPLAY_WINDOW_BITS {
+            return Err(ReplayAcceptError::TooOld);
+        }
+        let bit = 1_u64 << offset;
+        if self.seen & bit != 0 {
+            return Err(ReplayAcceptError::Duplicate);
+        }
+
+        self.seen |= bit;
+        Ok(())
+    }
 }
 
 impl Forwarder {
@@ -46,6 +94,7 @@ impl Forwarder {
             routes: config.compile_routes()?,
             peers,
             authorized_peers: AuthorizedPeers::from_config(config),
+            replay_windows: HashMap::new(),
             session_id: session_id_for_peer(local_peer),
             next_sequence: 0,
             mtu: usize::from(config.effective_packet_mtu()),
@@ -157,7 +206,7 @@ impl Forwarder {
     }
 
     pub fn accept_inbound_packet<'a>(
-        &self,
+        &mut self,
         peer: Libp2pPeerId,
         frame: &'a Frame,
     ) -> Result<&'a [u8], ForwardError> {
@@ -180,13 +229,35 @@ impl Forwarder {
             });
         }
 
+        let overlay_peer = PeerId::from_libp2p(peer);
         let source = packet_source(&frame.payload)?;
-        self.routes
-            .authorize_source(PeerId::from_libp2p(peer), source)?;
+        self.routes.authorize_source(overlay_peer, source)?;
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
+        self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
 
         Ok(&frame.payload)
+    }
+
+    fn accept_sequence(
+        &mut self,
+        peer: PeerId,
+        session_id: SessionId,
+        sequence: Sequence,
+    ) -> Result<(), ForwardError> {
+        let window = self.replay_windows.entry((peer, session_id)).or_default();
+        window.accept(sequence).map_err(|error| match error {
+            ReplayAcceptError::Duplicate => ForwardError::ReplayedPacket {
+                peer,
+                session_id,
+                sequence,
+            },
+            ReplayAcceptError::TooOld => ForwardError::PacketOutsideReplayWindow {
+                peer,
+                session_id,
+                sequence,
+            },
+        })
     }
 
     fn authorize_local_destination(&self, destination: IpAddr) -> Result<(), ForwardError> {
@@ -277,14 +348,37 @@ pub enum ForwardError {
     Enqueue(EnqueueError),
     NoRoute(IpAddr),
     NoTransportPeer(PeerId),
-    PacketTooLarge { actual: usize, max: usize },
-    UnauthorizedLocalSource { source: IpAddr },
-    UnauthorizedLocalDestination { destination: IpAddr },
-    TruncatedIpPacket { actual: usize, expected: usize },
+    PacketTooLarge {
+        actual: usize,
+        max: usize,
+    },
+    UnauthorizedLocalSource {
+        source: IpAddr,
+    },
+    UnauthorizedLocalDestination {
+        destination: IpAddr,
+    },
+    TruncatedIpPacket {
+        actual: usize,
+        expected: usize,
+    },
     UnsupportedIpVersion(u8),
     UnauthorizedPeer(Libp2pPeerId),
     UnexpectedPayload(PayloadType),
-    PayloadLengthMismatch { header: u16, actual: usize },
+    PayloadLengthMismatch {
+        header: u16,
+        actual: usize,
+    },
+    ReplayedPacket {
+        peer: PeerId,
+        session_id: SessionId,
+        sequence: Sequence,
+    },
+    PacketOutsideReplayWindow {
+        peer: PeerId,
+        session_id: SessionId,
+        sequence: Sequence,
+    },
 }
 
 impl From<ConfigError> for ForwardError {
@@ -423,7 +517,7 @@ mod tests {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = config_for(remote);
-        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
         let frame = Frame::packet(0, 1, packet).expect("frame");
 
@@ -438,7 +532,7 @@ mod tests {
     #[test]
     fn inbound_packet_rejects_source_spoofing() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
-        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
         let packet = ipv4_packet(Ipv4Addr::new(198, 51, 100, 1), Ipv4Addr::new(100, 64, 9, 9));
         let frame = Frame::packet(0, 1, packet).expect("frame");
 
@@ -452,7 +546,7 @@ mod tests {
     fn inbound_packet_must_target_local_overlay_address() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
-        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
         let packet = ipv4_packet(builtin_ipv4(remote_overlay), Ipv4Addr::new(100, 64, 9, 9));
         let frame = Frame::packet(0, 1, packet).expect("frame");
 
@@ -469,7 +563,7 @@ mod tests {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = config_for(remote);
-        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let packet = ipv6_packet(builtin_ipv6(remote_overlay), local_ipv6(&config));
         let frame = Frame::packet(0, 1, packet).expect("frame");
 
@@ -479,6 +573,89 @@ mod tests {
                 .expect("packet accepted"),
             frame.payload.as_slice()
         );
+    }
+
+    #[test]
+    fn inbound_packet_rejects_duplicate_sequence_in_session() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let frame = Frame::packet(7, 42, packet).expect("frame");
+
+        forwarder
+            .accept_inbound_packet(remote, &frame)
+            .expect("first packet accepted");
+
+        assert!(matches!(
+            forwarder.accept_inbound_packet(remote, &frame),
+            Err(ForwardError::ReplayedPacket {
+                peer,
+                session_id: 7,
+                sequence: 42
+            }) if peer == remote_overlay
+        ));
+    }
+
+    #[test]
+    fn inbound_packet_accepts_out_of_order_sequence_inside_replay_window() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let later = Frame::packet(7, 42, packet.clone()).expect("later frame");
+        let earlier = Frame::packet(7, 41, packet).expect("earlier frame");
+
+        forwarder
+            .accept_inbound_packet(remote, &later)
+            .expect("later packet accepted");
+        forwarder
+            .accept_inbound_packet(remote, &earlier)
+            .expect("earlier packet accepted");
+    }
+
+    #[test]
+    fn inbound_packet_rejects_sequence_outside_replay_window() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let current = Frame::packet(7, 100, packet.clone()).expect("current frame");
+        let too_old = Frame::packet(7, 36, packet).expect("old frame");
+
+        forwarder
+            .accept_inbound_packet(remote, &current)
+            .expect("current packet accepted");
+
+        assert!(matches!(
+            forwarder.accept_inbound_packet(remote, &too_old),
+            Err(ForwardError::PacketOutsideReplayWindow {
+                peer,
+                session_id: 7,
+                sequence: 36
+            }) if peer == remote_overlay
+        ));
+    }
+
+    #[test]
+    fn inbound_packet_tracks_replay_windows_per_session() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let first_session = Frame::packet(7, 42, packet.clone()).expect("first session frame");
+        let second_session = Frame::packet(8, 42, packet).expect("second session frame");
+
+        forwarder
+            .accept_inbound_packet(remote, &first_session)
+            .expect("first session accepted");
+        forwarder
+            .accept_inbound_packet(remote, &second_session)
+            .expect("second session accepted");
     }
 
     #[tokio::test]
@@ -641,7 +818,7 @@ mod tests {
     #[test]
     fn inbound_packet_rejects_payload_length_mismatch() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
-        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
         let mut frame = Frame::packet(0, 1, vec![0x45; 20]).expect("frame");
         frame.header = Header::new(PayloadType::IpPacket, 0, 1, 19);
 
@@ -656,7 +833,7 @@ mod tests {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let other = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
-        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
         let packet = ipv6_packet(builtin_ipv6(remote_overlay), Ipv6Addr::LOCALHOST);
         let frame = Frame::packet(0, 1, packet).expect("frame");
 

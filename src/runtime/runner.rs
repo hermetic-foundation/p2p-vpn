@@ -127,7 +127,7 @@ pub async fn run_node(
                 handle_swarm_event(
                     &mut node.swarm,
                     SwarmEventContext {
-                        forwarder: &forwarder,
+                        forwarder: &mut forwarder,
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
@@ -277,7 +277,7 @@ fn drain_outbound_queue(
 }
 
 struct SwarmEventContext<'a> {
-    forwarder: &'a Forwarder,
+    forwarder: &'a mut Forwarder,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,

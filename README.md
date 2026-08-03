@@ -39,6 +39,9 @@ The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
 the local peer identity plus a per-session packet sequence number. It is
 intentionally reusable over libp2p streams now and QUIC datagrams later.
+Inbound packet acceptance keeps a 64-packet replay window per configured
+peer/session pair, so duplicate frames and frames older than the current window
+are dropped before they can be written to TUN.
 
 The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
 request-response streams. Inbound packet handling checks the configured peer
