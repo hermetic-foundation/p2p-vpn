@@ -89,9 +89,11 @@ Configured bootstrap and peer addresses are redialed periodically when they are
 not already connected. This keeps the overlay trying to recover after transient
 network loss instead of depending on a one-shot startup dial or a future
 discovery event. Addresses learned from mDNS or identify are retained only for
-configured peers and are included in the same periodic redial loop; mDNS-expired
-addresses are removed from that transient address book. Redial attempts,
-connected-peer skips, and failures are exposed in the runtime metrics output.
+configured peers and are included in the same periodic redial loop. They are
+refreshed when rediscovered, removed when mDNS expires them, and aged out after
+10 minutes so stale transient addresses are not retried indefinitely. Redial
+attempts, connected-peer skips, failures, and discovered-address expiry are
+exposed in the runtime metrics output.
 Discovered addresses that include an explicit `/p2p/<peer>` target are rejected
 when that target does not match the configured peer being learned, including
 relayed target addresses after `/p2p-circuit`.
@@ -326,11 +328,11 @@ candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
 public/private/unknown reachability gauges and status-change counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap
 refresh counts, unauthorized connection drops, configured peer redial counters,
-rejected discovered-address counters, asynchronous outgoing connection error
-counts, healthy path counts by transport kind, configured peers with and without
-a currently supported packet path, and queue-drain stalls caused by peers having
-no currently supported packet path. Those counters are intended to show whether
-a deployment is
+rejected and expired discovered-address counters, asynchronous outgoing
+connection error counts, healthy path counts by transport kind, configured peers
+with and without a currently supported packet path, and queue-drain stalls
+caused by peers having no currently supported packet path. Those counters are
+intended to show whether a deployment is
 exchanging capabilities, probing and advertising observed public addresses,
 refreshing DHT discovery, rejecting bad discovered addresses, using direct
 paths, relay fallback, hole-punching, enforcing membership, recovering

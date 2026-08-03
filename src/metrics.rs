@@ -86,6 +86,7 @@ pub struct RuntimeMetrics {
     redial_failures: AtomicU64,
     outgoing_connection_errors: AtomicU64,
     discovered_addresses_rejected: AtomicU64,
+    discovered_addresses_expired: AtomicU64,
     outbound_queue_blocked_no_supported_path_events: AtomicU64,
 }
 
@@ -356,6 +357,11 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_discovered_address_expired(&self, addresses: u64) {
+        self.discovered_addresses_expired
+            .fetch_add(addresses, Ordering::Relaxed);
+    }
+
     pub fn record_outbound_queue_blocked_no_supported_path(&self) {
         self.outbound_queue_blocked_no_supported_path_events
             .fetch_add(1, Ordering::Relaxed);
@@ -522,6 +528,8 @@ impl RuntimeMetrics {
             self.outgoing_connection_errors.load(Ordering::Relaxed);
         snapshot.discovered_addresses_rejected =
             self.discovered_addresses_rejected.load(Ordering::Relaxed);
+        snapshot.discovered_addresses_expired =
+            self.discovered_addresses_expired.load(Ordering::Relaxed);
         snapshot.outbound_queue_blocked_no_supported_path_events = self
             .outbound_queue_blocked_no_supported_path_events
             .load(Ordering::Relaxed);
@@ -591,6 +599,7 @@ pub struct RuntimeSnapshot {
     pub redial_failures: u64,
     pub outgoing_connection_errors: u64,
     pub discovered_addresses_rejected: u64,
+    pub discovered_addresses_expired: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
     pub queue: QueueStats,
     pub path: PathRuntimeStats,
@@ -733,6 +742,10 @@ impl RuntimeSnapshot {
             format!(
                 "discovered_addresses_rejected {}",
                 self.discovered_addresses_rejected
+            ),
+            format!(
+                "discovered_addresses_expired {}",
+                self.discovered_addresses_expired
             ),
             format!(
                 "outbound_queue_blocked_no_supported_path_events {}",
@@ -889,6 +902,7 @@ mod tests {
         metrics.record_redial_failure();
         metrics.record_outgoing_connection_error();
         metrics.record_discovered_address_rejected();
+        metrics.record_discovered_address_expired(2);
         metrics.record_outbound_queue_blocked_no_supported_path();
 
         metrics.snapshot_with_paths(
@@ -978,6 +992,7 @@ mod tests {
         assert_eq!(snapshot.redial_failures, 1);
         assert_eq!(snapshot.outgoing_connection_errors, 1);
         assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert_eq!(snapshot.discovered_addresses_expired, 2);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.path.healthy_direct_quic_datagram_paths, 1);
         assert_eq!(snapshot.path.healthy_direct_quic_stream_paths, 2);
@@ -1033,6 +1048,7 @@ mod tests {
         assert_metric_line(&snapshot, "redial_failures 1");
         assert_metric_line(&snapshot, "outgoing_connection_errors 1");
         assert_metric_line(&snapshot, "discovered_addresses_rejected 1");
+        assert_metric_line(&snapshot, "discovered_addresses_expired 2");
         assert_metric_line(
             &snapshot,
             "outbound_queue_blocked_no_supported_path_events 1",

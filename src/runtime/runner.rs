@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures::StreamExt as _;
 use libp2p::{
@@ -35,6 +39,7 @@ use crate::{
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
+const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
 
@@ -141,11 +146,13 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
             }
             _ = redial_tick.tick() => {
+                expire_discovered_peer_addresses(&mut discovered_peer_addresses, &metrics);
+                let discovered_addresses = discovered_peer_addresses.as_vec();
                 redial_known_addresses(
                     &mut node.swarm,
                     &node.bootstrap_peer_addresses,
                     &node.configured_peer_addresses,
-                    discovered_peer_addresses.as_slice(),
+                    &discovered_addresses,
                     &metrics,
                 );
             }
@@ -235,6 +242,14 @@ fn expire_outbound_queue(queues: &mut PeerQueues, metrics: &RuntimeMetrics) {
     queues.drop_expired(std::time::Instant::now());
     let expired_after = queues.total_stats().expired_packets;
     metrics.record_outbound_queue_expired(expired_after.saturating_sub(expired_before));
+}
+
+fn expire_discovered_peer_addresses(
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+) {
+    let expired = discovered_peer_addresses.drop_expired(Instant::now(), DISCOVERED_ADDRESS_TTL);
+    metrics.record_discovered_address_expired(expired);
 }
 
 fn refresh_kademlia_rendezvous(
@@ -340,26 +355,60 @@ struct RedialTargets {
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct DiscoveredPeerAddresses {
-    addresses: Vec<(Libp2pPeerId, Multiaddr)>,
+    addresses: Vec<DiscoveredPeerAddress>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DiscoveredPeerAddress {
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    last_seen: Instant,
 }
 
 impl DiscoveredPeerAddresses {
     fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) {
-        let entry = (peer, address);
-        if !self.addresses.contains(&entry) {
-            self.addresses.push(entry);
+        self.insert_at(peer, address, Instant::now());
+    }
+
+    fn insert_at(&mut self, peer: Libp2pPeerId, address: Multiaddr, now: Instant) {
+        if let Some(entry) = self
+            .addresses
+            .iter_mut()
+            .find(|entry| entry.peer == peer && entry.address == address)
+        {
+            entry.last_seen = now;
+            return;
         }
+
+        self.addresses.push(DiscoveredPeerAddress {
+            peer,
+            address,
+            last_seen: now,
+        });
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) {
         self.addresses
-            .retain(|(candidate_peer, candidate_address)| {
-                *candidate_peer != peer || candidate_address != address
-            });
+            .retain(|entry| entry.peer != peer || &entry.address != address);
     }
 
-    fn as_slice(&self) -> &[(Libp2pPeerId, Multiaddr)] {
-        &self.addresses
+    fn drop_expired(&mut self, now: Instant, max_age: Duration) -> u64 {
+        let mut expired = 0_u64;
+        self.addresses.retain(|entry| {
+            let keep = now.saturating_duration_since(entry.last_seen) <= max_age;
+            if !keep {
+                expired = expired.saturating_add(1);
+            }
+            keep
+        });
+        expired
+    }
+
+    fn as_vec(&self) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        self.addresses
+            .iter()
+            .map(|entry| (entry.peer, entry.address.clone()))
+            .collect()
     }
 }
 
@@ -1586,20 +1635,47 @@ mod tests {
         let peer = peer_id();
         let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
         let other_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let now = Instant::now();
+        let old = now.checked_sub(Duration::from_secs(30)).expect("old time");
         let mut discovered = DiscoveredPeerAddresses::default();
 
-        discovered.insert(peer, address.clone());
-        discovered.insert(peer, address.clone());
-        discovered.insert(peer, other_address.clone());
+        discovered.insert_at(peer, address.clone(), old);
+        discovered.insert_at(peer, address.clone(), now);
+        discovered.insert_at(peer, other_address.clone(), old);
 
         assert_eq!(
-            discovered.as_slice(),
-            &[(peer, address.clone()), (peer, other_address.clone())]
+            discovered.as_vec(),
+            vec![(peer, address.clone()), (peer, other_address.clone())]
         );
+
+        assert_eq!(discovered.drop_expired(now, Duration::from_secs(10)), 1);
+        assert_eq!(discovered.as_vec(), vec![(peer, address.clone())]);
 
         discovered.remove(peer, &address);
 
-        assert_eq!(discovered.as_slice(), &[(peer, other_address)]);
+        assert_eq!(discovered.as_vec(), Vec::new());
+    }
+
+    #[test]
+    fn discovered_address_expiry_records_metrics() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let now = Instant::now();
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let metrics = RuntimeMetrics::default();
+
+        discovered.insert_at(
+            peer,
+            address,
+            now.checked_sub(DISCOVERED_ADDRESS_TTL + Duration::from_secs(1))
+                .expect("expired time"),
+        );
+
+        let expired = discovered.drop_expired(now, DISCOVERED_ADDRESS_TTL);
+        metrics.record_discovered_address_expired(expired);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_expired, 1);
     }
 
     #[test]
