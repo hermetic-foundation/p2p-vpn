@@ -116,7 +116,15 @@ path-selection log event.
 The drain decision is explicit: native QUIC datagram, stream fallback, or
 blocked with a reason. The locked libp2p-quic transport currently disables QUIC
 datagram receive buffers internally, so the daemon advertises datagrams as
-unsupported and uses the stream fallback for direct QUIC/TCP/relay paths.
+unsupported and cannot expose a real application datagram sender or receiver
+through the libp2p `Swarm`. The operational data plane is therefore an
+identity-keyed stream fallback: each packet frame is sent over libp2p's
+authenticated request-response channel to the configured peer ID, and the
+receiver still applies the overlay allowlist, replay window, source-route
+ownership, and local-destination checks before writing to TUN. The runtime does
+not report a native datagram packet as sent unless a real datagram-capable local
+data plane exists; datagram-only paths remain blocked instead of silently
+degrading into fake success.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames over the packet protocol, giving operators liveness
 traffic that does not depend on user IP packets.

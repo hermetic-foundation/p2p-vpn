@@ -51,9 +51,32 @@ const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
-const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
 const SERVICE_STATUS_NONCE: u64 = 1;
 const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
+
+const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
+    LocalPacketDataPlane::identity_keyed_streams();
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LocalPacketDataPlane {
+    quic_datagrams: bool,
+}
+
+impl LocalPacketDataPlane {
+    // libp2p-quic 0.13.1 disables Quinn datagram receive buffers internally and
+    // does not expose an application datagram handle through Swarm connections.
+    // Until that changes, the only operational packet data plane is the
+    // identity-keyed libp2p request-response stream fallback.
+    const fn identity_keyed_streams() -> Self {
+        Self {
+            quic_datagrams: false,
+        }
+    }
+}
+
+fn local_packet_data_plane() -> LocalPacketDataPlane {
+    LOCAL_PACKET_DATA_PLANE
+}
 
 pub async fn run_config(
     config: Config,
@@ -1090,10 +1113,6 @@ fn drain_outbound_queue(
                     context.metrics.record_outbound_stream_fallback();
                 }
             }
-            PacketTransportDecision::NativeQuicDatagram { .. } => {
-                context.metrics.record_outbound_quic_datagram();
-                context.metrics.record_outbound_sent();
-            }
             PacketTransportDecision::Blocked { reason, .. } => {
                 if reason == PacketTransportBlockReason::LocalQuicDatagramsUnavailable {
                     context.metrics.record_outbound_quic_datagram_unavailable();
@@ -1155,9 +1174,6 @@ fn dial_blocked_queue_peers(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PacketTransportDecision {
-    NativeQuicDatagram {
-        path: PathKind,
-    },
     StreamFallback {
         path: PathKind,
     },
@@ -1169,10 +1185,7 @@ enum PacketTransportDecision {
 
 impl PacketTransportDecision {
     const fn can_send(self) -> bool {
-        matches!(
-            self,
-            Self::NativeQuicDatagram { .. } | Self::StreamFallback { .. }
-        )
+        matches!(self, Self::StreamFallback { .. })
     }
 }
 
@@ -1197,17 +1210,13 @@ fn packet_transport_decision(
 
     let support = packet_transport_support(peer_capabilities, peer);
     if let Some(path) = paths.best_supported_for(peer, support) {
-        return if path.kind.requires_quic_datagrams() {
-            PacketTransportDecision::NativeQuicDatagram { path: path.kind }
-        } else {
-            PacketTransportDecision::StreamFallback { path: path.kind }
-        };
+        return PacketTransportDecision::StreamFallback { path: path.kind };
     }
 
     let best_path = paths.best_for(peer).map(|path| path.kind);
     let reason = if best_path.is_some_and(PathKind::requires_quic_datagrams)
         && peer_capabilities.supports_quic_datagrams_for(peer)
-        && !LOCAL_QUIC_DATAGRAMS_SUPPORTED
+        && !local_packet_data_plane().quic_datagrams
     {
         PacketTransportBlockReason::LocalQuicDatagramsUnavailable
     } else {
@@ -1221,7 +1230,7 @@ fn packet_transport_support(
     peer: PeerId,
 ) -> PathTransportSupport {
     PathTransportSupport {
-        quic_datagrams: LOCAL_QUIC_DATAGRAMS_SUPPORTED
+        quic_datagrams: local_packet_data_plane().quic_datagrams
             && peer_capabilities.supports_quic_datagrams_for(peer),
     }
 }
@@ -4832,6 +4841,16 @@ mod tests {
                 best_path: Some(PathKind::DirectQuicDatagram)
             }
         );
+    }
+
+    #[test]
+    fn local_packet_data_plane_is_identity_keyed_stream_fallback_only() {
+        let local_data_plane = local_packet_data_plane();
+        assert_eq!(
+            local_data_plane,
+            LocalPacketDataPlane::identity_keyed_streams()
+        );
+        assert!(!local_data_plane.quic_datagrams);
     }
 
     #[tokio::test]
