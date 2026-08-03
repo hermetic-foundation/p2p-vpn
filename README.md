@@ -33,7 +33,10 @@ request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
 path, and whether native QUIC datagrams are currently supported. Outbound queue
 draining respects the peer's advertised effective MTU and drops oversized
-packets before sending them to the packet stream fallback.
+packets before sending them to the packet stream fallback. Capability requests
+from unconfigured peers are rejected, and configured peers are only accepted
+when they advertise a compatible wire version, packet protocol, packet header
+length, and non-zero effective MTU.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from

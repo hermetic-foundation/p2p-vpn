@@ -50,6 +50,16 @@ pub enum ControlRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ControlResponse {
     CapabilitiesAccepted(ControlCapabilities),
+    CapabilitiesRejected(ControlRejectionReason),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ControlRejectionReason {
+    UnauthorizedPeer,
+    UnsupportedWireVersion,
+    UnsupportedPacketProtocol,
+    UnsupportedPacketHeaderLength,
+    InvalidEffectiveMtu,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -79,6 +89,34 @@ impl PeerCapabilities {
     pub fn is_empty(&self) -> bool {
         self.peers.is_empty()
     }
+}
+
+#[must_use]
+pub fn validate_capabilities(capabilities: &ControlCapabilities) -> Option<ControlRejectionReason> {
+    if capabilities.wire_version != WIRE_VERSION {
+        return Some(ControlRejectionReason::UnsupportedWireVersion);
+    }
+    if capabilities.packet_protocol != PACKET_PROTOCOL {
+        return Some(ControlRejectionReason::UnsupportedPacketProtocol);
+    }
+    if capabilities.packet_header_len != HEADER_LEN {
+        return Some(ControlRejectionReason::UnsupportedPacketHeaderLength);
+    }
+    if capabilities.effective_mtu == 0 {
+        return Some(ControlRejectionReason::InvalidEffectiveMtu);
+    }
+
+    None
+}
+
+#[must_use]
+pub fn accepted_capabilities_response(capabilities: &ControlCapabilities) -> ControlResponse {
+    ControlResponse::CapabilitiesAccepted(capabilities.clone())
+}
+
+#[must_use]
+pub const fn rejected_capabilities_response(reason: ControlRejectionReason) -> ControlResponse {
+    ControlResponse::CapabilitiesRejected(reason)
 }
 
 #[async_trait]
@@ -244,6 +282,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn control_codec_round_trips_capability_rejection() {
+        let mut codec = ControlCodec;
+        let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
+        let response =
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer);
+        let mut written = Cursor::new(Vec::new());
+
+        request_response::Codec::write_response(
+            &mut codec,
+            &protocol,
+            &mut written,
+            response.clone(),
+        )
+        .await
+        .expect("write response");
+
+        written.set_position(0);
+        let decoded = request_response::Codec::read_response(&mut codec, &protocol, &mut written)
+            .await
+            .expect("read response");
+
+        assert_eq!(decoded, response);
+    }
+
+    #[tokio::test]
     async fn control_codec_rejects_oversized_messages() {
         let mut codec = ControlCodec;
         let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
@@ -281,5 +344,37 @@ mod tests {
 
         capabilities.record(peer, ControlCapabilities::local(1420));
         assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
+    }
+
+    #[test]
+    fn capability_validation_rejects_incompatible_protocol_surfaces() {
+        let mut capabilities = ControlCapabilities::local(1280);
+        assert_eq!(validate_capabilities(&capabilities), None);
+
+        capabilities.wire_version = WIRE_VERSION.saturating_add(1);
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::UnsupportedWireVersion)
+        );
+
+        capabilities = ControlCapabilities::local(1280);
+        capabilities.packet_protocol = "/different/packet/1".to_owned();
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::UnsupportedPacketProtocol)
+        );
+
+        capabilities = ControlCapabilities::local(1280);
+        capabilities.packet_header_len = HEADER_LEN + 1;
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::UnsupportedPacketHeaderLength)
+        );
+
+        capabilities = ControlCapabilities::local(0);
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::InvalidEffectiveMtu)
+        );
     }
 }

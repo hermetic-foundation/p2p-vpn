@@ -20,7 +20,11 @@ use crate::{
     queue::PeerQueues,
     route::RouteError,
     runtime::{
-        control::{ControlCapabilities, ControlRequest, ControlResponse, PeerCapabilities},
+        control::{
+            ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
+            PeerCapabilities, accepted_capabilities_response, rejected_capabilities_response,
+            validate_capabilities,
+        },
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
@@ -449,21 +453,32 @@ fn handle_control_request(
 ) -> Result<(), RunnerError> {
     match request {
         ControlRequest::Capabilities(capabilities) => {
-            record_peer_capabilities(
-                context.forwarder,
-                context.peer_capabilities,
-                peer,
-                capabilities.clone(),
-            );
             context.metrics.record_control_request_received();
             eprintln!("control capabilities from {peer}: {capabilities:?}");
+            let response = capability_response_for_peer(
+                context.forwarder,
+                peer,
+                &capabilities,
+                context.local_capabilities,
+            );
+            match &response {
+                ControlResponse::CapabilitiesAccepted(_) => {
+                    record_peer_capabilities(
+                        context.forwarder,
+                        context.peer_capabilities,
+                        peer,
+                        capabilities.clone(),
+                    );
+                }
+                ControlResponse::CapabilitiesRejected(reason) => {
+                    context.metrics.record_control_failure();
+                    eprintln!("rejecting control capabilities from {peer}: {reason:?}");
+                }
+            }
             swarm
                 .behaviour_mut()
                 .control
-                .send_response(
-                    channel,
-                    ControlResponse::CapabilitiesAccepted(context.local_capabilities.clone()),
-                )
+                .send_response(channel, response)
                 .map_err(|_| RunnerError::ControlResponseDropped)?;
         }
     }
@@ -480,11 +495,37 @@ fn handle_control_response(
 ) {
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
-            metrics.record_control_response_received();
-            eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+            if let Some(reason) = validate_capabilities(&capabilities) {
+                metrics.record_control_failure();
+                eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
+            } else {
+                record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
+                metrics.record_control_response_received();
+                eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+            }
+        }
+        ControlResponse::CapabilitiesRejected(reason) => {
+            metrics.record_control_failure();
+            eprintln!("control capabilities rejected by {peer}: {reason:?}");
         }
     }
+}
+
+fn capability_response_for_peer(
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+    local_capabilities: &ControlCapabilities,
+) -> ControlResponse {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
+    }
+
+    if let Some(reason) = validate_capabilities(capabilities) {
+        return rejected_capabilities_response(reason);
+    }
+
+    accepted_capabilities_response(local_capabilities)
 }
 
 fn record_peer_capabilities(
@@ -1043,6 +1084,144 @@ mod tests {
         assert_eq!(
             packet_rejection_reason(PacketDropReason::NoRoute),
             PacketRejectionReason::MalformedPacket
+        );
+    }
+
+    #[test]
+    fn capability_response_accepts_configured_compatible_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities = ControlCapabilities::local(1280);
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &ControlCapabilities::local(1200),
+                &local_capabilities,
+            ),
+            ControlResponse::CapabilitiesAccepted(local_capabilities)
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_unconfigured_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let unconfigured = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: configured.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                unconfigured,
+                &ControlCapabilities::local(1280),
+                &ControlCapabilities::local(1280),
+            ),
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_incompatible_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut capabilities = ControlCapabilities::local(1280);
+        capabilities.packet_protocol = "/other/packet/1".to_owned();
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &capabilities,
+                &ControlCapabilities::local(1280),
+            ),
+            ControlResponse::CapabilitiesRejected(
+                ControlRejectionReason::UnsupportedPacketProtocol
+            )
         );
     }
 
