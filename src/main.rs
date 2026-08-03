@@ -170,6 +170,14 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
     },
+    Capabilities {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value_t = 10)]
+        timeout_seconds: u64,
+    },
     PeerStatus {
         peer: String,
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -301,6 +309,11 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(paths(&config, live, timeout_seconds)).await,
+        Command::Capabilities {
+            config,
+            live,
+            timeout_seconds,
+        } => Box::pin(capabilities(&config, live, timeout_seconds)).await,
         Command::PeerStatus {
             peer,
             config,
@@ -1143,6 +1156,129 @@ fn path_kind_for_multiaddr(address: &str) -> Result<PathKind, String> {
     Ok(PathKind::DirectTcpStream)
 }
 
+async fn capabilities(path: &PathBuf, live: bool, timeout_seconds: u64) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+
+    let lines = if live {
+        Box::pin(capability_lines_live(
+            &config,
+            Duration::from_secs(timeout_seconds.max(1)),
+        ))
+        .await?
+    } else {
+        capability_lines_local(&config)?
+    };
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
+    let routes = config
+        .compile_routes()
+        .map_err(|error| format!("failed to compile routes: {error:?}"))?;
+    let local_peer = config
+        .local_peer_id()
+        .map_err(|error| format!("failed to parse local peer id: {error:?}"))?;
+    let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local(
+        &config.network.name,
+        config
+            .membership_tag()
+            .map_err(|error| format!("failed to compute membership tag: {error:?}"))?,
+        config.effective_packet_mtu(),
+    )
+    .with_advertised_routes(
+        routes
+            .routes_for(local_peer)
+            .map(|route| {
+                p2p_vpn::runtime::control::ControlRoute::new(route.prefix.to_string(), route.metric)
+            })
+            .collect(),
+    );
+    let mut lines = vec![
+        format!("local peer: {}", config.network.local_peer),
+        format!("configured peers: {}", config.peers.len()),
+    ];
+
+    push_capability_lines(&mut lines, "local capability", &capabilities);
+
+    Ok(lines)
+}
+
+async fn capability_lines_live(config: &Config, timeout: Duration) -> Result<Vec<String>, String> {
+    let mut lines = capability_lines_local(config)?;
+    for peer in &config.peers {
+        let peer_id = peer
+            .id
+            .parse::<libp2p::PeerId>()
+            .expect("capability config is valid");
+        match Box::pin(query_peer_status(config, peer_id, timeout)).await {
+            Ok(status) => {
+                lines.push(format!("remote capability peer: {}", status.peer));
+                push_capability_lines(&mut lines, "remote capability", &status.capabilities);
+            }
+            Err(error) => lines.push(format!(
+                "remote capability peer: {} unreachable error {error:?}",
+                peer.id
+            )),
+        }
+    }
+
+    Ok(lines)
+}
+
+fn push_capability_lines(
+    lines: &mut Vec<String>,
+    prefix: &str,
+    capabilities: &p2p_vpn::runtime::control::ControlCapabilities,
+) {
+    lines.push(format!("{prefix} network: {}", capabilities.network_name));
+    lines.push(format!(
+        "{prefix} membership key matched: {}",
+        capabilities.membership_tag.is_some()
+    ));
+    lines.push(format!(
+        "{prefix} wire version: {}",
+        capabilities.wire_version
+    ));
+    lines.push(format!(
+        "{prefix} packet protocol: {}",
+        capabilities.packet_protocol
+    ));
+    lines.push(format!(
+        "{prefix} packet header length: {}",
+        capabilities.packet_header_len
+    ));
+    lines.push(format!("{prefix} mtu: {}", capabilities.effective_mtu));
+    lines.push(format!(
+        "{prefix} preferred path: {}",
+        path_name(
+            PathKind::from_wire_name(&capabilities.preferred_path)
+                .unwrap_or(PathKind::DirectQuicStream)
+        )
+    ));
+    lines.push(format!(
+        "{prefix} supports quic datagrams: {}",
+        capabilities.supports_quic_datagrams
+    ));
+    lines.push(format!(
+        "{prefix} advertised routes: {}",
+        capabilities.advertised_routes.len()
+    ));
+    for route in &capabilities.advertised_routes {
+        lines.push(format!(
+            "{prefix} advertised route: {} metric {}",
+            route.prefix, route.metric
+        ));
+    }
+}
+
 async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -1825,6 +1961,114 @@ mod tests {
     }
 
     #[test]
+    fn capability_lines_local_report_wire_contract_and_routes() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 50,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = capability_lines_local(&config).expect("capabilities");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability network: lab")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability packet protocol: /p2p-vpn/packet/1")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability preferred path: direct QUIC stream")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability advertised routes: 3")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability advertised route: 10.41.0.0/24 metric 50")
+        );
+    }
+
+    #[test]
+    fn capability_lines_report_remote_capability_fields() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities = p2p_vpn::runtime::control::ControlCapabilities::local(
+            "lab",
+            Some("tag".to_owned()),
+            1200,
+        )
+        .with_advertised_routes(vec![p2p_vpn::runtime::control::ControlRoute::new(
+            "10.42.0.0/24",
+            100,
+        )]);
+        capabilities.supports_quic_datagrams = true;
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        let mut lines = vec![format!("remote capability peer: {peer}")];
+
+        push_capability_lines(&mut lines, "remote capability", &capabilities);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("remote capability peer: {peer}"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability membership key matched: true")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability preferred path: direct QUIC datagram")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability supports quic datagrams: true")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability advertised route: 10.42.0.0/24 metric 100")
+        );
+    }
+
+    #[test]
     fn path_kind_for_multiaddr_prefers_relay_then_quic_then_tcp() {
         assert_eq!(
             path_kind_for_multiaddr(
@@ -1989,6 +2233,33 @@ mod tests {
         } = cli.command
         else {
             panic!("expected paths command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert!(live);
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_capabilities_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "capabilities",
+            "--config",
+            "node-a.json",
+            "--live",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::Capabilities {
+            config,
+            live,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected capabilities command");
         };
 
         assert_eq!(config, PathBuf::from("node-a.json"));

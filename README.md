@@ -465,6 +465,21 @@ current capability set can carry path probes. Active daemon connection counts
 and path-probe counters are still exposed through `metrics` until a daemon
 control socket is added.
 
+Inspect the local capability contract or validate configured peers' remote
+capabilities:
+
+```sh
+cargo run -- capabilities --config p2p-vpn.json
+cargo run -- capabilities --config p2p-vpn.json --live --timeout-seconds 10
+```
+
+`capabilities` prints the control-plane capability values this node advertises:
+network name, membership-key match state, wire version, packet protocol, packet
+header length, effective MTU, preferred packet path, QUIC datagram support, and
+advertised routes. Live mode queries every configured peer and prints the same
+validated remote fields, reporting unreachable peers without aborting the whole
+inspection run.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh
