@@ -51,6 +51,13 @@ nix flake check
 nix build .#default
 ```
 
+Run the Linux TUN end-to-end smoke test on hosts that allow unprivileged user
+and network namespaces:
+
+```sh
+cargo test --test tun_namespace -- --ignored --nocapture
+```
+
 ## Example Config
 
 ```json

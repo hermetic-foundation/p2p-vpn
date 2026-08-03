@@ -51,6 +51,10 @@
             pkgs.rust-analyzer
             pkgs.pkg-config
             pkgs.jujutsu
+            pkgs.iproute2
+            pkgs.iputils
+            pkgs.procps
+            pkgs.util-linux
           ];
 
           RUST_BACKTRACE = "1";
