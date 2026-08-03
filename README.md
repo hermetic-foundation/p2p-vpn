@@ -15,9 +15,14 @@ substrate while making the VPN data plane packet-oriented:
 
 Discovery is overlay-scoped. Configure bootstrap peers and relay-capable peers
 that intentionally participate in the VPN; do not rely on the public IPFS DHT
-as the membership or routing authority. Public libp2p relays can be useful for
-experiments only when they support the needed relay reservations and are
-acceptable for the deployment's trust and availability requirements.
+as the membership or routing authority. When Kademlia is enabled, nodes announce
+and query an overlay provider key derived from the configured network name,
+`/p2p-vpn/<network>/providers/1`. Provider results are only dialed when the peer
+ID is already present in the configured peer list, so DHT discovery is a
+reachability hint rather than route or membership authorization. Public libp2p
+relays can be useful for experiments only when they support the needed relay
+reservations and are acceptable for the deployment's trust and availability
+requirements.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
@@ -117,12 +122,14 @@ cargo test --test tun_namespace -- --ignored --nocapture
 ```
 
 `bootstrap_peers` are dialed and added to the overlay-scoped Kademlia routing
-table when Kademlia discovery is enabled. `relay.reservations` are full
-libp2p relay listen addresses; listening on one asks that relay for a circuit
-relay v2 reservation. Peer `addresses` may also contain full relayed target
-addresses such as `/dns4/relay.example.net/tcp/4001/p2p/<relay>/p2p-circuit/p2p/<peer>`.
-Set `relay.server` to `true` on nodes that should accept relay reservations
-and relay circuits for the overlay.
+table when Kademlia discovery is enabled. Kademlia nodes advertise themselves
+under the network provider key and query that same key for other configured
+peers. `relay.reservations` are full libp2p relay listen addresses; listening on
+one asks that relay for a circuit relay v2 reservation. Peer `addresses` may
+also contain full relayed target addresses such as
+`/dns4/relay.example.net/tcp/4001/p2p/<relay>/p2p-circuit/p2p/<peer>`. Set
+`relay.server` to `true` on nodes that should accept relay reservations and
+relay circuits for the overlay.
 
 Inspect the compiled local view:
 

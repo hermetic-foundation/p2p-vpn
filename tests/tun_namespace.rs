@@ -264,6 +264,7 @@ async fn run_ready_node(
 ) -> Result<(), runner::RunnerError> {
     let mut node = build_node(HostConfig {
         identity: config.identity()?,
+        network_name: config.network.name.clone(),
         mtu: config.interface.mtu,
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,

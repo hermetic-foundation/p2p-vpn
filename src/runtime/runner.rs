@@ -29,6 +29,7 @@ pub async fn run_config(
     let identity = config.identity()?;
     let node = build_node(HostConfig {
         identity,
+        network_name: config.network.name.clone(),
         mtu: config.interface.mtu,
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
@@ -68,8 +69,14 @@ pub async fn run_node(
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let discovery = node.discovery;
 
-    if node.startup.kad_bootstrap_started {
+    if node.startup.kademlia.bootstrap_started {
         eprintln!("kademlia bootstrap started");
+    }
+    if node.startup.kademlia.rendezvous_advertise_started {
+        eprintln!("kademlia overlay provider advertisement started");
+    }
+    if node.startup.kademlia.rendezvous_lookup_started {
+        eprintln!("kademlia overlay provider lookup started");
     }
     if node.startup.relay_reservations_started > 0 {
         eprintln!(
@@ -189,7 +196,9 @@ fn handle_swarm_event(
             metrics.record_inbound_failure();
             eprintln!("packet request from {peer} failed: {error}");
         }
-        SwarmEvent::Behaviour(event) => handle_behaviour_event(swarm, metrics, discovery, event),
+        SwarmEvent::Behaviour(event) => {
+            handle_behaviour_event(swarm, forwarder, metrics, discovery, event);
+        }
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
@@ -208,6 +217,7 @@ fn handle_swarm_event(
 
 fn handle_behaviour_event(
     swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     discovery: DiscoveryConfig,
     event: BehaviourEvent,
@@ -215,7 +225,7 @@ fn handle_behaviour_event(
     match event {
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if discovery.mdns => {
             for (peer, address) in peers {
-                learn_peer_address(swarm, peer, address, discovery.kademlia);
+                learn_peer_address(swarm, forwarder, peer, address, discovery.kademlia);
             }
         }
         BehaviourEvent::Mdns(mdns::Event::Expired(peers))
@@ -227,16 +237,14 @@ fn handle_behaviour_event(
         }
         BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             for address in info.listen_addrs {
-                learn_peer_address(swarm, peer_id, address, discovery.kademlia);
+                learn_peer_address(swarm, forwarder, peer_id, address, discovery.kademlia);
             }
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
             eprintln!("identify with {peer_id} failed: {error}");
         }
-        BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { result, .. })
-            if discovery.kademlia =>
-        {
-            eprintln!("kademlia query progressed: {result:?}");
+        BehaviourEvent::Kad(event) if discovery.kademlia => {
+            handle_kademlia_event(swarm, forwarder, event);
         }
         BehaviourEvent::Relay(event) => handle_relay_event(metrics, &event),
         BehaviourEvent::RelayServer(event) => handle_relay_server_event(metrics, &event),
@@ -248,6 +256,26 @@ fn handle_behaviour_event(
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
         }
         _ => {}
+    }
+}
+
+fn handle_kademlia_event(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, event: kad::Event) {
+    match event {
+        kad::Event::OutboundQueryProgressed { result, .. } => {
+            if let kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
+                providers,
+                ..
+            })) = &result
+            {
+                for provider in providers {
+                    dial_configured_peer(swarm, forwarder, *provider);
+                }
+            }
+            eprintln!("kademlia query progressed: {result:?}");
+        }
+        other => {
+            eprintln!("kademlia event: {other:?}");
+        }
     }
 }
 
@@ -320,11 +348,15 @@ fn handle_relay_event(metrics: &RuntimeMetrics, event: &relay::client::Event) {
 
 fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
     peer: Libp2pPeerId,
     address: Multiaddr,
     add_to_kademlia: bool,
 ) {
     if peer == *swarm.local_peer_id() {
+        return;
+    }
+    if !forwarder.is_configured_transport_peer(peer) {
         return;
     }
 
@@ -342,6 +374,19 @@ fn learn_peer_address(
     let dial_address = peer_dial_address(peer, address);
     if let Err(error) = swarm.dial(dial_address) {
         eprintln!("dial discovered peer {peer} failed: {error}");
+    }
+}
+
+fn dial_configured_peer(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, peer: Libp2pPeerId) {
+    if peer == *swarm.local_peer_id()
+        || !forwarder.is_configured_transport_peer(peer)
+        || swarm.is_connected(&peer)
+    {
+        return;
+    }
+
+    if let Err(error) = swarm.dial(peer) {
+        eprintln!("dial discovered provider {peer} failed: {error}");
     }
 }
 

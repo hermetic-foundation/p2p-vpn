@@ -80,6 +80,11 @@ impl Forwarder {
         Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
     }
 
+    #[must_use]
+    pub fn is_configured_transport_peer(&self, peer: Libp2pPeerId) -> bool {
+        self.peers.values().any(|configured| *configured == peer)
+    }
+
     fn packet_frame(&self, packet: &Packet) -> Result<Frame, ForwardError> {
         Ok(Frame::packet(
             self.session_id,
@@ -389,6 +394,7 @@ mod tests {
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut node = build_node(HostConfig {
             identity: local_identity,
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),

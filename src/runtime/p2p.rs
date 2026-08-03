@@ -39,6 +39,7 @@ pub struct P2pNode {
 
 pub struct HostConfig {
     pub identity: NodeIdentity,
+    pub network_name: String,
     pub mtu: u16,
     pub listen_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
@@ -50,9 +51,16 @@ pub struct HostConfig {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StartupStatus {
-    pub kad_bootstrap_started: bool,
+    pub kademlia: KademliaStartupStatus,
     pub relay_reservations_started: usize,
     pub relay_server_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KademliaStartupStatus {
+    pub bootstrap_started: bool,
+    pub rendezvous_advertise_started: bool,
+    pub rendezvous_lookup_started: bool,
 }
 
 pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
@@ -74,7 +82,11 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                 let store = kad::store::MemoryStore::new(local_peer_id);
                 let kad_config = kad::Config::new(libp2p::StreamProtocol::new("/p2p-vpn/kad/1"));
                 let mut kad = kad::Behaviour::with_config(local_peer_id, store, kad_config);
-                kad.set_mode(Some(kad::Mode::Client));
+                if config.discovery.kademlia {
+                    kad.set_mode(Some(kad::Mode::Server));
+                } else {
+                    kad.set_mode(Some(kad::Mode::Client));
+                }
 
                 Ok(Behaviour {
                     identify: identify::Behaviour::new(identify::Config::new(
@@ -114,19 +126,38 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm.dial(dial_address)?;
     }
 
-    let kad_bootstrap_started =
-        config.discovery.kademlia && swarm.behaviour_mut().kad.bootstrap().is_ok();
+    let rendezvous_key = kademlia_rendezvous_key(&config.network_name);
+    let (kad_bootstrap_started, kad_rendezvous_advertise_started, kad_rendezvous_lookup_started) =
+        if config.discovery.kademlia {
+            swarm
+                .behaviour_mut()
+                .kad
+                .start_providing(rendezvous_key.clone())?;
+            swarm.behaviour_mut().kad.get_providers(rendezvous_key);
+            (swarm.behaviour_mut().kad.bootstrap().is_ok(), true, true)
+        } else {
+            (false, false, false)
+        };
 
     Ok(P2pNode {
         local_peer_id,
         swarm,
         discovery: config.discovery,
         startup: StartupStatus {
-            kad_bootstrap_started,
+            kademlia: KademliaStartupStatus {
+                bootstrap_started: kad_bootstrap_started,
+                rendezvous_advertise_started: kad_rendezvous_advertise_started,
+                rendezvous_lookup_started: kad_rendezvous_lookup_started,
+            },
             relay_reservations_started,
             relay_server_enabled: config.relay_server,
         },
     })
+}
+
+#[must_use]
+pub fn kademlia_rendezvous_key(network_name: &str) -> kad::RecordKey {
+    kad::RecordKey::new(&format!("/p2p-vpn/{network_name}/providers/1"))
 }
 
 fn decode_keypair(encoded: &str) -> Result<Keypair, IdentityError> {
@@ -159,6 +190,7 @@ pub enum P2pBuildError {
     Behaviour(libp2p::BehaviourBuilderError),
     Listen(libp2p::TransportError<std::io::Error>),
     Dial(libp2p::swarm::DialError),
+    KadStore(kad::store::Error),
     Multiaddr(libp2p::multiaddr::Error),
     InvalidP2pAddress(Box<Multiaddr>),
 }
@@ -193,6 +225,12 @@ impl From<libp2p::swarm::DialError> for P2pBuildError {
     }
 }
 
+impl From<kad::store::Error> for P2pBuildError {
+    fn from(error: kad::store::Error) -> Self {
+        Self::KadStore(error)
+    }
+}
+
 impl From<libp2p::multiaddr::Error> for P2pBuildError {
     fn from(error: libp2p::multiaddr::Error) -> Self {
         Self::Multiaddr(error)
@@ -221,6 +259,7 @@ mod tests {
 
         let node = build_node(HostConfig {
             identity,
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -248,6 +287,7 @@ mod tests {
 
         let node = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: vec![(relay, bootstrap_address)],
@@ -258,7 +298,9 @@ mod tests {
         })
         .expect("node");
 
-        assert!(node.startup.kad_bootstrap_started);
+        assert!(node.startup.kademlia.bootstrap_started);
+        assert!(node.startup.kademlia.rendezvous_advertise_started);
+        assert!(node.startup.kademlia.rendezvous_lookup_started);
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
@@ -304,10 +346,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn kademlia_rendezvous_key_is_scoped_to_network_name() {
+        assert_eq!(
+            kademlia_rendezvous_key("lab").to_vec(),
+            b"/p2p-vpn/lab/providers/1".to_vec()
+        );
+        assert_ne!(
+            kademlia_rendezvous_key("lab").to_vec(),
+            kademlia_rendezvous_key("prod").to_vec()
+        );
+    }
+
     #[tokio::test]
     async fn two_nodes_exchange_packet_request() {
         let mut listener = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
             bootstrap_peers: Vec::new(),
@@ -321,6 +376,7 @@ mod tests {
 
         let mut dialer = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -354,6 +410,7 @@ mod tests {
         };
         let mut relay = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("relay identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
             bootstrap_peers: Vec::new(),
@@ -374,6 +431,7 @@ mod tests {
 
         let mut listener = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -402,6 +460,7 @@ mod tests {
 
         let mut dialer = build_node(HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            network_name: "lab".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
