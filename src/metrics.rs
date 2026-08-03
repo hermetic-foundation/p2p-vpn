@@ -67,6 +67,7 @@ pub struct RuntimeMetrics {
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
+    discovered_addresses_rejected: AtomicU64,
     outbound_queue_blocked_no_supported_path_events: AtomicU64,
 }
 
@@ -282,6 +283,11 @@ impl RuntimeMetrics {
         self.redial_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_discovered_address_rejected(&self) {
+        self.discovered_addresses_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_outbound_queue_blocked_no_supported_path(&self) {
         self.outbound_queue_blocked_no_supported_path_events
             .fetch_add(1, Ordering::Relaxed);
@@ -289,105 +295,131 @@ impl RuntimeMetrics {
 
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
-        RuntimeSnapshot {
-            tun_read_packets: self.tun_read_packets.load(Ordering::Relaxed),
-            tun_read_bytes: self.tun_read_bytes.load(Ordering::Relaxed),
-            tun_write_packets: self.tun_write_packets.load(Ordering::Relaxed),
-            tun_write_bytes: self.tun_write_bytes.load(Ordering::Relaxed),
-            outbound_sent_packets: self.outbound_sent_packets.load(Ordering::Relaxed),
-            inbound_accepted_packets: self.inbound_accepted_packets.load(Ordering::Relaxed),
-            outbound_dropped_packets: self.outbound_dropped_packets.load(Ordering::Relaxed),
-            inbound_dropped_packets: self.inbound_dropped_packets.load(Ordering::Relaxed),
-            outbound_drop_malformed_packets: self
-                .outbound_drop_malformed_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_no_route_packets: self
-                .outbound_drop_no_route_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_no_transport_peer_packets: self
-                .outbound_drop_no_transport_peer_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_packet_too_large_packets: self
-                .outbound_drop_packet_too_large_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_queue_full_packets: self
-                .outbound_drop_queue_full_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_queue_expired_packets: self
-                .outbound_drop_queue_expired_packets
-                .load(Ordering::Relaxed),
-            outbound_drop_unauthorized_source_packets: self
-                .outbound_drop_unauthorized_source_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_malformed_packets: self
-                .inbound_drop_malformed_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_packet_too_large_packets: self
-                .inbound_drop_packet_too_large_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_replay_packets: self.inbound_drop_replay_packets.load(Ordering::Relaxed),
-            inbound_drop_unauthorized_peer_packets: self
-                .inbound_drop_unauthorized_peer_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_unauthorized_source_packets: self
-                .inbound_drop_unauthorized_source_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_unauthorized_destination_packets: self
-                .inbound_drop_unauthorized_destination_packets
-                .load(Ordering::Relaxed),
-            inbound_drop_unexpected_payload_packets: self
-                .inbound_drop_unexpected_payload_packets
-                .load(Ordering::Relaxed),
-            outbound_failures: self.outbound_failures.load(Ordering::Relaxed),
-            inbound_failures: self.inbound_failures.load(Ordering::Relaxed),
-            direct_connections_established: self
-                .direct_connections_established
-                .load(Ordering::Relaxed),
-            relayed_connections_established: self
-                .relayed_connections_established
-                .load(Ordering::Relaxed),
-            unauthorized_connections_dropped: self
-                .unauthorized_connections_dropped
-                .load(Ordering::Relaxed),
-            relay_reservations_accepted: self.relay_reservations_accepted.load(Ordering::Relaxed),
-            relay_outbound_circuits_established: self
-                .relay_outbound_circuits_established
-                .load(Ordering::Relaxed),
-            relay_inbound_circuits_established: self
-                .relay_inbound_circuits_established
-                .load(Ordering::Relaxed),
-            relay_server_reservations_accepted: self
-                .relay_server_reservations_accepted
-                .load(Ordering::Relaxed),
-            relay_server_circuits_accepted: self
-                .relay_server_circuits_accepted
-                .load(Ordering::Relaxed),
-            dcutr_successes: self.dcutr_successes.load(Ordering::Relaxed),
-            dcutr_failures: self.dcutr_failures.load(Ordering::Relaxed),
-            external_address_candidates: self.external_address_candidates.load(Ordering::Relaxed),
-            external_addresses_confirmed: self.external_addresses_confirmed.load(Ordering::Relaxed),
-            external_addresses_expired: self.external_addresses_expired.load(Ordering::Relaxed),
-            kademlia_provider_lookups: self.kademlia_provider_lookups.load(Ordering::Relaxed),
-            kademlia_provider_advertisements: self
-                .kademlia_provider_advertisements
-                .load(Ordering::Relaxed),
-            kademlia_provider_advertisement_failures: self
-                .kademlia_provider_advertisement_failures
-                .load(Ordering::Relaxed),
-            kademlia_bootstrap_refreshes: self.kademlia_bootstrap_refreshes.load(Ordering::Relaxed),
-            kademlia_bootstrap_failures: self.kademlia_bootstrap_failures.load(Ordering::Relaxed),
-            control_requests_sent: self.control_requests_sent.load(Ordering::Relaxed),
-            control_requests_received: self.control_requests_received.load(Ordering::Relaxed),
-            control_responses_received: self.control_responses_received.load(Ordering::Relaxed),
-            control_failures: self.control_failures.load(Ordering::Relaxed),
-            redial_attempts: self.redial_attempts.load(Ordering::Relaxed),
-            redial_skipped_connected: self.redial_skipped_connected.load(Ordering::Relaxed),
-            redial_failures: self.redial_failures.load(Ordering::Relaxed),
-            outbound_queue_blocked_no_supported_path_events: self
-                .outbound_queue_blocked_no_supported_path_events
-                .load(Ordering::Relaxed),
+        let mut snapshot = RuntimeSnapshot {
             queue,
-        }
+            ..RuntimeSnapshot::default()
+        };
+        self.fill_packet_snapshot(&mut snapshot);
+        self.fill_drop_snapshot(&mut snapshot);
+        self.fill_transport_snapshot(&mut snapshot);
+        self.fill_discovery_snapshot(&mut snapshot);
+        self.fill_control_snapshot(&mut snapshot);
+        snapshot
+    }
+
+    fn fill_packet_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.tun_read_packets = self.tun_read_packets.load(Ordering::Relaxed);
+        snapshot.tun_read_bytes = self.tun_read_bytes.load(Ordering::Relaxed);
+        snapshot.tun_write_packets = self.tun_write_packets.load(Ordering::Relaxed);
+        snapshot.tun_write_bytes = self.tun_write_bytes.load(Ordering::Relaxed);
+        snapshot.outbound_sent_packets = self.outbound_sent_packets.load(Ordering::Relaxed);
+        snapshot.inbound_accepted_packets = self.inbound_accepted_packets.load(Ordering::Relaxed);
+        snapshot.outbound_dropped_packets = self.outbound_dropped_packets.load(Ordering::Relaxed);
+        snapshot.inbound_dropped_packets = self.inbound_dropped_packets.load(Ordering::Relaxed);
+        snapshot.outbound_failures = self.outbound_failures.load(Ordering::Relaxed);
+        snapshot.inbound_failures = self.inbound_failures.load(Ordering::Relaxed);
+    }
+
+    fn fill_drop_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.outbound_drop_malformed_packets =
+            self.outbound_drop_malformed_packets.load(Ordering::Relaxed);
+        snapshot.outbound_drop_no_route_packets =
+            self.outbound_drop_no_route_packets.load(Ordering::Relaxed);
+        snapshot.outbound_drop_no_transport_peer_packets = self
+            .outbound_drop_no_transport_peer_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_drop_packet_too_large_packets = self
+            .outbound_drop_packet_too_large_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_drop_queue_full_packets = self
+            .outbound_drop_queue_full_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_drop_queue_expired_packets = self
+            .outbound_drop_queue_expired_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_drop_unauthorized_source_packets = self
+            .outbound_drop_unauthorized_source_packets
+            .load(Ordering::Relaxed);
+        snapshot.inbound_drop_malformed_packets =
+            self.inbound_drop_malformed_packets.load(Ordering::Relaxed);
+        snapshot.inbound_drop_packet_too_large_packets = self
+            .inbound_drop_packet_too_large_packets
+            .load(Ordering::Relaxed);
+        snapshot.inbound_drop_replay_packets =
+            self.inbound_drop_replay_packets.load(Ordering::Relaxed);
+        snapshot.inbound_drop_unauthorized_peer_packets = self
+            .inbound_drop_unauthorized_peer_packets
+            .load(Ordering::Relaxed);
+        snapshot.inbound_drop_unauthorized_source_packets = self
+            .inbound_drop_unauthorized_source_packets
+            .load(Ordering::Relaxed);
+        snapshot.inbound_drop_unauthorized_destination_packets = self
+            .inbound_drop_unauthorized_destination_packets
+            .load(Ordering::Relaxed);
+        snapshot.inbound_drop_unexpected_payload_packets = self
+            .inbound_drop_unexpected_payload_packets
+            .load(Ordering::Relaxed);
+    }
+
+    fn fill_transport_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.direct_connections_established =
+            self.direct_connections_established.load(Ordering::Relaxed);
+        snapshot.relayed_connections_established =
+            self.relayed_connections_established.load(Ordering::Relaxed);
+        snapshot.unauthorized_connections_dropped = self
+            .unauthorized_connections_dropped
+            .load(Ordering::Relaxed);
+        snapshot.relay_reservations_accepted =
+            self.relay_reservations_accepted.load(Ordering::Relaxed);
+        snapshot.relay_outbound_circuits_established = self
+            .relay_outbound_circuits_established
+            .load(Ordering::Relaxed);
+        snapshot.relay_inbound_circuits_established = self
+            .relay_inbound_circuits_established
+            .load(Ordering::Relaxed);
+        snapshot.relay_server_reservations_accepted = self
+            .relay_server_reservations_accepted
+            .load(Ordering::Relaxed);
+        snapshot.relay_server_circuits_accepted =
+            self.relay_server_circuits_accepted.load(Ordering::Relaxed);
+        snapshot.dcutr_successes = self.dcutr_successes.load(Ordering::Relaxed);
+        snapshot.dcutr_failures = self.dcutr_failures.load(Ordering::Relaxed);
+    }
+
+    fn fill_discovery_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.external_address_candidates =
+            self.external_address_candidates.load(Ordering::Relaxed);
+        snapshot.external_addresses_confirmed =
+            self.external_addresses_confirmed.load(Ordering::Relaxed);
+        snapshot.external_addresses_expired =
+            self.external_addresses_expired.load(Ordering::Relaxed);
+        snapshot.kademlia_provider_lookups = self.kademlia_provider_lookups.load(Ordering::Relaxed);
+        snapshot.kademlia_provider_advertisements = self
+            .kademlia_provider_advertisements
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_provider_advertisement_failures = self
+            .kademlia_provider_advertisement_failures
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_bootstrap_refreshes =
+            self.kademlia_bootstrap_refreshes.load(Ordering::Relaxed);
+        snapshot.kademlia_bootstrap_failures =
+            self.kademlia_bootstrap_failures.load(Ordering::Relaxed);
+    }
+
+    fn fill_control_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.control_requests_sent = self.control_requests_sent.load(Ordering::Relaxed);
+        snapshot.control_requests_received = self.control_requests_received.load(Ordering::Relaxed);
+        snapshot.control_responses_received =
+            self.control_responses_received.load(Ordering::Relaxed);
+        snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
+        snapshot.redial_attempts = self.redial_attempts.load(Ordering::Relaxed);
+        snapshot.redial_skipped_connected = self.redial_skipped_connected.load(Ordering::Relaxed);
+        snapshot.redial_failures = self.redial_failures.load(Ordering::Relaxed);
+        snapshot.discovered_addresses_rejected =
+            self.discovered_addresses_rejected.load(Ordering::Relaxed);
+        snapshot.outbound_queue_blocked_no_supported_path_events = self
+            .outbound_queue_blocked_no_supported_path_events
+            .load(Ordering::Relaxed);
     }
 }
 
@@ -442,6 +474,7 @@ pub struct RuntimeSnapshot {
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
+    pub discovered_addresses_rejected: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
     pub queue: QueueStats,
 }
@@ -551,6 +584,10 @@ impl RuntimeSnapshot {
             format!("redial_attempts {}", self.redial_attempts),
             format!("redial_skipped_connected {}", self.redial_skipped_connected),
             format!("redial_failures {}", self.redial_failures),
+            format!(
+                "discovered_addresses_rejected {}",
+                self.discovered_addresses_rejected
+            ),
             format!(
                 "outbound_queue_blocked_no_supported_path_events {}",
                 self.outbound_queue_blocked_no_supported_path_events
@@ -677,6 +714,7 @@ mod tests {
         metrics.record_redial_attempt();
         metrics.record_redial_skipped_connected();
         metrics.record_redial_failure();
+        metrics.record_discovered_address_rejected();
         metrics.record_outbound_queue_blocked_no_supported_path();
 
         metrics.snapshot(QueueStats {
@@ -744,6 +782,7 @@ mod tests {
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
+        assert_eq!(snapshot.discovered_addresses_rejected, 1);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
     }
 
@@ -782,6 +821,7 @@ mod tests {
         assert_metric_line(&snapshot, "redial_attempts 1");
         assert_metric_line(&snapshot, "redial_skipped_connected 1");
         assert_metric_line(&snapshot, "redial_failures 1");
+        assert_metric_line(&snapshot, "discovered_addresses_rejected 1");
         assert_metric_line(
             &snapshot,
             "outbound_queue_blocked_no_supported_path_events 1",

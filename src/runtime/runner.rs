@@ -860,6 +860,7 @@ fn handle_behaviour_event(
                     swarm,
                     forwarder,
                     discovered_peer_addresses,
+                    metrics,
                     peer,
                     address,
                     discovery.kademlia,
@@ -880,6 +881,7 @@ fn handle_behaviour_event(
                     swarm,
                     forwarder,
                     discovered_peer_addresses,
+                    metrics,
                     peer_id,
                     address,
                     discovery.kademlia,
@@ -1013,6 +1015,7 @@ fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     address: Multiaddr,
     add_to_kademlia: bool,
@@ -1021,6 +1024,11 @@ fn learn_peer_address(
         return;
     }
     if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+    if !address_targets_peer(peer, &address) {
+        metrics.record_discovered_address_rejected();
+        eprintln!("rejecting discovered address for {peer} with mismatched target: {address}");
         return;
     }
 
@@ -1058,6 +1066,31 @@ fn dial_configured_peer(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, pee
 
 fn peer_dial_address(peer: Libp2pPeerId, address: Multiaddr) -> Multiaddr {
     address.with_p2p(peer).unwrap_or_else(|address| address)
+}
+
+fn address_targets_peer(peer: Libp2pPeerId, address: &Multiaddr) -> bool {
+    discovered_address_target(address).is_none_or(|target| target == peer)
+}
+
+fn discovered_address_target(address: &Multiaddr) -> Option<Libp2pPeerId> {
+    let mut direct_target = None;
+    let mut relayed_target = None;
+    let mut after_circuit = false;
+
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(peer) if after_circuit => relayed_target = Some(peer),
+            Protocol::P2p(peer) => direct_target = Some(peer),
+            Protocol::P2pCircuit => after_circuit = true,
+            _ => {}
+        }
+    }
+
+    if after_circuit {
+        relayed_target
+    } else {
+        direct_target
+    }
 }
 
 fn print_metrics(metrics: &RuntimeMetrics, queue: crate::queue::QueueStats) {
@@ -1491,6 +1524,35 @@ mod tests {
             relay_peer_from_relayed_address(&target_address),
             Some(relay)
         );
+    }
+
+    #[test]
+    fn discovered_address_target_uses_direct_or_relayed_target_peer() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let other = peer_id();
+        let direct_without_target: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let direct_target: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("address");
+        let relayed_without_target: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
+                .parse()
+                .expect("address");
+        let relayed_target: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("address");
+        let relayed_other_target: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{other}")
+                .parse()
+                .expect("address");
+
+        assert!(address_targets_peer(peer, &direct_without_target));
+        assert!(address_targets_peer(peer, &direct_target));
+        assert!(address_targets_peer(peer, &relayed_without_target));
+        assert!(address_targets_peer(peer, &relayed_target));
+        assert!(!address_targets_peer(peer, &relayed_other_target));
     }
 
     #[test]
