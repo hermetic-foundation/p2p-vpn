@@ -70,9 +70,10 @@ pub async fn run_node(
     let (reader, mut writer) = device.split();
     let metrics = Arc::new(RuntimeMetrics::default());
     let mut tun_rx = spawn_tun_reader(reader, Arc::clone(&metrics), mtu);
-    let mut queues = PeerQueues::new(
+    let mut queues = PeerQueues::with_packet_ttl(
         queue_config.max_packets_per_peer,
         queue_config.max_bytes_per_peer,
+        queue_config.max_packet_age(),
     );
     let mut paths = PathSet::new();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
@@ -228,6 +229,7 @@ fn drain_outbound_queue(
     paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
+    queues.drop_expired(std::time::Instant::now());
     while let Some(packet) = queues.dequeue_ready(|peer| paths.has_healthy_path(peer)) {
         if let Err(error) = forwarder.send_queued_packet(swarm, &packet) {
             metrics.record_outbound_drop();

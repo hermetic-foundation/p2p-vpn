@@ -206,6 +206,15 @@ impl RouteConfig {
 pub struct QueueConfig {
     pub max_packets_per_peer: usize,
     pub max_bytes_per_peer: usize,
+    #[serde(default = "default_max_packet_age_millis")]
+    pub max_packet_age_millis: u64,
+}
+
+impl QueueConfig {
+    #[must_use]
+    pub const fn max_packet_age(self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.max_packet_age_millis)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -303,7 +312,12 @@ fn default_queue() -> QueueConfig {
     QueueConfig {
         max_packets_per_peer: 256,
         max_bytes_per_peer: 512 * 1_024,
+        max_packet_age_millis: default_max_packet_age_millis(),
     }
+}
+
+const fn default_max_packet_age_millis() -> u64 {
+    1_000
 }
 
 const fn default_resources() -> ResourceConfig {
@@ -610,6 +624,7 @@ mod tests {
         .expect("config");
 
         assert_eq!(config.resources.packet_stream_limit(), 256);
+        assert_eq!(config.queue.max_packet_age_millis, 1_000);
 
         let config = serde_json::from_str::<Config>(
             r#"{

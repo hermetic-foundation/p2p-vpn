@@ -332,6 +332,7 @@ fn node_config(
         queue: QueueConfig {
             max_packets_per_peer: 64,
             max_bytes_per_peer: 128 * 1024,
+            max_packet_age_millis: 1_000,
         },
         resources: ResourceConfig::default(),
     }

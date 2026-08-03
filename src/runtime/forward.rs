@@ -319,6 +319,7 @@ mod tests {
             queue: QueueConfig {
                 max_packets_per_peer: 4,
                 max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
             },
             resources: ResourceConfig::default(),
         }

@@ -1,4 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant},
+};
 
 use crate::{PeerId, Sequence};
 
@@ -7,6 +10,7 @@ pub struct Packet {
     peer: PeerId,
     sequence: Sequence,
     bytes: Vec<u8>,
+    enqueued_at: Instant,
 }
 
 impl Packet {
@@ -16,6 +20,17 @@ impl Packet {
             peer,
             sequence,
             bytes,
+            enqueued_at: Instant::now(),
+        }
+    }
+
+    #[must_use]
+    pub fn new_at(peer: PeerId, sequence: Sequence, bytes: Vec<u8>, enqueued_at: Instant) -> Self {
+        Self {
+            peer,
+            sequence,
+            bytes,
+            enqueued_at,
         }
     }
 
@@ -42,6 +57,16 @@ impl Packet {
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.bytes
+    }
+
+    #[must_use]
+    pub const fn enqueued_at(&self) -> Instant {
+        self.enqueued_at
+    }
+
+    #[must_use]
+    pub fn is_expired(&self, now: Instant, max_age: Duration) -> bool {
+        now.saturating_duration_since(self.enqueued_at) > max_age
     }
 }
 
@@ -80,6 +105,7 @@ pub enum EnqueueError {
 pub struct PeerQueue {
     max_packets: usize,
     max_bytes: usize,
+    max_packet_age: Duration,
     stats: QueueStats,
     packets: VecDeque<Packet>,
 }
@@ -87,9 +113,15 @@ pub struct PeerQueue {
 impl PeerQueue {
     #[must_use]
     pub fn new(max_packets: usize, max_bytes: usize) -> Self {
+        Self::with_packet_ttl(max_packets, max_bytes, Duration::from_secs(1))
+    }
+
+    #[must_use]
+    pub fn with_packet_ttl(max_packets: usize, max_bytes: usize, max_packet_age: Duration) -> Self {
         Self {
             max_packets,
             max_bytes,
+            max_packet_age,
             stats: QueueStats::default(),
             packets: VecDeque::new(),
         }
@@ -126,6 +158,25 @@ impl PeerQueue {
         Some(packet)
     }
 
+    pub fn drop_expired(&mut self, now: Instant) {
+        let Some(first_fresh) = self
+            .packets
+            .iter()
+            .position(|packet| !packet.is_expired(now, self.max_packet_age))
+        else {
+            while let Some(packet) = self.dequeue() {
+                self.record_drop(packet.len());
+            }
+            return;
+        };
+
+        for _ in 0..first_fresh {
+            if let Some(packet) = self.dequeue() {
+                self.record_drop(packet.len());
+            }
+        }
+    }
+
     #[must_use]
     pub const fn stats(&self) -> QueueStats {
         self.stats
@@ -141,6 +192,7 @@ impl PeerQueue {
 pub struct PeerQueues {
     max_packets_per_peer: usize,
     max_bytes_per_peer: usize,
+    max_packet_age: Duration,
     queues: HashMap<PeerId, PeerQueue>,
     ready: VecDeque<PeerId>,
 }
@@ -148,9 +200,23 @@ pub struct PeerQueues {
 impl PeerQueues {
     #[must_use]
     pub fn new(max_packets_per_peer: usize, max_bytes_per_peer: usize) -> Self {
+        Self::with_packet_ttl(
+            max_packets_per_peer,
+            max_bytes_per_peer,
+            Duration::from_secs(1),
+        )
+    }
+
+    #[must_use]
+    pub fn with_packet_ttl(
+        max_packets_per_peer: usize,
+        max_bytes_per_peer: usize,
+        max_packet_age: Duration,
+    ) -> Self {
         Self {
             max_packets_per_peer,
             max_bytes_per_peer,
+            max_packet_age,
             queues: HashMap::new(),
             ready: VecDeque::new(),
         }
@@ -207,6 +273,22 @@ impl PeerQueues {
         None
     }
 
+    pub fn drop_expired(&mut self, now: Instant) {
+        let ready_len = self.ready.len();
+        for _ in 0..ready_len {
+            let Some(peer) = self.ready.pop_front() else {
+                return;
+            };
+            let Some(queue) = self.queues.get_mut(&peer) else {
+                continue;
+            };
+            queue.drop_expired(now);
+            if queue.stats().queued_packets > 0 {
+                self.ready.push_back(peer);
+            }
+        }
+    }
+
     #[must_use]
     pub fn peer_stats(&self, peer: PeerId) -> QueueStats {
         self.queues
@@ -224,9 +306,13 @@ impl PeerQueues {
     }
 
     fn queue_mut(&mut self, peer: PeerId) -> &mut PeerQueue {
-        self.queues
-            .entry(peer)
-            .or_insert_with(|| PeerQueue::new(self.max_packets_per_peer, self.max_bytes_per_peer))
+        self.queues.entry(peer).or_insert_with(|| {
+            PeerQueue::with_packet_ttl(
+                self.max_packets_per_peer,
+                self.max_bytes_per_peer,
+                self.max_packet_age,
+            )
+        })
     }
 }
 
@@ -236,6 +322,29 @@ mod tests {
 
     fn peer(seed: u8) -> PeerId {
         PeerId::from_bytes([seed; 32])
+    }
+
+    #[test]
+    fn queue_drops_expired_packets() {
+        let now = Instant::now();
+        let expired_at = now
+            .checked_sub(Duration::from_millis(101))
+            .expect("test instant should allow subtraction");
+        let mut queue = PeerQueue::with_packet_ttl(4, 4096, Duration::from_millis(100));
+        queue
+            .enqueue(Packet::new_at(peer(1), 1, vec![1, 2, 3], expired_at))
+            .expect("expired packet should initially fit");
+        queue
+            .enqueue(Packet::new_at(peer(1), 2, vec![4, 5], now))
+            .expect("fresh packet should fit");
+
+        queue.drop_expired(now);
+
+        assert_eq!(queue.stats().queued_packets, 1);
+        assert_eq!(queue.stats().queued_bytes, 2);
+        assert_eq!(queue.stats().dropped_packets, 1);
+        assert_eq!(queue.stats().dropped_bytes, 3);
+        assert_eq!(queue.dequeue().expect("fresh packet remains").sequence(), 2);
     }
 
     #[test]
@@ -369,5 +478,33 @@ mod tests {
         assert_eq!(queues.peer_stats(peer(2)).dropped_bytes, 3);
         assert_eq!(queues.total_stats().queued_packets, 1);
         assert_eq!(queues.total_stats().dropped_packets, 2);
+    }
+
+    #[test]
+    fn peer_queues_drop_expired_packets_and_keep_fresh_ready() {
+        let now = Instant::now();
+        let expired_at = now
+            .checked_sub(Duration::from_millis(101))
+            .expect("test instant should allow subtraction");
+        let mut queues = PeerQueues::with_packet_ttl(4, 4096, Duration::from_millis(100));
+        queues
+            .enqueue(Packet::new_at(peer(1), 1, vec![1], expired_at))
+            .expect("expired packet");
+        queues
+            .enqueue(Packet::new_at(peer(2), 2, vec![2], now))
+            .expect("fresh packet");
+
+        queues.drop_expired(now);
+
+        assert_eq!(queues.peer_stats(peer(1)).queued_packets, 0);
+        assert_eq!(queues.peer_stats(peer(1)).dropped_packets, 1);
+        assert_eq!(queues.total_stats().queued_packets, 1);
+        assert_eq!(
+            queues
+                .dequeue_ready(|candidate| candidate == peer(2))
+                .expect("fresh peer remains")
+                .sequence(),
+            2
+        );
     }
 }

@@ -49,7 +49,8 @@ QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
 unhealthy when their connections close, and only drains a peer's bounded queue
 while that peer has a healthy path. Packets for disconnected peers remain
 bounded by the per-peer queue limits instead of expanding into unbounded stream
-requests.
+requests. Queued packets also have a configurable age limit; stale packets are
+dropped rather than sent after a long outage.
 
 Configured bootstrap and peer addresses are redialed periodically when they are
 not already connected. This keeps the overlay trying to recover after transient
@@ -133,7 +134,8 @@ cargo test --test tun_namespace -- --ignored --nocapture
   },
   "queue": {
     "max_packets_per_peer": 256,
-    "max_bytes_per_peer": 524288
+    "max_bytes_per_peer": 524288,
+    "max_packet_age_millis": 1000
   },
   "resources": {
     "max_concurrent_packet_streams": 256

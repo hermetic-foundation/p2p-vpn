@@ -91,8 +91,10 @@ fn status(path: &PathBuf) -> Result<(), String> {
     );
     println!("peers: {}", config.peers.len());
     println!(
-        "queue: {} packets / {} bytes per peer",
-        config.queue.max_packets_per_peer, config.queue.max_bytes_per_peer
+        "queue: {} packets / {} bytes / {} ms per peer",
+        config.queue.max_packets_per_peer,
+        config.queue.max_bytes_per_peer,
+        config.queue.max_packet_age_millis
     );
     println!(
         "resources: {} concurrent packet streams",
