@@ -45,16 +45,18 @@ Kademlia prevents overlay provider advertisement and lookup.
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
-path, overlay network name, and whether native QUIC datagrams are currently
-supported. The current local capability advertises direct QUIC streams as
-preferred and native QUIC datagrams as unsupported, so peers do not negotiate an
-unreliable data path before one is implemented. Outbound queue draining respects
-the peer's advertised effective MTU and drops oversized packets before sending
-them to the packet stream fallback. Capability requests from unconfigured peers
-are rejected, and configured peers are only accepted when they advertise the
-same overlay network name, compatible wire version, packet protocol, packet
-header length, matching membership tag when a key is configured, known
-preferred path, coherent datagram support, and non-zero effective MTU.
+path, overlay network name, advertised route prefixes, and whether native QUIC
+datagrams are currently supported. The current local capability advertises the
+node's built-in IPv4 and IPv6 host routes, direct QUIC streams as preferred, and
+native QUIC datagrams as unsupported, so peers do not negotiate an unreliable
+data path before one is implemented. Outbound queue draining respects the
+peer's advertised effective MTU and drops oversized packets before sending them
+to the packet stream fallback. Capability requests from unconfigured peers are
+rejected, and configured peers are only accepted when they advertise the same
+overlay network name, compatible wire version, packet protocol, packet header
+length, matching membership tag when a key is configured, known preferred path,
+coherent datagram support, non-zero effective MTU, and no route prefixes outside
+their configured ownership.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
@@ -77,7 +79,10 @@ unexpected payload, or malformed packet instead of relying on request timeout.
 Route ownership is static and exclusive. Each configured peer may own its
 built-in host routes plus any advertised prefixes, but route compilation rejects
 overlapping prefixes owned by different peers, including more-specific prefixes
-that would hijack another peer's aggregate route.
+that would hijack another peer's aggregate route. Runtime route advertisements
+are treated as claims, not as dynamic routing input: advertised prefixes must
+match the local static route table for the authenticated libp2p peer, and the
+local node keeps using its configured route metrics for forwarding decisions.
 
 Outbound packet draining is path-aware. The runtime records direct TCP, direct
 QUIC stream, and circuit-relay paths from libp2p connection events, marks paths

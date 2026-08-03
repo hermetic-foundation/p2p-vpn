@@ -18,10 +18,28 @@ const MAX_CONTROL_MESSAGE_LEN: usize = 4096;
 pub struct ControlCodec;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ControlRoute {
+    pub prefix: String,
+    pub metric: u16,
+}
+
+impl ControlRoute {
+    #[must_use]
+    pub fn new(prefix: impl Into<String>, metric: u16) -> Self {
+        Self {
+            prefix: prefix.into(),
+            metric,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ControlCapabilities {
     pub network_name: String,
     #[serde(default)]
     pub membership_tag: Option<String>,
+    #[serde(default)]
+    pub advertised_routes: Vec<ControlRoute>,
     pub wire_version: u8,
     pub packet_protocol: String,
     pub packet_header_len: usize,
@@ -37,6 +55,7 @@ impl ControlCapabilities {
         Self {
             network_name: network_name.to_owned(),
             membership_tag,
+            advertised_routes: Vec::new(),
             wire_version: WIRE_VERSION,
             packet_protocol: PACKET_PROTOCOL.to_owned(),
             packet_header_len: HEADER_LEN,
@@ -44,6 +63,12 @@ impl ControlCapabilities {
             preferred_path: preferred_path.wire_name().to_owned(),
             supports_quic_datagrams: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_advertised_routes(mut self, routes: Vec<ControlRoute>) -> Self {
+        self.advertised_routes = routes;
+        self
     }
 }
 
@@ -68,6 +93,7 @@ pub enum ControlRejectionReason {
     UnsupportedPacketHeaderLength,
     InvalidEffectiveMtu,
     UnsupportedPreferredPath,
+    UnauthorizedRouteAdvertisement,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -283,7 +309,10 @@ mod tests {
     async fn control_codec_round_trips_capabilities() {
         let mut codec = ControlCodec;
         let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
-        let request = ControlRequest::Capabilities(ControlCapabilities::local("lab", None, 1280));
+        let request = ControlRequest::Capabilities(
+            ControlCapabilities::local("lab", None, 1280)
+                .with_advertised_routes(vec![ControlRoute::new("100.64.1.2/32", 0)]),
+        );
         let mut written = Cursor::new(Vec::new());
 
         request_response::Codec::write_request(
@@ -301,6 +330,24 @@ mod tests {
             .expect("read request");
 
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn capabilities_decode_missing_advertised_routes_as_empty() {
+        let payload = serde_json::json!({
+            "network_name": "lab",
+            "wire_version": WIRE_VERSION,
+            "packet_protocol": PACKET_PROTOCOL,
+            "packet_header_len": HEADER_LEN,
+            "effective_mtu": 1280,
+            "preferred_path": "direct_quic_stream",
+            "supports_quic_datagrams": false
+        });
+
+        let capabilities: ControlCapabilities =
+            serde_json::from_value(payload).expect("capabilities decode");
+
+        assert!(capabilities.advertised_routes.is_empty());
     }
 
     #[tokio::test]
@@ -352,6 +399,7 @@ mod tests {
         assert_eq!(capabilities.packet_header_len, HEADER_LEN);
         assert_eq!(capabilities.effective_mtu, 1420);
         assert_eq!(capabilities.preferred_path, "direct_quic_stream");
+        assert!(capabilities.advertised_routes.is_empty());
         assert!(!capabilities.supports_quic_datagrams);
     }
 

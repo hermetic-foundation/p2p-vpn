@@ -7,10 +7,11 @@ use libp2p::{PeerId as Libp2pPeerId, Swarm, request_response};
 
 use crate::{
     PeerId, Sequence, SessionId,
-    config::{Config, ConfigError},
+    config::{Config, ConfigError, RouteConfig},
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
+    route::{IpCidr, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
     runtime::{
+        control::ControlRoute,
         p2p::Behaviour,
         packet::{AuthorizedPeers, PacketResponse},
     },
@@ -162,6 +163,45 @@ impl Forwarder {
 
     pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
         self.peers.keys().copied()
+    }
+
+    #[must_use]
+    pub fn local_advertised_routes(&self) -> Vec<ControlRoute> {
+        [
+            (
+                IpCidr::new(IpAddr::V4(builtin_ipv4(self.local_peer)), 32)
+                    .expect("built-in IPv4 host prefix is valid"),
+                0,
+            ),
+            (
+                IpCidr::new(IpAddr::V6(builtin_ipv6(self.local_peer)), 128)
+                    .expect("built-in IPv6 host prefix is valid"),
+                0,
+            ),
+        ]
+        .into_iter()
+        .map(|(prefix, metric)| ControlRoute::new(prefix.to_string(), metric))
+        .collect()
+    }
+
+    #[must_use]
+    pub fn authorizes_advertised_routes(
+        &self,
+        peer: Libp2pPeerId,
+        routes: &[ControlRoute],
+    ) -> bool {
+        let owner = PeerId::from_libp2p(peer);
+        routes.iter().all(|route| {
+            let Ok(prefix) = (RouteConfig {
+                prefix: route.prefix.clone(),
+                metric: route.metric,
+            })
+            .prefix() else {
+                return false;
+            };
+
+            self.routes.authorizes_route(owner, prefix)
+        })
     }
 
     fn packet_frame(&self, packet: &Packet) -> Result<Frame, ForwardError> {
@@ -415,7 +455,9 @@ mod tests {
     use libp2p::identity::Keypair;
 
     use crate::{
-        config::{InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
+        config::{
+            InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig, RouteConfig,
+        },
         route::{builtin_ipv4, builtin_ipv6},
         runtime::p2p::{HostConfig, build_node},
         wire::Header,
@@ -533,6 +575,50 @@ mod tests {
                 .accept_inbound_packet(remote, &frame)
                 .expect("packet accepted"),
             frame.payload.as_slice()
+        );
+    }
+
+    #[test]
+    fn local_advertised_routes_include_builtin_host_routes() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let config = config_for(remote);
+        let local = config.local_peer_id().expect("local peer");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert_eq!(
+            forwarder.local_advertised_routes(),
+            vec![
+                ControlRoute::new(format!("{}/32", builtin_ipv4(local)), 0),
+                ControlRoute::new(format!("{}/128", builtin_ipv6(local)), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn advertised_routes_must_match_configured_peer_ownership() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut config = config_for(remote);
+        config.peers[0].routes.push(RouteConfig {
+            prefix: "10.42.0.0/24".to_owned(),
+            metric: 100,
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(forwarder.authorizes_advertised_routes(
+            remote,
+            &[
+                ControlRoute::new(format!("{}/32", builtin_ipv4(remote_overlay)), 0),
+                ControlRoute::new("10.42.0.0/24", 1),
+            ],
+        ));
+        assert!(
+            !forwarder
+                .authorizes_advertised_routes(remote, &[ControlRoute::new("10.42.9.0/24", 0)])
+        );
+        assert!(
+            !forwarder
+                .authorizes_advertised_routes(remote, &[ControlRoute::new("not-a-prefix", 0)])
         );
     }
 

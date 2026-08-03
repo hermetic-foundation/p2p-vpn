@@ -174,6 +174,13 @@ impl RouteTable {
             Err(RouteError::UnauthorizedSource { peer, source })
         }
     }
+
+    #[must_use]
+    pub fn authorizes_route(&self, peer: PeerId, prefix: IpCidr) -> bool {
+        self.routes
+            .iter()
+            .any(|route| route.owner == peer && route.prefix == prefix)
+    }
 }
 
 fn prefix_matches<T>(network: T, address: T, prefix_len: u8) -> bool
@@ -340,6 +347,25 @@ mod tests {
                 metric: 0,
             })
             .expect("same owner more-specific route");
+    }
+
+    #[test]
+    fn route_table_authorizes_exact_route_ownership() {
+        let mut table = RouteTable::new();
+        let aggregate = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap();
+        let more_specific = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 9, 0)), 24).unwrap();
+
+        table
+            .insert_authorized(Route {
+                owner: peer(7),
+                prefix: aggregate,
+                metric: 10,
+            })
+            .expect("aggregate route");
+
+        assert!(table.authorizes_route(peer(7), aggregate));
+        assert!(!table.authorizes_route(peer(8), aggregate));
+        assert!(!table.authorizes_route(peer(7), more_specific));
     }
 
     #[test]

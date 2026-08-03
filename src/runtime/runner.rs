@@ -110,7 +110,8 @@ pub async fn run_node(
     let mut queue_expiry_tick =
         tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
     let local_capabilities =
-        ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu);
+        ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
+            .with_advertised_routes(forwarder.local_advertised_routes());
     redial_tick.tick().await;
     if let Some(tick) = &mut kademlia_refresh_tick {
         tick.tick().await;
@@ -816,9 +817,13 @@ fn handle_control_response(
 ) {
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            if let Some(reason) =
-                validate_capabilities(&capabilities, expected_network, expected_membership_tag)
-            {
+            if let Some(reason) = validate_peer_capabilities(
+                forwarder,
+                peer,
+                &capabilities,
+                expected_network,
+                expected_membership_tag,
+            ) {
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
             } else {
@@ -852,7 +857,33 @@ fn capability_response_for_peer(
         return rejected_capabilities_response(reason);
     }
 
+    if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
+        return rejected_capabilities_response(
+            ControlRejectionReason::UnauthorizedRouteAdvertisement,
+        );
+    }
+
     accepted_capabilities_response(local_capabilities)
+}
+
+fn validate_peer_capabilities(
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+    expected_network: &str,
+    expected_membership_tag: Option<&str>,
+) -> Option<ControlRejectionReason> {
+    if let Some(reason) =
+        validate_capabilities(capabilities, expected_network, expected_membership_tag)
+    {
+        return Some(reason);
+    }
+
+    if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
+        return Some(ControlRejectionReason::UnauthorizedRouteAdvertisement);
+    }
+
+    None
 }
 
 fn record_peer_capabilities(
@@ -1400,9 +1431,10 @@ mod tests {
     use crate::{
         config::{
             BootstrapPeerConfig, Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
-            RelayConfig, ResourceConfig,
+            RelayConfig, ResourceConfig, RouteConfig,
         },
         route::builtin_ipv4,
+        runtime::control::ControlRoute,
     };
 
     use super::*;
@@ -2157,6 +2189,112 @@ mod tests {
                 &local_capabilities,
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
+        );
+    }
+
+    #[test]
+    fn capability_response_accepts_authorized_route_advertisements() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_advertised_routes(vec![
+                ControlRoute::new(format!("{}/32", builtin_ipv4(remote_overlay)), 0),
+                ControlRoute::new("10.42.0.0/24", 100),
+            ]);
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &remote_capabilities,
+                &local_capabilities,
+            ),
+            ControlResponse::CapabilitiesAccepted(local_capabilities)
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_unauthorized_route_advertisements() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_advertised_routes(vec![ControlRoute::new("10.42.0.0/24", 0)]);
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &remote_capabilities,
+                &ControlCapabilities::local("lab", None, 1280),
+            ),
+            ControlResponse::CapabilitiesRejected(
+                ControlRejectionReason::UnauthorizedRouteAdvertisement
+            )
         );
     }
 
