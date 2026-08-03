@@ -327,6 +327,12 @@ pub struct QueueConfig {
     pub max_packet_age_millis: u64,
 }
 
+impl Default for QueueConfig {
+    fn default() -> Self {
+        default_queue()
+    }
+}
+
 impl QueueConfig {
     #[must_use]
     pub fn max_packet_age(self) -> std::time::Duration {
@@ -425,6 +431,8 @@ pub struct InitConfigTemplate {
     pub peers: Vec<InitPeer>,
     pub discovery: DiscoveryConfig,
     pub relay: RelayConfig,
+    pub queue: QueueConfig,
+    pub resources: ResourceConfig,
 }
 
 impl InitConfigTemplate {
@@ -462,8 +470,8 @@ impl InitConfigTemplate {
                 mtu: self.mtu,
             },
             peers,
-            queue: default_queue(),
-            resources: default_resources(),
+            queue: self.queue,
+            resources: self.resources,
         }
     }
 }
@@ -1495,7 +1503,30 @@ mod tests {
             relay: RelayConfig {
                 server: true,
                 reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{remote}/p2p-circuit")],
-                resources: RelayResourceConfig::default(),
+                resources: RelayResourceConfig {
+                    max_reservations: 17,
+                    max_reservations_per_peer: 3,
+                    reservation_duration_secs: 45,
+                    max_circuits: 19,
+                    max_circuits_per_peer: 5,
+                    max_circuit_duration_secs: 23,
+                    max_circuit_bytes: 4096,
+                },
+            },
+            queue: QueueConfig {
+                max_packets_per_peer: 12,
+                max_bytes_per_peer: 8192,
+                max_packet_age_millis: 250,
+            },
+            resources: ResourceConfig {
+                max_concurrent_control_streams: 11,
+                max_concurrent_packet_streams: 22,
+                max_pending_incoming_connections: 33,
+                max_pending_outgoing_connections: 44,
+                max_established_incoming_connections: 55,
+                max_established_outgoing_connections: 66,
+                max_established_connections_per_peer: 7,
+                max_established_connections: 88,
             },
         }
         .into_config();
@@ -1525,7 +1556,36 @@ mod tests {
         assert!(decoded.network.relay.server);
         assert_eq!(
             decoded.network.relay.resources,
-            RelayResourceConfig::default()
+            RelayResourceConfig {
+                max_reservations: 17,
+                max_reservations_per_peer: 3,
+                reservation_duration_secs: 45,
+                max_circuits: 19,
+                max_circuits_per_peer: 5,
+                max_circuit_duration_secs: 23,
+                max_circuit_bytes: 4096,
+            }
+        );
+        assert_eq!(
+            decoded.queue,
+            QueueConfig {
+                max_packets_per_peer: 12,
+                max_bytes_per_peer: 8192,
+                max_packet_age_millis: 250,
+            }
+        );
+        assert_eq!(
+            decoded.resources,
+            ResourceConfig {
+                max_concurrent_control_streams: 11,
+                max_concurrent_packet_streams: 22,
+                max_pending_incoming_connections: 33,
+                max_pending_outgoing_connections: 44,
+                max_established_incoming_connections: 55,
+                max_established_outgoing_connections: 66,
+                max_established_connections_per_peer: 7,
+                max_established_connections: 88,
+            }
         );
         assert!(!decoded.network.discovery.kademlia);
         assert_eq!(decoded.peers.len(), 1);

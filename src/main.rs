@@ -4,8 +4,8 @@ use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
     config::{
-        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, RelayConfig, RelayResourceConfig,
-        RouteConfig, RuntimeDefaults,
+        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, QueueConfig, RelayConfig,
+        RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
     },
     identity::NodeIdentity,
     metrics::RuntimeMetrics,
@@ -58,6 +58,42 @@ enum Command {
         relay_reservations: Vec<String>,
         #[arg(long)]
         relay_server: bool,
+        #[arg(long, default_value_t = 128)]
+        relay_max_reservations: usize,
+        #[arg(long, default_value_t = 4)]
+        relay_max_reservations_per_peer: usize,
+        #[arg(long, default_value_t = 3_600)]
+        relay_reservation_duration_secs: u64,
+        #[arg(long, default_value_t = 16)]
+        relay_max_circuits: usize,
+        #[arg(long, default_value_t = 4)]
+        relay_max_circuits_per_peer: usize,
+        #[arg(long, default_value_t = 120)]
+        relay_max_circuit_duration_secs: u64,
+        #[arg(long, default_value_t = 131_072)]
+        relay_max_circuit_bytes: u64,
+        #[arg(long, default_value_t = 256)]
+        queue_max_packets_per_peer: usize,
+        #[arg(long, default_value_t = 524_288)]
+        queue_max_bytes_per_peer: usize,
+        #[arg(long, default_value_t = 1_000)]
+        queue_max_packet_age_millis: u64,
+        #[arg(long, default_value_t = 64)]
+        max_concurrent_control_streams: usize,
+        #[arg(long, default_value_t = 256)]
+        max_concurrent_packet_streams: usize,
+        #[arg(long, default_value_t = 64)]
+        max_pending_incoming_connections: u32,
+        #[arg(long, default_value_t = 64)]
+        max_pending_outgoing_connections: u32,
+        #[arg(long, default_value_t = 256)]
+        max_established_incoming_connections: u32,
+        #[arg(long, default_value_t = 256)]
+        max_established_outgoing_connections: u32,
+        #[arg(long, default_value_t = 8)]
+        max_established_connections_per_peer: u32,
+        #[arg(long, default_value_t = 512)]
+        max_established_connections: u32,
         #[arg(long)]
         disable_mdns: bool,
         #[arg(long)]
@@ -110,6 +146,24 @@ async fn main() -> Result<(), String> {
             peer_routes,
             relay_reservations,
             relay_server,
+            relay_max_reservations,
+            relay_max_reservations_per_peer,
+            relay_reservation_duration_secs,
+            relay_max_circuits,
+            relay_max_circuits_per_peer,
+            relay_max_circuit_duration_secs,
+            relay_max_circuit_bytes,
+            queue_max_packets_per_peer,
+            queue_max_bytes_per_peer,
+            queue_max_packet_age_millis,
+            max_concurrent_control_streams,
+            max_concurrent_packet_streams,
+            max_pending_incoming_connections,
+            max_pending_outgoing_connections,
+            max_established_incoming_connections,
+            max_established_outgoing_connections,
+            max_established_connections_per_peer,
+            max_established_connections,
             disable_mdns,
             disable_kademlia,
             kademlia_protocol,
@@ -139,7 +193,30 @@ async fn main() -> Result<(), String> {
             relay: RelayConfig {
                 server: relay_server,
                 reservations: relay_reservations,
-                resources: RelayResourceConfig::default(),
+                resources: RelayResourceConfig {
+                    max_reservations: relay_max_reservations,
+                    max_reservations_per_peer: relay_max_reservations_per_peer,
+                    reservation_duration_secs: relay_reservation_duration_secs,
+                    max_circuits: relay_max_circuits,
+                    max_circuits_per_peer: relay_max_circuits_per_peer,
+                    max_circuit_duration_secs: relay_max_circuit_duration_secs,
+                    max_circuit_bytes: relay_max_circuit_bytes,
+                },
+            },
+            queue: QueueConfig {
+                max_packets_per_peer: queue_max_packets_per_peer,
+                max_bytes_per_peer: queue_max_bytes_per_peer,
+                max_packet_age_millis: queue_max_packet_age_millis,
+            },
+            resources: ResourceConfig {
+                max_concurrent_packet_streams,
+                max_concurrent_control_streams,
+                max_pending_incoming_connections,
+                max_pending_outgoing_connections,
+                max_established_incoming_connections,
+                max_established_outgoing_connections,
+                max_established_connections_per_peer,
+                max_established_connections,
             },
             force,
         }),
@@ -169,6 +246,8 @@ struct InitConfigArgs {
     peer_routes: Vec<PeerRouteArg>,
     discovery: DiscoveryConfig,
     relay: RelayConfig,
+    queue: QueueConfig,
+    resources: ResourceConfig,
     force: bool,
 }
 
@@ -315,6 +394,8 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
         relay: args.relay,
+        queue: args.queue,
+        resources: args.resources,
     }
     .into_config();
     config
@@ -798,6 +879,22 @@ mod tests {
             "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
             "--peer-route",
             "12D3KooWPeer=10.42.0.0/24,250",
+            "--relay-max-reservations",
+            "17",
+            "--relay-max-circuits",
+            "19",
+            "--queue-max-packets-per-peer",
+            "12",
+            "--queue-max-bytes-per-peer",
+            "8192",
+            "--queue-max-packet-age-millis",
+            "250",
+            "--max-concurrent-control-streams",
+            "11",
+            "--max-concurrent-packet-streams",
+            "22",
+            "--max-established-connections",
+            "88",
         ])
         .expect("cli");
 
@@ -807,6 +904,14 @@ mod tests {
             peer_routes,
             kademlia_protocol,
             membership_key,
+            relay_max_reservations,
+            relay_max_circuits,
+            queue_max_packets_per_peer,
+            queue_max_bytes_per_peer,
+            queue_max_packet_age_millis,
+            max_concurrent_control_streams,
+            max_concurrent_packet_streams,
+            max_established_connections,
             ..
         } = cli.command
         else {
@@ -844,5 +949,13 @@ mod tests {
             membership_key.as_deref(),
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         );
+        assert_eq!(relay_max_reservations, 17);
+        assert_eq!(relay_max_circuits, 19);
+        assert_eq!(queue_max_packets_per_peer, 12);
+        assert_eq!(queue_max_bytes_per_peer, 8192);
+        assert_eq!(queue_max_packet_age_millis, 250);
+        assert_eq!(max_concurrent_control_streams, 11);
+        assert_eq!(max_concurrent_packet_streams, 22);
+        assert_eq!(max_established_connections, 88);
     }
 }

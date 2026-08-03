@@ -160,6 +160,11 @@ cargo run -- init-config \
   --listen-address /ip4/0.0.0.0/tcp/0 \
   --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
   --local-route 10.41.0.0/24,100 \
+  --queue-max-packets-per-peer 256 \
+  --queue-max-bytes-per-peer 524288 \
+  --queue-max-packet-age-millis 1000 \
+  --max-concurrent-control-streams 64 \
+  --max-concurrent-packet-streams 256 \
   --external-address /dns4/node-a.example.net/udp/4001/quic-v1
 ```
 
@@ -196,7 +201,13 @@ libp2p should advertise to peers in addition to observed addresses learned
 through identify and confirmed through AutoNAT. Use
 `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
-the generated config.
+the generated config. Use the `--queue-*`, `--max-concurrent-*`, and
+`--max-*-connections*` flags to tune per-peer packet buffering, stream pressure,
+and swarm connection limits in generated configs instead of hand-editing JSON.
+Relay-capable nodes can also set `--relay-max-reservations`,
+`--relay-max-reservations-per-peer`, `--relay-reservation-duration-secs`,
+`--relay-max-circuits`, `--relay-max-circuits-per-peer`,
+`--relay-max-circuit-duration-secs`, and `--relay-max-circuit-bytes`.
 
 Run local checks:
 
