@@ -5,7 +5,7 @@ use std::{
     str::FromStr,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     PathKind, PeerId,
@@ -15,7 +15,7 @@ use crate::{
     wire::MAX_PAYLOAD_LEN,
 };
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Config {
     pub network: NetworkConfig,
     #[serde(default = "default_interface")]
@@ -114,7 +114,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NetworkConfig {
     pub name: String,
     pub local_peer: String,
@@ -130,7 +130,7 @@ pub struct NetworkConfig {
     pub relay: RelayConfig,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BootstrapPeerConfig {
     pub id: String,
     pub address: String,
@@ -142,7 +142,7 @@ impl BootstrapPeerConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DiscoveryConfig {
     #[serde(default = "default_true")]
     pub mdns: bool,
@@ -158,7 +158,7 @@ impl Default for DiscoveryConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelayConfig {
     #[serde(default)]
     pub server: bool,
@@ -166,13 +166,13 @@ pub struct RelayConfig {
     pub reservations: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InterfaceConfig {
     pub name: String,
     pub mtu: u16,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PeerConfig {
     pub id: String,
     #[serde(default)]
@@ -189,7 +189,7 @@ impl PeerConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RouteConfig {
     pub prefix: String,
     #[serde(default)]
@@ -202,7 +202,7 @@ impl RouteConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct QueueConfig {
     pub max_packets_per_peer: usize,
     pub max_bytes_per_peer: usize,
@@ -217,7 +217,7 @@ impl QueueConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ResourceConfig {
     #[serde(default = "default_max_concurrent_packet_streams")]
     pub max_concurrent_packet_streams: usize,
@@ -260,6 +260,63 @@ impl Default for RuntimeDefaults {
                 PathKind::CircuitRelay,
             ],
             initial_mtu: 1_280,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitPeer {
+    pub id: String,
+    pub address: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitConfigTemplate {
+    pub identity: NodeIdentity,
+    pub network_name: String,
+    pub interface_name: String,
+    pub mtu: u16,
+    pub listen_addresses: Vec<String>,
+    pub bootstrap_peers: Vec<InitPeer>,
+    pub peers: Vec<InitPeer>,
+    pub discovery: DiscoveryConfig,
+    pub relay: RelayConfig,
+}
+
+impl InitConfigTemplate {
+    #[must_use]
+    pub fn into_config(self) -> Config {
+        let mut peers: Vec<PeerConfig> = Vec::new();
+        for peer in self.peers {
+            upsert_peer(&mut peers, peer);
+        }
+
+        Config {
+            network: NetworkConfig {
+                name: self.network_name,
+                local_peer: self.identity.peer_id,
+                private_key: Some(self.identity.private_key),
+                listen_addresses: self.listen_addresses,
+                bootstrap_peers: self
+                    .bootstrap_peers
+                    .into_iter()
+                    .filter_map(|peer| {
+                        peer.address.map(|address| BootstrapPeerConfig {
+                            id: peer.id,
+                            address,
+                        })
+                    })
+                    .collect(),
+                discovery: self.discovery,
+                relay: self.relay,
+            },
+            interface: InterfaceConfig {
+                name: self.interface_name,
+                mtu: self.mtu,
+            },
+            peers,
+            queue: default_queue(),
+            resources: default_resources(),
         }
     }
 }
@@ -409,6 +466,24 @@ fn normalize_address(address: IpAddr, prefix_len: u8) -> IpAddr {
             IpAddr::V6(Ipv6Addr::from(u128::from(address) & mask))
         }
     }
+}
+
+fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
+    if let Some(existing) = peers.iter_mut().find(|existing| existing.id == peer.id) {
+        if let Some(address) = peer.address
+            && !existing.addresses.contains(&address)
+        {
+            existing.addresses.push(address);
+        }
+        return;
+    }
+
+    peers.push(PeerConfig {
+        id: peer.id,
+        name: None,
+        addresses: peer.address.into_iter().collect(),
+        routes: Vec::new(),
+    });
 }
 
 fn ipv4_mask(prefix_len: u8) -> u32 {
@@ -617,6 +692,72 @@ mod tests {
         assert!(config.network.relay.server);
         assert!(!config.network.discovery.mdns);
         assert_eq!(config.resources.packet_stream_limit(), 256);
+    }
+
+    #[test]
+    fn init_config_template_generates_loadable_runtime_config() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let remote = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let config = InitConfigTemplate {
+            identity: identity.clone(),
+            network_name: "lab".to_owned(),
+            interface_name: "hs-lab".to_owned(),
+            mtu: 1_400,
+            listen_addresses: vec![
+                "/ip4/0.0.0.0/tcp/0".to_owned(),
+                "/ip4/0.0.0.0/udp/0/quic-v1".to_owned(),
+            ],
+            bootstrap_peers: vec![InitPeer {
+                id: remote.to_string(),
+                address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+            }],
+            peers: vec![
+                InitPeer {
+                    id: remote.to_string(),
+                    address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                },
+                InitPeer {
+                    id: remote.to_string(),
+                    address: Some("/ip4/127.0.0.1/udp/4001/quic-v1".to_owned()),
+                },
+                InitPeer {
+                    id: remote.to_string(),
+                    address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                },
+            ],
+            discovery: DiscoveryConfig {
+                mdns: true,
+                kademlia: false,
+                dcutr: true,
+            },
+            relay: RelayConfig {
+                server: true,
+                reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{remote}/p2p-circuit")],
+            },
+        }
+        .into_config();
+        let rendered = serde_json::to_string_pretty(&config).expect("rendered config");
+        let decoded = serde_json::from_str::<Config>(&rendered).expect("decoded config");
+
+        assert_eq!(decoded.network.local_peer, identity.peer_id);
+        assert_eq!(
+            decoded.network.private_key.as_deref(),
+            Some(identity.private_key.as_str())
+        );
+        assert_eq!(decoded.interface.name, "hs-lab");
+        assert_eq!(decoded.interface.mtu, 1_400);
+        assert_eq!(decoded.network.bootstrap_peers.len(), 1);
+        assert!(decoded.network.relay.server);
+        assert!(!decoded.network.discovery.kademlia);
+        assert_eq!(decoded.peers.len(), 1);
+        assert_eq!(decoded.peers[0].addresses.len(), 2);
+        assert!(decoded.identity().is_ok());
+        assert!(decoded.listen_multiaddrs().is_ok());
+        assert!(decoded.bootstrap_multiaddrs().is_ok());
+        assert_eq!(decoded.peer_multiaddrs().expect("peer addresses").len(), 2);
+        assert!(decoded.relay_reservation_multiaddrs().is_ok());
     }
 
     #[test]

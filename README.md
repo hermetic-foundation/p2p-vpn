@@ -93,6 +93,34 @@ Generate a libp2p identity:
 cargo run -- keygen
 ```
 
+Generate a starter node config with a new private key:
+
+```sh
+cargo run -- init-config \
+  --network lab \
+  --output node-a.json \
+  --listen-address /ip4/0.0.0.0/tcp/0 \
+  --listen-address /ip4/0.0.0.0/udp/0/quic-v1
+```
+
+Generate another node config that knows how to dial node A:
+
+```sh
+cargo run -- init-config \
+  --network lab \
+  --output node-b.json \
+  --listen-address /ip4/0.0.0.0/tcp/0 \
+  --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
+  --peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1 \
+  --bootstrap-peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1
+```
+
+Use `--private-key` to regenerate a config for an existing identity, `--force`
+to overwrite an existing file, and `--output -` to print the generated JSON to
+stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
+`--bootstrap-peer PEER_ID=MULTIADDR` for overlay-scoped Kademlia bootstrap
+nodes.
+
 Run local checks:
 
 ```sh
