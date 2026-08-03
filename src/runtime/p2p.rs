@@ -11,7 +11,7 @@ use libp2p::{
 };
 
 use crate::{
-    config::DiscoveryConfig,
+    config::{DiscoveryConfig, RelayResourceConfig},
     identity::{IdentityError, NodeIdentity},
     runtime::{
         control::{self, ControlCodec},
@@ -54,6 +54,7 @@ pub struct HostConfig {
     pub known_peers: Vec<(PeerId, Multiaddr)>,
     pub relay_reservations: Vec<Multiaddr>,
     pub relay_server: bool,
+    pub relay_resources: RelayResourceConfig,
     pub discovery: DiscoveryConfig,
 }
 
@@ -81,6 +82,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     let discovery = config.discovery;
     let relay_server = config.relay_server;
+    let relay_resources = config.relay_resources;
     let mtu = config.mtu;
     let control_streams = config.max_concurrent_control_streams;
     let packet_streams = config.max_concurrent_packet_streams;
@@ -123,7 +125,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     kad,
                     relay,
                     relay_server: relay_server
-                        .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default()))
+                        .then(|| {
+                            relay::Behaviour::new(local_peer_id, relay_resources.to_libp2p_config())
+                        })
                         .into(),
                     dcutr: discovery
                         .dcutr
@@ -321,6 +325,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node should build");
@@ -353,6 +358,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery,
         })
         .expect("node should build");
@@ -387,6 +393,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation],
             relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node");
@@ -466,6 +473,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
@@ -482,6 +490,7 @@ mod tests {
             known_peers: vec![(listener.local_peer_id, listener_address)],
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
@@ -513,6 +522,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
@@ -529,6 +539,7 @@ mod tests {
             known_peers: vec![(listener.local_peer_id, listener_address)],
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
@@ -570,6 +581,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery,
         })
         .expect("relay node");
@@ -593,6 +605,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: vec![relayed_listener_address.clone()],
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery,
         })
         .expect("listener node");
@@ -624,6 +637,7 @@ mod tests {
             known_peers: vec![(listener_peer, relayed_target_address)],
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery,
         })
         .expect("dialer node");

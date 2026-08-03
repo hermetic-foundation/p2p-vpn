@@ -3,7 +3,10 @@ use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
-    config::{Config, DiscoveryConfig, InitConfigTemplate, InitPeer, RelayConfig, RuntimeDefaults},
+    config::{
+        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, RelayConfig, RelayResourceConfig,
+        RuntimeDefaults,
+    },
     identity::NodeIdentity,
     metrics::RuntimeMetrics,
     queue::QueueStats,
@@ -111,6 +114,7 @@ async fn main() -> Result<(), String> {
             relay: RelayConfig {
                 server: relay_server,
                 reservations: relay_reservations,
+                resources: RelayResourceConfig::default(),
             },
             force,
         }),
@@ -301,6 +305,16 @@ fn status(path: &PathBuf) -> Result<(), String> {
     println!(
         "relay reservations: {}",
         config.network.relay.reservations.len()
+    );
+    println!(
+        "relay resources: {} reservations / {} per peer / {}s reservation / {} circuits / {} per peer / {}s circuit / {} bytes",
+        config.network.relay.resources.max_reservations,
+        config.network.relay.resources.max_reservations_per_peer,
+        config.network.relay.resources.reservation_duration_secs,
+        config.network.relay.resources.max_circuits,
+        config.network.relay.resources.max_circuits_per_peer,
+        config.network.relay.resources.max_circuit_duration_secs,
+        config.network.relay.resources.max_circuit_bytes
     );
     println!(
         "configured peer addresses: {}",

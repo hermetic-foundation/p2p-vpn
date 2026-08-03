@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::Path,
     str::FromStr,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -174,6 +175,56 @@ pub struct RelayConfig {
     pub server: bool,
     #[serde(default)]
     pub reservations: Vec<String>,
+    #[serde(default)]
+    pub resources: RelayResourceConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RelayResourceConfig {
+    #[serde(default = "default_max_relay_reservations")]
+    pub max_reservations: usize,
+    #[serde(default = "default_max_relay_reservations_per_peer")]
+    pub max_reservations_per_peer: usize,
+    #[serde(default = "default_relay_reservation_duration_secs")]
+    pub reservation_duration_secs: u64,
+    #[serde(default = "default_max_relay_circuits")]
+    pub max_circuits: usize,
+    #[serde(default = "default_max_relay_circuits_per_peer")]
+    pub max_circuits_per_peer: usize,
+    #[serde(default = "default_relay_max_circuit_duration_secs")]
+    pub max_circuit_duration_secs: u64,
+    #[serde(default = "default_relay_max_circuit_bytes")]
+    pub max_circuit_bytes: u64,
+}
+
+impl Default for RelayResourceConfig {
+    fn default() -> Self {
+        Self {
+            max_reservations: default_max_relay_reservations(),
+            max_reservations_per_peer: default_max_relay_reservations_per_peer(),
+            reservation_duration_secs: default_relay_reservation_duration_secs(),
+            max_circuits: default_max_relay_circuits(),
+            max_circuits_per_peer: default_max_relay_circuits_per_peer(),
+            max_circuit_duration_secs: default_relay_max_circuit_duration_secs(),
+            max_circuit_bytes: default_relay_max_circuit_bytes(),
+        }
+    }
+}
+
+impl RelayResourceConfig {
+    #[must_use]
+    pub fn to_libp2p_config(self) -> libp2p::relay::Config {
+        libp2p::relay::Config {
+            max_reservations: self.max_reservations,
+            max_reservations_per_peer: self.max_reservations_per_peer,
+            reservation_duration: Duration::from_secs(self.reservation_duration_secs),
+            max_circuits: self.max_circuits,
+            max_circuits_per_peer: self.max_circuits_per_peer,
+            max_circuit_duration: Duration::from_secs(self.max_circuit_duration_secs),
+            max_circuit_bytes: self.max_circuit_bytes,
+            ..libp2p::relay::Config::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -419,6 +470,34 @@ const fn default_discovery() -> DiscoveryConfig {
         kademlia: true,
         dcutr: true,
     }
+}
+
+const fn default_max_relay_reservations() -> usize {
+    128
+}
+
+const fn default_max_relay_reservations_per_peer() -> usize {
+    4
+}
+
+const fn default_relay_reservation_duration_secs() -> u64 {
+    60 * 60
+}
+
+const fn default_max_relay_circuits() -> usize {
+    16
+}
+
+const fn default_max_relay_circuits_per_peer() -> usize {
+    4
+}
+
+const fn default_relay_max_circuit_duration_secs() -> u64 {
+    2 * 60
+}
+
+const fn default_relay_max_circuit_bytes() -> u64 {
+    1 << 17
 }
 
 fn default_interface() -> InterfaceConfig {
@@ -672,6 +751,7 @@ mod tests {
                 relay: RelayConfig {
                     server: true,
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{remote}/p2p-circuit")],
+                    resources: RelayResourceConfig::default(),
                 },
             },
             interface: InterfaceConfig {
@@ -817,6 +897,7 @@ mod tests {
             relay: RelayConfig {
                 server: true,
                 reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{remote}/p2p-circuit")],
+                resources: RelayResourceConfig::default(),
             },
         }
         .into_config();
@@ -832,6 +913,10 @@ mod tests {
         assert_eq!(decoded.interface.mtu, 1_400);
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);
         assert!(decoded.network.relay.server);
+        assert_eq!(
+            decoded.network.relay.resources,
+            RelayResourceConfig::default()
+        );
         assert!(!decoded.network.discovery.kademlia);
         assert_eq!(decoded.peers.len(), 1);
         assert_eq!(decoded.peers[0].addresses.len(), 2);
@@ -840,6 +925,62 @@ mod tests {
         assert!(decoded.bootstrap_multiaddrs().is_ok());
         assert_eq!(decoded.peer_multiaddrs().expect("peer addresses").len(), 2);
         assert!(decoded.relay_reservation_multiaddrs().is_ok());
+    }
+
+    #[test]
+    fn relay_resource_config_defaults_when_missing() {
+        let config = serde_json::from_str::<Config>(
+            r#"{
+              "network": {
+                "name": "dev",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                "relay": {
+                  "server": true,
+                  "reservations": []
+                }
+              },
+              "interface": {
+                "name": "hs0",
+                "mtu": 1280
+              }
+            }"#,
+        )
+        .expect("config");
+
+        assert!(config.network.relay.server);
+        assert_eq!(
+            config.network.relay.resources,
+            RelayResourceConfig::default()
+        );
+    }
+
+    #[test]
+    fn relay_resource_config_maps_to_libp2p_relay_limits() {
+        let resources = RelayResourceConfig {
+            max_reservations: 17,
+            max_reservations_per_peer: 3,
+            reservation_duration_secs: 45,
+            max_circuits: 19,
+            max_circuits_per_peer: 5,
+            max_circuit_duration_secs: 23,
+            max_circuit_bytes: 4096,
+        };
+
+        let relay = resources.to_libp2p_config();
+
+        assert_eq!(relay.max_reservations, 17);
+        assert_eq!(relay.max_reservations_per_peer, 3);
+        assert_eq!(
+            relay.reservation_duration,
+            std::time::Duration::from_secs(45)
+        );
+        assert_eq!(relay.max_circuits, 19);
+        assert_eq!(relay.max_circuits_per_peer, 5);
+        assert_eq!(
+            relay.max_circuit_duration,
+            std::time::Duration::from_secs(23)
+        );
+        assert_eq!(relay.max_circuit_bytes, 4096);
     }
 
     #[test]

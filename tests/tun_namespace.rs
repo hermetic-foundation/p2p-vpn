@@ -273,6 +273,7 @@ async fn run_ready_node(
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
         relay_server: config.network.relay.server,
+        relay_resources: config.network.relay.resources,
         discovery: config.network.discovery,
     })?;
     wait_for_listen_address(&mut node).await;

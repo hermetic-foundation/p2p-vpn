@@ -183,7 +183,16 @@ cargo test --test tun_namespace -- --ignored --nocapture
       "server": false,
       "reservations": [
         "/dns4/relay.example.net/tcp/4001/p2p/12D3KooWRelay.../p2p-circuit"
-      ]
+      ],
+      "resources": {
+        "max_reservations": 128,
+        "max_reservations_per_peer": 4,
+        "reservation_duration_secs": 3600,
+        "max_circuits": 16,
+        "max_circuits_per_peer": 4,
+        "max_circuit_duration_secs": 120,
+        "max_circuit_bytes": 131072
+      }
     }
   },
   "interface": {
@@ -226,7 +235,9 @@ one asks that relay for a circuit relay v2 reservation. Peer `addresses` may
 also contain full relayed target addresses such as
 `/dns4/relay.example.net/tcp/4001/p2p/<relay>/p2p-circuit/p2p/<peer>`. Set
 `relay.server` to `true` on nodes that should accept relay reservations and
-relay circuits for the overlay.
+relay circuits for the overlay. `relay.resources` maps to circuit relay v2
+server limits; its defaults match libp2p's relay defaults while retaining the
+library's default rate limiters.
 
 Inspect the compiled local view:
 

@@ -53,6 +53,7 @@ pub async fn run_config(
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
         relay_server: config.network.relay.server,
+        relay_resources: config.network.relay.resources,
         discovery: config.network.discovery,
     })?;
     let forwarder = Forwarder::from_config(&config)?;
@@ -1248,6 +1249,7 @@ mod tests {
                 relay: RelayConfig {
                     server: false,
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit")],
+                    resources: crate::config::RelayResourceConfig::default(),
                 },
             },
             interface: InterfaceConfig {
@@ -1609,6 +1611,7 @@ mod tests {
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
             relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node");
