@@ -344,11 +344,11 @@ pub struct RuntimeDefaults {
 impl Default for RuntimeDefaults {
     fn default() -> Self {
         Self {
-            preferred_path: PathKind::DirectQuicDatagram,
+            preferred_path: PathKind::DirectQuicStream,
             fallback_paths: [
-                PathKind::DirectQuicStream,
                 PathKind::DirectTcpStream,
                 PathKind::CircuitRelay,
+                PathKind::DirectQuicDatagram,
             ],
             initial_mtu: 1_280,
         }

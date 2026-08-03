@@ -30,13 +30,13 @@ pub struct ControlCapabilities {
 impl ControlCapabilities {
     #[must_use]
     pub fn local(effective_mtu: u16) -> Self {
-        let preferred_path = PathKind::DirectQuicDatagram;
+        let preferred_path = PathKind::DirectQuicStream;
         Self {
             wire_version: WIRE_VERSION,
             packet_protocol: PACKET_PROTOCOL.to_owned(),
             packet_header_len: HEADER_LEN,
             effective_mtu,
-            preferred_path: path_name(preferred_path).to_owned(),
+            preferred_path: preferred_path.wire_name().to_owned(),
             supports_quic_datagrams: false,
         }
     }
@@ -60,6 +60,7 @@ pub enum ControlRejectionReason {
     UnsupportedPacketProtocol,
     UnsupportedPacketHeaderLength,
     InvalidEffectiveMtu,
+    UnsupportedPreferredPath,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -104,6 +105,12 @@ pub fn validate_capabilities(capabilities: &ControlCapabilities) -> Option<Contr
     }
     if capabilities.effective_mtu == 0 {
         return Some(ControlRejectionReason::InvalidEffectiveMtu);
+    }
+    let Some(preferred_path) = PathKind::from_wire_name(&capabilities.preferred_path) else {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    };
+    if preferred_path.requires_quic_datagrams() && !capabilities.supports_quic_datagrams {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
 
     None
@@ -242,15 +249,6 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
 
-const fn path_name(path: PathKind) -> &'static str {
-    match path {
-        PathKind::DirectQuicDatagram => "direct_quic_datagram",
-        PathKind::DirectQuicStream => "direct_quic_stream",
-        PathKind::DirectTcpStream => "direct_tcp_stream",
-        PathKind::CircuitRelay => "circuit_relay",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use futures::io::Cursor;
@@ -328,7 +326,7 @@ mod tests {
         assert_eq!(capabilities.packet_protocol, PACKET_PROTOCOL);
         assert_eq!(capabilities.packet_header_len, HEADER_LEN);
         assert_eq!(capabilities.effective_mtu, 1420);
-        assert_eq!(capabilities.preferred_path, "direct_quic_datagram");
+        assert_eq!(capabilities.preferred_path, "direct_quic_stream");
         assert!(!capabilities.supports_quic_datagrams);
     }
 
@@ -376,5 +374,23 @@ mod tests {
             validate_capabilities(&capabilities),
             Some(ControlRejectionReason::InvalidEffectiveMtu)
         );
+
+        capabilities = ControlCapabilities::local(1280);
+        capabilities.preferred_path = "not_a_path".to_owned();
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::UnsupportedPreferredPath)
+        );
+
+        capabilities = ControlCapabilities::local(1280);
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        capabilities.supports_quic_datagrams = false;
+        assert_eq!(
+            validate_capabilities(&capabilities),
+            Some(ControlRejectionReason::UnsupportedPreferredPath)
+        );
+
+        capabilities.supports_quic_datagrams = true;
+        assert_eq!(validate_capabilities(&capabilities), None);
     }
 }

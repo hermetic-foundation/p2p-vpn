@@ -104,6 +104,32 @@ impl PathKind {
             Self::CircuitRelay => 30,
         }
     }
+
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::DirectQuicDatagram => "direct_quic_datagram",
+            Self::DirectQuicStream => "direct_quic_stream",
+            Self::DirectTcpStream => "direct_tcp_stream",
+            Self::CircuitRelay => "circuit_relay",
+        }
+    }
+
+    #[must_use]
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "direct_quic_datagram" => Some(Self::DirectQuicDatagram),
+            "direct_quic_stream" => Some(Self::DirectQuicStream),
+            "direct_tcp_stream" => Some(Self::DirectTcpStream),
+            "circuit_relay" => Some(Self::CircuitRelay),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn requires_quic_datagrams(self) -> bool {
+        matches!(self, Self::DirectQuicDatagram)
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +149,21 @@ mod tests {
             "abcd".parse::<PeerId>(),
             Err(PeerIdParseError::InvalidLength { actual: 4 })
         );
+    }
+
+    #[test]
+    fn path_kind_wire_names_round_trip() {
+        for path in [
+            PathKind::DirectQuicDatagram,
+            PathKind::DirectQuicStream,
+            PathKind::DirectTcpStream,
+            PathKind::CircuitRelay,
+        ] {
+            assert_eq!(PathKind::from_wire_name(path.wire_name()), Some(path));
+        }
+
+        assert_eq!(PathKind::from_wire_name("unknown"), None);
+        assert!(PathKind::DirectQuicDatagram.requires_quic_datagrams());
+        assert!(!PathKind::DirectQuicStream.requires_quic_datagrams());
     }
 }

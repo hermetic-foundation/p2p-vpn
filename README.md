@@ -5,8 +5,10 @@ Rust foundation for a Hyprspace-inspired peer-to-peer mesh VPN.
 The v2 design keeps libp2p as the identity, discovery, NAT traversal, and relay
 substrate while making the VPN data plane packet-oriented:
 
-- direct QUIC datagrams for preferred packet transport
-- framed libp2p streams as compatibility and relay fallback
+- direct QUIC streams as the current preferred operational packet transport
+- native QUIC datagrams as the intended promotion path when the libp2p data
+  plane exposes a usable datagram handle
+- framed libp2p streams as TCP and relay fallback
 - bounded per-peer packet queues with intentional drop policy
 - separate control, packet, and service protocol surfaces
 - explicit route ownership and source-address authorization
@@ -38,12 +40,15 @@ swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
-path, and whether native QUIC datagrams are currently supported. Outbound queue
-draining respects the peer's advertised effective MTU and drops oversized
-packets before sending them to the packet stream fallback. Capability requests
-from unconfigured peers are rejected, and configured peers are only accepted
-when they advertise a compatible wire version, packet protocol, packet header
-length, and non-zero effective MTU.
+path, and whether native QUIC datagrams are currently supported. The current
+local capability advertises direct QUIC streams as preferred and native QUIC
+datagrams as unsupported, so peers do not negotiate an unreliable data path
+before one is implemented. Outbound queue draining respects the peer's
+advertised effective MTU and drops oversized packets before sending them to the
+packet stream fallback. Capability requests from unconfigured peers are
+rejected, and configured peers are only accepted when they advertise a
+compatible wire version, packet protocol, packet header length, known preferred
+path, coherent datagram support, and non-zero effective MTU.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
