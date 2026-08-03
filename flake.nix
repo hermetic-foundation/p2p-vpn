@@ -31,6 +31,9 @@
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/p2p-vpn";
+          meta = {
+            description = "Run the p2p-vpn CLI";
+          };
         };
 
         checks = {
