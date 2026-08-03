@@ -162,6 +162,14 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
     },
+    Paths {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value_t = 10)]
+        timeout_seconds: u64,
+    },
     PeerStatus {
         peer: String,
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -288,6 +296,11 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(peers(&config, live, timeout_seconds)).await,
+        Command::Paths {
+            config,
+            live,
+            timeout_seconds,
+        } => Box::pin(paths(&config, live, timeout_seconds)).await,
         Command::PeerStatus {
             peer,
             config,
@@ -988,6 +1001,148 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
     }
 }
 
+async fn paths(path: &PathBuf, live: bool, timeout_seconds: u64) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+
+    let lines = if live {
+        Box::pin(path_lines_live(
+            &config,
+            Duration::from_secs(timeout_seconds.max(1)),
+        ))
+        .await?
+    } else {
+        path_lines_configured(&config)?
+    };
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn path_lines_configured(config: &Config) -> Result<Vec<String>, String> {
+    let defaults = RuntimeDefaults::default();
+    let mut lines = vec![
+        format!("peers: {}", config.peers.len()),
+        format!(
+            "preferred path: {} (score {})",
+            path_name(defaults.preferred_path),
+            defaults.preferred_path.default_score()
+        ),
+        format!(
+            "discovery paths: mdns={} kademlia={} dcutr={} autonat={}",
+            config.network.discovery.mdns,
+            config.network.discovery.kademlia,
+            config.network.discovery.dcutr,
+            config.network.discovery.autonat
+        ),
+        format!(
+            "relay reservation paths: {}",
+            config.network.relay.reservations.len()
+        ),
+    ];
+
+    push_configured_path_lines(&mut lines, config)?;
+
+    Ok(lines)
+}
+
+fn push_configured_path_lines(lines: &mut Vec<String>, config: &Config) -> Result<(), String> {
+    let mut candidate_count = 0usize;
+    for peer in &config.peers {
+        lines.push(format!(
+            "peer path candidates: {} {}",
+            peer.id,
+            peer.addresses.len()
+        ));
+        for address in &peer.addresses {
+            let kind = path_kind_for_multiaddr(address)?;
+            candidate_count = candidate_count.saturating_add(1);
+            lines.push(format!(
+                "peer path candidate: {} {} score {} address {}",
+                peer.id,
+                path_name(kind),
+                kind.default_score(),
+                address
+            ));
+        }
+        if peer.addresses.is_empty() {
+            lines.push(format!(
+                "peer path discovery: {} enabled {}",
+                peer.id,
+                config.network.discovery.mdns || config.network.discovery.kademlia
+            ));
+        }
+    }
+    lines.insert(1, format!("configured path candidates: {candidate_count}"));
+
+    Ok(())
+}
+
+async fn path_lines_live(config: &Config, timeout: Duration) -> Result<Vec<String>, String> {
+    let mut lines = path_lines_configured(config)?;
+    for peer in &config.peers {
+        let peer_id = peer
+            .id
+            .parse::<libp2p::PeerId>()
+            .expect("path config is valid");
+        match Box::pin(query_peer_status(config, peer_id, timeout)).await {
+            Ok(status) => push_peer_live_path_lines(&mut lines, &status),
+            Err(error) => lines.push(format!(
+                "peer live path: {} unreachable error {error:?}",
+                peer.id
+            )),
+        }
+    }
+
+    Ok(lines)
+}
+
+fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
+    let preferred_path = PathKind::from_wire_name(&status.capabilities.preferred_path)
+        .unwrap_or(PathKind::DirectQuicStream);
+    let path_probe_ready =
+        !preferred_path.requires_quic_datagrams() || status.service.supports_quic_datagrams;
+
+    lines.push(format!(
+        "peer live path: {} reachable preferred {} score {} mtu {} quic_datagrams {} path_probe_ready {}",
+        status.peer,
+        path_name(preferred_path),
+        preferred_path.default_score(),
+        status.service.effective_mtu,
+        status.service.supports_quic_datagrams,
+        path_probe_ready
+    ));
+}
+
+fn path_kind_for_multiaddr(address: &str) -> Result<PathKind, String> {
+    let address = address
+        .parse::<libp2p::Multiaddr>()
+        .map_err(|error| format!("failed to parse peer path address: {error:?}"))?;
+
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return Ok(PathKind::CircuitRelay);
+    }
+
+    if address.iter().any(|protocol| {
+        matches!(
+            protocol,
+            libp2p::multiaddr::Protocol::Quic | libp2p::multiaddr::Protocol::QuicV1
+        )
+    }) {
+        return Ok(PathKind::DirectQuicStream);
+    }
+
+    Ok(PathKind::DirectTcpStream)
+}
+
 async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -1566,6 +1721,128 @@ mod tests {
     }
 
     #[test]
+    fn path_lines_configured_report_direct_relay_and_discovery_candidates() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![
+                p2p_vpn::config::PeerConfig {
+                    id: remote.peer_id.clone(),
+                    name: Some("remote".to_owned()),
+                    addresses: vec![
+                        "/ip4/127.0.0.1/udp/4001/quic-v1".to_owned(),
+                        "/ip4/127.0.0.1/tcp/4001".to_owned(),
+                        format!(
+                            "/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit/p2p/{}",
+                            relay.peer_id, remote.peer_id
+                        ),
+                    ],
+                    routes: Vec::new(),
+                },
+                p2p_vpn::config::PeerConfig {
+                    id: relay.peer_id.clone(),
+                    name: Some("discovered".to_owned()),
+                    addresses: Vec::new(),
+                    routes: Vec::new(),
+                },
+            ],
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = path_lines_configured(&config).expect("path lines");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "configured path candidates: 3")
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer path candidate: {} direct QUIC stream score 75 address /ip4/127.0.0.1/udp/4001/quic-v1",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer path candidate: {} direct TCP stream score 60 address /ip4/127.0.0.1/tcp/4001",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer path discovery: {} enabled true",
+                relay.peer_id
+            )));
+        assert!(lines.iter().any(|line| {
+            line.starts_with(&format!(
+                "peer path candidate: {} circuit relay score 30 address ",
+                remote.peer_id
+            ))
+        }));
+    }
+
+    #[test]
+    fn peer_live_path_lines_report_probe_readiness() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities =
+            p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200);
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200),
+        };
+        let mut lines = Vec::new();
+
+        push_peer_live_path_lines(&mut lines, &status);
+
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 quic_datagrams false path_probe_ready false"
+            )));
+    }
+
+    #[test]
+    fn path_kind_for_multiaddr_prefers_relay_then_quic_then_tcp() {
+        assert_eq!(
+            path_kind_for_multiaddr(
+                "/ip4/127.0.0.1/tcp/4002/p2p/12D3KooWLSJY9r3syVF7eh1b5CAJSmQkHdHu1QMUGNXk7Nzd4y6f/p2p-circuit/p2p/12D3KooWBCGXBm96czaYf6X41Hd2mD879WoF5Jyi8YUxi2Tiz3aT"
+            ),
+            Ok(PathKind::CircuitRelay)
+        );
+        assert_eq!(
+            path_kind_for_multiaddr("/ip4/127.0.0.1/udp/4001/quic-v1"),
+            Ok(PathKind::DirectQuicStream)
+        );
+        assert_eq!(
+            path_kind_for_multiaddr("/ip4/127.0.0.1/tcp/4001"),
+            Ok(PathKind::DirectTcpStream)
+        );
+    }
+
+    #[test]
     fn cli_parses_peer_route_arguments() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -1689,6 +1966,33 @@ mod tests {
 
         assert_eq!(peer, "12D3KooWPeer");
         assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_paths_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "paths",
+            "--config",
+            "node-a.json",
+            "--live",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::Paths {
+            config,
+            live,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected paths command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert!(live);
         assert_eq!(timeout_seconds, 3);
     }
 

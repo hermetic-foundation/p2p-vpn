@@ -449,6 +449,22 @@ effective MTU, QUIC datagram support, preferred packet path, and advertised
 routes. Unreachable peers are reported per peer instead of aborting the whole
 inspection run.
 
+Inspect configured path candidates and live remote path capability:
+
+```sh
+cargo run -- paths --config p2p-vpn.json
+cargo run -- paths --config p2p-vpn.json --live --timeout-seconds 10
+```
+
+`paths` classifies configured peer dial addresses as direct QUIC stream, direct
+TCP stream, or circuit relay paths, shows their default promotion scores, and
+marks addressless peers that depend on mDNS or Kademlia discovery. Live mode
+queries each configured peer's validated control and service status and reports
+its preferred packet path, effective MTU, QUIC datagram support, and whether the
+current capability set can carry path probes. Active daemon connection counts
+and path-probe counters are still exposed through `metrics` until a daemon
+control socket is added.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh
