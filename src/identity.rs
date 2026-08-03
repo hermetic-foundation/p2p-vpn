@@ -27,12 +27,31 @@ impl NodeIdentity {
             private_key,
         })
     }
+
+    pub fn keypair(&self) -> Result<Keypair, IdentityError> {
+        let bytes = STANDARD.decode(&self.private_key)?;
+        let keypair = Keypair::from_protobuf_encoding(&bytes)?;
+        Ok(keypair)
+    }
+
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, IdentityError> {
+        Ok(self.keypair()?.sign(message)?)
+    }
+
+    pub fn public_key(&self) -> Result<libp2p::identity::PublicKey, IdentityError> {
+        Ok(self.keypair()?.public())
+    }
+
+    pub fn public_key_protobuf(&self) -> Result<Vec<u8>, IdentityError> {
+        Ok(self.public_key()?.encode_protobuf())
+    }
 }
 
 #[derive(Debug)]
 pub enum IdentityError {
     Base64(base64::DecodeError),
     Libp2p(libp2p::identity::DecodingError),
+    Signing(libp2p::identity::SigningError),
 }
 
 impl From<base64::DecodeError> for IdentityError {
@@ -44,6 +63,12 @@ impl From<base64::DecodeError> for IdentityError {
 impl From<libp2p::identity::DecodingError> for IdentityError {
     fn from(error: libp2p::identity::DecodingError) -> Self {
         Self::Libp2p(error)
+    }
+}
+
+impl From<libp2p::identity::SigningError> for IdentityError {
+    fn from(error: libp2p::identity::SigningError) -> Self {
+        Self::Signing(error)
     }
 }
 
@@ -59,5 +84,15 @@ mod tests {
 
         assert_eq!(decoded.peer_id, generated.peer_id);
         assert_eq!(decoded.private_key, generated.private_key);
+    }
+
+    #[test]
+    fn identity_signatures_verify_with_public_key() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity generation");
+        let public_key = identity.public_key().expect("public key");
+        let signature = identity.sign(b"invite").expect("signature");
+
+        assert!(public_key.verify(b"invite", &signature));
+        assert!(!public_key.verify(b"tampered", &signature));
     }
 }

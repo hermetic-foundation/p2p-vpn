@@ -14,6 +14,10 @@ use p2p_vpn::{
         RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
     },
     identity::NodeIdentity,
+    invite::{
+        InviteExportOptions, InviteImportOptions, SignedInvite, export_signed_invite,
+        import_invite_config,
+    },
     metrics::RuntimeMetrics,
     queue::QueueStats,
     runtime::{
@@ -184,6 +188,38 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
     },
+    InviteExport {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(short, long, default_value = "p2p-vpn-invite.json")]
+        output: PathBuf,
+        #[arg(long)]
+        expires_at_unix_seconds: Option<u64>,
+        #[arg(long, default_value_t = 1)]
+        membership_epoch: u64,
+        #[arg(long = "previous-membership-tag")]
+        previous_membership_tags: Vec<String>,
+        #[arg(long)]
+        force: bool,
+    },
+    InviteImport {
+        #[arg(short, long, default_value = "p2p-vpn-invite.json")]
+        invite: PathBuf,
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        output: PathBuf,
+        #[arg(long)]
+        private_key: Option<String>,
+        #[arg(long, default_value = "hs0")]
+        interface: String,
+        #[arg(long, default_value_t = 1_280)]
+        mtu: u16,
+        #[arg(long = "local-route")]
+        local_routes: Vec<LocalRouteArg>,
+        #[arg(long)]
+        peer_name: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
     DaemonStatus {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -334,6 +370,42 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(capabilities(&config, live, timeout_seconds)).await,
+        Command::InviteExport {
+            config,
+            output,
+            expires_at_unix_seconds,
+            membership_epoch,
+            previous_membership_tags,
+            force,
+        } => invite_export(
+            &config,
+            &output,
+            InviteExportOptions {
+                expires_at_unix_seconds,
+                membership_epoch,
+                previous_membership_tags,
+            },
+            force,
+        ),
+        Command::InviteImport {
+            invite,
+            output,
+            private_key,
+            interface,
+            mtu,
+            local_routes,
+            peer_name,
+            force,
+        } => invite_import(InviteImportArgs {
+            invite,
+            output,
+            private_key,
+            interface,
+            mtu,
+            local_routes,
+            peer_name,
+            force,
+        }),
         Command::DaemonStatus {
             socket,
             timeout_seconds,
@@ -432,6 +504,18 @@ struct LocalRouteArg {
 struct PeerRouteArg {
     id: String,
     route: RouteConfig,
+}
+
+#[derive(Clone, Debug)]
+struct InviteImportArgs {
+    invite: PathBuf,
+    output: PathBuf,
+    private_key: Option<String>,
+    interface: String,
+    mtu: u16,
+    local_routes: Vec<LocalRouteArg>,
+    peer_name: Option<String>,
+    force: bool,
 }
 
 impl FromStr for EndpointArg {
@@ -585,6 +669,87 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
         println!("local peer: {}", config.network.local_peer);
+    }
+
+    Ok(())
+}
+
+fn invite_export(
+    config_path: &Path,
+    output: &Path,
+    options: InviteExportOptions,
+    force: bool,
+) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    let config =
+        Config::load(config_path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let invite = export_signed_invite(&config, options)
+        .map_err(|error| format!("failed to export invite: {error:?}"))?;
+    let rendered = serde_json::to_string_pretty(&invite)
+        .map_err(|error| format!("failed to render invite: {error}"))?;
+
+    if output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+        println!("invite network: {}", invite.payload.network_name);
+        println!("inviter peer: {}", invite.payload.inviter_peer);
+        println!("membership epoch: {}", invite.payload.membership_epoch);
+    }
+
+    Ok(())
+}
+
+fn invite_import(args: InviteImportArgs) -> Result<(), String> {
+    if !args.force && args.output.to_string_lossy() != "-" && args.output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            args.output.display()
+        ));
+    }
+    let bytes = fs::read(&args.invite)
+        .map_err(|error| format!("failed to read {}: {error}", args.invite.display()))?;
+    let invite: SignedInvite = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse invite: {error}"))?;
+    let identity = match args.private_key {
+        Some(private_key) => NodeIdentity::from_private_key(&private_key)
+            .map_err(|error| format!("failed to decode private key: {error:?}"))?,
+        None => NodeIdentity::generate_ed25519()
+            .map_err(|error| format!("failed to generate identity: {error:?}"))?,
+    };
+    let config = import_invite_config(
+        &invite,
+        InviteImportOptions {
+            identity,
+            interface_name: args.interface,
+            mtu: args.mtu,
+            local_routes: args
+                .local_routes
+                .into_iter()
+                .map(|route| route.route)
+                .collect(),
+            peer_name: args.peer_name,
+        },
+    )
+    .map_err(|error| format!("failed to import invite: {error:?}"))?;
+    let rendered = serde_json::to_string_pretty(&config)
+        .map_err(|error| format!("failed to render config: {error}"))?;
+
+    if args.output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(&args.output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
+        println!("wrote {}", args.output.display());
+        println!("local peer: {}", config.network.local_peer);
+        println!("invited by: {}", invite.payload.inviter_peer);
     }
 
     Ok(())
@@ -2432,6 +2597,93 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_invite_export_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "invite-export",
+            "--config",
+            "node-a.json",
+            "--output",
+            "node-a.invite.json",
+            "--expires-at-unix-seconds",
+            "2000",
+            "--membership-epoch",
+            "4",
+            "--previous-membership-tag",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::InviteExport {
+            config,
+            output,
+            expires_at_unix_seconds,
+            membership_epoch,
+            previous_membership_tags,
+            force,
+        } = cli.command
+        else {
+            panic!("expected invite-export command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(output, PathBuf::from("node-a.invite.json"));
+        assert_eq!(expires_at_unix_seconds, Some(2000));
+        assert_eq!(membership_epoch, 4);
+        assert_eq!(
+            previous_membership_tags,
+            vec!["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_owned()]
+        );
+        assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_invite_import_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "invite-import",
+            "--invite",
+            "node-a.invite.json",
+            "--output",
+            "node-b.json",
+            "--interface",
+            "hs1",
+            "--mtu",
+            "1400",
+            "--local-route",
+            "10.42.0.0/24,100",
+            "--peer-name",
+            "node-a",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::InviteImport {
+            invite,
+            output,
+            interface,
+            mtu,
+            local_routes,
+            peer_name,
+            force,
+            ..
+        } = cli.command
+        else {
+            panic!("expected invite-import command");
+        };
+
+        assert_eq!(invite, PathBuf::from("node-a.invite.json"));
+        assert_eq!(output, PathBuf::from("node-b.json"));
+        assert_eq!(interface, "hs1");
+        assert_eq!(mtu, 1400);
+        assert_eq!(local_routes.len(), 1);
+        assert_eq!(local_routes[0].route.prefix, "10.42.0.0/24");
+        assert_eq!(peer_name.as_deref(), Some("node-a"));
+        assert!(force);
     }
 
     #[test]

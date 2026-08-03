@@ -1,5 +1,6 @@
 pub mod config;
 pub mod identity;
+pub mod invite;
 pub mod metrics;
 pub mod path;
 pub mod queue;

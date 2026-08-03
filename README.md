@@ -213,6 +213,32 @@ cargo run -- init-config \
   --bootstrap-peer <node-a-peer-id>=/dns4/<node-a-hostname>/udp/4001/quic-v1
 ```
 
+Or export a signed invite from node A and import it for node B:
+
+```sh
+cargo run -- invite-export \
+  --config node-a.json \
+  --output node-a.invite.json \
+  --expires-at-unix-seconds 1893456000 \
+  --membership-epoch 1
+
+cargo run -- invite-import \
+  --invite node-a.invite.json \
+  --output node-b.json \
+  --local-route 10.42.0.0/24,100 \
+  --peer-name node-a
+```
+
+The invite is signed by node A's existing libp2p identity and binds the inviter
+public key to the inviter peer ID. Import verifies the signature, expiration,
+protocol constants, wire version, membership tag, peer-address bindings,
+discovery settings, and route syntax before writing a config. The invite
+carries the current membership key so the imported node can join the same
+private overlay; treat invite files as sensitive. `--membership-epoch` and
+repeatable `--previous-membership-tag` metadata let operators label membership
+key rotations and distribute compatibility hints while importing nodes use the
+current invite key.
+
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Use the same `--membership-key` value on every node that should join
