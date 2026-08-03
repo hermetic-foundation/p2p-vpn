@@ -97,6 +97,16 @@ fn status(path: &PathBuf) -> Result<(), String> {
     );
     println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
     println!(
+        "discovery: mdns={} kademlia={} dcutr={}",
+        config.network.discovery.mdns,
+        config.network.discovery.kademlia,
+        config.network.discovery.dcutr
+    );
+    println!(
+        "relay reservations: {}",
+        config.network.relay.reservations.len()
+    );
+    println!(
         "configured peer addresses: {}",
         config
             .peers
@@ -145,6 +155,11 @@ async fn up(
         println!("dry-run: would create Linux TUN interface and run:");
         for command in commands {
             println!("{command}");
+        }
+        for address in config.relay_reservation_multiaddrs().map_err(|error| {
+            format!("failed to parse relay reservation listen address: {error:?}")
+        })? {
+            println!("libp2p listen {address}");
         }
         return Ok(());
     }

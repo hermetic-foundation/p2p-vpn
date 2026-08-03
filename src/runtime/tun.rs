@@ -226,6 +226,8 @@ mod tests {
                 private_key: None,
                 listen_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -254,6 +256,8 @@ mod tests {
                 private_key: None,
                 listen_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),

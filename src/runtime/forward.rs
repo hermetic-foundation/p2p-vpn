@@ -266,6 +266,8 @@ mod tests {
                 private_key: None,
                 listen_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -368,6 +370,8 @@ mod tests {
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            discovery: crate::config::DiscoveryConfig::default(),
         })
         .expect("node");
         let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));

@@ -2,14 +2,14 @@ use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, Swarm, identify, mdns,
+    Multiaddr, PeerId as Libp2pPeerId, Swarm, dcutr, identify, kad, mdns, relay,
     request_response::{self, Message},
     swarm::SwarmEvent,
 };
 use tokio::sync::mpsc;
 
 use crate::{
-    config::{Config, QueueConfig},
+    config::{Config, DiscoveryConfig, QueueConfig},
     metrics::RuntimeMetrics,
     queue::PeerQueues,
     runtime::{
@@ -33,6 +33,8 @@ pub async fn run_config(
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
+        relay_reservations: config.relay_reservation_multiaddrs()?,
+        discovery: config.network.discovery,
     })?;
     let forwarder = Forwarder::from_config(&config)?;
 
@@ -63,6 +65,17 @@ pub async fn run_node(
         queue_config.max_bytes_per_peer,
     );
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
+    let discovery = node.discovery;
+
+    if node.startup.kad_bootstrap_started {
+        eprintln!("kademlia bootstrap started");
+    }
+    if node.startup.relay_reservations_started > 0 {
+        eprintln!(
+            "relay reservation listeners started: {}",
+            node.startup.relay_reservations_started
+        );
+    }
 
     loop {
         tokio::select! {
@@ -74,7 +87,7 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
             }
             event = node.swarm.select_next_some() => {
-                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &metrics, event)?;
+                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &metrics, discovery, event)?;
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
             }
             () = async {
@@ -137,6 +150,7 @@ fn handle_swarm_event(
     forwarder: &Forwarder,
     writer: &mut TunWriter,
     metrics: &RuntimeMetrics,
+    discovery: DiscoveryConfig,
     event: SwarmEvent<BehaviourEvent>,
 ) -> Result<(), RunnerError> {
     match event {
@@ -171,32 +185,7 @@ fn handle_swarm_event(
             metrics.record_inbound_failure();
             eprintln!("packet request from {peer} failed: {error}");
         }
-        SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
-            for (peer, address) in peers {
-                learn_peer_address(swarm, peer, address);
-            }
-        }
-        SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
-            for (peer, address) in peers {
-                swarm.behaviour_mut().kad.remove_address(&peer, &address);
-            }
-        }
-        SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-            peer_id,
-            info,
-            ..
-        })) => {
-            for address in info.listen_addrs {
-                learn_peer_address(swarm, peer_id, address);
-            }
-        }
-        SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Error {
-            peer_id,
-            error,
-            ..
-        })) => {
-            eprintln!("identify with {peer_id} failed: {error}");
-        }
+        SwarmEvent::Behaviour(event) => handle_behaviour_event(swarm, discovery, event),
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
@@ -212,15 +201,82 @@ fn handle_swarm_event(
     Ok(())
 }
 
-fn learn_peer_address(swarm: &mut Swarm<Behaviour>, peer: Libp2pPeerId, address: Multiaddr) {
+fn handle_behaviour_event(
+    swarm: &mut Swarm<Behaviour>,
+    discovery: DiscoveryConfig,
+    event: BehaviourEvent,
+) {
+    match event {
+        BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if discovery.mdns => {
+            for (peer, address) in peers {
+                learn_peer_address(swarm, peer, address, discovery.kademlia);
+            }
+        }
+        BehaviourEvent::Mdns(mdns::Event::Expired(peers))
+            if discovery.mdns && discovery.kademlia =>
+        {
+            for (peer, address) in peers {
+                swarm.behaviour_mut().kad.remove_address(&peer, &address);
+            }
+        }
+        BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+            for address in info.listen_addrs {
+                learn_peer_address(swarm, peer_id, address, discovery.kademlia);
+            }
+        }
+        BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
+            eprintln!("identify with {peer_id} failed: {error}");
+        }
+        BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { result, .. })
+            if discovery.kademlia =>
+        {
+            eprintln!("kademlia query progressed: {result:?}");
+        }
+        BehaviourEvent::Relay(event) => handle_relay_event(&event),
+        BehaviourEvent::Dcutr(dcutr::Event {
+            remote_peer_id,
+            result,
+        }) if discovery.dcutr => {
+            eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
+        }
+        _ => {}
+    }
+}
+
+fn handle_relay_event(event: &relay::client::Event) {
+    match event {
+        relay::client::Event::ReservationReqAccepted {
+            relay_peer_id,
+            renewal,
+            ..
+        } => {
+            eprintln!("relay reservation accepted by {relay_peer_id} renewal={renewal}");
+        }
+        relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+            eprintln!("outbound relay circuit established via {relay_peer_id}");
+        }
+        relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+            eprintln!("inbound relay circuit established from {src_peer_id}");
+        }
+    }
+}
+
+fn learn_peer_address(
+    swarm: &mut Swarm<Behaviour>,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    add_to_kademlia: bool,
+) {
     if peer == *swarm.local_peer_id() {
         return;
     }
 
-    swarm
-        .behaviour_mut()
-        .kad
-        .add_address(&peer, address.clone());
+    if add_to_kademlia {
+        swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer, address.clone());
+    }
 
     if swarm.is_connected(&peer) {
         return;

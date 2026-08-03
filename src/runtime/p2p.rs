@@ -6,6 +6,7 @@ use libp2p::{
 };
 
 use crate::{
+    config::DiscoveryConfig,
     identity::{IdentityError, NodeIdentity},
     runtime::packet::{self, PacketCodec},
 };
@@ -26,6 +27,8 @@ pub struct Behaviour {
 pub struct P2pNode {
     pub local_peer_id: PeerId,
     pub swarm: Swarm<Behaviour>,
+    pub discovery: DiscoveryConfig,
+    pub startup: StartupStatus,
 }
 
 pub struct HostConfig {
@@ -34,6 +37,14 @@ pub struct HostConfig {
     pub listen_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
     pub known_peers: Vec<(PeerId, Multiaddr)>,
+    pub relay_reservations: Vec<Multiaddr>,
+    pub discovery: DiscoveryConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StartupStatus {
+    pub kad_bootstrap_started: bool,
+    pub relay_reservations_started: usize,
 }
 
 pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
@@ -77,6 +88,11 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm.listen_on(address)?;
     }
 
+    let relay_reservations_started = config.relay_reservations.len();
+    for address in config.relay_reservations {
+        swarm.listen_on(address)?;
+    }
+
     for (peer, address) in config.bootstrap_peers.into_iter().chain(config.known_peers) {
         swarm
             .behaviour_mut()
@@ -88,9 +104,17 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm.dial(dial_address)?;
     }
 
+    let kad_bootstrap_started =
+        config.discovery.kademlia && swarm.behaviour_mut().kad.bootstrap().is_ok();
+
     Ok(P2pNode {
         local_peer_id,
         swarm,
+        discovery: config.discovery,
+        startup: StartupStatus {
+            kad_bootstrap_started,
+            relay_reservations_started,
+        },
     })
 }
 
@@ -176,10 +200,37 @@ mod tests {
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            discovery: DiscoveryConfig::default(),
         })
         .expect("node should build");
 
         assert_eq!(node.local_peer_id, expected_peer_id);
+    }
+
+    #[tokio::test]
+    async fn build_node_starts_bootstrap_and_relay_reservations() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let bootstrap_address: Multiaddr = "/memory/91".parse().expect("bootstrap address");
+        let relay_reservation = bootstrap_address
+            .clone()
+            .with_p2p(relay)
+            .expect("relay p2p address")
+            .with(libp2p::multiaddr::Protocol::P2pCircuit);
+
+        let node = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: vec![(relay, bootstrap_address)],
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation],
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+
+        assert!(node.startup.kad_bootstrap_started);
+        assert_eq!(node.startup.relay_reservations_started, 1);
     }
 
     #[tokio::test]
@@ -190,6 +241,8 @@ mod tests {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
         let listener_address = next_listen_address(&mut listener.swarm).await;
@@ -200,6 +253,8 @@ mod tests {
             listen_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: vec![(listener.local_peer_id, listener_address)],
+            relay_reservations: Vec::new(),
+            discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
         let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).expect("frame");

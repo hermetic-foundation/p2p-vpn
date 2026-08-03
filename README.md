@@ -75,7 +75,17 @@ cargo test --test tun_namespace -- --ignored --nocapture
         "id": "12D3KooW...",
         "address": "/dns4/bootstrap.example.net/tcp/4001"
       }
-    ]
+    ],
+    "discovery": {
+      "mdns": true,
+      "kademlia": true,
+      "dcutr": true
+    },
+    "relay": {
+      "reservations": [
+        "/dns4/relay.example.net/tcp/4001/p2p/12D3KooWRelay.../p2p-circuit"
+      ]
+    }
   },
   "interface": {
     "name": "hs0",
@@ -103,6 +113,12 @@ cargo test --test tun_namespace -- --ignored --nocapture
   ]
 }
 ```
+
+`bootstrap_peers` are dialed and added to the overlay-scoped Kademlia routing
+table when Kademlia discovery is enabled. `relay.reservations` are full
+libp2p relay listen addresses; listening on one asks that relay for a circuit
+relay v2 reservation. Peer `addresses` may also contain full relayed target
+addresses such as `/dns4/relay.example.net/tcp/4001/p2p/<relay>/p2p-circuit/p2p/<peer>`.
 
 Inspect the compiled local view:
 

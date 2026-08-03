@@ -268,6 +268,8 @@ async fn run_ready_node(
         listen_addresses: config.listen_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
+        relay_reservations: config.relay_reservation_multiaddrs()?,
+        discovery: config.network.discovery,
     })?;
     wait_for_listen_address(&mut node).await;
     fs::write(ready_file, b"ready").expect("write ready file");
@@ -316,6 +318,8 @@ fn node_config(
             private_key: Some(identity.private_key.clone()),
             listen_addresses: vec![listen_address.to_owned()],
             bootstrap_peers: Vec::new(),
+            discovery: p2p_vpn::config::DiscoveryConfig::default(),
+            relay: p2p_vpn::config::RelayConfig::default(),
         },
         interface: InterfaceConfig {
             name: interface.to_owned(),

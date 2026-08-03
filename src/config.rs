@@ -100,6 +100,10 @@ impl Config {
             .map(|(peer, address)| parse_peer_address(peer, address))
             .collect()
     }
+
+    pub fn relay_reservation_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
+        parse_multiaddrs(&self.network.relay.reservations)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -112,6 +116,10 @@ pub struct NetworkConfig {
     pub listen_addresses: Vec<String>,
     #[serde(default)]
     pub bootstrap_peers: Vec<BootstrapPeerConfig>,
+    #[serde(default = "default_discovery")]
+    pub discovery: DiscoveryConfig,
+    #[serde(default)]
+    pub relay: RelayConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -124,6 +132,28 @@ impl BootstrapPeerConfig {
     pub fn peer_address(&self) -> Result<(libp2p::PeerId, libp2p::Multiaddr), ConfigError> {
         parse_peer_address(&self.id, &self.address)
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub struct DiscoveryConfig {
+    #[serde(default = "default_true")]
+    pub mdns: bool,
+    #[serde(default = "default_true")]
+    pub kademlia: bool,
+    #[serde(default = "default_true")]
+    pub dcutr: bool,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        default_discovery()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+pub struct RelayConfig {
+    #[serde(default)]
+    pub reservations: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -247,6 +277,18 @@ fn default_queue() -> QueueConfig {
     }
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        mdns: true,
+        kademlia: true,
+        dcutr: true,
+    }
+}
+
 fn default_interface() -> InterfaceConfig {
     InterfaceConfig {
         name: "hs0".to_owned(),
@@ -333,6 +375,8 @@ mod tests {
                 private_key: None,
                 listen_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -381,6 +425,14 @@ mod tests {
                     id: remote.to_string(),
                     address: "/ip4/127.0.0.1/udp/4001/quic-v1".to_owned(),
                 }],
+                discovery: DiscoveryConfig {
+                    mdns: false,
+                    kademlia: true,
+                    dcutr: true,
+                },
+                relay: RelayConfig {
+                    reservations: vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{remote}/p2p-circuit")],
+                },
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -399,5 +451,13 @@ mod tests {
         assert_eq!(config.listen_multiaddrs().expect("listen").len(), 1);
         assert_eq!(config.bootstrap_multiaddrs().expect("bootstrap").len(), 1);
         assert_eq!(config.peer_multiaddrs().expect("peer addresses").len(), 1);
+        assert_eq!(
+            config
+                .relay_reservation_multiaddrs()
+                .expect("relay reservations")
+                .len(),
+            1
+        );
+        assert!(!config.network.discovery.mdns);
     }
 }
