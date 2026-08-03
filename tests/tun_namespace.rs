@@ -27,6 +27,7 @@ use p2p_vpn::{
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
@@ -39,6 +40,16 @@ fn tun_namespace_ping_crosses_two_node_overlay() {
         Ok("orchestrator") => run_direct_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(DIRECT_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_ping_crosses_mdns_discovered_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_mdns_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(MDNS_TEST_NAME),
     }
 }
 
@@ -161,6 +172,77 @@ fn run_direct_orchestrator() {
         &initiator_routes,
         &responder_addresses,
         &responder_routes,
+    );
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+fn run_mdns_orchestrator() {
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!("p2p-vpn-mdns-tun-e2e-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_b = mdns_overlay_config("b", &identity_b, &identity_a);
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+
+    let mut node_a = spawn_node(
+        MDNS_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        None,
+        &temp_dir,
+        &start_a,
+    );
+    let mut node_b = spawn_node(
+        MDNS_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        None,
+        &temp_dir,
+        &start_b,
+    );
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_underlay(node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.250.0.2"]);
+
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    thread::sleep(Duration::from_secs(2));
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    thread::sleep(Duration::from_secs(8));
+
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    assert_ping_success(
+        "mDNS-discovered overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let node_a_log = read_log(&temp_dir.join("node-a.log"));
+    assert!(
+        node_a_log.contains("control capabilities accepted")
+            && node_a_log.contains("discovered_address_dial_attempts 1"),
+        "node A did not discover and validate node B through mDNS\nnode-a log:\n{node_a_log}\nnode-b log:\n{}",
+        read_log(&temp_dir.join("node-b.log"))
     );
     let _ = fs::remove_dir_all(temp_dir);
 }
@@ -542,6 +624,8 @@ fn run_node_child() {
             "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
             other => panic!("unknown node role {other}"),
         }
+    } else if is_mdns_test_child() {
+        mdns_overlay_config(&role, &local, &remote)
     } else {
         direct_overlay_config(&role, &local, &remote)
     };
@@ -658,6 +742,40 @@ fn relay_overlay_config(
     );
     config.network.discovery = relay_test_discovery();
     config.network.relay.reservations = relay_reservations;
+    config
+}
+
+fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
+    let (interface, listen, local_routes, peer_routes) = match role {
+        "a" => (
+            "hse2ea",
+            "/ip4/10.250.0.1/tcp/42101",
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+            Vec::new(),
+        ),
+        "b" => (
+            "hse2eb",
+            "/ip4/10.250.0.2/tcp/42102",
+            Vec::new(),
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+        ),
+        other => panic!("unknown mDNS node role {other}"),
+    };
+    let mut config = node_config(
+        NETWORK_NAME,
+        interface,
+        local,
+        listen,
+        local_routes,
+        peer_config(remote, None, peer_routes),
+    );
+    config.network.discovery = mdns_test_discovery();
     config
 }
 
@@ -1015,8 +1133,23 @@ fn dht_bootstrap_discovery() -> DiscoveryConfig {
     }
 }
 
+fn mdns_test_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        mdns: true,
+        kademlia: false,
+        kademlia_provider_advertisement: false,
+        kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+        dcutr: false,
+        autonat: false,
+    }
+}
+
 fn is_dht_test_child() -> bool {
     env::args().any(|argument| argument == DHT_TEST_NAME)
+}
+
+fn is_mdns_test_child() -> bool {
+    env::args().any(|argument| argument == MDNS_TEST_NAME)
 }
 
 fn peer_config(

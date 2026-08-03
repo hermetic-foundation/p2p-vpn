@@ -260,6 +260,9 @@ and network namespaces:
 cargo test --test tun_namespace -- --ignored --nocapture
 ```
 
+The namespace suite covers direct static peer addresses, mDNS peer discovery,
+Kademlia/bootstrap peer discovery, and circuit-relay fallback.
+
 ## Example Config
 
 ```json
