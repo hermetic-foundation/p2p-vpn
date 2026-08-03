@@ -55,6 +55,11 @@ pub struct RuntimeMetrics {
     external_address_candidates: AtomicU64,
     external_addresses_confirmed: AtomicU64,
     external_addresses_expired: AtomicU64,
+    kademlia_provider_lookups: AtomicU64,
+    kademlia_provider_advertisements: AtomicU64,
+    kademlia_provider_advertisement_failures: AtomicU64,
+    kademlia_bootstrap_refreshes: AtomicU64,
+    kademlia_bootstrap_failures: AtomicU64,
     control_requests_sent: AtomicU64,
     control_requests_received: AtomicU64,
     control_responses_received: AtomicU64,
@@ -221,6 +226,31 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_kademlia_provider_lookup(&self) {
+        self.kademlia_provider_lookups
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_provider_advertisement(&self) {
+        self.kademlia_provider_advertisements
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_provider_advertisement_failure(&self) {
+        self.kademlia_provider_advertisement_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_bootstrap_refresh(&self) {
+        self.kademlia_bootstrap_refreshes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_bootstrap_failure(&self) {
+        self.kademlia_bootstrap_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_control_request_sent(&self) {
         self.control_requests_sent.fetch_add(1, Ordering::Relaxed);
     }
@@ -337,6 +367,15 @@ impl RuntimeMetrics {
             external_address_candidates: self.external_address_candidates.load(Ordering::Relaxed),
             external_addresses_confirmed: self.external_addresses_confirmed.load(Ordering::Relaxed),
             external_addresses_expired: self.external_addresses_expired.load(Ordering::Relaxed),
+            kademlia_provider_lookups: self.kademlia_provider_lookups.load(Ordering::Relaxed),
+            kademlia_provider_advertisements: self
+                .kademlia_provider_advertisements
+                .load(Ordering::Relaxed),
+            kademlia_provider_advertisement_failures: self
+                .kademlia_provider_advertisement_failures
+                .load(Ordering::Relaxed),
+            kademlia_bootstrap_refreshes: self.kademlia_bootstrap_refreshes.load(Ordering::Relaxed),
+            kademlia_bootstrap_failures: self.kademlia_bootstrap_failures.load(Ordering::Relaxed),
             control_requests_sent: self.control_requests_sent.load(Ordering::Relaxed),
             control_requests_received: self.control_requests_received.load(Ordering::Relaxed),
             control_responses_received: self.control_responses_received.load(Ordering::Relaxed),
@@ -391,6 +430,11 @@ pub struct RuntimeSnapshot {
     pub external_address_candidates: u64,
     pub external_addresses_confirmed: u64,
     pub external_addresses_expired: u64,
+    pub kademlia_provider_lookups: u64,
+    pub kademlia_provider_advertisements: u64,
+    pub kademlia_provider_advertisement_failures: u64,
+    pub kademlia_bootstrap_refreshes: u64,
+    pub kademlia_bootstrap_failures: u64,
     pub control_requests_sent: u64,
     pub control_requests_received: u64,
     pub control_responses_received: u64,
@@ -414,6 +458,12 @@ impl RuntimeSnapshot {
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
         ];
         self.extend_drop_lines(&mut lines);
+        self.extend_path_and_discovery_lines(&mut lines);
+        self.extend_control_and_queue_lines(&mut lines);
+        lines
+    }
+
+    fn extend_path_and_discovery_lines(&self, lines: &mut Vec<String>) {
         lines.extend([
             format!("outbound_failures {}", self.outbound_failures),
             format!("inbound_failures {}", self.inbound_failures),
@@ -463,6 +513,31 @@ impl RuntimeSnapshot {
                 "external_addresses_expired {}",
                 self.external_addresses_expired
             ),
+            format!(
+                "kademlia_provider_lookups {}",
+                self.kademlia_provider_lookups
+            ),
+            format!(
+                "kademlia_provider_advertisements {}",
+                self.kademlia_provider_advertisements
+            ),
+            format!(
+                "kademlia_provider_advertisement_failures {}",
+                self.kademlia_provider_advertisement_failures
+            ),
+            format!(
+                "kademlia_bootstrap_refreshes {}",
+                self.kademlia_bootstrap_refreshes
+            ),
+            format!(
+                "kademlia_bootstrap_failures {}",
+                self.kademlia_bootstrap_failures
+            ),
+        ]);
+    }
+
+    fn extend_control_and_queue_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
             format!("control_requests_sent {}", self.control_requests_sent),
             format!(
                 "control_requests_received {}",
@@ -487,7 +562,6 @@ impl RuntimeSnapshot {
             format!("queue_expired_packets {}", self.queue.expired_packets),
             format!("queue_expired_bytes {}", self.queue.expired_bytes),
         ]);
-        lines
     }
 
     fn extend_drop_lines(&self, lines: &mut Vec<String>) {
@@ -591,6 +665,11 @@ mod tests {
         metrics.record_external_address_candidate();
         metrics.record_external_address_confirmed();
         metrics.record_external_address_expired();
+        metrics.record_kademlia_provider_lookup();
+        metrics.record_kademlia_provider_advertisement();
+        metrics.record_kademlia_provider_advertisement_failure();
+        metrics.record_kademlia_bootstrap_refresh();
+        metrics.record_kademlia_bootstrap_failure();
         metrics.record_control_request_sent();
         metrics.record_control_request_received();
         metrics.record_control_response_received();
@@ -653,6 +732,11 @@ mod tests {
         assert_eq!(snapshot.external_address_candidates, 1);
         assert_eq!(snapshot.external_addresses_confirmed, 1);
         assert_eq!(snapshot.external_addresses_expired, 1);
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
+        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 1);
+        assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
         assert_eq!(snapshot.control_requests_sent, 1);
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
@@ -686,6 +770,11 @@ mod tests {
         assert_metric_line(&snapshot, "external_address_candidates 1");
         assert_metric_line(&snapshot, "external_addresses_confirmed 1");
         assert_metric_line(&snapshot, "external_addresses_expired 1");
+        assert_metric_line(&snapshot, "kademlia_provider_lookups 1");
+        assert_metric_line(&snapshot, "kademlia_provider_advertisements 1");
+        assert_metric_line(&snapshot, "kademlia_provider_advertisement_failures 1");
+        assert_metric_line(&snapshot, "kademlia_bootstrap_refreshes 1");
+        assert_metric_line(&snapshot, "kademlia_bootstrap_failures 1");
         assert_metric_line(&snapshot, "control_requests_sent 1");
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");

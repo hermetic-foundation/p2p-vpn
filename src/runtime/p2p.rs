@@ -40,6 +40,7 @@ pub struct P2pNode {
     pub local_peer_id: PeerId,
     pub swarm: Swarm<Behaviour>,
     pub discovery: DiscoveryConfig,
+    pub kademlia_rendezvous_key: Option<kad::RecordKey>,
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub startup: StartupStatus,
@@ -158,12 +159,17 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     let relay_reservations_started = config.relay_reservations.len();
     install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
-    let kademlia = start_kademlia(&mut swarm, config)?;
+    let kademlia_rendezvous_key = config
+        .discovery
+        .kademlia
+        .then(|| kademlia_rendezvous_key(&config.network_name));
+    let kademlia = start_kademlia(&mut swarm, kademlia_rendezvous_key.as_ref())?;
 
     Ok(P2pNode {
         local_peer_id,
         swarm,
         discovery: config.discovery,
+        kademlia_rendezvous_key,
         bootstrap_peer_addresses,
         configured_peer_addresses,
         startup: StartupStatus {
@@ -210,18 +216,20 @@ fn install_listeners_and_dials(
 
 fn start_kademlia(
     swarm: &mut Swarm<Behaviour>,
-    config: &HostConfig,
+    rendezvous_key: Option<&kad::RecordKey>,
 ) -> Result<KademliaStartupStatus, P2pBuildError> {
-    if !config.discovery.kademlia {
+    let Some(rendezvous_key) = rendezvous_key else {
         return Ok(KademliaStartupStatus::default());
-    }
+    };
 
-    let rendezvous_key = kademlia_rendezvous_key(&config.network_name);
     swarm
         .behaviour_mut()
         .kad
         .start_providing(rendezvous_key.clone())?;
-    swarm.behaviour_mut().kad.get_providers(rendezvous_key);
+    swarm
+        .behaviour_mut()
+        .kad
+        .get_providers(rendezvous_key.clone());
 
     Ok(KademliaStartupStatus {
         bootstrap_started: swarm.behaviour_mut().kad.bootstrap().is_ok(),

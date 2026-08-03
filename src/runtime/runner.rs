@@ -34,6 +34,7 @@ use crate::{
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
 
@@ -96,10 +97,17 @@ pub async fn run_node(
     let mut discovered_peer_addresses = DiscoveredPeerAddresses::default();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
+    let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
+    let mut kademlia_refresh_tick = kademlia_rendezvous_key
+        .as_ref()
+        .map(|_| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL));
     let mut queue_expiry_tick =
         tokio::time::interval(queue_expiry_interval(queue_config.max_packet_age()));
     let local_capabilities = ControlCapabilities::local(mtu);
     redial_tick.tick().await;
+    if let Some(tick) = &mut kademlia_refresh_tick {
+        tick.tick().await;
+    }
     queue_expiry_tick.tick().await;
     let discovery = node.discovery;
 
@@ -138,6 +146,21 @@ pub async fn run_node(
                     &node.bootstrap_peer_addresses,
                     &node.configured_peer_addresses,
                     discovered_peer_addresses.as_slice(),
+                    &metrics,
+                );
+            }
+            () = async {
+                kademlia_refresh_tick
+                    .as_mut()
+                    .expect("kademlia refresh interval is present")
+                    .tick()
+                    .await;
+            }, if kademlia_refresh_tick.is_some() => {
+                refresh_kademlia_rendezvous(
+                    &mut node.swarm,
+                    kademlia_rendezvous_key
+                        .as_ref()
+                        .expect("kademlia rendezvous key is present"),
                     &metrics,
                 );
             }
@@ -202,6 +225,38 @@ fn expire_outbound_queue(queues: &mut PeerQueues, metrics: &RuntimeMetrics) {
     queues.drop_expired(std::time::Instant::now());
     let expired_after = queues.total_stats().expired_packets;
     metrics.record_outbound_queue_expired(expired_after.saturating_sub(expired_before));
+}
+
+fn refresh_kademlia_rendezvous(
+    swarm: &mut Swarm<Behaviour>,
+    rendezvous_key: &kad::RecordKey,
+    metrics: &RuntimeMetrics,
+) {
+    match swarm
+        .behaviour_mut()
+        .kad
+        .start_providing(rendezvous_key.clone())
+    {
+        Ok(_) => metrics.record_kademlia_provider_advertisement(),
+        Err(error) => {
+            metrics.record_kademlia_provider_advertisement_failure();
+            eprintln!("kademlia provider advertisement refresh failed: {error:?}");
+        }
+    }
+
+    swarm
+        .behaviour_mut()
+        .kad
+        .get_providers(rendezvous_key.clone());
+    metrics.record_kademlia_provider_lookup();
+
+    match swarm.behaviour_mut().kad.bootstrap() {
+        Ok(_) => metrics.record_kademlia_bootstrap_refresh(),
+        Err(error) => {
+            metrics.record_kademlia_bootstrap_failure();
+            eprintln!("kademlia bootstrap refresh failed: {error:?}");
+        }
+    }
 }
 
 fn redial_known_addresses(
@@ -1196,6 +1251,44 @@ mod tests {
         assert_eq!(snapshot.outbound_drop_queue_expired_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
         assert_eq!(snapshot.queue.expired_packets, 1);
+    }
+
+    #[tokio::test]
+    async fn kademlia_refresh_records_lookup_advertisement_and_bootstrap_result() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            dcutr: false,
+            autonat: false,
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+
+        refresh_kademlia_rendezvous(&mut node.swarm, &key, &metrics);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
+        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
+        assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
     }
 
     #[test]

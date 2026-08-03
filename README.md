@@ -92,6 +92,10 @@ discovery event. Addresses learned from mDNS or identify are retained only for
 configured peers and are included in the same periodic redial loop; mDNS-expired
 addresses are removed from that transient address book. Redial attempts,
 connected-peer skips, and failures are exposed in the runtime metrics output.
+When Kademlia is enabled, the runtime also periodically refreshes the overlay
+provider advertisement, reruns the provider lookup, and retries Kademlia
+bootstrap. That lets a long-running node find configured peers that join the DHT
+after startup rather than relying on the initial one-shot provider query.
 Observed external address candidates reported by libp2p identify are passed to
 AutoNAT when that behaviour is enabled. AutoNAT probes candidate reachability
 through connected peers and only confirmed public addresses enter the local
@@ -299,12 +303,13 @@ queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons including expired outbound queue packets, direct versus
 relayed connection counts, relay reservation/circuit counts, relay-server
 accept counts, DCUtR success/failure counts, observed external address
-candidate/confirmed/expired counts, unauthorized connection drops, configured
-peer redial counters, and queue-drain stalls caused by peers having no currently
-supported packet path. Those counters are intended to show whether a deployment
-is exchanging capabilities, advertising observed public addresses, using direct
-paths, relay fallback, hole-punching, enforcing membership, recovering
-connections, and waiting on path negotiation as expected.
+candidate/confirmed/expired counts, Kademlia provider lookup/advertisement and
+bootstrap refresh counts, unauthorized connection drops, configured peer redial
+counters, and queue-drain stalls caused by peers having no currently supported
+packet path. Those counters are intended to show whether a deployment is
+exchanging capabilities, advertising observed public addresses, refreshing DHT
+discovery, using direct paths, relay fallback, hole-punching, enforcing
+membership, recovering connections, and waiting on path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
