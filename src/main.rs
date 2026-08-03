@@ -148,6 +148,14 @@ enum Command {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
     },
+    Peers {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value_t = 10)]
+        timeout_seconds: u64,
+    },
     PeerStatus {
         peer: String,
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -268,6 +276,11 @@ async fn main() -> Result<(), String> {
         }),
         Command::Status { config } => status(&config),
         Command::Metrics { config } => metrics(&config),
+        Command::Peers {
+            config,
+            live,
+            timeout_seconds,
+        } => Box::pin(peers(&config, live, timeout_seconds)).await,
         Command::PeerStatus {
             peer,
             config,
@@ -764,6 +777,133 @@ fn metrics(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+async fn peers(path: &PathBuf, live: bool, timeout_seconds: u64) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+
+    let lines = if live {
+        Box::pin(peer_lines_live(
+            &config,
+            Duration::from_secs(timeout_seconds.max(1)),
+        ))
+        .await?
+    } else {
+        peer_lines_configured(&config)?
+    };
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn peer_lines_configured(config: &Config) -> Result<Vec<String>, String> {
+    let routes = config
+        .compile_routes()
+        .map_err(|error| format!("failed to compile routes: {error:?}"))?;
+    let mut lines = vec![format!("peers: {}", config.peers.len())];
+
+    push_peer_config_lines(&mut lines, config, &routes);
+
+    Ok(lines)
+}
+
+fn push_peer_config_lines(
+    lines: &mut Vec<String>,
+    config: &Config,
+    routes: &p2p_vpn::route::RouteTable,
+) {
+    for peer in &config.peers {
+        let peer_id = peer.peer_id().expect("peer list config is valid");
+        lines.push(format!("peer: {}", peer.id));
+        if let Some(name) = &peer.name {
+            lines.push(format!("peer name: {} {}", peer.id, name));
+        }
+        lines.push(format!(
+            "peer addresses: {} {}",
+            peer.id,
+            peer.addresses.len()
+        ));
+        for address in &peer.addresses {
+            lines.push(format!("peer address: {} {}", peer.id, address));
+        }
+        for route in routes.routes_for(peer_id) {
+            let source = route_source(&peer.routes, route);
+            lines.push(format!(
+                "peer route: {} {} metric {} {source}",
+                peer.id, route.prefix, route.metric
+            ));
+        }
+    }
+}
+
+async fn peer_lines_live(config: &Config, timeout: Duration) -> Result<Vec<String>, String> {
+    let routes = config
+        .compile_routes()
+        .map_err(|error| format!("failed to compile routes: {error:?}"))?;
+    let mut lines = vec![format!("peers: {}", config.peers.len())];
+
+    push_peer_config_lines(&mut lines, config, &routes);
+    for peer in &config.peers {
+        let peer_id = peer
+            .id
+            .parse::<libp2p::PeerId>()
+            .expect("peer list config is valid");
+        match Box::pin(query_peer_status(config, peer_id, timeout)).await {
+            Ok(status) => push_peer_live_status_lines(&mut lines, &status),
+            Err(error) => lines.push(format!(
+                "peer live: {} unreachable error {error:?}",
+                peer.id
+            )),
+        }
+    }
+
+    Ok(lines)
+}
+
+fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
+    lines.push(format!("peer live: {} reachable", status.peer));
+    lines.push(format!(
+        "peer live network: {} {}",
+        status.peer, status.service.network_name
+    ));
+    lines.push(format!(
+        "peer live membership key matched: {} {}",
+        status.peer,
+        status.service.membership_tag.is_some()
+    ));
+    lines.push(format!(
+        "peer live mtu: {} {}",
+        status.peer, status.service.effective_mtu
+    ));
+    lines.push(format!(
+        "peer live quic datagrams: {} {}",
+        status.peer, status.service.supports_quic_datagrams
+    ));
+    lines.push(format!(
+        "peer live preferred path: {} {}",
+        status.peer,
+        path_name(
+            PathKind::from_wire_name(&status.capabilities.preferred_path)
+                .unwrap_or(PathKind::DirectQuicStream)
+        )
+    ));
+    lines.push(format!(
+        "peer live advertised routes: {} {}",
+        status.peer,
+        status.capabilities.advertised_routes.len()
+    ));
+    for route in &status.capabilities.advertised_routes {
+        lines.push(format!(
+            "peer live advertised route: {} {} metric {}",
+            status.peer, route.prefix, route.metric
+        ));
+    }
+}
+
 async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -1127,6 +1267,120 @@ mod tests {
     }
 
     #[test]
+    fn peer_lines_configured_report_peer_inventory() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![p2p_vpn::config::PeerConfig {
+                id: remote.peer_id.clone(),
+                name: Some("remote".to_owned()),
+                addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = peer_lines_configured(&config).expect("peer lines");
+
+        assert!(lines.iter().any(|line| line == "peers: 1"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer: {}", remote.peer_id))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer name: {} remote", remote.peer_id))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer addresses: {} 1", remote.peer_id))
+        );
+        assert!(lines.iter().any(
+            |line| line == &format!("peer address: {} /ip4/127.0.0.1/tcp/4001", remote.peer_id)
+        ));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer route: {} 10.42.0.0/24 metric 100 configured",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer route: {} {}/32 metric 0 built-in",
+                remote.peer_id,
+                p2p_vpn::route::builtin_ipv4(
+                    remote
+                        .peer_id
+                        .parse::<p2p_vpn::PeerId>()
+                        .expect("remote peer id")
+                )
+            )));
+    }
+
+    #[test]
+    fn peer_live_status_lines_report_probe_results() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+            .with_advertised_routes(vec![p2p_vpn::runtime::control::ControlRoute::new(
+                "10.42.0.0/24",
+                100,
+            )]);
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200),
+        };
+        let mut lines = Vec::new();
+
+        push_peer_live_status_lines(&mut lines, &status);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live: {peer} reachable"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live mtu: {peer} 1200"))
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!("peer live preferred path: {peer} direct QUIC stream")));
+        assert!(
+            lines.iter().any(|line| line
+                == &format!("peer live advertised route: {peer} 10.42.0.0/24 metric 100"))
+        );
+    }
+
+    #[test]
     fn cli_parses_peer_route_arguments() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -1250,6 +1504,33 @@ mod tests {
 
         assert_eq!(peer, "12D3KooWPeer");
         assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_peers_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "peers",
+            "--config",
+            "node-a.json",
+            "--live",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::Peers {
+            config,
+            live,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected peers command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert!(live);
         assert_eq!(timeout_seconds, 3);
     }
 

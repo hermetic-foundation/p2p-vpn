@@ -416,6 +416,26 @@ addresses plus built-in and configured route ownership lines, which are the
 claims peers must mirror in their `peer.routes` entries before accepting routed
 traffic from this node.
 
+List configured peers and their route/address inventory:
+
+```sh
+cargo run -- peers --config p2p-vpn.json
+```
+
+Add `--live` to query every configured peer's validated control and service
+status:
+
+```sh
+cargo run -- peers --config p2p-vpn.json --live --timeout-seconds 10
+```
+
+`peers` prints each configured peer id, optional name, dial addresses, built-in
+host routes, and configured route claims. In live mode it also reports whether
+each peer was reachable, the validated remote network, membership-key match,
+effective MTU, QUIC datagram support, preferred packet path, and advertised
+routes. Unreachable peers are reported per peer instead of aborting the whole
+inspection run.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh
