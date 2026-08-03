@@ -189,10 +189,11 @@ fn handle_swarm_event(
             metrics.record_inbound_failure();
             eprintln!("packet request from {peer} failed: {error}");
         }
-        SwarmEvent::Behaviour(event) => handle_behaviour_event(swarm, discovery, event),
+        SwarmEvent::Behaviour(event) => handle_behaviour_event(swarm, metrics, discovery, event),
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
+            metrics.record_connection_established(endpoint.is_relayed());
             eprintln!("connection established with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => match peer_id {
@@ -207,6 +208,7 @@ fn handle_swarm_event(
 
 fn handle_behaviour_event(
     swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
     discovery: DiscoveryConfig,
     event: BehaviourEvent,
 ) {
@@ -236,24 +238,26 @@ fn handle_behaviour_event(
         {
             eprintln!("kademlia query progressed: {result:?}");
         }
-        BehaviourEvent::Relay(event) => handle_relay_event(&event),
-        BehaviourEvent::RelayServer(event) => handle_relay_server_event(&event),
+        BehaviourEvent::Relay(event) => handle_relay_event(metrics, &event),
+        BehaviourEvent::RelayServer(event) => handle_relay_server_event(metrics, &event),
         BehaviourEvent::Dcutr(dcutr::Event {
             remote_peer_id,
             result,
         }) if discovery.dcutr => {
+            metrics.record_dcutr_result(result.is_ok());
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
         }
         _ => {}
     }
 }
 
-fn handle_relay_server_event(event: &relay::Event) {
+fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
     match event {
         relay::Event::ReservationReqAccepted {
             src_peer_id,
             renewed,
         } => {
+            metrics.record_relay_server_reservation_accepted();
             eprintln!("relay server accepted reservation from {src_peer_id} renewed={renewed}");
         }
         relay::Event::ReservationReqDenied {
@@ -279,6 +283,7 @@ fn handle_relay_server_event(event: &relay::Event) {
             src_peer_id,
             dst_peer_id,
         } => {
+            metrics.record_relay_server_circuit_accepted();
             eprintln!("relay server accepted circuit {src_peer_id} -> {dst_peer_id}");
         }
         relay::Event::CircuitClosed {
@@ -292,19 +297,22 @@ fn handle_relay_server_event(event: &relay::Event) {
     }
 }
 
-fn handle_relay_event(event: &relay::client::Event) {
+fn handle_relay_event(metrics: &RuntimeMetrics, event: &relay::client::Event) {
     match event {
         relay::client::Event::ReservationReqAccepted {
             relay_peer_id,
             renewal,
             ..
         } => {
+            metrics.record_relay_reservation_accepted();
             eprintln!("relay reservation accepted by {relay_peer_id} renewal={renewal}");
         }
         relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+            metrics.record_relay_outbound_circuit_established();
             eprintln!("outbound relay circuit established via {relay_peer_id}");
         }
         relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+            metrics.record_relay_inbound_circuit_established();
             eprintln!("inbound relay circuit established from {src_peer_id}");
         }
     }
@@ -387,6 +395,10 @@ mod tests {
 
     use super::*;
 
+    fn peer_id() -> Libp2pPeerId {
+        Keypair::generate_ed25519().public().to_peer_id()
+    }
+
     #[test]
     fn peer_dial_address_appends_p2p_component() {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
@@ -405,5 +417,66 @@ mod tests {
             .expect("address");
 
         assert_eq!(peer_dial_address(peer, address.clone()), address);
+    }
+
+    #[test]
+    fn relay_client_events_update_path_metrics() {
+        let metrics = RuntimeMetrics::default();
+        let relay_peer_id = peer_id();
+        let src_peer_id = peer_id();
+
+        handle_relay_event(
+            &metrics,
+            &relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                renewal: false,
+                limit: None,
+            },
+        );
+        handle_relay_event(
+            &metrics,
+            &relay::client::Event::OutboundCircuitEstablished {
+                relay_peer_id,
+                limit: None,
+            },
+        );
+        handle_relay_event(
+            &metrics,
+            &relay::client::Event::InboundCircuitEstablished {
+                src_peer_id,
+                limit: None,
+            },
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.relay_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_outbound_circuits_established, 1);
+        assert_eq!(snapshot.relay_inbound_circuits_established, 1);
+    }
+
+    #[test]
+    fn relay_server_events_update_path_metrics() {
+        let metrics = RuntimeMetrics::default();
+        let src_peer_id = peer_id();
+        let dst_peer_id = peer_id();
+
+        handle_relay_server_event(
+            &metrics,
+            &relay::Event::ReservationReqAccepted {
+                src_peer_id,
+                renewed: false,
+            },
+        );
+        handle_relay_server_event(
+            &metrics,
+            &relay::Event::CircuitReqAccepted {
+                src_peer_id,
+                dst_peer_id,
+            },
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.relay_server_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_server_circuits_accepted, 1);
     }
 }

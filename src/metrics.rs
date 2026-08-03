@@ -14,6 +14,15 @@ pub struct RuntimeMetrics {
     inbound_dropped_packets: AtomicU64,
     outbound_failures: AtomicU64,
     inbound_failures: AtomicU64,
+    direct_connections_established: AtomicU64,
+    relayed_connections_established: AtomicU64,
+    relay_reservations_accepted: AtomicU64,
+    relay_outbound_circuits_established: AtomicU64,
+    relay_inbound_circuits_established: AtomicU64,
+    relay_server_reservations_accepted: AtomicU64,
+    relay_server_circuits_accepted: AtomicU64,
+    dcutr_successes: AtomicU64,
+    dcutr_failures: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -55,6 +64,49 @@ impl RuntimeMetrics {
         self.inbound_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_connection_established(&self, relayed: bool) {
+        if relayed {
+            self.relayed_connections_established
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.direct_connections_established
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_relay_reservation_accepted(&self) {
+        self.relay_reservations_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_outbound_circuit_established(&self) {
+        self.relay_outbound_circuits_established
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_inbound_circuit_established(&self) {
+        self.relay_inbound_circuits_established
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_reservation_accepted(&self) {
+        self.relay_server_reservations_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_server_circuit_accepted(&self) {
+        self.relay_server_circuits_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_dcutr_result(&self, success: bool) {
+        if success {
+            self.dcutr_successes.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.dcutr_failures.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
         RuntimeSnapshot {
@@ -68,6 +120,27 @@ impl RuntimeMetrics {
             inbound_dropped_packets: self.inbound_dropped_packets.load(Ordering::Relaxed),
             outbound_failures: self.outbound_failures.load(Ordering::Relaxed),
             inbound_failures: self.inbound_failures.load(Ordering::Relaxed),
+            direct_connections_established: self
+                .direct_connections_established
+                .load(Ordering::Relaxed),
+            relayed_connections_established: self
+                .relayed_connections_established
+                .load(Ordering::Relaxed),
+            relay_reservations_accepted: self.relay_reservations_accepted.load(Ordering::Relaxed),
+            relay_outbound_circuits_established: self
+                .relay_outbound_circuits_established
+                .load(Ordering::Relaxed),
+            relay_inbound_circuits_established: self
+                .relay_inbound_circuits_established
+                .load(Ordering::Relaxed),
+            relay_server_reservations_accepted: self
+                .relay_server_reservations_accepted
+                .load(Ordering::Relaxed),
+            relay_server_circuits_accepted: self
+                .relay_server_circuits_accepted
+                .load(Ordering::Relaxed),
+            dcutr_successes: self.dcutr_successes.load(Ordering::Relaxed),
+            dcutr_failures: self.dcutr_failures.load(Ordering::Relaxed),
             queue,
         }
     }
@@ -85,6 +158,15 @@ pub struct RuntimeSnapshot {
     pub inbound_dropped_packets: u64,
     pub outbound_failures: u64,
     pub inbound_failures: u64,
+    pub direct_connections_established: u64,
+    pub relayed_connections_established: u64,
+    pub relay_reservations_accepted: u64,
+    pub relay_outbound_circuits_established: u64,
+    pub relay_inbound_circuits_established: u64,
+    pub relay_server_reservations_accepted: u64,
+    pub relay_server_circuits_accepted: u64,
+    pub dcutr_successes: u64,
+    pub dcutr_failures: u64,
     pub queue: QueueStats,
 }
 
@@ -102,6 +184,36 @@ impl RuntimeSnapshot {
             format!("inbound_dropped_packets {}", self.inbound_dropped_packets),
             format!("outbound_failures {}", self.outbound_failures),
             format!("inbound_failures {}", self.inbound_failures),
+            format!(
+                "direct_connections_established {}",
+                self.direct_connections_established
+            ),
+            format!(
+                "relayed_connections_established {}",
+                self.relayed_connections_established
+            ),
+            format!(
+                "relay_reservations_accepted {}",
+                self.relay_reservations_accepted
+            ),
+            format!(
+                "relay_outbound_circuits_established {}",
+                self.relay_outbound_circuits_established
+            ),
+            format!(
+                "relay_inbound_circuits_established {}",
+                self.relay_inbound_circuits_established
+            ),
+            format!(
+                "relay_server_reservations_accepted {}",
+                self.relay_server_reservations_accepted
+            ),
+            format!(
+                "relay_server_circuits_accepted {}",
+                self.relay_server_circuits_accepted
+            ),
+            format!("dcutr_successes {}", self.dcutr_successes),
+            format!("dcutr_failures {}", self.dcutr_failures),
             format!("queue_queued_packets {}", self.queue.queued_packets),
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
             format!("queue_dropped_packets {}", self.queue.dropped_packets),
@@ -125,6 +237,15 @@ mod tests {
         metrics.record_inbound_drop();
         metrics.record_outbound_failure();
         metrics.record_inbound_failure();
+        metrics.record_connection_established(false);
+        metrics.record_connection_established(true);
+        metrics.record_relay_reservation_accepted();
+        metrics.record_relay_outbound_circuit_established();
+        metrics.record_relay_inbound_circuit_established();
+        metrics.record_relay_server_reservation_accepted();
+        metrics.record_relay_server_circuit_accepted();
+        metrics.record_dcutr_result(true);
+        metrics.record_dcutr_result(false);
 
         let snapshot = metrics.snapshot(QueueStats {
             queued_packets: 2,
@@ -143,10 +264,25 @@ mod tests {
         assert_eq!(snapshot.inbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_failures, 1);
         assert_eq!(snapshot.inbound_failures, 1);
+        assert_eq!(snapshot.direct_connections_established, 1);
+        assert_eq!(snapshot.relayed_connections_established, 1);
+        assert_eq!(snapshot.relay_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_outbound_circuits_established, 1);
+        assert_eq!(snapshot.relay_inbound_circuits_established, 1);
+        assert_eq!(snapshot.relay_server_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_server_circuits_accepted, 1);
+        assert_eq!(snapshot.dcutr_successes, 1);
+        assert_eq!(snapshot.dcutr_failures, 1);
         assert!(
             snapshot
                 .lines()
                 .contains(&"queue_queued_packets 2".to_owned())
         );
+        assert!(
+            snapshot
+                .lines()
+                .contains(&"relayed_connections_established 1".to_owned())
+        );
+        assert!(snapshot.lines().contains(&"dcutr_successes 1".to_owned()));
     }
 }

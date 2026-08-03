@@ -11,7 +11,7 @@ substrate while making the VPN data plane packet-oriented:
 - separate control, packet, and service protocol surfaces
 - explicit route ownership and source-address authorization
 - path scoring and promotion from relay to direct paths
-- first-class metrics for packet, queue, route, and path behavior
+- first-class metrics for packet, queue, route, relay, DCUtR, and path behavior
 
 Discovery is overlay-scoped. Configure bootstrap peers and relay-capable peers
 that intentionally participate in the VPN; do not rely on the public IPFS DHT
@@ -135,6 +135,12 @@ Inspect the runtime metric names and startup snapshot:
 ```sh
 cargo run -- metrics --config p2p-vpn.json
 ```
+
+The metrics output includes packet counters, queue occupancy and drops, direct
+versus relayed connection counts, relay reservation/circuit counts, relay-server
+accept counts, and DCUtR success/failure counts. Those counters are intended to
+show whether a deployment is using direct paths, relay fallback, and
+hole-punching as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
