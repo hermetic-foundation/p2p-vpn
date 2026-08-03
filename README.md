@@ -217,8 +217,10 @@ the private overlay; it must decode to at least 32 bytes. Repeat
 `--local-route CIDR[,METRIC]` for prefixes this node is allowed to originate
 and advertise. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses,
 and repeat `--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is
-allowed to originate. The default generated route metric is `100`, preserving
-the built-in host routes at metric `0`. Repeat `--bootstrap-peer
+allowed to originate. Peers may omit `MULTIADDR` only when mDNS or Kademlia is
+enabled, because relay, DCUtR, and AutoNAT can improve reachability but do not
+discover an otherwise unknown peer address. The default generated route metric
+is `100`, preserving the built-in host routes at metric `0`. Repeat `--bootstrap-peer
 PEER_ID=MULTIADDR` for Kademlia bootstrap nodes. By default the generated
 config uses the private
 `/p2p-vpn/kad/1` Kademlia protocol; pass `--ipfs-kademlia` as shorthand for

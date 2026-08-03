@@ -96,6 +96,7 @@ impl Config {
         self.bootstrap_multiaddrs()?;
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
+        self.validate_peer_reachability()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
         Ok(())
     }
@@ -103,6 +104,22 @@ impl Config {
     fn validate_interface(&self) -> Result<(), ConfigError> {
         if self.interface.mtu == 0 {
             return Err(ConfigError::Interface(InterfaceValidationError::ZeroMtu));
+        }
+
+        Ok(())
+    }
+
+    fn validate_peer_reachability(&self) -> Result<(), ConfigError> {
+        if self.network.discovery.mdns || self.network.discovery.kademlia {
+            return Ok(());
+        }
+
+        if let Some(peer) = self.peers.iter().find(|peer| peer.addresses.is_empty()) {
+            return Err(ConfigError::Address(
+                AddressValidationError::UnreachablePeer {
+                    peer: peer.id.clone(),
+                },
+            ));
         }
 
         Ok(())
@@ -586,6 +603,9 @@ pub enum AddressValidationError {
     },
     UnexpectedRelayTarget {
         address: String,
+    },
+    UnreachablePeer {
+        peer: String,
     },
 }
 
@@ -1202,6 +1222,100 @@ mod tests {
             config.validate_runtime(),
             Err(ConfigError::KademliaProtocol(protocol)) if protocol == "ipfs/kad/1.0.0"
         ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_addressless_peers_without_discovery() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig {
+                    mdns: false,
+                    kademlia: false,
+                    kademlia_provider_advertisement: false,
+                    kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+                    dcutr: true,
+                    autonat: true,
+                },
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.peer_id.clone(),
+                name: Some("remote".to_owned()),
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::UnreachablePeer { peer }
+            )) if peer == remote.peer_id
+        ));
+
+        config.peers[0].addresses = vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{}", remote.peer_id)];
+        assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn runtime_validation_allows_addressless_peers_with_discovery() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig {
+                    mdns: true,
+                    kademlia: false,
+                    kademlia_provider_advertisement: false,
+                    kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+                    dcutr: true,
+                    autonat: true,
+                },
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.peer_id,
+                name: Some("remote".to_owned()),
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(config.validate_runtime().is_ok());
+
+        config.network.discovery.mdns = false;
+        config.network.discovery.kademlia = true;
+        assert!(config.validate_runtime().is_ok());
     }
 
     #[test]
