@@ -16,6 +16,8 @@ use crate::{
     wire::MAX_PAYLOAD_LEN,
 };
 
+use libp2p::multiaddr::Protocol;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Config {
     pub network: NetworkConfig,
@@ -121,7 +123,7 @@ impl Config {
     }
 
     pub fn relay_reservation_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
-        parse_multiaddrs(&self.network.relay.reservations)
+        parse_relay_reservation_multiaddrs(&self.network.relay.reservations)
     }
 
     #[must_use]
@@ -429,6 +431,7 @@ pub enum ConfigError {
     PeerId(crate::PeerIdParseError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
+    Address(AddressValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
 }
@@ -463,6 +466,24 @@ pub enum RoutePrefixError {
     InvalidAddress(String),
     InvalidPrefix(String),
     InvalidPrefixLength(RouteError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AddressValidationError {
+    PeerIdMismatch {
+        expected: String,
+        actual: String,
+        address: String,
+    },
+    MissingRelayCircuit {
+        address: String,
+    },
+    MissingRelayPeer {
+        address: String,
+    },
+    UnexpectedRelayTarget {
+        address: String,
+    },
 }
 
 fn default_queue() -> QueueConfig {
@@ -600,10 +621,100 @@ fn parse_peer_address(
     peer: &str,
     address: &str,
 ) -> Result<(libp2p::PeerId, libp2p::Multiaddr), ConfigError> {
-    Ok((
-        peer.parse().map_err(ConfigError::Libp2pPeerId)?,
-        address.parse().map_err(ConfigError::Multiaddr)?,
+    let peer = peer.parse().map_err(ConfigError::Libp2pPeerId)?;
+    let address = address.parse().map_err(ConfigError::Multiaddr)?;
+    validate_peer_multiaddr(peer, &address)?;
+    Ok((peer, address))
+}
+
+fn parse_relay_reservation_multiaddrs(
+    input: &[String],
+) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
+    input
+        .iter()
+        .map(|address| {
+            let multiaddr = address.parse().map_err(ConfigError::Multiaddr)?;
+            validate_relay_reservation_multiaddr(&multiaddr)?;
+            Ok(multiaddr)
+        })
+        .collect()
+}
+
+fn validate_peer_multiaddr(
+    expected: libp2p::PeerId,
+    address: &libp2p::Multiaddr,
+) -> Result<(), ConfigError> {
+    let Some(actual) = peer_address_target(address) else {
+        return Ok(());
+    };
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(ConfigError::Address(
+        AddressValidationError::PeerIdMismatch {
+            expected: expected.to_string(),
+            actual: actual.to_string(),
+            address: address.to_string(),
+        },
     ))
+}
+
+fn validate_relay_reservation_multiaddr(address: &libp2p::Multiaddr) -> Result<(), ConfigError> {
+    let mut relay_peer = None;
+    let mut saw_circuit = false;
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(_) if saw_circuit => {
+                return Err(ConfigError::Address(
+                    AddressValidationError::UnexpectedRelayTarget {
+                        address: address.to_string(),
+                    },
+                ));
+            }
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            Protocol::P2pCircuit if relay_peer.is_some() => saw_circuit = true,
+            Protocol::P2pCircuit => {
+                return Err(ConfigError::Address(
+                    AddressValidationError::MissingRelayPeer {
+                        address: address.to_string(),
+                    },
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if saw_circuit {
+        Ok(())
+    } else {
+        Err(ConfigError::Address(
+            AddressValidationError::MissingRelayCircuit {
+                address: address.to_string(),
+            },
+        ))
+    }
+}
+
+fn peer_address_target(address: &libp2p::Multiaddr) -> Option<libp2p::PeerId> {
+    let mut direct_target = None;
+    let mut relayed_target = None;
+    let mut after_circuit = false;
+
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(peer) if after_circuit => relayed_target = Some(peer),
+            Protocol::P2p(peer) => direct_target = Some(peer),
+            Protocol::P2pCircuit => after_circuit = true,
+            _ => {}
+        }
+    }
+
+    if after_circuit {
+        relayed_target
+    } else {
+        direct_target
+    }
 }
 
 fn normalize_address(address: IpAddr, prefix_len: u8) -> IpAddr {
@@ -930,6 +1041,126 @@ mod tests {
             config.validate_runtime(),
             Err(ConfigError::Multiaddr(_))
         ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_peer_address_identity_mismatch() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let configured = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let other = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: vec![BootstrapPeerConfig {
+                    id: configured.to_string(),
+                    address: format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}"),
+                }],
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: configured.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::PeerIdMismatch { .. }
+            ))
+        ));
+
+        config.network.bootstrap_peers.clear();
+        config.peers[0].addresses = vec![format!(
+            "/ip4/127.0.0.1/tcp/4001/p2p/{other}/p2p-circuit/p2p/{other}"
+        )];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::PeerIdMismatch { .. }
+            ))
+        ));
+
+        config.peers[0].addresses =
+            vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}/p2p-circuit")];
+        assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn runtime_validation_requires_relay_reservation_shape() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let relay = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig {
+                    server: false,
+                    reservations: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
+                    resources: RelayResourceConfig::default(),
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::MissingRelayCircuit { .. }
+            ))
+        ));
+
+        config.network.relay.reservations = vec!["/ip4/127.0.0.1/tcp/4001/p2p-circuit".to_owned()];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::MissingRelayPeer { .. }
+            ))
+        ));
+
+        config.network.relay.reservations = vec![format!(
+            "/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{relay}"
+        )];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Address(
+                AddressValidationError::UnexpectedRelayTarget { .. }
+            ))
+        ));
+
+        config.network.relay.reservations =
+            vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")];
+        assert!(config.validate_runtime().is_ok());
     }
 
     #[test]

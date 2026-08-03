@@ -271,8 +271,10 @@ cargo run -- status --config p2p-vpn.json
 ```
 
 `status` validates the config before printing the compiled view. It checks that
-the private key matches `network.local_peer`, configured routes compile, and all
-listen, external, bootstrap, peer, and relay reservation multiaddrs parse.
+the private key matches `network.local_peer`, configured routes compile, all
+listen and external multiaddrs parse, bootstrap and peer multiaddrs either omit
+an explicit peer id or match the configured peer, and relay reservation
+multiaddrs contain `/p2p/<relay>/p2p-circuit`.
 
 Inspect the runtime metric names and startup snapshot:
 
