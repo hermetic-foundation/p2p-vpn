@@ -459,6 +459,14 @@ fn runtime_state_lines(
             snapshot.outbound_quic_datagram_unavailable_packets
         ),
         format!(
+            "path_promotions_to_direct {}",
+            snapshot.path_promotions_to_direct
+        ),
+        format!(
+            "path_fallbacks_to_relay {}",
+            snapshot.path_fallbacks_to_relay
+        ),
+        format!(
             "outbound_path_probes_sent {}",
             snapshot.outbound_path_probes_sent
         ),
@@ -1283,7 +1291,13 @@ fn handle_swarm_event(
                 peer_id,
                 num_established.get(),
             );
-            record_path_established(context.paths, context.forwarder, peer_id, &endpoint);
+            record_path_established(
+                context.paths,
+                context.forwarder,
+                context.metrics,
+                peer_id,
+                &endpoint,
+            );
             send_control_capabilities(
                 swarm,
                 context.forwarder,
@@ -1317,7 +1331,13 @@ fn handle_swarm_event(
             num_established,
             ..
         } => {
-            record_path_closed(context.paths, context.forwarder, peer_id, &endpoint);
+            record_path_closed(
+                context.paths,
+                context.forwarder,
+                context.metrics,
+                peer_id,
+                &endpoint,
+            );
             invalidate_peer_capabilities_when_disconnected(
                 context.forwarder,
                 context.peer_capabilities,
@@ -1854,6 +1874,7 @@ fn send_service_status_request(
 fn record_path_established(
     paths: &mut PathSet,
     forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     endpoint: &ConnectedPoint,
 ) {
@@ -1862,7 +1883,7 @@ fn record_path_established(
     }
 
     let kind = path_kind_for_endpoint(endpoint);
-    paths.record_established_with_mtu(
+    let change = paths.record_established_with_mtu(
         PeerId::from_libp2p(peer),
         kind,
         Some(initial_path_mtu(
@@ -1870,11 +1891,13 @@ fn record_path_established(
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         )),
     );
+    record_path_selection_change(metrics, change);
 }
 
 fn record_path_closed(
     paths: &mut PathSet,
     forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     endpoint: &ConnectedPoint,
 ) {
@@ -1882,7 +1905,43 @@ fn record_path_closed(
         return;
     }
 
-    paths.record_closed(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+    let change = paths.record_closed(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+    record_path_selection_change(metrics, change);
+}
+
+fn record_path_selection_change(
+    metrics: &RuntimeMetrics,
+    change: Option<crate::path::PathSelectionChange>,
+) {
+    let Some(change) = change else {
+        return;
+    };
+    if change.promoted_to_direct() {
+        metrics.record_path_promotion_to_direct();
+        log_path_selection_change("path_promoted_to_direct", change);
+    } else if change.fell_back_to_relay() {
+        metrics.record_path_fallback_to_relay();
+        log_path_selection_change("path_fell_back_to_relay", change);
+    }
+}
+
+fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChange) {
+    let peer = change.peer.to_string();
+    let previous = change
+        .previous
+        .map_or("none", |candidate| candidate.kind.wire_name());
+    let current = change
+        .current
+        .map_or("none", |candidate| candidate.kind.wire_name());
+    log_runtime_event(
+        LogLevel::Info,
+        event,
+        &[
+            ("peer", &peer),
+            ("previous_path", previous),
+            ("current_path", current),
+        ],
+    );
 }
 
 fn authorize_established_connection(
@@ -2532,6 +2591,8 @@ mod tests {
         assert!(lines.contains(&"outbound_stream_fallback_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
+        assert!(lines.contains(&"path_promotions_to_direct 0".to_owned()));
+        assert!(lines.contains(&"path_fallbacks_to_relay 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(

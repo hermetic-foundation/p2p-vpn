@@ -110,6 +110,9 @@ Outbound packet draining is path-aware. The runtime records direct TCP, direct
 QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
 unhealthy when their connections close, and only drains a peer's bounded queue
 while that peer has a healthy path that the negotiated packet transport can use.
+When the selected path changes from relay to direct, or from direct back to
+relay, the daemon records promotion/fallback counters and emits a structured
+path-selection log event.
 The drain decision is explicit: native QUIC datagram, stream fallback, or
 blocked with a reason. The locked libp2p-quic transport currently disables QUIC
 datagram receive buffers internally, so the daemon advertises datagrams as
@@ -537,7 +540,8 @@ inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/failure counters, inbound and outbound packet drop reasons
 including expired outbound queue packets, stream fallback sends, attempted
 native QUIC datagram sends, datagram-unavailable queue stalls, direct versus
-relayed connection counts, relay reservation/circuit counts, relay-server
+relayed connection counts, selected-path promotions to direct, selected-path
+fallbacks to relay, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
 current public/private/unknown reachability gauges and status-change counters,

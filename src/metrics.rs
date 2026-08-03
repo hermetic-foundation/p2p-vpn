@@ -58,6 +58,8 @@ pub struct RuntimeMetrics {
     inbound_failures: AtomicU64,
     direct_connections_established: AtomicU64,
     relayed_connections_established: AtomicU64,
+    path_promotions_to_direct: AtomicU64,
+    path_fallbacks_to_relay: AtomicU64,
     unauthorized_connections_dropped: AtomicU64,
     relay_reservations_accepted: AtomicU64,
     relay_outbound_circuits_established: AtomicU64,
@@ -261,6 +263,15 @@ impl RuntimeMetrics {
             self.direct_connections_established
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn record_path_promotion_to_direct(&self) {
+        self.path_promotions_to_direct
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_path_fallback_to_relay(&self) {
+        self.path_fallbacks_to_relay.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_unauthorized_connection_dropped(&self) {
@@ -655,6 +666,8 @@ impl RuntimeMetrics {
             self.direct_connections_established.load(Ordering::Relaxed);
         snapshot.relayed_connections_established =
             self.relayed_connections_established.load(Ordering::Relaxed);
+        snapshot.path_promotions_to_direct = self.path_promotions_to_direct.load(Ordering::Relaxed);
+        snapshot.path_fallbacks_to_relay = self.path_fallbacks_to_relay.load(Ordering::Relaxed);
         snapshot.unauthorized_connections_dropped = self
             .unauthorized_connections_dropped
             .load(Ordering::Relaxed);
@@ -842,6 +855,8 @@ pub struct RuntimeSnapshot {
     pub inbound_failures: u64,
     pub direct_connections_established: u64,
     pub relayed_connections_established: u64,
+    pub path_promotions_to_direct: u64,
+    pub path_fallbacks_to_relay: u64,
     pub unauthorized_connections_dropped: u64,
     pub relay_reservations_accepted: u64,
     pub relay_outbound_circuits_established: u64,
@@ -969,6 +984,11 @@ impl RuntimeSnapshot {
                 "relayed_connections_established {}",
                 self.relayed_connections_established
             ),
+            format!(
+                "path_promotions_to_direct {}",
+                self.path_promotions_to_direct
+            ),
+            format!("path_fallbacks_to_relay {}", self.path_fallbacks_to_relay),
             format!(
                 "unauthorized_connections_dropped {}",
                 self.unauthorized_connections_dropped
@@ -1353,6 +1373,8 @@ mod tests {
     fn populate_transport_and_discovery_metrics(metrics: &RuntimeMetrics) {
         metrics.record_connection_established(false);
         metrics.record_connection_established(true);
+        metrics.record_path_promotion_to_direct();
+        metrics.record_path_fallback_to_relay();
         metrics.record_unauthorized_connection_dropped();
         metrics.record_relay_reservation_accepted();
         metrics.record_relay_outbound_circuit_established();
@@ -1570,6 +1592,14 @@ mod tests {
     }
 
     #[test]
+    fn metrics_snapshot_reports_path_selection_counters() {
+        let snapshot = populated_snapshot();
+
+        assert_eq!(snapshot.path_promotions_to_direct, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
     fn metrics_snapshot_reports_runtime_and_queue_lines() {
         let snapshot = populated_snapshot();
 
@@ -1595,6 +1625,8 @@ mod tests {
         assert_metric_line(&snapshot, "inbound_drop_unauthorized_destination_packets 1");
         assert_metric_line(&snapshot, "inbound_drop_unexpected_payload_packets 1");
         assert_metric_line(&snapshot, "relayed_connections_established 1");
+        assert_metric_line(&snapshot, "path_promotions_to_direct 1");
+        assert_metric_line(&snapshot, "path_fallbacks_to_relay 1");
         assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");
         assert_metric_line(&snapshot, "relay_server_reservations_denied 1");
         assert_metric_line(&snapshot, "relay_server_reservations_closed 1");

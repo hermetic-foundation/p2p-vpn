@@ -48,6 +48,16 @@ impl PathCandidate {
             .map_or(0, |rtt| i32::from(rtt.saturating_div(10)));
         i32::from(self.kind.default_score()) - latency_penalty
     }
+
+    #[must_use]
+    pub const fn is_relay(self) -> bool {
+        self.relay
+    }
+
+    #[must_use]
+    pub const fn is_direct(self) -> bool {
+        !self.relay
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -72,6 +82,31 @@ impl PathTransportSupport {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PathSet {
     candidates: Vec<PathCandidate>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PathSelectionChange {
+    pub peer: PeerId,
+    pub previous: Option<PathCandidate>,
+    pub current: Option<PathCandidate>,
+}
+
+impl PathSelectionChange {
+    #[must_use]
+    pub const fn promoted_to_direct(self) -> bool {
+        matches!(
+            (self.previous, self.current),
+            (Some(previous), Some(current)) if previous.is_relay() && current.is_direct()
+        )
+    }
+
+    #[must_use]
+    pub const fn fell_back_to_relay(self) -> bool {
+        matches!(
+            (self.previous, self.current),
+            (Some(previous), Some(current)) if previous.is_direct() && current.is_relay()
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -146,8 +181,12 @@ impl PathSet {
         }
     }
 
-    pub fn record_established(&mut self, peer: PeerId, kind: PathKind) {
-        self.record_established_with_mtu(peer, kind, None);
+    pub fn record_established(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+    ) -> Option<PathSelectionChange> {
+        self.record_established_with_mtu(peer, kind, None)
     }
 
     pub fn record_established_with_mtu(
@@ -155,7 +194,8 @@ impl PathSet {
         peer: PeerId,
         kind: PathKind,
         estimated_mtu: Option<u16>,
-    ) {
+    ) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
             .iter_mut()
@@ -172,9 +212,11 @@ impl PathSet {
             candidate.established_connections = 1;
             self.candidates.push(candidate);
         }
+        self.selection_change(peer, previous)
     }
 
-    pub fn record_closed(&mut self, peer: PeerId, kind: PathKind) {
+    pub fn record_closed(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
             .iter_mut()
@@ -184,6 +226,24 @@ impl PathSet {
             if candidate.established_connections == 0 {
                 candidate.healthy = false;
             }
+        }
+        self.selection_change(peer, previous)
+    }
+
+    fn selection_change(
+        &self,
+        peer: PeerId,
+        previous: Option<PathCandidate>,
+    ) -> Option<PathSelectionChange> {
+        let current = self.best_for(peer);
+        if previous.map(|path| path.kind) == current.map(|path| path.kind) {
+            None
+        } else {
+            Some(PathSelectionChange {
+                peer,
+                previous,
+                current,
+            })
         }
     }
 
@@ -335,6 +395,61 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn reports_selection_changes_on_promotion_and_fallback() {
+        let mut paths = PathSet::new();
+
+        assert_eq!(
+            paths
+                .record_established(peer(1), PathKind::CircuitRelay)
+                .map(|change| (
+                    change.previous.map(|path| path.kind),
+                    change.current.map(|path| path.kind)
+                )),
+            Some((None, Some(PathKind::CircuitRelay)))
+        );
+        let promotion = paths
+            .record_established(peer(1), PathKind::DirectQuicStream)
+            .expect("selected path changed");
+        assert!(promotion.promoted_to_direct());
+        assert_eq!(
+            promotion.previous.map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        assert_eq!(
+            promotion.current.map(|path| path.kind),
+            Some(PathKind::DirectQuicStream)
+        );
+
+        let fallback = paths
+            .record_closed(peer(1), PathKind::DirectQuicStream)
+            .expect("selected path changed");
+        assert!(fallback.fell_back_to_relay());
+        assert_eq!(
+            fallback.previous.map(|path| path.kind),
+            Some(PathKind::DirectQuicStream)
+        );
+        assert_eq!(
+            fallback.current.map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+    }
+
+    #[test]
+    fn suppresses_selection_changes_when_best_path_stays_the_same() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::DirectQuicStream);
+
+        assert_eq!(
+            paths.record_established(peer(1), PathKind::DirectTcpStream),
+            None
+        );
+        assert_eq!(
+            paths.record_closed(peer(1), PathKind::DirectTcpStream),
+            None
+        );
     }
 
     #[test]
