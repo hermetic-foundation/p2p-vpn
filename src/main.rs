@@ -5,7 +5,7 @@ use p2p_vpn::{
     PathKind,
     config::{
         Config, DiscoveryConfig, InitConfigTemplate, InitPeer, RelayConfig, RelayResourceConfig,
-        RuntimeDefaults,
+        RouteConfig, RuntimeDefaults,
     },
     identity::NodeIdentity,
     metrics::RuntimeMetrics,
@@ -26,6 +26,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     Keygen,
     InitConfig {
@@ -47,6 +48,8 @@ enum Command {
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long = "peer")]
         peers: Vec<EndpointArg>,
+        #[arg(long = "peer-route")]
+        peer_routes: Vec<PeerRouteArg>,
         #[arg(long = "relay-reservation")]
         relay_reservations: Vec<String>,
         #[arg(long)]
@@ -96,6 +99,7 @@ async fn main() -> Result<(), String> {
             external_addresses,
             bootstrap_peers,
             peers,
+            peer_routes,
             relay_reservations,
             relay_server,
             disable_mdns,
@@ -113,6 +117,7 @@ async fn main() -> Result<(), String> {
             external_addresses,
             bootstrap_peers,
             peers,
+            peer_routes,
             discovery: DiscoveryConfig {
                 mdns: !disable_mdns,
                 kademlia: !disable_kademlia,
@@ -147,6 +152,7 @@ struct InitConfigArgs {
     external_addresses: Vec<String>,
     bootstrap_peers: Vec<EndpointArg>,
     peers: Vec<EndpointArg>,
+    peer_routes: Vec<PeerRouteArg>,
     discovery: DiscoveryConfig,
     relay: RelayConfig,
     force: bool,
@@ -156,6 +162,12 @@ struct InitConfigArgs {
 struct EndpointArg {
     id: String,
     address: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PeerRouteArg {
+    id: String,
+    route: RouteConfig,
 }
 
 impl FromStr for EndpointArg {
@@ -175,6 +187,41 @@ impl FromStr for EndpointArg {
         Ok(Self {
             id: id.to_owned(),
             address: address.map(str::to_owned),
+        })
+    }
+}
+
+impl FromStr for PeerRouteArg {
+    type Err = String;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let (id, route) = input
+            .split_once('=')
+            .ok_or_else(|| "peer route must be PEER_ID=CIDR[,METRIC]".to_owned())?;
+        if id.is_empty() {
+            return Err("peer id cannot be empty".to_owned());
+        }
+        if route.is_empty() {
+            return Err("peer route cannot be empty".to_owned());
+        }
+        let (prefix, metric) = if let Some((prefix, metric)) = route.split_once(',') {
+            let metric = metric
+                .parse::<u16>()
+                .map_err(|_| format!("peer route metric `{metric}` is not a u16"))?;
+            (prefix, metric)
+        } else {
+            (route, 100)
+        };
+        if prefix.is_empty() {
+            return Err("peer route prefix cannot be empty".to_owned());
+        }
+
+        Ok(Self {
+            id: id.to_owned(),
+            route: RouteConfig {
+                prefix: prefix.to_owned(),
+                metric,
+            },
         })
     }
 }
@@ -225,7 +272,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
             .into_iter()
             .map(EndpointArg::into)
             .collect(),
-        peers: args.peers.into_iter().map(EndpointArg::into).collect(),
+        peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
         relay: args.relay,
     }
@@ -253,8 +300,21 @@ impl From<EndpointArg> for InitPeer {
         Self {
             id: value.id,
             address: value.address,
+            routes: Vec::new(),
         }
     }
+}
+
+fn init_peers(addresses: Vec<EndpointArg>, routes: Vec<PeerRouteArg>) -> Vec<InitPeer> {
+    addresses
+        .into_iter()
+        .map(EndpointArg::into)
+        .chain(routes.into_iter().map(|route| InitPeer {
+            id: route.id,
+            address: None,
+            routes: vec![route.route],
+        }))
+        .collect()
 }
 
 fn status(path: &PathBuf) -> Result<(), String> {
@@ -346,6 +406,14 @@ fn status(path: &PathBuf) -> Result<(), String> {
             .peers
             .iter()
             .map(|peer| peer.addresses.len())
+            .sum::<usize>()
+    );
+    println!(
+        "configured peer routes: {}",
+        config
+            .peers
+            .iter()
+            .map(|peer| peer.routes.len())
             .sum::<usize>()
     );
 
@@ -443,5 +511,129 @@ fn path_name(path: PathKind) -> &'static str {
         PathKind::DirectQuicStream => "direct QUIC stream",
         PathKind::DirectTcpStream => "direct TCP stream",
         PathKind::CircuitRelay => "circuit relay",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_route_arg_parses_default_and_explicit_metric() {
+        assert_eq!(
+            "12D3KooWPeer=10.42.0.0/24"
+                .parse::<PeerRouteArg>()
+                .expect("route"),
+            PeerRouteArg {
+                id: "12D3KooWPeer".to_owned(),
+                route: RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                },
+            }
+        );
+        assert_eq!(
+            "12D3KooWPeer=fd00::/64,250"
+                .parse::<PeerRouteArg>()
+                .expect("route"),
+            PeerRouteArg {
+                id: "12D3KooWPeer".to_owned(),
+                route: RouteConfig {
+                    prefix: "fd00::/64".to_owned(),
+                    metric: 250,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn init_peers_preserves_address_and_route_entries_for_template_merge() {
+        let peers = init_peers(
+            vec![EndpointArg {
+                id: "peer-a".to_owned(),
+                address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+            }],
+            vec![
+                PeerRouteArg {
+                    id: "peer-a".to_owned(),
+                    route: RouteConfig {
+                        prefix: "10.42.0.0/24".to_owned(),
+                        metric: 100,
+                    },
+                },
+                PeerRouteArg {
+                    id: "peer-a".to_owned(),
+                    route: RouteConfig {
+                        prefix: "fd00::/64".to_owned(),
+                        metric: 250,
+                    },
+                },
+            ],
+        );
+
+        assert_eq!(
+            peers,
+            vec![
+                InitPeer {
+                    id: "peer-a".to_owned(),
+                    address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    routes: Vec::new(),
+                },
+                InitPeer {
+                    id: "peer-a".to_owned(),
+                    address: None,
+                    routes: vec![RouteConfig {
+                        prefix: "10.42.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
+                },
+                InitPeer {
+                    id: "peer-a".to_owned(),
+                    address: None,
+                    routes: vec![RouteConfig {
+                        prefix: "fd00::/64".to_owned(),
+                        metric: 250,
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_parses_peer_route_arguments() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "init-config",
+            "--peer",
+            "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
+            "--peer-route",
+            "12D3KooWPeer=10.42.0.0/24,250",
+        ])
+        .expect("cli");
+
+        let Command::InitConfig {
+            peers, peer_routes, ..
+        } = cli.command
+        else {
+            panic!("expected init-config command");
+        };
+
+        assert_eq!(
+            peers,
+            vec![EndpointArg {
+                id: "12D3KooWPeer".to_owned(),
+                address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+            }]
+        );
+        assert_eq!(
+            peer_routes,
+            vec![PeerRouteArg {
+                id: "12D3KooWPeer".to_owned(),
+                route: RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 250,
+                },
+            }]
+        );
     }
 }

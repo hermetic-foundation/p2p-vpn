@@ -154,19 +154,22 @@ cargo run -- init-config \
   --listen-address /ip4/0.0.0.0/tcp/0 \
   --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
   --peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1 \
+  --peer-route <node-a-peer-id>=10.42.0.0/24,100 \
   --bootstrap-peer <node-a-peer-id>=/ip4/<node-a-address>/udp/4001/quic-v1
 ```
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
-`--bootstrap-peer PEER_ID=MULTIADDR` for overlay-scoped Kademlia bootstrap
-nodes. Repeat `--external-address MULTIADDR` for stable public or DNS
-addresses that libp2p should advertise to peers in addition to observed
-addresses learned through identify and confirmed through AutoNAT. Use
-`--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
-`--disable-autonat` to omit optional discovery and NAT traversal behaviours
-from the generated config.
+`--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is allowed to
+originate. The default generated route metric is `100`, preserving the built-in
+host routes at metric `0`. Repeat `--bootstrap-peer PEER_ID=MULTIADDR` for
+overlay-scoped Kademlia bootstrap nodes. Repeat `--external-address MULTIADDR`
+for stable public or DNS addresses that libp2p should advertise to peers in
+addition to observed addresses learned through identify and confirmed through
+AutoNAT. Use `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
+`--disable-autonat` to omit optional discovery and NAT traversal behaviours from
+the generated config.
 
 Run local checks:
 

@@ -364,6 +364,7 @@ impl Default for RuntimeDefaults {
 pub struct InitPeer {
     pub id: String,
     pub address: Option<String>,
+    pub routes: Vec<RouteConfig>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -741,6 +742,11 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
         {
             existing.addresses.push(address);
         }
+        for route in peer.routes {
+            if !existing.routes.contains(&route) {
+                existing.routes.push(route);
+            }
+        }
         return;
     }
 
@@ -748,7 +754,7 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
         id: peer.id,
         name: None,
         addresses: peer.address.into_iter().collect(),
-        routes: Vec::new(),
+        routes: peer.routes,
     });
 }
 
@@ -1187,19 +1193,32 @@ mod tests {
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                routes: Vec::new(),
             }],
             peers: vec![
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    routes: vec![RouteConfig {
+                        prefix: "10.42.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
                 },
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/udp/4001/quic-v1".to_owned()),
+                    routes: vec![RouteConfig {
+                        prefix: "fd00::/64".to_owned(),
+                        metric: 100,
+                    }],
                 },
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    routes: vec![RouteConfig {
+                        prefix: "10.42.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
                 },
             ],
             discovery: DiscoveryConfig {
@@ -1235,10 +1254,24 @@ mod tests {
         assert!(!decoded.network.discovery.kademlia);
         assert_eq!(decoded.peers.len(), 1);
         assert_eq!(decoded.peers[0].addresses.len(), 2);
+        assert_eq!(
+            decoded.peers[0].routes,
+            vec![
+                RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                },
+                RouteConfig {
+                    prefix: "fd00::/64".to_owned(),
+                    metric: 100,
+                },
+            ]
+        );
         assert!(decoded.identity().is_ok());
         assert!(decoded.listen_multiaddrs().is_ok());
         assert!(decoded.bootstrap_multiaddrs().is_ok());
         assert_eq!(decoded.peer_multiaddrs().expect("peer addresses").len(), 2);
+        assert!(decoded.compile_routes().is_ok());
         assert!(decoded.relay_reservation_multiaddrs().is_ok());
     }
 
