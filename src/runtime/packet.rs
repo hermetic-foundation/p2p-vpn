@@ -327,6 +327,7 @@ mod tests {
                     .to_string(),
                 private_key: None,
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: crate::config::DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),

@@ -115,7 +115,8 @@ cargo run -- init-config \
   --network lab \
   --output node-a.json \
   --listen-address /ip4/0.0.0.0/tcp/0 \
-  --listen-address /ip4/0.0.0.0/udp/0/quic-v1
+  --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
+  --external-address /dns4/node-a.example.net/udp/4001/quic-v1
 ```
 
 Generate another node config that knows how to dial node A:
@@ -134,7 +135,9 @@ Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
 `--bootstrap-peer PEER_ID=MULTIADDR` for overlay-scoped Kademlia bootstrap
-nodes.
+nodes. Repeat `--external-address MULTIADDR` for stable public or DNS
+addresses that libp2p should advertise to peers in addition to observed
+addresses learned through identify.
 
 Run local checks:
 
@@ -167,6 +170,9 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "listen_addresses": [
       "/ip4/0.0.0.0/tcp/0",
       "/ip4/0.0.0.0/udp/0/quic-v1"
+    ],
+    "external_addresses": [
+      "/dns4/node-a.example.net/udp/4001/quic-v1"
     ],
     "bootstrap_peers": [
       {
@@ -230,7 +236,10 @@ cargo test --test tun_namespace -- --ignored --nocapture
 `bootstrap_peers` are dialed and added to the overlay-scoped Kademlia routing
 table when Kademlia discovery is enabled. Kademlia nodes advertise themselves
 under the network provider key and query that same key for other configured
-peers. `relay.reservations` are full libp2p relay listen addresses; listening on
+peers. `external_addresses` are registered with the libp2p swarm as explicit
+advertised addresses; use them for stable public socket, DNS, or port-forwarded
+addresses that peers should prefer over wildcard listen addresses.
+`relay.reservations` are full libp2p relay listen addresses; listening on
 one asks that relay for a circuit relay v2 reservation. Peer `addresses` may
 also contain full relayed target addresses such as
 `/dns4/relay.example.net/tcp/4001/p2p/<relay>/p2p-circuit/p2p/<peer>`. Set
@@ -247,7 +256,7 @@ cargo run -- status --config p2p-vpn.json
 
 `status` validates the config before printing the compiled view. It checks that
 the private key matches `network.local_peer`, configured routes compile, and all
-listen, bootstrap, peer, and relay reservation multiaddrs parse.
+listen, external, bootstrap, peer, and relay reservation multiaddrs parse.
 
 Inspect the runtime metric names and startup snapshot:
 

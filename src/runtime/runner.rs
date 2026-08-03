@@ -49,6 +49,7 @@ pub async fn run_config(
         max_concurrent_control_streams: config.resources.control_stream_limit(),
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
+        external_addresses: config.external_multiaddrs()?,
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
@@ -100,30 +101,7 @@ pub async fn run_node(
     queue_expiry_tick.tick().await;
     let discovery = node.discovery;
 
-    if node.startup.mdns_enabled {
-        eprintln!("mdns discovery enabled");
-    }
-    if node.startup.dcutr_enabled {
-        eprintln!("dcutr hole punching enabled");
-    }
-    if node.startup.kademlia.bootstrap_started {
-        eprintln!("kademlia bootstrap started");
-    }
-    if node.startup.kademlia.rendezvous_advertise_started {
-        eprintln!("kademlia overlay provider advertisement started");
-    }
-    if node.startup.kademlia.rendezvous_lookup_started {
-        eprintln!("kademlia overlay provider lookup started");
-    }
-    if node.startup.relay_reservations_started > 0 {
-        eprintln!(
-            "relay reservation listeners started: {}",
-            node.startup.relay_reservations_started
-        );
-    }
-    if node.startup.relay_server_enabled {
-        eprintln!("relay server enabled");
-    }
+    log_startup_status(node.startup);
 
     loop {
         tokio::select! {
@@ -174,6 +152,39 @@ pub async fn run_node(
                 print_metrics(&metrics, queues.total_stats());
             }
         }
+    }
+}
+
+fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
+    if startup.mdns_enabled {
+        eprintln!("mdns discovery enabled");
+    }
+    if startup.external_addresses_configured > 0 {
+        eprintln!(
+            "external addresses configured: {}",
+            startup.external_addresses_configured
+        );
+    }
+    if startup.dcutr_enabled {
+        eprintln!("dcutr hole punching enabled");
+    }
+    if startup.kademlia.bootstrap_started {
+        eprintln!("kademlia bootstrap started");
+    }
+    if startup.kademlia.rendezvous_advertise_started {
+        eprintln!("kademlia overlay provider advertisement started");
+    }
+    if startup.kademlia.rendezvous_lookup_started {
+        eprintln!("kademlia overlay provider lookup started");
+    }
+    if startup.relay_reservations_started > 0 {
+        eprintln!(
+            "relay reservation listeners started: {}",
+            startup.relay_reservations_started
+        );
+    }
+    if startup.relay_server_enabled {
+        eprintln!("relay server enabled");
     }
 }
 
@@ -1241,6 +1252,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: vec![BootstrapPeerConfig {
                     id: bootstrap.to_string(),
                     address: "/ip4/127.0.0.1/tcp/4001".to_owned(),
@@ -1436,6 +1448,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
@@ -1482,6 +1495,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
@@ -1526,6 +1540,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
@@ -1579,6 +1594,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
@@ -1607,6 +1623,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),

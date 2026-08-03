@@ -41,6 +41,8 @@ enum Command {
         mtu: u16,
         #[arg(long = "listen-address")]
         listen_addresses: Vec<String>,
+        #[arg(long = "external-address")]
+        external_addresses: Vec<String>,
         #[arg(long = "bootstrap-peer")]
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long = "peer")]
@@ -89,6 +91,7 @@ async fn main() -> Result<(), String> {
             interface,
             mtu,
             listen_addresses,
+            external_addresses,
             bootstrap_peers,
             peers,
             relay_reservations,
@@ -104,6 +107,7 @@ async fn main() -> Result<(), String> {
             interface,
             mtu,
             listen_addresses,
+            external_addresses,
             bootstrap_peers,
             peers,
             discovery: DiscoveryConfig {
@@ -136,6 +140,7 @@ struct InitConfigArgs {
     interface: String,
     mtu: u16,
     listen_addresses: Vec<String>,
+    external_addresses: Vec<String>,
     bootstrap_peers: Vec<EndpointArg>,
     peers: Vec<EndpointArg>,
     discovery: DiscoveryConfig,
@@ -210,6 +215,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         interface_name: args.interface,
         mtu: args.mtu,
         listen_addresses: args.listen_addresses,
+        external_addresses: args.external_addresses,
         bootstrap_peers: args
             .bootstrap_peers
             .into_iter()
@@ -294,6 +300,10 @@ fn status(path: &PathBuf) -> Result<(), String> {
         "listen addresses: {}",
         config.network.listen_addresses.len()
     );
+    println!(
+        "external addresses: {}",
+        config.network.external_addresses.len()
+    );
     println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
     println!(
         "discovery: mdns={} kademlia={} dcutr={}",
@@ -364,6 +374,18 @@ async fn up(
         println!("dry-run: would create Linux TUN interface and run:");
         for command in commands {
             println!("{command}");
+        }
+        for address in config
+            .listen_multiaddrs()
+            .map_err(|error| format!("failed to parse listen address: {error:?}"))?
+        {
+            println!("libp2p listen {address}");
+        }
+        for address in config
+            .external_multiaddrs()
+            .map_err(|error| format!("failed to parse external address: {error:?}"))?
+        {
+            println!("libp2p advertise {address}");
         }
         for address in config.relay_reservation_multiaddrs().map_err(|error| {
             format!("failed to parse relay reservation listen address: {error:?}")

@@ -66,6 +66,7 @@ impl Config {
         self.identity()?;
         self.compile_routes()?;
         self.listen_multiaddrs()?;
+        self.external_multiaddrs()?;
         self.bootstrap_multiaddrs()?;
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
@@ -95,6 +96,10 @@ impl Config {
 
     pub fn listen_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
         parse_multiaddrs(&self.network.listen_addresses)
+    }
+
+    pub fn external_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
+        parse_multiaddrs(&self.network.external_addresses)
     }
 
     pub fn bootstrap_multiaddrs(
@@ -133,6 +138,8 @@ pub struct NetworkConfig {
     pub private_key: Option<String>,
     #[serde(default)]
     pub listen_addresses: Vec<String>,
+    #[serde(default)]
+    pub external_addresses: Vec<String>,
     #[serde(default)]
     pub bootstrap_peers: Vec<BootstrapPeerConfig>,
     #[serde(default = "default_discovery")]
@@ -338,6 +345,7 @@ pub struct InitConfigTemplate {
     pub interface_name: String,
     pub mtu: u16,
     pub listen_addresses: Vec<String>,
+    pub external_addresses: Vec<String>,
     pub bootstrap_peers: Vec<InitPeer>,
     pub peers: Vec<InitPeer>,
     pub discovery: DiscoveryConfig,
@@ -358,6 +366,7 @@ impl InitConfigTemplate {
                 local_peer: self.identity.peer_id,
                 private_key: Some(self.identity.private_key),
                 listen_addresses: self.listen_addresses,
+                external_addresses: self.external_addresses,
                 bootstrap_peers: self
                     .bootstrap_peers
                     .into_iter()
@@ -608,6 +617,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
@@ -653,6 +663,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
@@ -684,6 +695,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
@@ -739,6 +751,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
+                external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
                 bootstrap_peers: vec![BootstrapPeerConfig {
                     id: remote.to_string(),
                     address: "/ip4/127.0.0.1/udp/4001/quic-v1".to_owned(),
@@ -770,6 +783,7 @@ mod tests {
 
         assert_eq!(config.identity().expect("identity"), identity);
         assert_eq!(config.listen_multiaddrs().expect("listen").len(), 1);
+        assert_eq!(config.external_multiaddrs().expect("external").len(), 1);
         assert_eq!(config.bootstrap_multiaddrs().expect("bootstrap").len(), 1);
         assert_eq!(config.peer_multiaddrs().expect("peer addresses").len(), 1);
         assert_eq!(
@@ -794,6 +808,7 @@ mod tests {
                 local_peer: identity.peer_id,
                 private_key: Some(other.private_key),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
@@ -825,6 +840,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
+                external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
@@ -849,6 +865,13 @@ mod tests {
         ));
 
         config.network.listen_addresses = Vec::new();
+        config.network.external_addresses = vec!["not-a-multiaddr".to_owned()];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Multiaddr(_))
+        ));
+
+        config.network.external_addresses = Vec::new();
         config.peers[0].addresses = vec!["not-a-multiaddr".to_owned()];
         assert!(matches!(
             config.validate_runtime(),
@@ -871,6 +894,7 @@ mod tests {
                 "/ip4/0.0.0.0/tcp/0".to_owned(),
                 "/ip4/0.0.0.0/udp/0/quic-v1".to_owned(),
             ],
+            external_addresses: vec!["/dns4/node-a.example.net/udp/4001/quic-v1".to_owned()],
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
@@ -911,6 +935,7 @@ mod tests {
         );
         assert_eq!(decoded.interface.name, "hs-lab");
         assert_eq!(decoded.interface.mtu, 1_400);
+        assert_eq!(decoded.network.external_addresses.len(), 1);
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);
         assert!(decoded.network.relay.server);
         assert_eq!(

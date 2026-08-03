@@ -50,6 +50,7 @@ pub struct HostConfig {
     pub max_concurrent_control_streams: usize,
     pub max_concurrent_packet_streams: usize,
     pub listen_addresses: Vec<Multiaddr>,
+    pub external_addresses: Vec<Multiaddr>,
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
     pub known_peers: Vec<(PeerId, Multiaddr)>,
     pub relay_reservations: Vec<Multiaddr>,
@@ -62,6 +63,7 @@ pub struct HostConfig {
 pub struct StartupStatus {
     pub mdns_enabled: bool,
     pub dcutr_enabled: bool,
+    pub external_addresses_configured: usize,
     pub kademlia: KademliaStartupStatus,
     pub relay_reservations_started: usize,
     pub relay_server_enabled: bool,
@@ -154,6 +156,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         startup: StartupStatus {
             mdns_enabled: config.discovery.mdns,
             dcutr_enabled: config.discovery.dcutr,
+            external_addresses_configured: config.external_addresses.len(),
             kademlia,
             relay_reservations_started,
             relay_server_enabled: config.relay_server,
@@ -168,6 +171,10 @@ fn install_listeners_and_dials(
 ) -> Result<(), P2pBuildError> {
     for address in &config.listen_addresses {
         swarm.listen_on(address.clone())?;
+    }
+
+    for address in &config.external_addresses {
+        swarm.add_external_address(address.clone());
     }
 
     for address in &config.relay_reservations {
@@ -321,6 +328,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
@@ -354,6 +362,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
@@ -373,6 +382,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_node_registers_configured_external_addresses() {
+        let external_address: Multiaddr = "/ip4/203.0.113.10/udp/4001/quic-v1"
+            .parse()
+            .expect("external address");
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: vec![external_address.clone()],
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node should build");
+
+        assert_eq!(node.startup.external_addresses_configured, 1);
+        assert!(
+            node.swarm
+                .external_addresses()
+                .any(|address| address == &external_address)
+        );
+    }
+
+    #[tokio::test]
     async fn build_node_starts_bootstrap_and_relay_reservations() {
         let relay = Keypair::generate_ed25519().public().to_peer_id();
         let bootstrap_address: Multiaddr = "/memory/91".parse().expect("bootstrap address");
@@ -389,6 +429,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: vec![(relay, bootstrap_address)],
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation],
@@ -469,6 +510,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
@@ -486,6 +528,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: vec![(listener.local_peer_id, listener_address)],
             relay_reservations: Vec::new(),
@@ -518,6 +561,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
@@ -535,6 +579,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: vec![(listener.local_peer_id, listener_address)],
             relay_reservations: Vec::new(),
@@ -577,6 +622,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
@@ -601,6 +647,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: vec![relayed_listener_address.clone()],
@@ -633,6 +680,7 @@ mod tests {
             max_concurrent_control_streams: 64,
             max_concurrent_packet_streams: 256,
             listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             known_peers: vec![(listener_peer, relayed_target_address)],
             relay_reservations: Vec::new(),
