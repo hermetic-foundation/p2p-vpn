@@ -382,8 +382,9 @@ cargo run -- metrics --config p2p-vpn.json
 
 The metrics output includes control-plane exchange counters, capability
 acceptance and rejection counters by reason, packet counters, queue occupancy,
-total queue drops, queue expiry drops, inbound and outbound packet drop reasons
-including expired outbound queue packets, direct versus relayed connection
+oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
+inbound and outbound packet drop reasons including expired outbound queue packets,
+direct versus relayed connection
 counts, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT current

@@ -74,6 +74,7 @@ impl Packet {
 pub struct QueueStats {
     pub queued_packets: usize,
     pub queued_bytes: usize,
+    pub oldest_packet_age_millis: u64,
     pub dropped_packets: u64,
     pub dropped_bytes: u64,
     pub expired_packets: u64,
@@ -86,6 +87,13 @@ impl QueueStats {
         Self {
             queued_packets: self.queued_packets + other.queued_packets,
             queued_bytes: self.queued_bytes + other.queued_bytes,
+            oldest_packet_age_millis: if self.oldest_packet_age_millis
+                > other.oldest_packet_age_millis
+            {
+                self.oldest_packet_age_millis
+            } else {
+                other.oldest_packet_age_millis
+            },
             dropped_packets: self.dropped_packets + other.dropped_packets,
             dropped_bytes: self.dropped_bytes + other.dropped_bytes,
             expired_packets: self.expired_packets + other.expired_packets,
@@ -182,8 +190,19 @@ impl PeerQueue {
     }
 
     #[must_use]
-    pub const fn stats(&self) -> QueueStats {
-        self.stats
+    pub fn stats(&self) -> QueueStats {
+        self.stats_at(Instant::now())
+    }
+
+    #[must_use]
+    pub fn stats_at(&self, now: Instant) -> QueueStats {
+        QueueStats {
+            oldest_packet_age_millis: self
+                .packets
+                .front()
+                .map_or(0, |packet| duration_millis(now, packet.enqueued_at())),
+            ..self.stats
+        }
     }
 
     fn record_drop(&mut self, packet_bytes: usize) {
@@ -301,17 +320,27 @@ impl PeerQueues {
 
     #[must_use]
     pub fn peer_stats(&self, peer: PeerId) -> QueueStats {
+        self.peer_stats_at(peer, Instant::now())
+    }
+
+    #[must_use]
+    pub fn peer_stats_at(&self, peer: PeerId, now: Instant) -> QueueStats {
         self.queues
             .get(&peer)
-            .map_or_else(QueueStats::default, PeerQueue::stats)
+            .map_or_else(QueueStats::default, |queue| queue.stats_at(now))
     }
 
     #[must_use]
     pub fn total_stats(&self) -> QueueStats {
+        self.total_stats_at(Instant::now())
+    }
+
+    #[must_use]
+    pub fn total_stats_at(&self, now: Instant) -> QueueStats {
         self.queues
             .values()
             .fold(QueueStats::default(), |total, queue| {
-                total.add(queue.stats())
+                total.add(queue.stats_at(now))
             })
     }
 
@@ -324,6 +353,10 @@ impl PeerQueues {
             )
         })
     }
+}
+
+fn duration_millis(now: Instant, then: Instant) -> u64 {
+    u64::try_from(now.saturating_duration_since(then).as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -372,6 +405,7 @@ mod tests {
             QueueStats {
                 queued_packets: 1,
                 queued_bytes: 3,
+                oldest_packet_age_millis: 0,
                 dropped_packets: 0,
                 dropped_bytes: 0,
                 expired_packets: 0,
@@ -383,6 +417,29 @@ mod tests {
         assert_eq!(packet.sequence(), 7);
         assert_eq!(packet.payload(), &[1, 2, 3]);
         assert_eq!(queue.stats(), QueueStats::default());
+    }
+
+    #[test]
+    fn queue_stats_report_oldest_packet_age() {
+        let now = Instant::now();
+        let older = now
+            .checked_sub(Duration::from_millis(250))
+            .expect("test instant should allow subtraction");
+        let newer = now
+            .checked_sub(Duration::from_millis(75))
+            .expect("test instant should allow subtraction");
+        let mut queue = PeerQueue::new(4, 4096);
+
+        queue
+            .enqueue(Packet::new_at(peer(1), 1, vec![1], older))
+            .expect("older packet");
+        queue
+            .enqueue(Packet::new_at(peer(1), 2, vec![2], newer))
+            .expect("newer packet");
+
+        assert_eq!(queue.stats_at(now).oldest_packet_age_millis, 250);
+        queue.dequeue().expect("older packet dequeued");
+        assert_eq!(queue.stats_at(now).oldest_packet_age_millis, 75);
     }
 
     #[test]
@@ -495,6 +552,31 @@ mod tests {
         assert_eq!(queues.total_stats().expired_packets, 0);
         assert_eq!(queues.total_stats().queued_packets, 1);
         assert_eq!(queues.total_stats().dropped_packets, 2);
+    }
+
+    #[test]
+    fn peer_queues_total_stats_report_oldest_age_across_peers() {
+        let now = Instant::now();
+        let older = now
+            .checked_sub(Duration::from_millis(500))
+            .expect("test instant should allow subtraction");
+        let newer = now
+            .checked_sub(Duration::from_millis(125))
+            .expect("test instant should allow subtraction");
+        let mut queues = PeerQueues::new(4, 4096);
+
+        queues
+            .enqueue(Packet::new_at(peer(1), 1, vec![1], older))
+            .expect("older packet");
+        queues
+            .enqueue(Packet::new_at(peer(2), 2, vec![2], newer))
+            .expect("newer packet");
+
+        assert_eq!(
+            queues.peer_stats_at(peer(2), now).oldest_packet_age_millis,
+            125
+        );
+        assert_eq!(queues.total_stats_at(now).oldest_packet_age_millis, 500);
     }
 
     #[test]

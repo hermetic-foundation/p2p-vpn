@@ -999,6 +999,10 @@ impl RuntimeSnapshot {
             ),
             format!("queue_queued_packets {}", self.queue.queued_packets),
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
+            format!(
+                "queue_oldest_packet_age_millis {}",
+                self.queue.oldest_packet_age_millis
+            ),
             format!("queue_dropped_packets {}", self.queue.dropped_packets),
             format!("queue_dropped_bytes {}", self.queue.dropped_bytes),
             format!("queue_expired_packets {}", self.queue.expired_packets),
@@ -1153,6 +1157,7 @@ mod tests {
             QueueStats {
                 queued_packets: 2,
                 queued_bytes: 80,
+                oldest_packet_age_millis: 45,
                 dropped_packets: 3,
                 dropped_bytes: 120,
                 expired_packets: 2,
@@ -1267,6 +1272,7 @@ mod tests {
         let snapshot = populated_snapshot();
 
         assert_metric_line(&snapshot, "queue_queued_packets 2");
+        assert_metric_line(&snapshot, "queue_oldest_packet_age_millis 45");
         assert_metric_line(&snapshot, "outbound_drop_no_route_packets 1");
         assert_metric_line(&snapshot, "outbound_drop_packet_too_large_packets 1");
         assert_metric_line(&snapshot, "outbound_drop_queue_full_packets 1");
