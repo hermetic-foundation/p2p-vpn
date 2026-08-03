@@ -324,12 +324,13 @@ relayed connection counts, relay reservation/circuit counts, relay-server
 accept counts, DCUtR success/failure counts, observed external address
 candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
 public/private/unknown reachability gauges and status-change counters, Kademlia
-provider lookup/advertisement and bootstrap refresh counts, unauthorized
-connection drops, configured peer redial counters, rejected discovered-address
-counters, asynchronous outgoing connection error counts, healthy path counts by
-transport kind, configured peers with and without a currently supported packet
-path, and queue-drain stalls caused by peers having no currently supported
-packet path. Those counters are intended to show whether a deployment is
+provider lookup/result/configured-provider-dial/advertisement and bootstrap
+refresh counts, unauthorized connection drops, configured peer redial counters,
+rejected discovered-address counters, asynchronous outgoing connection error
+counts, healthy path counts by transport kind, configured peers with and without
+a currently supported packet path, and queue-drain stalls caused by peers having
+no currently supported packet path. Those counters are intended to show whether
+a deployment is
 exchanging capabilities, probing and advertising observed public addresses,
 refreshing DHT discovery, rejecting bad discovered addresses, using direct
 paths, relay fallback, hole-punching, enforcing membership, recovering

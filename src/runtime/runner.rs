@@ -917,7 +917,7 @@ fn handle_behaviour_event(
             eprintln!("identify with {peer_id} failed: {error}");
         }
         BehaviourEvent::Kad(event) if discovery.kademlia => {
-            handle_kademlia_event(swarm, forwarder, event);
+            handle_kademlia_event(swarm, forwarder, metrics, event);
         }
         BehaviourEvent::Relay(event) => handle_relay_event(metrics, &event),
         BehaviourEvent::RelayServer(event) => handle_relay_server_event(metrics, &event),
@@ -972,7 +972,12 @@ fn autonat_reachability(status: &autonat::NatStatus) -> AutoNatReachability {
     }
 }
 
-fn handle_kademlia_event(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, event: kad::Event) {
+fn handle_kademlia_event(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
+    event: kad::Event,
+) {
     match event {
         kad::Event::OutboundQueryProgressed { result, .. } => {
             if let kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
@@ -980,15 +985,25 @@ fn handle_kademlia_event(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, ev
                 ..
             })) = &result
             {
-                for provider in providers {
-                    dial_configured_peer(swarm, forwarder, *provider);
-                }
+                dial_kademlia_providers(swarm, forwarder, metrics, providers);
             }
             eprintln!("kademlia query progressed: {result:?}");
         }
         other => {
             eprintln!("kademlia event: {other:?}");
         }
+    }
+}
+
+fn dial_kademlia_providers(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
+    providers: &HashSet<Libp2pPeerId>,
+) {
+    metrics.record_kademlia_providers_found(providers.len());
+    for provider in providers {
+        dial_configured_peer(swarm, forwarder, metrics, *provider);
     }
 }
 
@@ -1104,7 +1119,12 @@ fn learn_peer_address(
     }
 }
 
-fn dial_configured_peer(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, peer: Libp2pPeerId) {
+fn dial_configured_peer(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+) {
     if peer == *swarm.local_peer_id()
         || !forwarder.is_configured_transport_peer(peer)
         || swarm.is_connected(&peer)
@@ -1112,7 +1132,9 @@ fn dial_configured_peer(swarm: &mut Swarm<Behaviour>, forwarder: &Forwarder, pee
         return;
     }
 
+    metrics.record_kademlia_provider_dial_attempt();
     if let Err(error) = swarm.dial(peer) {
+        metrics.record_kademlia_provider_dial_failure();
         eprintln!("dial discovered provider {peer} failed: {error}");
     }
 }
@@ -1390,6 +1412,71 @@ mod tests {
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn kademlia_provider_results_dial_configured_peers_and_count_failures() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let unconfigured = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: configured.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity {
+                peer_id: local_identity.peer_id,
+                private_key: local_identity.private_key,
+            },
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let metrics = RuntimeMetrics::default();
+        let providers = HashSet::from([configured, unconfigured]);
+
+        dial_kademlia_providers(&mut node.swarm, &forwarder, &metrics, &providers);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_providers_found, 2);
+        assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
+        assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
     }
 
     #[test]

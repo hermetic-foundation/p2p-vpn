@@ -70,6 +70,9 @@ pub struct RuntimeMetrics {
     autonat_status_changes_to_public: AtomicU64,
     autonat_status_changes_to_private: AtomicU64,
     kademlia_provider_lookups: AtomicU64,
+    kademlia_providers_found: AtomicU64,
+    kademlia_provider_dial_attempts: AtomicU64,
+    kademlia_provider_dial_failures: AtomicU64,
     kademlia_provider_advertisements: AtomicU64,
     kademlia_provider_advertisement_failures: AtomicU64,
     kademlia_bootstrap_refreshes: AtomicU64,
@@ -275,6 +278,23 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_kademlia_providers_found(&self, providers: usize) {
+        self.kademlia_providers_found.fetch_add(
+            u64::try_from(providers).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_kademlia_provider_dial_attempt(&self) {
+        self.kademlia_provider_dial_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_provider_dial_failure(&self) {
+        self.kademlia_provider_dial_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_kademlia_provider_advertisement(&self) {
         self.kademlia_provider_advertisements
             .fetch_add(1, Ordering::Relaxed);
@@ -472,6 +492,11 @@ impl RuntimeMetrics {
             .autonat_status_changes_to_private
             .load(Ordering::Relaxed);
         snapshot.kademlia_provider_lookups = self.kademlia_provider_lookups.load(Ordering::Relaxed);
+        snapshot.kademlia_providers_found = self.kademlia_providers_found.load(Ordering::Relaxed);
+        snapshot.kademlia_provider_dial_attempts =
+            self.kademlia_provider_dial_attempts.load(Ordering::Relaxed);
+        snapshot.kademlia_provider_dial_failures =
+            self.kademlia_provider_dial_failures.load(Ordering::Relaxed);
         snapshot.kademlia_provider_advertisements = self
             .kademlia_provider_advertisements
             .load(Ordering::Relaxed);
@@ -550,6 +575,9 @@ pub struct RuntimeSnapshot {
     pub autonat_status_changes_to_public: u64,
     pub autonat_status_changes_to_private: u64,
     pub kademlia_provider_lookups: u64,
+    pub kademlia_providers_found: u64,
+    pub kademlia_provider_dial_attempts: u64,
+    pub kademlia_provider_dial_failures: u64,
     pub kademlia_provider_advertisements: u64,
     pub kademlia_provider_advertisement_failures: u64,
     pub kademlia_bootstrap_refreshes: u64,
@@ -654,6 +682,15 @@ impl RuntimeSnapshot {
             format!(
                 "kademlia_provider_lookups {}",
                 self.kademlia_provider_lookups
+            ),
+            format!("kademlia_providers_found {}", self.kademlia_providers_found),
+            format!(
+                "kademlia_provider_dial_attempts {}",
+                self.kademlia_provider_dial_attempts
+            ),
+            format!(
+                "kademlia_provider_dial_failures {}",
+                self.kademlia_provider_dial_failures
             ),
             format!(
                 "kademlia_provider_advertisements {}",
@@ -836,6 +873,9 @@ mod tests {
         metrics.record_autonat_status(AutoNatReachability::Public);
         metrics.record_autonat_status(AutoNatReachability::Private);
         metrics.record_kademlia_provider_lookup();
+        metrics.record_kademlia_providers_found(2);
+        metrics.record_kademlia_provider_dial_attempt();
+        metrics.record_kademlia_provider_dial_failure();
         metrics.record_kademlia_provider_advertisement();
         metrics.record_kademlia_provider_advertisement_failure();
         metrics.record_kademlia_bootstrap_refresh();
@@ -922,6 +962,9 @@ mod tests {
         assert_eq!(snapshot.autonat_status_changes_to_public, 1);
         assert_eq!(snapshot.autonat_status_changes_to_private, 1);
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_providers_found, 2);
+        assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
+        assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 1);
@@ -974,6 +1017,9 @@ mod tests {
         assert_metric_line(&snapshot, "autonat_status_changes_to_public 1");
         assert_metric_line(&snapshot, "autonat_status_changes_to_private 1");
         assert_metric_line(&snapshot, "kademlia_provider_lookups 1");
+        assert_metric_line(&snapshot, "kademlia_providers_found 2");
+        assert_metric_line(&snapshot, "kademlia_provider_dial_attempts 1");
+        assert_metric_line(&snapshot, "kademlia_provider_dial_failures 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisements 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisement_failures 1");
         assert_metric_line(&snapshot, "kademlia_bootstrap_refreshes 1");
