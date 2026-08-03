@@ -208,6 +208,15 @@ fn handle_swarm_event(
         })) => {
             eprintln!("identify with {peer_id} failed: {error}");
         }
+        SwarmEvent::ConnectionEstablished {
+            peer_id, endpoint, ..
+        } => {
+            eprintln!("connection established with {peer_id} via {endpoint:?}");
+        }
+        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => match peer_id {
+            Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
+            None => eprintln!("outgoing connection failed: {error}"),
+        },
         _ => {}
     }
 
@@ -223,6 +232,10 @@ fn learn_peer_address(swarm: &mut Swarm<Behaviour>, peer: Libp2pPeerId, address:
         .behaviour_mut()
         .kad
         .add_address(&peer, address.clone());
+
+    if swarm.is_connected(&peer) {
+        return;
+    }
 
     let dial_address = peer_dial_address(peer, address);
     if let Err(error) = swarm.dial(dial_address) {
