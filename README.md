@@ -38,6 +38,13 @@ built-in host routes plus any advertised prefixes, but route compilation rejects
 overlapping prefixes owned by different peers, including more-specific prefixes
 that would hijack another peer's aggregate route.
 
+Outbound packet draining is path-aware. The runtime records direct TCP, direct
+QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
+unhealthy when their connections close, and only drains a peer's bounded queue
+while that peer has a healthy path. Packets for disconnected peers remain
+bounded by the per-peer queue limits instead of expanding into unbounded stream
+requests.
+
 ## Development
 
 Enter the reproducible development shell:

@@ -7,6 +7,7 @@ pub struct PathCandidate {
     pub observed_rtt_ms: Option<u16>,
     pub relay: bool,
     pub healthy: bool,
+    pub established_connections: u32,
 }
 
 impl PathCandidate {
@@ -18,6 +19,7 @@ impl PathCandidate {
             observed_rtt_ms: None,
             relay: matches!(kind, PathKind::CircuitRelay),
             healthy: true,
+            established_connections: 0,
         }
     }
 
@@ -77,6 +79,39 @@ impl PathSet {
             candidate.healthy = false;
         }
     }
+
+    pub fn record_established(&mut self, peer: PeerId, kind: PathKind) {
+        if let Some(candidate) = self
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+        {
+            candidate.healthy = true;
+            candidate.established_connections = candidate.established_connections.saturating_add(1);
+        } else {
+            let mut candidate = PathCandidate::new(peer, kind);
+            candidate.established_connections = 1;
+            self.candidates.push(candidate);
+        }
+    }
+
+    pub fn record_closed(&mut self, peer: PeerId, kind: PathKind) {
+        if let Some(candidate) = self
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+        {
+            candidate.established_connections = candidate.established_connections.saturating_sub(1);
+            if candidate.established_connections == 0 {
+                candidate.healthy = false;
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn has_healthy_path(&self, peer: PeerId) -> bool {
+        self.best_for(peer).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +146,39 @@ mod tests {
             paths.best_for(peer(1)).map(|path| path.kind),
             Some(PathKind::CircuitRelay)
         );
+    }
+
+    #[test]
+    fn reports_when_healthy_path_exists() {
+        let mut paths = PathSet::new();
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectTcpStream));
+
+        assert!(paths.has_healthy_path(peer(1)));
+
+        paths.mark_unhealthy(peer(1), PathKind::DirectTcpStream);
+
+        assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn tracks_established_connection_counts_per_path() {
+        let mut paths = PathSet::new();
+
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+
+        assert_eq!(
+            paths
+                .best_for(peer(1))
+                .map(|path| path.established_connections),
+            Some(2)
+        );
+
+        paths.record_closed(peer(1), PathKind::DirectTcpStream);
+        assert!(paths.has_healthy_path(peer(1)));
+
+        paths.record_closed(peer(1), PathKind::DirectTcpStream);
+        assert!(!paths.has_healthy_path(peer(1)));
     }
 
     #[test]

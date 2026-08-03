@@ -182,6 +182,31 @@ impl PeerQueues {
         Some(packet)
     }
 
+    pub fn dequeue_ready(&mut self, mut is_ready: impl FnMut(PeerId) -> bool) -> Option<Packet> {
+        let ready_len = self.ready.len();
+        for _ in 0..ready_len {
+            let peer = self.ready.pop_front()?;
+            if !is_ready(peer) {
+                self.ready.push_back(peer);
+                continue;
+            }
+
+            let Some(queue) = self.queues.get_mut(&peer) else {
+                continue;
+            };
+            let Some(packet) = queue.dequeue() else {
+                continue;
+            };
+            if queue.stats().queued_packets > 0 {
+                self.ready.push_back(peer);
+            }
+
+            return Some(packet);
+        }
+
+        None
+    }
+
     #[must_use]
     pub fn peer_stats(&self, peer: PeerId) -> QueueStats {
         self.queues
@@ -271,6 +296,34 @@ mod tests {
         );
         assert_eq!(queue.stats().dropped_bytes, 4);
         assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn peer_queues_dequeue_only_ready_peers_without_dropping_blocked_packets() {
+        let mut queues = PeerQueues::new(4, 4096);
+        queues
+            .enqueue(Packet::new(peer(1), 1, vec![1]))
+            .expect("peer 1 packet");
+        queues
+            .enqueue(Packet::new(peer(2), 2, vec![2]))
+            .expect("peer 2 packet");
+
+        let packet = queues
+            .dequeue_ready(|candidate| candidate == peer(2))
+            .expect("ready packet");
+
+        assert_eq!(packet.peer(), peer(2));
+        assert_eq!(packet.sequence(), 2);
+        assert_eq!(queues.peer_stats(peer(1)).queued_packets, 1);
+        assert_eq!(queues.peer_stats(peer(2)).queued_packets, 0);
+        assert_eq!(queues.dequeue_ready(|candidate| candidate == peer(2)), None);
+        assert_eq!(
+            queues
+                .dequeue_ready(|candidate| candidate == peer(1))
+                .expect("peer 1 remains")
+                .sequence(),
+            1
+        );
     }
 
     #[test]

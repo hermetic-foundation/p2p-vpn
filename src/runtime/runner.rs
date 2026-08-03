@@ -2,15 +2,21 @@ use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, Swarm, dcutr, identify, kad, mdns, relay,
+    Multiaddr, PeerId as Libp2pPeerId, Swarm,
+    core::ConnectedPoint,
+    dcutr, identify, kad, mdns,
+    multiaddr::Protocol,
+    relay,
     request_response::{self, Message},
     swarm::SwarmEvent,
 };
 use tokio::sync::mpsc;
 
 use crate::{
+    PathKind, PeerId,
     config::{Config, DiscoveryConfig, QueueConfig},
     metrics::RuntimeMetrics,
+    path::PathSet,
     queue::PeerQueues,
     runtime::{
         forward::{ForwardError, Forwarder},
@@ -66,6 +72,7 @@ pub async fn run_node(
         queue_config.max_packets_per_peer,
         queue_config.max_bytes_per_peer,
     );
+    let mut paths = PathSet::new();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let discovery = node.discovery;
 
@@ -95,11 +102,11 @@ pub async fn run_node(
                     metrics.record_outbound_drop();
                     eprintln!("dropping outbound packet: {error:?}");
                 }
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
             }
             event = node.swarm.select_next_some() => {
-                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &metrics, discovery, event)?;
-                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &metrics);
+                handle_swarm_event(&mut node.swarm, &forwarder, &mut writer, &mut paths, &metrics, discovery, event)?;
+                drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &metrics);
             }
             () = async {
                 metrics_tick
@@ -144,9 +151,10 @@ fn drain_outbound_queue(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     queues: &mut PeerQueues,
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
-    while let Some(packet) = queues.dequeue() {
+    while let Some(packet) = queues.dequeue_ready(|peer| paths.has_healthy_path(peer)) {
         if let Err(error) = forwarder.send_queued_packet(swarm, &packet) {
             metrics.record_outbound_drop();
             eprintln!("dropping queued outbound packet: {error:?}");
@@ -160,6 +168,7 @@ fn handle_swarm_event(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     writer: &mut TunWriter,
+    paths: &mut PathSet,
     metrics: &RuntimeMetrics,
     discovery: DiscoveryConfig,
     event: SwarmEvent<BehaviourEvent>,
@@ -202,8 +211,15 @@ fn handle_swarm_event(
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
+            record_path_established(paths, forwarder, peer_id, &endpoint);
             metrics.record_connection_established(endpoint.is_relayed());
             eprintln!("connection established with {peer_id} via {endpoint:?}");
+        }
+        SwarmEvent::ConnectionClosed {
+            peer_id, endpoint, ..
+        } => {
+            record_path_closed(paths, forwarder, peer_id, &endpoint);
+            eprintln!("connection closed with {peer_id} via {endpoint:?}");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => match peer_id {
             Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
@@ -213,6 +229,52 @@ fn handle_swarm_event(
     }
 
     Ok(())
+}
+
+fn record_path_established(
+    paths: &mut PathSet,
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    endpoint: &ConnectedPoint,
+) {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    paths.record_established(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+}
+
+fn record_path_closed(
+    paths: &mut PathSet,
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    endpoint: &ConnectedPoint,
+) {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    paths.record_closed(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+}
+
+fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
+    if endpoint.is_relayed() {
+        return PathKind::CircuitRelay;
+    }
+
+    let address = match endpoint {
+        ConnectedPoint::Dialer { address, .. } => address,
+        ConnectedPoint::Listener { local_addr, .. } => local_addr,
+    };
+
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::Quic | Protocol::QuicV1))
+    {
+        PathKind::DirectQuicStream
+    } else {
+        PathKind::DirectTcpStream
+    }
 }
 
 fn handle_behaviour_event(
@@ -436,7 +498,10 @@ impl From<TunRuntimeError> for RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use libp2p::identity::Keypair;
+    use libp2p::{
+        core::{Endpoint, transport::PortUse},
+        identity::Keypair,
+    };
 
     use super::*;
 
@@ -462,6 +527,42 @@ mod tests {
             .expect("address");
 
         assert_eq!(peer_dial_address(peer, address.clone()), address);
+    }
+
+    #[test]
+    fn endpoint_path_kind_prefers_relay_then_quic_then_tcp() {
+        let relay: Multiaddr =
+            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWLSJY9r3syVF7eh1b5CAJSmQkHdHu1QMUGNXk7Nzd4y6f/p2p-circuit/p2p/12D3KooWBCGXBm96czaYf6X41Hd2mD879WoF5Jyi8YUxi2Tiz3aT"
+                .parse()
+                .expect("relay address");
+        let quic: Multiaddr = "/ip4/127.0.0.1/udp/4001/quic-v1"
+            .parse()
+            .expect("quic address");
+        let tcp: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("tcp address");
+
+        assert_eq!(
+            path_kind_for_endpoint(&ConnectedPoint::Dialer {
+                address: relay,
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::Reuse,
+            }),
+            PathKind::CircuitRelay
+        );
+        assert_eq!(
+            path_kind_for_endpoint(&ConnectedPoint::Dialer {
+                address: quic,
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::Reuse,
+            }),
+            PathKind::DirectQuicStream
+        );
+        assert_eq!(
+            path_kind_for_endpoint(&ConnectedPoint::Listener {
+                local_addr: tcp,
+                send_back_addr: "/ip4/127.0.0.1/tcp/5000".parse().expect("send back"),
+            }),
+            PathKind::DirectTcpStream
+        );
     }
 
     #[test]
