@@ -282,13 +282,14 @@ cargo run -- metrics --config p2p-vpn.json
 
 The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
-packet drop reasons, direct versus relayed connection counts, relay
-reservation/circuit counts, relay-server accept counts, DCUtR success/failure
-counts, unauthorized connection drops, configured-peer redial counters, and
-queue-drain stalls caused by peers having no currently supported packet path.
-Those counters are intended to show whether a deployment is exchanging
-capabilities, using direct paths, relay fallback, hole-punching, enforcing
-membership, recovering connections, and waiting on path negotiation as expected.
+packet drop reasons including expired outbound queue packets, direct versus
+relayed connection counts, relay reservation/circuit counts, relay-server
+accept counts, DCUtR success/failure counts, unauthorized connection drops,
+configured-peer redial counters, and queue-drain stalls caused by peers having
+no currently supported packet path. Those counters are intended to show whether
+a deployment is exchanging capabilities, using direct paths, relay fallback,
+hole-punching, enforcing membership, recovering connections, and waiting on
+path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 

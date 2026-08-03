@@ -142,7 +142,7 @@ pub async fn run_node(
                 );
             }
             _ = queue_expiry_tick.tick() => {
-                expire_outbound_queue(&mut queues);
+                expire_outbound_queue(&mut queues, &metrics);
             }
             () = async {
                 metrics_tick
@@ -194,8 +194,11 @@ fn queue_expiry_interval(max_packet_age: Duration) -> Duration {
     max_packet_age.clamp(MIN_QUEUE_EXPIRY_INTERVAL, REDIAL_INTERVAL)
 }
 
-fn expire_outbound_queue(queues: &mut PeerQueues) {
+fn expire_outbound_queue(queues: &mut PeerQueues, metrics: &RuntimeMetrics) {
+    let expired_before = queues.total_stats().expired_packets;
     queues.drop_expired(std::time::Instant::now());
+    let expired_after = queues.total_stats().expired_packets;
+    metrics.record_outbound_queue_expired(expired_after.saturating_sub(expired_before));
 }
 
 fn redial_known_addresses(
@@ -398,7 +401,7 @@ fn drain_outbound_queue(
     peer_capabilities: &PeerCapabilities,
     metrics: &RuntimeMetrics,
 ) {
-    expire_outbound_queue(queues);
+    expire_outbound_queue(queues, metrics);
     while let Some(packet) = queues.dequeue_ready(|peer| {
         paths.has_supported_path(peer, packet_transport_support(peer_capabilities, peer))
     }) {
@@ -1127,6 +1130,40 @@ mod tests {
             queue_expiry_interval(Duration::from_secs(11)),
             REDIAL_INTERVAL
         );
+    }
+
+    #[test]
+    fn expire_outbound_queue_records_expired_drops() {
+        let now = std::time::Instant::now();
+        let expired_at = now
+            .checked_sub(Duration::from_millis(101))
+            .expect("test instant should allow subtraction");
+        let mut queues = PeerQueues::with_packet_ttl(4, 4096, Duration::from_millis(100));
+        queues
+            .enqueue(crate::queue::Packet::new_at(
+                PeerId::from_bytes([1; 32]),
+                1,
+                vec![1],
+                expired_at,
+            ))
+            .expect("expired packet");
+        queues
+            .enqueue(crate::queue::Packet::new_at(
+                PeerId::from_bytes([2; 32]),
+                2,
+                vec![2],
+                now,
+            ))
+            .expect("fresh packet");
+        let metrics = RuntimeMetrics::default();
+
+        expire_outbound_queue(&mut queues, &metrics);
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_dropped_packets, 1);
+        assert_eq!(snapshot.outbound_drop_queue_expired_packets, 1);
+        assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(snapshot.queue.expired_packets, 1);
     }
 
     #[test]

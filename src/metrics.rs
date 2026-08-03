@@ -31,6 +31,7 @@ pub struct RuntimeMetrics {
     outbound_drop_no_transport_peer_packets: AtomicU64,
     outbound_drop_packet_too_large_packets: AtomicU64,
     outbound_drop_queue_full_packets: AtomicU64,
+    outbound_drop_queue_expired_packets: AtomicU64,
     outbound_drop_unauthorized_source_packets: AtomicU64,
     inbound_drop_malformed_packets: AtomicU64,
     inbound_drop_packet_too_large_packets: AtomicU64,
@@ -110,6 +111,13 @@ impl RuntimeMetrics {
                 .outbound_drop_unauthorized_source_packets
                 .fetch_add(1, Ordering::Relaxed),
         };
+    }
+
+    pub fn record_outbound_queue_expired(&self, packets: u64) {
+        self.outbound_dropped_packets
+            .fetch_add(packets, Ordering::Relaxed);
+        self.outbound_drop_queue_expired_packets
+            .fetch_add(packets, Ordering::Relaxed);
     }
 
     pub fn record_inbound_drop(&self, reason: PacketDropReason) {
@@ -257,6 +265,9 @@ impl RuntimeMetrics {
             outbound_drop_queue_full_packets: self
                 .outbound_drop_queue_full_packets
                 .load(Ordering::Relaxed),
+            outbound_drop_queue_expired_packets: self
+                .outbound_drop_queue_expired_packets
+                .load(Ordering::Relaxed),
             outbound_drop_unauthorized_source_packets: self
                 .outbound_drop_unauthorized_source_packets
                 .load(Ordering::Relaxed),
@@ -335,6 +346,7 @@ pub struct RuntimeSnapshot {
     pub outbound_drop_no_transport_peer_packets: u64,
     pub outbound_drop_packet_too_large_packets: u64,
     pub outbound_drop_queue_full_packets: u64,
+    pub outbound_drop_queue_expired_packets: u64,
     pub outbound_drop_unauthorized_source_packets: u64,
     pub inbound_drop_malformed_packets: u64,
     pub inbound_drop_packet_too_large_packets: u64,
@@ -467,6 +479,10 @@ impl RuntimeSnapshot {
                 self.outbound_drop_queue_full_packets
             ),
             format!(
+                "outbound_drop_queue_expired_packets {}",
+                self.outbound_drop_queue_expired_packets
+            ),
+            format!(
                 "outbound_drop_unauthorized_source_packets {}",
                 self.outbound_drop_unauthorized_source_packets
             ),
@@ -515,6 +531,7 @@ mod tests {
         metrics.record_outbound_drop(PacketDropReason::NoRoute);
         metrics.record_outbound_drop(PacketDropReason::PacketTooLarge);
         metrics.record_outbound_drop(PacketDropReason::QueueFull);
+        metrics.record_outbound_queue_expired(2);
         metrics.record_outbound_drop(PacketDropReason::UnauthorizedSource);
         metrics.record_inbound_drop(PacketDropReason::MalformedPacket);
         metrics.record_inbound_drop(PacketDropReason::PacketTooLarge);
@@ -568,11 +585,12 @@ mod tests {
         assert_eq!(snapshot.tun_write_bytes, 40);
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.inbound_accepted_packets, 1);
-        assert_eq!(snapshot.outbound_dropped_packets, 4);
+        assert_eq!(snapshot.outbound_dropped_packets, 6);
         assert_eq!(snapshot.inbound_dropped_packets, 7);
         assert_eq!(snapshot.outbound_drop_no_route_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.outbound_drop_queue_full_packets, 1);
+        assert_eq!(snapshot.outbound_drop_queue_expired_packets, 2);
         assert_eq!(snapshot.outbound_drop_unauthorized_source_packets, 1);
         assert_eq!(snapshot.inbound_drop_malformed_packets, 1);
         assert_eq!(snapshot.inbound_drop_packet_too_large_packets, 1);
@@ -611,6 +629,7 @@ mod tests {
         assert_metric_line(&snapshot, "outbound_drop_no_route_packets 1");
         assert_metric_line(&snapshot, "outbound_drop_packet_too_large_packets 1");
         assert_metric_line(&snapshot, "outbound_drop_queue_full_packets 1");
+        assert_metric_line(&snapshot, "outbound_drop_queue_expired_packets 2");
         assert_metric_line(&snapshot, "outbound_drop_unauthorized_source_packets 1");
         assert_metric_line(&snapshot, "inbound_drop_malformed_packets 1");
         assert_metric_line(&snapshot, "inbound_drop_packet_too_large_packets 1");
