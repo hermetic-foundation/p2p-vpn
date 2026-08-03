@@ -3,6 +3,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::{path::PathRuntimeStats, queue::QueueStats};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutoNatReachability {
+    Unknown,
+    Public,
+    Private,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketDropReason {
     MalformedPacket,
     NoRoute,
@@ -56,6 +63,12 @@ pub struct RuntimeMetrics {
     external_addresses_confirmed: AtomicU64,
     external_addresses_expired: AtomicU64,
     autonat_probes_scheduled: AtomicU64,
+    autonat_status_unknown: AtomicU64,
+    autonat_status_public: AtomicU64,
+    autonat_status_private: AtomicU64,
+    autonat_status_changes_to_unknown: AtomicU64,
+    autonat_status_changes_to_public: AtomicU64,
+    autonat_status_changes_to_private: AtomicU64,
     kademlia_provider_lookups: AtomicU64,
     kademlia_provider_advertisements: AtomicU64,
     kademlia_provider_advertisement_failures: AtomicU64,
@@ -231,6 +244,29 @@ impl RuntimeMetrics {
     pub fn record_autonat_probe_scheduled(&self) {
         self.autonat_probes_scheduled
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_autonat_status(&self, reachability: AutoNatReachability) {
+        self.autonat_status_unknown.store(0, Ordering::Relaxed);
+        self.autonat_status_public.store(0, Ordering::Relaxed);
+        self.autonat_status_private.store(0, Ordering::Relaxed);
+        match reachability {
+            AutoNatReachability::Unknown => {
+                self.autonat_status_unknown.store(1, Ordering::Relaxed);
+                self.autonat_status_changes_to_unknown
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            AutoNatReachability::Public => {
+                self.autonat_status_public.store(1, Ordering::Relaxed);
+                self.autonat_status_changes_to_public
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            AutoNatReachability::Private => {
+                self.autonat_status_private.store(1, Ordering::Relaxed);
+                self.autonat_status_changes_to_private
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     pub fn record_kademlia_provider_lookup(&self) {
@@ -410,6 +446,25 @@ impl RuntimeMetrics {
         snapshot.external_addresses_expired =
             self.external_addresses_expired.load(Ordering::Relaxed);
         snapshot.autonat_probes_scheduled = self.autonat_probes_scheduled.load(Ordering::Relaxed);
+        snapshot.autonat_status_unknown = self.autonat_status_unknown.load(Ordering::Relaxed);
+        snapshot.autonat_status_public = self.autonat_status_public.load(Ordering::Relaxed);
+        snapshot.autonat_status_private = self.autonat_status_private.load(Ordering::Relaxed);
+        if snapshot.autonat_status_unknown
+            + snapshot.autonat_status_public
+            + snapshot.autonat_status_private
+            == 0
+        {
+            snapshot.autonat_status_unknown = 1;
+        }
+        snapshot.autonat_status_changes_to_unknown = self
+            .autonat_status_changes_to_unknown
+            .load(Ordering::Relaxed);
+        snapshot.autonat_status_changes_to_public = self
+            .autonat_status_changes_to_public
+            .load(Ordering::Relaxed);
+        snapshot.autonat_status_changes_to_private = self
+            .autonat_status_changes_to_private
+            .load(Ordering::Relaxed);
         snapshot.kademlia_provider_lookups = self.kademlia_provider_lookups.load(Ordering::Relaxed);
         snapshot.kademlia_provider_advertisements = self
             .kademlia_provider_advertisements
@@ -480,6 +535,12 @@ pub struct RuntimeSnapshot {
     pub external_addresses_confirmed: u64,
     pub external_addresses_expired: u64,
     pub autonat_probes_scheduled: u64,
+    pub autonat_status_unknown: u64,
+    pub autonat_status_public: u64,
+    pub autonat_status_private: u64,
+    pub autonat_status_changes_to_unknown: u64,
+    pub autonat_status_changes_to_public: u64,
+    pub autonat_status_changes_to_private: u64,
     pub kademlia_provider_lookups: u64,
     pub kademlia_provider_advertisements: u64,
     pub kademlia_provider_advertisement_failures: u64,
@@ -566,6 +627,21 @@ impl RuntimeSnapshot {
                 self.external_addresses_expired
             ),
             format!("autonat_probes_scheduled {}", self.autonat_probes_scheduled),
+            format!("autonat_status_unknown {}", self.autonat_status_unknown),
+            format!("autonat_status_public {}", self.autonat_status_public),
+            format!("autonat_status_private {}", self.autonat_status_private),
+            format!(
+                "autonat_status_changes_to_unknown {}",
+                self.autonat_status_changes_to_unknown
+            ),
+            format!(
+                "autonat_status_changes_to_public {}",
+                self.autonat_status_changes_to_public
+            ),
+            format!(
+                "autonat_status_changes_to_private {}",
+                self.autonat_status_changes_to_private
+            ),
             format!(
                 "kademlia_provider_lookups {}",
                 self.kademlia_provider_lookups
@@ -744,6 +820,8 @@ mod tests {
         metrics.record_external_address_confirmed();
         metrics.record_external_address_expired();
         metrics.record_autonat_probe_scheduled();
+        metrics.record_autonat_status(AutoNatReachability::Public);
+        metrics.record_autonat_status(AutoNatReachability::Private);
         metrics.record_kademlia_provider_lookup();
         metrics.record_kademlia_provider_advertisement();
         metrics.record_kademlia_provider_advertisement_failure();
@@ -823,6 +901,12 @@ mod tests {
         assert_eq!(snapshot.external_addresses_confirmed, 1);
         assert_eq!(snapshot.external_addresses_expired, 1);
         assert_eq!(snapshot.autonat_probes_scheduled, 1);
+        assert_eq!(snapshot.autonat_status_unknown, 0);
+        assert_eq!(snapshot.autonat_status_public, 0);
+        assert_eq!(snapshot.autonat_status_private, 1);
+        assert_eq!(snapshot.autonat_status_changes_to_unknown, 0);
+        assert_eq!(snapshot.autonat_status_changes_to_public, 1);
+        assert_eq!(snapshot.autonat_status_changes_to_private, 1);
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
@@ -869,6 +953,11 @@ mod tests {
         assert_metric_line(&snapshot, "external_addresses_confirmed 1");
         assert_metric_line(&snapshot, "external_addresses_expired 1");
         assert_metric_line(&snapshot, "autonat_probes_scheduled 1");
+        assert_metric_line(&snapshot, "autonat_status_unknown 0");
+        assert_metric_line(&snapshot, "autonat_status_public 0");
+        assert_metric_line(&snapshot, "autonat_status_private 1");
+        assert_metric_line(&snapshot, "autonat_status_changes_to_public 1");
+        assert_metric_line(&snapshot, "autonat_status_changes_to_private 1");
         assert_metric_line(&snapshot, "kademlia_provider_lookups 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisements 1");
         assert_metric_line(&snapshot, "kademlia_provider_advertisement_failures 1");
@@ -894,5 +983,15 @@ mod tests {
         assert_metric_line(&snapshot, "path_peers_without_supported_path 6");
         assert_metric_line(&snapshot, "queue_expired_packets 2");
         assert_metric_line(&snapshot, "queue_expired_bytes 60");
+    }
+
+    #[test]
+    fn metrics_snapshot_reports_default_autonat_unknown_status() {
+        let snapshot = RuntimeMetrics::default().snapshot(QueueStats::default());
+
+        assert_eq!(snapshot.autonat_status_unknown, 1);
+        assert_eq!(snapshot.autonat_status_public, 0);
+        assert_eq!(snapshot.autonat_status_private, 0);
+        assert_eq!(snapshot.autonat_status_changes_to_unknown, 0);
     }
 }

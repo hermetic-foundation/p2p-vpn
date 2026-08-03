@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::{
     PathKind, PeerId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig},
-    metrics::{PacketDropReason, RuntimeMetrics},
+    metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics},
     path::{PathSet, PathTransportSupport},
     queue::PeerQueues,
     route::RouteError,
@@ -918,7 +918,7 @@ fn handle_behaviour_event(
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
         }
         BehaviourEvent::Autonat(event) if discovery.autonat => {
-            handle_autonat_event(event);
+            handle_autonat_event(metrics, event);
         }
         _ => {}
     }
@@ -938,9 +938,10 @@ fn schedule_autonat_probe(
     true
 }
 
-fn handle_autonat_event(event: autonat::Event) {
+fn handle_autonat_event(metrics: &RuntimeMetrics, event: autonat::Event) {
     match event {
         autonat::Event::StatusChanged { old, new } => {
+            metrics.record_autonat_status(autonat_reachability(&new));
             eprintln!("autonat status changed: {old:?} -> {new:?}");
         }
         autonat::Event::OutboundProbe(event) => {
@@ -949,6 +950,14 @@ fn handle_autonat_event(event: autonat::Event) {
         autonat::Event::InboundProbe(event) => {
             eprintln!("autonat inbound probe: {event:?}");
         }
+    }
+}
+
+fn autonat_reachability(status: &autonat::NatStatus) -> AutoNatReachability {
+    match status {
+        autonat::NatStatus::Unknown => AutoNatReachability::Unknown,
+        autonat::NatStatus::Public(_) => AutoNatReachability::Public,
+        autonat::NatStatus::Private => AutoNatReachability::Private,
     }
 }
 
@@ -1684,6 +1693,36 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.autonat_probes_scheduled, 0);
+    }
+
+    #[test]
+    fn autonat_status_changes_update_reachability_metrics() {
+        let metrics = RuntimeMetrics::default();
+        let public_address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().expect("address");
+
+        handle_autonat_event(
+            &metrics,
+            autonat::Event::StatusChanged {
+                old: autonat::NatStatus::Unknown,
+                new: autonat::NatStatus::Public(public_address),
+            },
+        );
+        handle_autonat_event(
+            &metrics,
+            autonat::Event::StatusChanged {
+                old: autonat::NatStatus::Public(
+                    "/ip4/203.0.113.10/tcp/4001".parse().expect("address"),
+                ),
+                new: autonat::NatStatus::Private,
+            },
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.autonat_status_unknown, 0);
+        assert_eq!(snapshot.autonat_status_public, 0);
+        assert_eq!(snapshot.autonat_status_private, 1);
+        assert_eq!(snapshot.autonat_status_changes_to_public, 1);
+        assert_eq!(snapshot.autonat_status_changes_to_private, 1);
     }
 
     #[test]
