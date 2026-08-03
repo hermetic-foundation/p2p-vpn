@@ -8,6 +8,7 @@ use p2p_vpn::{
     metrics::RuntimeMetrics,
     queue::QueueStats,
     runtime::{
+        forward::session_id_for_peer,
         runner,
         tun::{TunDevice, TunRuntimeConfig},
     },
@@ -78,6 +79,14 @@ fn status(path: &PathBuf) -> Result<(), String> {
     println!(
         "interface: {} mtu {}",
         config.interface.name, config.interface.mtu
+    );
+    println!(
+        "packet session: {}",
+        session_id_for_peer(
+            config
+                .local_peer_id()
+                .map_err(|error| format!("failed to parse local peer id: {error:?}"))?
+        )
     );
     println!("peers: {}", config.peers.len());
     println!(

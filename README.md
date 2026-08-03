@@ -20,8 +20,9 @@ experiments only when they support the needed relay reservations and are
 acceptable for the deployment's trust and availability requirements.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
-packet payload. It is intentionally reusable over libp2p streams now and QUIC
-datagrams later.
+packet payload. The header includes a non-zero packet session id derived from
+the local peer identity plus a per-session packet sequence number. It is
+intentionally reusable over libp2p streams now and QUIC datagrams later.
 
 The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
 request-response streams. Inbound packet handling checks the configured peer

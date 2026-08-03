@@ -42,7 +42,7 @@ impl Forwarder {
             routes: config.compile_routes()?,
             peers,
             authorized_peers: AuthorizedPeers::from_config(config),
-            session_id: 0,
+            session_id: session_id_for_peer(config.local_peer_id()?),
             next_sequence: 0,
             mtu: usize::from(config.interface.mtu).min(MAX_PAYLOAD_LEN),
         })
@@ -75,13 +75,17 @@ impl Forwarder {
             .peers
             .get(&packet.peer())
             .ok_or(ForwardError::NoTransportPeer(packet.peer()))?;
-        let frame = Frame::packet(
+        let frame = self.packet_frame(packet)?;
+
+        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+    }
+
+    fn packet_frame(&self, packet: &Packet) -> Result<Frame, ForwardError> {
+        Ok(Frame::packet(
             self.session_id,
             packet.sequence(),
             packet.payload().to_vec(),
-        )?;
-
-        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+        )?)
     }
 
     fn prepare_tun_packet(&mut self, packet: Vec<u8>) -> Result<Packet, ForwardError> {
@@ -146,6 +150,13 @@ impl Forwarder {
             .packet
             .send_response(channel, PacketResponse::Accepted)
     }
+}
+
+#[must_use]
+pub fn session_id_for_peer(peer: PeerId) -> SessionId {
+    let bytes = peer.as_bytes();
+    let session_id = SessionId::from_be_bytes(bytes[..4].try_into().expect("fixed slice length"));
+    session_id.max(1)
 }
 
 pub fn packet_source(packet: &[u8]) -> Result<IpAddr, ForwardError> {
@@ -303,6 +314,18 @@ mod tests {
     }
 
     #[test]
+    fn session_id_is_derived_from_local_peer_and_never_zero() {
+        assert_eq!(session_id_for_peer(PeerId::from_bytes([0; 32])), 1);
+        assert_eq!(
+            session_id_for_peer(PeerId::from_bytes([
+                0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0
+            ])),
+            0x1234_5678
+        );
+    }
+
+    #[test]
     fn packet_endpoints_parse_ipv4_and_ipv6() {
         let source4 = Ipv4Addr::new(100, 64, 1, 2);
         let destination4 = Ipv4Addr::new(100, 64, 3, 4);
@@ -399,6 +422,31 @@ mod tests {
         let queued_packet = queues.dequeue().expect("queued packet");
         assert_eq!(queued_packet.peer(), remote_overlay);
         assert_eq!(queued_packet.sequence(), 0);
+    }
+
+    #[test]
+    fn outbound_frame_carries_local_session_and_packet_sequence() {
+        let local = PeerId::from_bytes([
+            0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        ]);
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut config = config_for(remote);
+        config.network.local_peer = local.to_string();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(Ipv4Addr::new(100, 64, 9, 9), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(1, 1280);
+
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("queued");
+        let queued_packet = queues.dequeue().expect("queued packet");
+        let frame = forwarder.packet_frame(&queued_packet).expect("frame");
+
+        assert_eq!(frame.header.session_id, 0xdead_beef);
+        assert_eq!(frame.header.sequence, 0);
+        assert_eq!(frame.header.payload_len, 20);
     }
 
     #[test]
