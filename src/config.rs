@@ -291,6 +291,18 @@ pub struct ResourceConfig {
     pub max_concurrent_packet_streams: usize,
     #[serde(default = "default_max_concurrent_control_streams")]
     pub max_concurrent_control_streams: usize,
+    #[serde(default = "default_max_pending_incoming_connections")]
+    pub max_pending_incoming_connections: u32,
+    #[serde(default = "default_max_pending_outgoing_connections")]
+    pub max_pending_outgoing_connections: u32,
+    #[serde(default = "default_max_established_incoming_connections")]
+    pub max_established_incoming_connections: u32,
+    #[serde(default = "default_max_established_outgoing_connections")]
+    pub max_established_outgoing_connections: u32,
+    #[serde(default = "default_max_established_connections_per_peer")]
+    pub max_established_connections_per_peer: u32,
+    #[serde(default = "default_max_established_connections")]
+    pub max_established_connections: u32,
 }
 
 impl Default for ResourceConfig {
@@ -308,6 +320,17 @@ impl ResourceConfig {
     #[must_use]
     pub fn control_stream_limit(self) -> usize {
         self.max_concurrent_control_streams.max(1)
+    }
+
+    #[must_use]
+    pub fn to_connection_limits(self) -> libp2p::connection_limits::ConnectionLimits {
+        libp2p::connection_limits::ConnectionLimits::default()
+            .with_max_pending_incoming(Some(self.max_pending_incoming_connections))
+            .with_max_pending_outgoing(Some(self.max_pending_outgoing_connections))
+            .with_max_established_incoming(Some(self.max_established_incoming_connections))
+            .with_max_established_outgoing(Some(self.max_established_outgoing_connections))
+            .with_max_established_per_peer(Some(self.max_established_connections_per_peer))
+            .with_max_established(Some(self.max_established_connections))
     }
 }
 
@@ -458,6 +481,12 @@ const fn default_resources() -> ResourceConfig {
     ResourceConfig {
         max_concurrent_packet_streams: default_max_concurrent_packet_streams(),
         max_concurrent_control_streams: default_max_concurrent_control_streams(),
+        max_pending_incoming_connections: default_max_pending_incoming_connections(),
+        max_pending_outgoing_connections: default_max_pending_outgoing_connections(),
+        max_established_incoming_connections: default_max_established_incoming_connections(),
+        max_established_outgoing_connections: default_max_established_outgoing_connections(),
+        max_established_connections_per_peer: default_max_established_connections_per_peer(),
+        max_established_connections: default_max_established_connections(),
     }
 }
 
@@ -467,6 +496,30 @@ const fn default_max_concurrent_packet_streams() -> usize {
 
 const fn default_max_concurrent_control_streams() -> usize {
     64
+}
+
+const fn default_max_pending_incoming_connections() -> u32 {
+    64
+}
+
+const fn default_max_pending_outgoing_connections() -> u32 {
+    64
+}
+
+const fn default_max_established_incoming_connections() -> u32 {
+    256
+}
+
+const fn default_max_established_outgoing_connections() -> u32 {
+    256
+}
+
+const fn default_max_established_connections_per_peer() -> u32 {
+    8
+}
+
+const fn default_max_established_connections() -> u32 {
+    512
 }
 
 const fn default_true() -> bool {
@@ -1026,6 +1079,12 @@ mod tests {
 
         assert_eq!(config.resources.packet_stream_limit(), 256);
         assert_eq!(config.resources.control_stream_limit(), 64);
+        assert_eq!(config.resources.max_pending_incoming_connections, 64);
+        assert_eq!(config.resources.max_pending_outgoing_connections, 64);
+        assert_eq!(config.resources.max_established_incoming_connections, 256);
+        assert_eq!(config.resources.max_established_outgoing_connections, 256);
+        assert_eq!(config.resources.max_established_connections_per_peer, 8);
+        assert_eq!(config.resources.max_established_connections, 512);
         assert_eq!(config.queue.max_packet_age_millis, 1_000);
 
         let config = serde_json::from_str::<Config>(
@@ -1040,7 +1099,13 @@ mod tests {
               },
               "resources": {
                 "max_concurrent_control_streams": 0,
-                "max_concurrent_packet_streams": 0
+                "max_concurrent_packet_streams": 0,
+                "max_pending_incoming_connections": 3,
+                "max_pending_outgoing_connections": 4,
+                "max_established_incoming_connections": 5,
+                "max_established_outgoing_connections": 6,
+                "max_established_connections_per_peer": 7,
+                "max_established_connections": 8
               },
               "queue": {
                 "max_packets_per_peer": 256,
@@ -1053,6 +1118,12 @@ mod tests {
 
         assert_eq!(config.resources.packet_stream_limit(), 1);
         assert_eq!(config.resources.control_stream_limit(), 1);
+        assert_eq!(config.resources.max_pending_incoming_connections, 3);
+        assert_eq!(config.resources.max_pending_outgoing_connections, 4);
+        assert_eq!(config.resources.max_established_incoming_connections, 5);
+        assert_eq!(config.resources.max_established_outgoing_connections, 6);
+        assert_eq!(config.resources.max_established_connections_per_peer, 7);
+        assert_eq!(config.resources.max_established_connections, 8);
         assert_eq!(
             config.queue.max_packet_age(),
             std::time::Duration::from_millis(1)

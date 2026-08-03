@@ -128,7 +128,7 @@ async fn main() -> Result<(), String> {
             config,
             dry_run,
             metrics_interval_seconds,
-        } => up(&config, dry_run, metrics_interval_seconds).await,
+        } => Box::pin(up(&config, dry_run, metrics_interval_seconds)).await,
     }
 }
 
@@ -289,6 +289,15 @@ fn status(path: &PathBuf) -> Result<(), String> {
         config.resources.control_stream_limit(),
         config.resources.packet_stream_limit()
     );
+    println!(
+        "connection limits: {} pending in / {} pending out / {} established in / {} established out / {} per peer / {} total",
+        config.resources.max_pending_incoming_connections,
+        config.resources.max_pending_outgoing_connections,
+        config.resources.max_established_incoming_connections,
+        config.resources.max_established_outgoing_connections,
+        config.resources.max_established_connections_per_peer,
+        config.resources.max_established_connections
+    );
     println!("wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header");
     println!(
         "preferred path: {} (score {})",
@@ -418,7 +427,7 @@ async fn up(
 
     println!("starting libp2p packet forwarding runtime");
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
-    runner::run_config(config, device, metrics_interval)
+    Box::pin(runner::run_config(config, device, metrics_interval))
         .await
         .map_err(|error| format!("runtime failed: {error:?}"))
 }

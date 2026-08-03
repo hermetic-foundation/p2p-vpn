@@ -87,7 +87,10 @@ connected-peer skips, and failures are exposed in the runtime metrics output.
 
 Resource limits are part of the overlay config. The packet request-response
 fallback has a bounded concurrent stream limit, exposed through `resources`, so
-operators can tighten or relax stream pressure without changing code.
+operators can tighten or relax stream pressure without changing code. Swarm
+connection limits are also exposed there so public bootstrap and relay-capable
+nodes can bound pending handshakes, established connections, and connections per
+peer.
 
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
@@ -212,7 +215,13 @@ cargo test --test tun_namespace -- --ignored --nocapture
   },
   "resources": {
     "max_concurrent_control_streams": 64,
-    "max_concurrent_packet_streams": 256
+    "max_concurrent_packet_streams": 256,
+    "max_pending_incoming_connections": 64,
+    "max_pending_outgoing_connections": 64,
+    "max_established_incoming_connections": 256,
+    "max_established_outgoing_connections": 256,
+    "max_established_connections_per_peer": 8,
+    "max_established_connections": 512
   },
   "peers": [
     {

@@ -681,6 +681,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: crate::config::DiscoveryConfig::default(),
         })
         .expect("node");
@@ -777,6 +778,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: crate::config::DiscoveryConfig::default(),
         })
         .expect("node");

@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, dcutr, identify,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, connection_limits, dcutr, identify,
     identity::Keypair,
     kad, mdns,
     multiaddr::Protocol,
@@ -11,7 +11,7 @@ use libp2p::{
 };
 
 use crate::{
-    config::{DiscoveryConfig, RelayResourceConfig},
+    config::{DiscoveryConfig, RelayResourceConfig, ResourceConfig},
     identity::{IdentityError, NodeIdentity},
     runtime::{
         control::{self, ControlCodec},
@@ -23,6 +23,7 @@ const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
+    pub connection_limits: connection_limits::Behaviour,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
@@ -56,6 +57,7 @@ pub struct HostConfig {
     pub relay_reservations: Vec<Multiaddr>,
     pub relay_server: bool,
     pub relay_resources: RelayResourceConfig,
+    pub resources: ResourceConfig,
     pub discovery: DiscoveryConfig,
 }
 
@@ -85,6 +87,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let discovery = config.discovery;
     let relay_server = config.relay_server;
     let relay_resources = config.relay_resources;
+    let resources = config.resources;
     let mtu = config.mtu;
     let control_streams = config.max_concurrent_control_streams;
     let packet_streams = config.max_concurrent_packet_streams;
@@ -119,6 +122,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                 };
 
                 Ok(Behaviour {
+                    connection_limits: connection_limits::Behaviour::new(
+                        resources.to_connection_limits(),
+                    ),
                     identify: identify::Behaviour::new(identify::Config::new(
                         PROTOCOL_VERSION.to_owned(),
                         keypair.public(),
@@ -334,6 +340,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node should build");
@@ -368,6 +375,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery,
         })
         .expect("node should build");
@@ -400,6 +408,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node should build");
@@ -410,6 +419,34 @@ mod tests {
                 .external_addresses()
                 .any(|address| address == &external_address)
         );
+    }
+
+    #[tokio::test]
+    async fn build_node_enforces_configured_connection_limits_on_startup_dials() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address = "/memory/9".parse().expect("peer address");
+
+        let result = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(peer, address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig {
+                max_pending_outgoing_connections: 0,
+                ..crate::config::ResourceConfig::default()
+            },
+            discovery: DiscoveryConfig::default(),
+        });
+
+        assert!(matches!(result, Err(P2pBuildError::Dial(_))));
     }
 
     #[tokio::test]
@@ -435,6 +472,7 @@ mod tests {
             relay_reservations: vec![relay_reservation],
             relay_server: true,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("node");
@@ -516,6 +554,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
@@ -534,6 +573,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
@@ -567,6 +607,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
@@ -585,6 +626,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");
@@ -628,6 +670,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: true,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery,
         })
         .expect("relay node");
@@ -653,6 +696,7 @@ mod tests {
             relay_reservations: vec![relayed_listener_address.clone()],
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery,
         })
         .expect("listener node");
@@ -686,6 +730,7 @@ mod tests {
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
             discovery,
         })
         .expect("dialer node");
