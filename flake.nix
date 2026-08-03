@@ -12,12 +12,41 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
+
+      templates.nixos-mesh = {
+        path = ./examples/nixos-mesh;
+        description = "Two-node NixOS deployment skeleton for p2p-vpn";
+      };
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
+        lib = nixpkgs.lib;
         rust = pkgs.rustc;
         cargo = pkgs.cargo;
+        moduleEval = lib.nixosSystem {
+          inherit system;
+          modules = [
+            self.nixosModules.default
+            (
+              { ... }:
+              {
+                system.stateVersion = "25.11";
+                services.p2p-vpn.instances.node-a = {
+                  enable = true;
+                  configFile = "/etc/p2p-vpn/node-a.json";
+                  metricsIntervalSeconds = 10;
+                  openFirewall = true;
+                  tcpPorts = [ 4001 ];
+                  udpPorts = [ 4001 ];
+                };
+              }
+            )
+          ];
+        };
       in
       {
         packages.default = pkgs.rustPlatform.buildRustPackage {
@@ -62,6 +91,25 @@
           fmt = pkgs.runCommand "p2p-vpn-fmt" { nativeBuildInputs = [ cargo pkgs.rustfmt ]; } ''
             cd ${self}
             cargo fmt --check
+            touch $out
+          '';
+        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
+            execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
+            tcpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedTCPPorts;
+            udpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedUDPPorts;
+            kernelModules = builtins.toJSON moduleEval.config.boot.kernelModules;
+          } ''
+            case "$execStart" in
+              *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10"*) ;;
+              *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
+            esac
+            test "$tcpPorts" = '[4001]'
+            test "$udpPorts" = '[4001]'
+            case "$kernelModules" in
+              *tun*) ;;
+              *) echo "tun kernel module not requested: $kernelModules" >&2; exit 1 ;;
+            esac
             touch $out
           '';
         };

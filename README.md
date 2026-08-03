@@ -465,6 +465,43 @@ wire protocol, MTU shape, preferred path, and route ownership. The output shows
 the validated packet protocol, effective MTU, QUIC datagram support flag,
 preferred path, and advertised routes.
 
+Run as a NixOS service:
+
+```nix
+{
+  inputs.p2p-vpn.url = "github:hermetic-foundation/p2p-vpn";
+
+  outputs = { nixpkgs, p2p-vpn, ... }: {
+    nixosConfigurations.node-a = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        p2p-vpn.nixosModules.default
+        {
+          services.p2p-vpn.instances.node-a = {
+            enable = true;
+            configFile = "/etc/p2p-vpn/node-a.json";
+            metricsIntervalSeconds = 10;
+            openFirewall = true;
+            tcpPorts = [ 4001 ];
+            udpPorts = [ 4001 ];
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The NixOS module exports named systemd units such as `p2p-vpn-node-a.service`,
+loads the `tun` kernel module, runs `p2p-vpn up --config ...`, adds `iproute2`
+to the unit path for interface setup, grants `CAP_NET_ADMIN` and `CAP_NET_RAW`,
+restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
+firewall. Keep JSON configs that contain `network.private_key` or
+`network.membership_key` outside the Nix store, for example under
+`/etc/p2p-vpn`, with permissions managed by your deployment system. A two-node
+deployment skeleton is available as the `nixos-mesh` flake template in
+`examples/nixos-mesh`.
+
 Inspect the Linux interface setup plan without requiring root:
 
 ```sh
