@@ -53,6 +53,16 @@ impl IpCidr {
             _ => false,
         }
     }
+
+    #[must_use]
+    pub fn overlaps(self, other: Self) -> bool {
+        match (self.address, other.address) {
+            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_)) => {
+                self.contains(other.address) || other.contains(self.address)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for IpCidr {
@@ -70,8 +80,20 @@ pub struct Route {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteError {
-    InvalidPrefix { prefix_len: u8, max_prefix: u8 },
-    UnauthorizedSource { peer: PeerId, source: IpAddr },
+    InvalidPrefix {
+        prefix_len: u8,
+        max_prefix: u8,
+    },
+    ConflictingOwnership {
+        existing_owner: PeerId,
+        new_owner: PeerId,
+        existing_prefix: IpCidr,
+        new_prefix: IpCidr,
+    },
+    UnauthorizedSource {
+        peer: PeerId,
+        source: IpAddr,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -87,6 +109,27 @@ impl RouteTable {
 
     pub fn insert(&mut self, route: Route) {
         self.routes.push(route);
+        self.sort_routes();
+    }
+
+    pub fn insert_authorized(&mut self, route: Route) -> Result<(), RouteError> {
+        for existing in &self.routes {
+            if existing.owner != route.owner && existing.prefix.overlaps(route.prefix) {
+                return Err(RouteError::ConflictingOwnership {
+                    existing_owner: existing.owner,
+                    new_owner: route.owner,
+                    existing_prefix: existing.prefix,
+                    new_prefix: route.prefix,
+                });
+            }
+        }
+
+        self.routes.push(route);
+        self.sort_routes();
+        Ok(())
+    }
+
+    fn sort_routes(&mut self) {
         self.routes.sort_by(|left, right| {
             right
                 .prefix
@@ -237,6 +280,66 @@ mod tests {
                 source: IpAddr::V4(Ipv4Addr::new(100, 64, 9, 1))
             })
         );
+    }
+
+    #[test]
+    fn cidr_overlap_detects_more_specific_prefixes() {
+        let aggregate = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap();
+        let more_specific = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 9, 0)), 24).unwrap();
+        let disjoint = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 43, 0, 0)), 16).unwrap();
+
+        assert!(aggregate.overlaps(more_specific));
+        assert!(more_specific.overlaps(aggregate));
+        assert!(!aggregate.overlaps(disjoint));
+    }
+
+    #[test]
+    fn route_table_rejects_cross_peer_prefix_overlap() {
+        let mut table = RouteTable::new();
+        let aggregate = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap();
+        let hijack = IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 9, 0)), 24).unwrap();
+
+        table
+            .insert_authorized(Route {
+                owner: peer(7),
+                prefix: aggregate,
+                metric: 0,
+            })
+            .expect("aggregate route");
+
+        assert_eq!(
+            table.insert_authorized(Route {
+                owner: peer(8),
+                prefix: hijack,
+                metric: 0,
+            }),
+            Err(RouteError::ConflictingOwnership {
+                existing_owner: peer(7),
+                new_owner: peer(8),
+                existing_prefix: aggregate,
+                new_prefix: hijack,
+            })
+        );
+    }
+
+    #[test]
+    fn route_table_allows_same_peer_prefix_overlap() {
+        let mut table = RouteTable::new();
+
+        table
+            .insert_authorized(Route {
+                owner: peer(7),
+                prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap(),
+                metric: 10,
+            })
+            .expect("aggregate route");
+        table
+            .insert_authorized(Route {
+                owner: peer(7),
+                prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 9, 0)), 24).unwrap(),
+                metric: 0,
+            })
+            .expect("same owner more-specific route");
     }
 
     #[test]

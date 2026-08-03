@@ -35,23 +35,23 @@ impl Config {
         let mut table = RouteTable::new();
         for peer in &self.peers {
             let owner = peer.peer_id()?;
-            table.insert(Route {
+            table.insert_authorized(Route {
                 owner,
                 prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(owner)), 32)?,
                 metric: 0,
-            });
-            table.insert(Route {
+            })?;
+            table.insert_authorized(Route {
                 owner,
                 prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(owner)), 128)?,
                 metric: 0,
-            });
+            })?;
 
             for route in &peer.routes {
-                table.insert(Route {
+                table.insert_authorized(Route {
                     owner,
                     prefix: route.prefix()?,
                     metric: route.metric,
-                });
+                })?;
             }
         }
 
@@ -409,6 +409,57 @@ mod tests {
             table.authorize_source(owner, IpAddr::V4(builtin_ipv4(owner))),
             Ok(())
         );
+    }
+
+    #[test]
+    fn config_rejects_cross_peer_route_overlap() {
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![
+                PeerConfig {
+                    id: "0100000000000000000000000000000000000000000000000000000000000000"
+                        .to_owned(),
+                    name: Some("one".to_owned()),
+                    addresses: Vec::new(),
+                    routes: vec![RouteConfig {
+                        prefix: "10.42.0.0/16".to_owned(),
+                        metric: 50,
+                    }],
+                },
+                PeerConfig {
+                    id: "0200000000000000000000000000000000000000000000000000000000000000"
+                        .to_owned(),
+                    name: Some("two".to_owned()),
+                    addresses: Vec::new(),
+                    routes: vec![RouteConfig {
+                        prefix: "10.42.9.0/24".to_owned(),
+                        metric: 10,
+                    }],
+                },
+            ],
+            queue: default_queue(),
+        };
+
+        assert!(matches!(
+            config.compile_routes(),
+            Err(ConfigError::Route(RouteError::ConflictingOwnership { .. }))
+        ));
+
+        config.peers[1].routes[0].prefix = "10.43.9.0/24".to_owned();
+        assert!(config.compile_routes().is_ok());
     }
 
     #[test]

@@ -33,6 +33,11 @@ The libp2p runtime exposes `/p2p-vpn/packet/1` for framed packet exchange over
 request-response streams. Inbound packet handling checks the configured peer
 allowlist and route ownership before writing to TUN.
 
+Route ownership is static and exclusive. Each configured peer may own its
+built-in host routes plus any advertised prefixes, but route compilation rejects
+overlapping prefixes owned by different peers, including more-specific prefixes
+that would hijack another peer's aggregate route.
+
 ## Development
 
 Enter the reproducible development shell:
