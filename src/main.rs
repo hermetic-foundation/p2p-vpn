@@ -58,6 +58,8 @@ enum Command {
         disable_mdns: bool,
         #[arg(long)]
         disable_kademlia: bool,
+        #[arg(long, default_value = "/p2p-vpn/kad/1")]
+        kademlia_protocol: String,
         #[arg(long)]
         disable_dcutr: bool,
         #[arg(long)]
@@ -104,6 +106,7 @@ async fn main() -> Result<(), String> {
             relay_server,
             disable_mdns,
             disable_kademlia,
+            kademlia_protocol,
             disable_dcutr,
             disable_autonat,
             force,
@@ -121,6 +124,7 @@ async fn main() -> Result<(), String> {
             discovery: DiscoveryConfig {
                 mdns: !disable_mdns,
                 kademlia: !disable_kademlia,
+                kademlia_protocol,
                 dcutr: !disable_dcutr,
                 autonat: !disable_autonat,
             },
@@ -369,37 +373,8 @@ fn status(path: &PathBuf) -> Result<(), String> {
         defaults.preferred_path.default_score()
     );
     println!("compiled routes: {}", routes.len());
-    println!(
-        "listen addresses: {}",
-        config.network.listen_addresses.len()
-    );
-    println!(
-        "external addresses: {}",
-        config.network.external_addresses.len()
-    );
-    println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
-    println!(
-        "discovery: mdns={} kademlia={} dcutr={} autonat={}",
-        config.network.discovery.mdns,
-        config.network.discovery.kademlia,
-        config.network.discovery.dcutr,
-        config.network.discovery.autonat
-    );
-    println!("relay server: {}", config.network.relay.server);
-    println!(
-        "relay reservations: {}",
-        config.network.relay.reservations.len()
-    );
-    println!(
-        "relay resources: {} reservations / {} per peer / {}s reservation / {} circuits / {} per peer / {}s circuit / {} bytes",
-        config.network.relay.resources.max_reservations,
-        config.network.relay.resources.max_reservations_per_peer,
-        config.network.relay.resources.reservation_duration_secs,
-        config.network.relay.resources.max_circuits,
-        config.network.relay.resources.max_circuits_per_peer,
-        config.network.relay.resources.max_circuit_duration_secs,
-        config.network.relay.resources.max_circuit_bytes
-    );
+    print_discovery_status(&config);
+    print_relay_status(&config);
     println!(
         "configured peer addresses: {}",
         config
@@ -418,6 +393,47 @@ fn status(path: &PathBuf) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+fn print_discovery_status(config: &Config) {
+    println!(
+        "listen addresses: {}",
+        config.network.listen_addresses.len()
+    );
+    println!(
+        "external addresses: {}",
+        config.network.external_addresses.len()
+    );
+    println!("bootstrap peers: {}", config.network.bootstrap_peers.len());
+    println!(
+        "discovery: mdns={} kademlia={} dcutr={} autonat={}",
+        config.network.discovery.mdns,
+        config.network.discovery.kademlia,
+        config.network.discovery.dcutr,
+        config.network.discovery.autonat
+    );
+    println!(
+        "kademlia protocol: {}",
+        config.network.discovery.kademlia_protocol
+    );
+}
+
+fn print_relay_status(config: &Config) {
+    println!("relay server: {}", config.network.relay.server);
+    println!(
+        "relay reservations: {}",
+        config.network.relay.reservations.len()
+    );
+    println!(
+        "relay resources: {} reservations / {} per peer / {}s reservation / {} circuits / {} per peer / {}s circuit / {} bytes",
+        config.network.relay.resources.max_reservations,
+        config.network.relay.resources.max_reservations_per_peer,
+        config.network.relay.resources.reservation_duration_secs,
+        config.network.relay.resources.max_circuits,
+        config.network.relay.resources.max_circuits_per_peer,
+        config.network.relay.resources.max_circuit_duration_secs,
+        config.network.relay.resources.max_circuit_bytes
+    );
 }
 
 fn metrics(path: &PathBuf) -> Result<(), String> {
@@ -604,6 +620,8 @@ mod tests {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
             "init-config",
+            "--kademlia-protocol",
+            "/ipfs/kad/1.0.0",
             "--peer",
             "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
             "--peer-route",
@@ -612,7 +630,10 @@ mod tests {
         .expect("cli");
 
         let Command::InitConfig {
-            peers, peer_routes, ..
+            peers,
+            peer_routes,
+            kademlia_protocol,
+            ..
         } = cli.command
         else {
             panic!("expected init-config command");
@@ -635,5 +656,6 @@ mod tests {
                 },
             }]
         );
+        assert_eq!(kademlia_protocol, "/ipfs/kad/1.0.0");
     }
 }

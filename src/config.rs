@@ -72,6 +72,7 @@ impl Config {
         self.bootstrap_multiaddrs()?;
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
+        validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
         Ok(())
     }
 
@@ -163,12 +164,14 @@ impl BootstrapPeerConfig {
 }
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DiscoveryConfig {
     #[serde(default = "default_true")]
     pub mdns: bool,
     #[serde(default = "default_true")]
     pub kademlia: bool,
+    #[serde(default = "default_kademlia_protocol")]
+    pub kademlia_protocol: String,
     #[serde(default = "default_true")]
     pub dcutr: bool,
     #[serde(default = "default_true")]
@@ -435,6 +438,7 @@ pub enum ConfigError {
     PeerId(crate::PeerIdParseError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
+    KademliaProtocol(String),
     Address(AddressValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
@@ -551,13 +555,18 @@ const fn default_true() -> bool {
     true
 }
 
-const fn default_discovery() -> DiscoveryConfig {
+fn default_discovery() -> DiscoveryConfig {
     DiscoveryConfig {
         mdns: true,
         kademlia: true,
+        kademlia_protocol: default_kademlia_protocol(),
         dcutr: true,
         autonat: true,
     }
+}
+
+fn default_kademlia_protocol() -> String {
+    "/p2p-vpn/kad/1".to_owned()
 }
 
 const fn default_max_relay_reservations() -> usize {
@@ -643,6 +652,14 @@ fn parse_relay_reservation_multiaddrs(
             Ok(multiaddr)
         })
         .collect()
+}
+
+fn validate_kademlia_protocol(protocol: &str) -> Result<(), ConfigError> {
+    if protocol.starts_with('/') {
+        Ok(())
+    } else {
+        Err(ConfigError::KademliaProtocol(protocol.to_owned()))
+    }
 }
 
 fn validate_peer_multiaddr(
@@ -861,6 +878,46 @@ mod tests {
     }
 
     #[test]
+    fn discovery_config_defaults_to_private_kademlia_protocol() {
+        let discovery = serde_json::from_str::<DiscoveryConfig>("{}").expect("discovery");
+
+        assert_eq!(discovery, DiscoveryConfig::default());
+        assert_eq!(discovery.kademlia_protocol, "/p2p-vpn/kad/1");
+    }
+
+    #[test]
+    fn runtime_validation_rejects_invalid_kademlia_protocol() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig {
+                    kademlia_protocol: "ipfs/kad/1.0.0".to_owned(),
+                    ..DiscoveryConfig::default()
+                },
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::KademliaProtocol(protocol)) if protocol == "ipfs/kad/1.0.0"
+        ));
+    }
+
+    #[test]
     fn config_rejects_cross_peer_route_overlap() {
         let mut config = Config {
             network: NetworkConfig {
@@ -933,6 +990,7 @@ mod tests {
                 discovery: DiscoveryConfig {
                     mdns: false,
                     kademlia: true,
+                    kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
                     dcutr: true,
                     autonat: true,
                 },
@@ -1224,6 +1282,7 @@ mod tests {
             discovery: DiscoveryConfig {
                 mdns: true,
                 kademlia: false,
+                kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
                 dcutr: true,
                 autonat: true,
             },

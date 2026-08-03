@@ -164,10 +164,13 @@ stdout. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
 `--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is allowed to
 originate. The default generated route metric is `100`, preserving the built-in
 host routes at metric `0`. Repeat `--bootstrap-peer PEER_ID=MULTIADDR` for
-overlay-scoped Kademlia bootstrap nodes. Repeat `--external-address MULTIADDR`
-for stable public or DNS addresses that libp2p should advertise to peers in
-addition to observed addresses learned through identify and confirmed through
-AutoNAT. Use `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
+Kademlia bootstrap nodes. By default the generated config uses the private
+`/p2p-vpn/kad/1` Kademlia protocol; pass `--kademlia-protocol /ipfs/kad/1.0.0`
+only when you intentionally want IPFS/public-DHT protocol compatibility with
+your bootstrap peers. Repeat `--external-address MULTIADDR` for stable public
+or DNS addresses that libp2p should advertise to peers in addition to observed
+addresses learned through identify and confirmed through AutoNAT. Use
+`--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
 the generated config.
 
@@ -215,6 +218,7 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "discovery": {
       "mdns": true,
       "kademlia": true,
+      "kademlia_protocol": "/p2p-vpn/kad/1",
       "dcutr": true,
       "autonat": true
     },
@@ -272,10 +276,14 @@ cargo test --test tun_namespace -- --ignored --nocapture
 }
 ```
 
-`bootstrap_peers` are dialed and added to the overlay-scoped Kademlia routing
-table when Kademlia discovery is enabled. Kademlia nodes advertise themselves
-under the network provider key and query that same key for other configured
-peers. `external_addresses` are registered with the libp2p swarm as explicit
+`bootstrap_peers` are dialed and added to the configured Kademlia routing table
+when Kademlia discovery is enabled. Kademlia nodes advertise themselves under
+the network provider key and query that same key for other configured peers.
+`discovery.kademlia_protocol` defaults to the private `/p2p-vpn/kad/1`
+protocol. Set it to `/ipfs/kad/1.0.0` only for deployments that explicitly use
+IPFS-compatible public bootstrap peers; those peers help discovery and NAT
+traversal, but do not grant overlay membership or route authority.
+`external_addresses` are registered with the libp2p swarm as explicit
 advertised addresses; use them for stable public socket, DNS, or port-forwarded
 addresses that peers should prefer over wildcard listen addresses.
 `relay.reservations` are full libp2p relay listen addresses; listening on

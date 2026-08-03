@@ -58,7 +58,7 @@ pub async fn run_config(
         relay_server: config.network.relay.server,
         relay_resources: config.network.relay.resources,
         resources: config.resources,
-        discovery: config.network.discovery,
+        discovery: config.network.discovery.clone(),
     })?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
@@ -109,7 +109,7 @@ pub async fn run_node(
         tick.tick().await;
     }
     queue_expiry_tick.tick().await;
-    let discovery = node.discovery;
+    let discovery = node.discovery.clone();
 
     log_startup_status(node.startup);
 
@@ -134,7 +134,7 @@ pub async fn run_node(
                         discovered_peer_addresses: &mut discovered_peer_addresses,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
-                        discovery,
+                        discovery: &discovery,
                     },
                     event,
                 )?;
@@ -508,7 +508,7 @@ struct SwarmEventContext<'a> {
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
-    discovery: DiscoveryConfig,
+    discovery: &'a DiscoveryConfig,
 }
 
 fn handle_swarm_event(
@@ -860,7 +860,7 @@ fn handle_behaviour_event(
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
-    discovery: DiscoveryConfig,
+    discovery: &DiscoveryConfig,
     event: BehaviourEvent,
 ) {
     match event {
@@ -1046,7 +1046,7 @@ fn learn_peer_address(
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     address: Multiaddr,
-    discovery: DiscoveryConfig,
+    discovery: &DiscoveryConfig,
 ) {
     if peer == *swarm.local_peer_id() {
         return;
@@ -1338,6 +1338,7 @@ mod tests {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: true,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,
         };

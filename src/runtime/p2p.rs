@@ -89,13 +89,15 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let bootstrap_peer_addresses = config.bootstrap_peers.clone();
     let configured_peer_addresses = config.known_peers.clone();
 
-    let discovery = config.discovery;
+    let discovery = config.discovery.clone();
+    let behaviour_discovery = discovery.clone();
     let relay_server = config.relay_server;
     let relay_resources = config.relay_resources;
     let resources = config.resources;
     let mtu = config.mtu;
     let control_streams = config.max_concurrent_control_streams;
     let packet_streams = config.max_concurrent_packet_streams;
+    let kademlia_protocol = kademlia_stream_protocol(&discovery.kademlia_protocol)?;
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -110,14 +112,14 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
             |keypair, relay| -> Result<Behaviour, Box<dyn Error + Send + Sync>> {
                 let local_peer_id = keypair.public().to_peer_id();
                 let store = kad::store::MemoryStore::new(local_peer_id);
-                let kad_config = kad::Config::new(libp2p::StreamProtocol::new("/p2p-vpn/kad/1"));
+                let kad_config = kad::Config::new(kademlia_protocol);
                 let mut kad = kad::Behaviour::with_config(local_peer_id, store, kad_config);
-                if discovery.kademlia {
+                if behaviour_discovery.kademlia {
                     kad.set_mode(Some(kad::Mode::Server));
                 } else {
                     kad.set_mode(Some(kad::Mode::Client));
                 }
-                let mdns = if discovery.mdns {
+                let mdns = if behaviour_discovery.mdns {
                     Some(mdns::tokio::Behaviour::new(
                         mdns::Config::default(),
                         local_peer_id,
@@ -142,11 +144,11 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                             relay::Behaviour::new(local_peer_id, relay_resources.to_libp2p_config())
                         })
                         .into(),
-                    dcutr: discovery
+                    dcutr: behaviour_discovery
                         .dcutr
                         .then(|| dcutr::Behaviour::new(local_peer_id))
                         .into(),
-                    autonat: discovery
+                    autonat: behaviour_discovery
                         .autonat
                         .then(|| autonat::Behaviour::new(local_peer_id, autonat::Config::default()))
                         .into(),
@@ -170,7 +172,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     Ok(P2pNode {
         local_peer_id,
         swarm,
-        discovery: config.discovery,
+        discovery,
         kademlia_rendezvous_key,
         bootstrap_peer_addresses,
         configured_peer_addresses,
@@ -263,6 +265,11 @@ pub fn kademlia_rendezvous_key(network_name: &str) -> kad::RecordKey {
     kad::RecordKey::new(&format!("/p2p-vpn/{network_name}/providers/1"))
 }
 
+fn kademlia_stream_protocol(protocol: &str) -> Result<libp2p::StreamProtocol, P2pBuildError> {
+    libp2p::StreamProtocol::try_from_owned(protocol.to_owned())
+        .map_err(|_| P2pBuildError::InvalidKademliaProtocol(protocol.to_owned()))
+}
+
 fn decode_keypair(encoded: &str) -> Result<Keypair, IdentityError> {
     let identity = NodeIdentity::from_private_key(encoded)?;
     let bytes = base64::Engine::decode(
@@ -296,6 +303,7 @@ pub enum P2pBuildError {
     KadStore(kad::store::Error),
     Multiaddr(libp2p::multiaddr::Error),
     InvalidP2pAddress(Box<Multiaddr>),
+    InvalidKademliaProtocol(String),
 }
 
 impl From<IdentityError> for P2pBuildError {
@@ -397,6 +405,7 @@ mod tests {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,
         };
@@ -415,7 +424,7 @@ mod tests {
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
-            discovery,
+            discovery: discovery.clone(),
         })
         .expect("node should build");
 
@@ -429,6 +438,65 @@ mod tests {
         assert!(!node.swarm.behaviour().mdns.is_enabled());
         assert!(!node.swarm.behaviour().dcutr.is_enabled());
         assert!(!node.swarm.behaviour().autonat.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn build_node_accepts_ipfs_compatible_kademlia_protocol() {
+        let discovery = DiscoveryConfig {
+            kademlia_protocol: "/ipfs/kad/1.0.0".to_owned(),
+            ..DiscoveryConfig::default()
+        };
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("node should build");
+
+        assert_eq!(node.discovery.kademlia_protocol, "/ipfs/kad/1.0.0");
+        assert!(node.startup.kademlia.rendezvous_advertise_started);
+        assert!(node.startup.kademlia.rendezvous_lookup_started);
+    }
+
+    #[tokio::test]
+    async fn build_node_rejects_invalid_kademlia_protocol() {
+        let result = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: "ipfs/kad/1.0.0".to_owned(),
+                ..DiscoveryConfig::default()
+            },
+        });
+
+        assert!(matches!(
+            result,
+            Err(P2pBuildError::InvalidKademliaProtocol(protocol))
+                if protocol == "ipfs/kad/1.0.0"
+        ));
     }
 
     #[tokio::test]
@@ -699,6 +767,7 @@ mod tests {
         let discovery = DiscoveryConfig {
             mdns: false,
             kademlia: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
             dcutr: false,
             autonat: false,
         };
@@ -716,7 +785,7 @@ mod tests {
             relay_server: true,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
-            discovery,
+            discovery: discovery.clone(),
         })
         .expect("relay node");
         let relay_address = next_listen_address(&mut relay.swarm).await;
@@ -742,7 +811,7 @@ mod tests {
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
-            discovery,
+            discovery: discovery.clone(),
         })
         .expect("listener node");
         let listener_peer = listener.local_peer_id;
