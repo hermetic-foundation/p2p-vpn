@@ -174,7 +174,11 @@ pub async fn run_node(
                     .tick()
                     .await;
             }, if metrics_tick.is_some() => {
-                print_metrics(&metrics, queues.total_stats());
+                print_metrics(
+                    &metrics,
+                    queues.total_stats(),
+                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                );
             }
         }
     }
@@ -1093,11 +1097,25 @@ fn discovered_address_target(address: &Multiaddr) -> Option<Libp2pPeerId> {
     }
 }
 
-fn print_metrics(metrics: &RuntimeMetrics, queue: crate::queue::QueueStats) {
+fn print_metrics(
+    metrics: &RuntimeMetrics,
+    queue: crate::queue::QueueStats,
+    path: crate::path::PathRuntimeStats,
+) {
     eprintln!("metrics:");
-    for line in metrics.snapshot(queue).lines() {
+    for line in metrics.snapshot_with_paths(queue, path).lines() {
         eprintln!("  {line}");
     }
+}
+
+fn runtime_path_stats(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+) -> crate::path::PathRuntimeStats {
+    paths.runtime_stats_for_peers(forwarder.configured_overlay_peers(), |peer| {
+        packet_transport_support(peer_capabilities, peer)
+    })
 }
 
 fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
@@ -1988,6 +2006,67 @@ mod tests {
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+    }
+
+    #[test]
+    fn runtime_path_stats_report_supported_and_blocked_configured_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let stream_peer = peer_id();
+        let datagram_peer = peer_id();
+        let stream_overlay = PeerId::from_libp2p(stream_peer);
+        let datagram_overlay = PeerId::from_libp2p(datagram_peer);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![
+                PeerConfig {
+                    id: stream_peer.to_string(),
+                    name: None,
+                    addresses: Vec::new(),
+                    routes: Vec::new(),
+                },
+                PeerConfig {
+                    id: datagram_peer.to_string(),
+                    name: None,
+                    addresses: Vec::new(),
+                    routes: Vec::new(),
+                },
+            ],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(stream_overlay, PathKind::DirectQuicStream);
+        paths.record_established(datagram_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(stream_overlay, ControlCapabilities::local(1280));
+        let mut datagram_capabilities = ControlCapabilities::local(1280);
+        datagram_capabilities.supports_quic_datagrams = true;
+        peer_capabilities.record(datagram_overlay, datagram_capabilities);
+
+        let stats = runtime_path_stats(&forwarder, &paths, &peer_capabilities);
+
+        assert_eq!(stats.healthy_direct_quic_datagram_paths, 1);
+        assert_eq!(stats.healthy_direct_quic_stream_paths, 1);
+        assert_eq!(stats.peers_with_supported_path, 1);
+        assert_eq!(stats.peers_without_supported_path, 1);
     }
 
     #[test]

@@ -60,6 +60,16 @@ pub struct PathSet {
     candidates: Vec<PathCandidate>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PathRuntimeStats {
+    pub healthy_direct_quic_datagram_paths: u64,
+    pub healthy_direct_quic_stream_paths: u64,
+    pub healthy_direct_tcp_stream_paths: u64,
+    pub healthy_relay_paths: u64,
+    pub peers_with_supported_path: u64,
+    pub peers_without_supported_path: u64,
+}
+
 impl PathSet {
     #[must_use]
     pub const fn new() -> Self {
@@ -151,6 +161,33 @@ impl PathSet {
     #[must_use]
     pub fn has_supported_path(&self, peer: PeerId, support: PathTransportSupport) -> bool {
         self.best_supported_for(peer, support).is_some()
+    }
+
+    #[must_use]
+    pub fn runtime_stats_for_peers(
+        &self,
+        peers: impl IntoIterator<Item = PeerId>,
+        mut support_for_peer: impl FnMut(PeerId) -> PathTransportSupport,
+    ) -> PathRuntimeStats {
+        let mut stats = PathRuntimeStats::default();
+        for candidate in self.candidates.iter().filter(|candidate| candidate.healthy) {
+            match candidate.kind {
+                PathKind::DirectQuicDatagram => stats.healthy_direct_quic_datagram_paths += 1,
+                PathKind::DirectQuicStream => stats.healthy_direct_quic_stream_paths += 1,
+                PathKind::DirectTcpStream => stats.healthy_direct_tcp_stream_paths += 1,
+                PathKind::CircuitRelay => stats.healthy_relay_paths += 1,
+            }
+        }
+
+        for peer in peers {
+            if self.has_supported_path(peer, support_for_peer(peer)) {
+                stats.peers_with_supported_path += 1;
+            } else {
+                stats.peers_without_supported_path += 1;
+            }
+        }
+
+        stats
     }
 }
 
@@ -264,6 +301,34 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn runtime_stats_report_healthy_paths_and_supported_peers() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::DirectQuicStream);
+        paths.record_established(peer(2), PathKind::CircuitRelay);
+        paths.record_established(peer(3), PathKind::DirectQuicDatagram);
+        paths.record_closed(peer(2), PathKind::CircuitRelay);
+
+        let stats =
+            paths.runtime_stats_for_peers([peer(1), peer(2), peer(3), peer(4)], |candidate_peer| {
+                PathTransportSupport {
+                    quic_datagrams: candidate_peer == peer(3),
+                }
+            });
+
+        assert_eq!(
+            stats,
+            PathRuntimeStats {
+                healthy_direct_quic_datagram_paths: 1,
+                healthy_direct_quic_stream_paths: 1,
+                healthy_direct_tcp_stream_paths: 0,
+                healthy_relay_paths: 0,
+                peers_with_supported_path: 2,
+                peers_without_supported_path: 2,
+            }
+        );
     }
 
     #[test]

@@ -160,6 +160,10 @@ impl Forwarder {
         self.peers.values().any(|configured| *configured == peer)
     }
 
+    pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.peers.keys().copied()
+    }
+
     fn packet_frame(&self, packet: &Packet) -> Result<Frame, ForwardError> {
         Ok(Frame::packet(
             self.session_id,

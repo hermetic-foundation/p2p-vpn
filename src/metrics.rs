@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::queue::QueueStats;
+use crate::{path::PathRuntimeStats, queue::QueueStats};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketDropReason {
@@ -295,8 +295,18 @@ impl RuntimeMetrics {
 
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
+        self.snapshot_with_paths(queue, PathRuntimeStats::default())
+    }
+
+    #[must_use]
+    pub fn snapshot_with_paths(
+        &self,
+        queue: QueueStats,
+        path: PathRuntimeStats,
+    ) -> RuntimeSnapshot {
         let mut snapshot = RuntimeSnapshot {
             queue,
+            path,
             ..RuntimeSnapshot::default()
         };
         self.fill_packet_snapshot(&mut snapshot);
@@ -477,6 +487,7 @@ pub struct RuntimeSnapshot {
     pub discovered_addresses_rejected: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
     pub queue: QueueStats,
+    pub path: PathRuntimeStats,
 }
 
 impl RuntimeSnapshot {
@@ -591,6 +602,27 @@ impl RuntimeSnapshot {
             format!(
                 "outbound_queue_blocked_no_supported_path_events {}",
                 self.outbound_queue_blocked_no_supported_path_events
+            ),
+            format!(
+                "path_healthy_direct_quic_datagram_paths {}",
+                self.path.healthy_direct_quic_datagram_paths
+            ),
+            format!(
+                "path_healthy_direct_quic_stream_paths {}",
+                self.path.healthy_direct_quic_stream_paths
+            ),
+            format!(
+                "path_healthy_direct_tcp_stream_paths {}",
+                self.path.healthy_direct_tcp_stream_paths
+            ),
+            format!("path_healthy_relay_paths {}", self.path.healthy_relay_paths),
+            format!(
+                "path_peers_with_supported_path {}",
+                self.path.peers_with_supported_path
+            ),
+            format!(
+                "path_peers_without_supported_path {}",
+                self.path.peers_without_supported_path
             ),
             format!("queue_queued_packets {}", self.queue.queued_packets),
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
@@ -717,14 +749,24 @@ mod tests {
         metrics.record_discovered_address_rejected();
         metrics.record_outbound_queue_blocked_no_supported_path();
 
-        metrics.snapshot(QueueStats {
-            queued_packets: 2,
-            queued_bytes: 80,
-            dropped_packets: 3,
-            dropped_bytes: 120,
-            expired_packets: 2,
-            expired_bytes: 60,
-        })
+        metrics.snapshot_with_paths(
+            QueueStats {
+                queued_packets: 2,
+                queued_bytes: 80,
+                dropped_packets: 3,
+                dropped_bytes: 120,
+                expired_packets: 2,
+                expired_bytes: 60,
+            },
+            PathRuntimeStats {
+                healthy_direct_quic_datagram_paths: 1,
+                healthy_direct_quic_stream_paths: 2,
+                healthy_direct_tcp_stream_paths: 3,
+                healthy_relay_paths: 4,
+                peers_with_supported_path: 5,
+                peers_without_supported_path: 6,
+            },
+        )
     }
 
     fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
@@ -784,6 +826,12 @@ mod tests {
         assert_eq!(snapshot.redial_failures, 1);
         assert_eq!(snapshot.discovered_addresses_rejected, 1);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
+        assert_eq!(snapshot.path.healthy_direct_quic_datagram_paths, 1);
+        assert_eq!(snapshot.path.healthy_direct_quic_stream_paths, 2);
+        assert_eq!(snapshot.path.healthy_direct_tcp_stream_paths, 3);
+        assert_eq!(snapshot.path.healthy_relay_paths, 4);
+        assert_eq!(snapshot.path.peers_with_supported_path, 5);
+        assert_eq!(snapshot.path.peers_without_supported_path, 6);
     }
 
     #[test]
@@ -826,6 +874,12 @@ mod tests {
             &snapshot,
             "outbound_queue_blocked_no_supported_path_events 1",
         );
+        assert_metric_line(&snapshot, "path_healthy_direct_quic_datagram_paths 1");
+        assert_metric_line(&snapshot, "path_healthy_direct_quic_stream_paths 2");
+        assert_metric_line(&snapshot, "path_healthy_direct_tcp_stream_paths 3");
+        assert_metric_line(&snapshot, "path_healthy_relay_paths 4");
+        assert_metric_line(&snapshot, "path_peers_with_supported_path 5");
+        assert_metric_line(&snapshot, "path_peers_without_supported_path 6");
         assert_metric_line(&snapshot, "queue_expired_packets 2");
         assert_metric_line(&snapshot, "queue_expired_bytes 60");
     }
