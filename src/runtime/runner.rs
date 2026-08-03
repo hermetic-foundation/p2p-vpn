@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use futures::StreamExt as _;
 use libp2p::{
@@ -86,6 +86,7 @@ pub async fn run_node(
     );
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
+    let mut discovered_peer_addresses = DiscoveredPeerAddresses::default();
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let mut redial_tick = tokio::time::interval(REDIAL_INTERVAL);
     let mut queue_expiry_tick =
@@ -137,6 +138,7 @@ pub async fn run_node(
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
+                        discovered_peer_addresses: &mut discovered_peer_addresses,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
                         discovery,
@@ -146,7 +148,13 @@ pub async fn run_node(
                 drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &paths, &peer_capabilities, &metrics);
             }
             _ = redial_tick.tick() => {
-                redial_configured_addresses(&mut node.swarm, &node.bootstrap_peer_addresses, &node.configured_peer_addresses, &metrics);
+                redial_known_addresses(
+                    &mut node.swarm,
+                    &node.bootstrap_peer_addresses,
+                    &node.configured_peer_addresses,
+                    discovered_peer_addresses.as_slice(),
+                    &metrics,
+                );
             }
             _ = queue_expiry_tick.tick() => {
                 expire_outbound_queue(&mut queues);
@@ -172,10 +180,11 @@ fn expire_outbound_queue(queues: &mut PeerQueues) {
     queues.drop_expired(std::time::Instant::now());
 }
 
-fn redial_configured_addresses(
+fn redial_known_addresses(
     swarm: &mut Swarm<Behaviour>,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     metrics: &RuntimeMetrics,
 ) {
     let local_peer = *swarm.local_peer_id();
@@ -183,6 +192,7 @@ fn redial_configured_addresses(
         local_peer,
         bootstrap_addresses,
         configured_peer_addresses,
+        discovered_peer_addresses,
         |peer| swarm.is_connected(peer),
     );
 
@@ -204,19 +214,25 @@ fn pending_redial_targets(
     local_peer: Libp2pPeerId,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
 ) -> RedialTargets {
     let mut addresses = Vec::new();
     let mut skipped_connected = 0;
+    let mut seen = HashSet::new();
     for (peer, address) in bootstrap_addresses
         .iter()
         .chain(configured_peer_addresses.iter())
+        .chain(discovered_peer_addresses.iter())
     {
         if *peer == local_peer {
             continue;
         }
         if is_connected(peer) {
             skipped_connected += 1;
+            continue;
+        }
+        if !seen.insert((*peer, address.clone())) {
             continue;
         }
         addresses.push((*peer, address.clone()));
@@ -231,6 +247,31 @@ fn pending_redial_targets(
 struct RedialTargets {
     addresses: Vec<(Libp2pPeerId, Multiaddr)>,
     skipped_connected: usize,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct DiscoveredPeerAddresses {
+    addresses: Vec<(Libp2pPeerId, Multiaddr)>,
+}
+
+impl DiscoveredPeerAddresses {
+    fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) {
+        let entry = (peer, address);
+        if !self.addresses.contains(&entry) {
+            self.addresses.push(entry);
+        }
+    }
+
+    fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) {
+        self.addresses
+            .retain(|(candidate_peer, candidate_address)| {
+                *candidate_peer != peer || candidate_address != address
+            });
+    }
+
+    fn as_slice(&self) -> &[(Libp2pPeerId, Multiaddr)] {
+        &self.addresses
+    }
 }
 
 fn spawn_tun_reader(
@@ -287,6 +328,7 @@ struct SwarmEventContext<'a> {
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
+    discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
     discovery: DiscoveryConfig,
@@ -308,6 +350,7 @@ fn handle_swarm_event(
             handle_behaviour_event(
                 swarm,
                 context.forwarder,
+                context.discovered_peer_addresses,
                 context.metrics,
                 context.discovery,
                 event,
@@ -606,6 +649,7 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
 fn handle_behaviour_event(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
     discovery: DiscoveryConfig,
     event: BehaviourEvent,
@@ -613,19 +657,34 @@ fn handle_behaviour_event(
     match event {
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if discovery.mdns => {
             for (peer, address) in peers {
-                learn_peer_address(swarm, forwarder, peer, address, discovery.kademlia);
+                learn_peer_address(
+                    swarm,
+                    forwarder,
+                    discovered_peer_addresses,
+                    peer,
+                    address,
+                    discovery.kademlia,
+                );
             }
         }
-        BehaviourEvent::Mdns(mdns::Event::Expired(peers))
-            if discovery.mdns && discovery.kademlia =>
-        {
+        BehaviourEvent::Mdns(mdns::Event::Expired(peers)) if discovery.mdns => {
             for (peer, address) in peers {
-                swarm.behaviour_mut().kad.remove_address(&peer, &address);
+                discovered_peer_addresses.remove(peer, &address);
+                if discovery.kademlia {
+                    swarm.behaviour_mut().kad.remove_address(&peer, &address);
+                }
             }
         }
         BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             for address in info.listen_addrs {
-                learn_peer_address(swarm, forwarder, peer_id, address, discovery.kademlia);
+                learn_peer_address(
+                    swarm,
+                    forwarder,
+                    discovered_peer_addresses,
+                    peer_id,
+                    address,
+                    discovery.kademlia,
+                );
             }
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
@@ -737,6 +796,7 @@ fn handle_relay_event(metrics: &RuntimeMetrics, event: &relay::client::Event) {
 fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     peer: Libp2pPeerId,
     address: Multiaddr,
     add_to_kademlia: bool,
@@ -747,6 +807,8 @@ fn learn_peer_address(
     if !forwarder.is_configured_transport_peer(peer) {
         return;
     }
+
+    discovered_peer_addresses.insert(peer, address.clone());
 
     if add_to_kademlia {
         swarm
@@ -951,6 +1013,7 @@ mod tests {
             local,
             &[(connected, bootstrap_address)],
             &[(disconnected, peer_address.clone()), (local, local_address)],
+            &[],
             |peer| *peer == connected,
         );
 
@@ -975,6 +1038,7 @@ mod tests {
             local,
             &[(bootstrap, bootstrap_address.clone())],
             &[(configured, peer_address.clone())],
+            &[],
             |_| false,
         );
 
@@ -985,6 +1049,78 @@ mod tests {
                 skipped_connected: 0,
             }
         );
+    }
+
+    #[test]
+    fn redial_targets_include_discovered_peer_addresses() {
+        let local = peer_id();
+        let configured = peer_id();
+        let discovered = peer_id();
+        let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let discovered_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+
+        let targets = pending_redial_targets(
+            local,
+            &[],
+            &[(configured, configured_address.clone())],
+            &[(discovered, discovered_address.clone())],
+            |_| false,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![
+                    (configured, configured_address),
+                    (discovered, discovered_address),
+                ],
+                skipped_connected: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn redial_targets_deduplicate_discovered_addresses() {
+        let local = peer_id();
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        let targets = pending_redial_targets(
+            local,
+            &[(peer, address.clone())],
+            &[],
+            &[(peer, address.clone())],
+            |_| false,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![(peer, address)],
+                skipped_connected: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn discovered_peer_addresses_are_unique_and_expirable() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let other_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let mut discovered = DiscoveredPeerAddresses::default();
+
+        discovered.insert(peer, address.clone());
+        discovered.insert(peer, address.clone());
+        discovered.insert(peer, other_address.clone());
+
+        assert_eq!(
+            discovered.as_slice(),
+            &[(peer, address.clone()), (peer, other_address.clone())]
+        );
+
+        discovered.remove(peer, &address);
+
+        assert_eq!(discovered.as_slice(), &[(peer, other_address)]);
     }
 
     #[test]

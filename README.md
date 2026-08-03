@@ -73,8 +73,10 @@ configured age of zero is treated as a one millisecond effective age.
 Configured bootstrap and peer addresses are redialed periodically when they are
 not already connected. This keeps the overlay trying to recover after transient
 network loss instead of depending on a one-shot startup dial or a future
-discovery event. Redial attempts, connected-peer skips, and failures are exposed
-in the runtime metrics output.
+discovery event. Addresses learned from mDNS or identify are retained only for
+configured peers and are included in the same periodic redial loop; mDNS-expired
+addresses are removed from that transient address book. Redial attempts,
+connected-peer skips, and failures are exposed in the runtime metrics output.
 
 Resource limits are part of the overlay config. The packet request-response
 fallback has a bounded concurrent stream limit, exposed through `resources`, so
