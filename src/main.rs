@@ -1277,11 +1277,13 @@ fn push_configured_path_lines(lines: &mut Vec<String>, config: &Config) -> Resul
         for address in &peer.addresses {
             let kind = path_kind_for_multiaddr(address)?;
             candidate_count = candidate_count.saturating_add(1);
+            let estimated_mtu = configured_path_mtu_estimate(kind, config.effective_packet_mtu());
             lines.push(format!(
-                "peer path candidate: {} {} score {} address {}",
+                "peer path candidate: {} {} score {} estimated_mtu {} address {}",
                 peer.id,
                 path_name(kind),
                 kind.default_score(),
+                estimated_mtu,
                 address
             ));
         }
@@ -1322,16 +1324,34 @@ fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus)
         .unwrap_or(PathKind::DirectQuicStream);
     let path_probe_ready =
         !preferred_path.requires_quic_datagrams() || status.service.supports_quic_datagrams;
+    let estimated_path_mtu =
+        configured_path_mtu_estimate(preferred_path, status.service.effective_mtu);
 
     lines.push(format!(
-        "peer live path: {} reachable preferred {} score {} mtu {} quic_datagrams {} path_probe_ready {}",
+        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} path_probe_ready {}",
         status.peer,
         path_name(preferred_path),
         preferred_path.default_score(),
         status.service.effective_mtu,
+        estimated_path_mtu,
         status.service.supports_quic_datagrams,
         path_probe_ready
     ));
+}
+
+const fn configured_path_mtu_estimate(kind: PathKind, mtu: u16) -> u16 {
+    match kind {
+        PathKind::CircuitRelay => {
+            if mtu < 1_200 {
+                mtu
+            } else {
+                1_200
+            }
+        }
+        PathKind::DirectQuicDatagram | PathKind::DirectQuicStream | PathKind::DirectTcpStream => {
+            mtu
+        }
+    }
 }
 
 fn path_kind_for_multiaddr(address: &str) -> Result<PathKind, String> {
@@ -2153,12 +2173,12 @@ mod tests {
         );
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer path candidate: {} direct QUIC stream score 75 address /ip4/127.0.0.1/udp/4001/quic-v1",
+                "peer path candidate: {} direct QUIC stream score 75 estimated_mtu 1280 address /ip4/127.0.0.1/udp/4001/quic-v1",
                 remote.peer_id
             )));
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer path candidate: {} direct TCP stream score 60 address /ip4/127.0.0.1/tcp/4001",
+                "peer path candidate: {} direct TCP stream score 60 estimated_mtu 1280 address /ip4/127.0.0.1/tcp/4001",
                 remote.peer_id
             )));
         assert!(lines.iter().any(|line| line
@@ -2168,7 +2188,7 @@ mod tests {
             )));
         assert!(lines.iter().any(|line| {
             line.starts_with(&format!(
-                "peer path candidate: {} circuit relay score 30 address ",
+                "peer path candidate: {} circuit relay score 30 estimated_mtu 1200 address ",
                 remote.peer_id
             ))
         }));
@@ -2193,7 +2213,7 @@ mod tests {
 
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 quic_datagrams false path_probe_ready false"
+                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false path_probe_ready false"
             )));
     }
 

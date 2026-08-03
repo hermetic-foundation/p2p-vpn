@@ -5,6 +5,7 @@ pub struct PathCandidate {
     pub peer: PeerId,
     pub kind: PathKind,
     pub observed_rtt_ms: Option<u16>,
+    pub estimated_mtu: Option<u16>,
     pub relay: bool,
     pub healthy: bool,
     pub established_connections: u32,
@@ -17,10 +18,23 @@ impl PathCandidate {
             peer,
             kind,
             observed_rtt_ms: None,
+            estimated_mtu: None,
             relay: matches!(kind, PathKind::CircuitRelay),
             healthy: true,
             established_connections: 0,
         }
+    }
+
+    #[must_use]
+    pub const fn with_estimated_mtu(mut self, mtu: u16) -> Self {
+        self.estimated_mtu = Some(mtu);
+        self
+    }
+
+    #[must_use]
+    pub fn effective_mtu(self, fallback_mtu: u16) -> u16 {
+        self.estimated_mtu
+            .map_or(fallback_mtu, |mtu| mtu.min(fallback_mtu))
     }
 
     #[must_use]
@@ -133,15 +147,28 @@ impl PathSet {
     }
 
     pub fn record_established(&mut self, peer: PeerId, kind: PathKind) {
+        self.record_established_with_mtu(peer, kind, None);
+    }
+
+    pub fn record_established_with_mtu(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        estimated_mtu: Option<u16>,
+    ) {
         if let Some(candidate) = self
             .candidates
             .iter_mut()
             .find(|candidate| candidate.peer == peer && candidate.kind == kind)
         {
             candidate.healthy = true;
+            if let Some(estimated_mtu) = estimated_mtu {
+                candidate.estimated_mtu = Some(estimated_mtu);
+            }
             candidate.established_connections = candidate.established_connections.saturating_add(1);
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
+            candidate.estimated_mtu = estimated_mtu;
             candidate.established_connections = 1;
             self.candidates.push(candidate);
         }
@@ -308,6 +335,28 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn records_and_updates_path_mtu_estimates() {
+        let mut paths = PathSet::new();
+
+        paths.record_established_with_mtu(peer(1), PathKind::DirectTcpStream, Some(1200));
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.estimated_mtu),
+            Some(Some(1200))
+        );
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.effective_mtu(1280)),
+            Some(1200)
+        );
+
+        paths.record_established_with_mtu(peer(1), PathKind::DirectTcpStream, Some(1180));
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.estimated_mtu),
+            Some(Some(1180))
+        );
     }
 
     #[test]

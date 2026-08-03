@@ -373,7 +373,7 @@ fn send_path_probes(
             continue;
         }
 
-        let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+        let peer_mtu = selected_path_mtu(paths, peer_capabilities, peer, local_mtu);
         match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD) {
             Ok(_) => metrics.record_outbound_path_probe_sent(),
             Err(error) => {
@@ -518,12 +518,18 @@ fn extend_runtime_peer_state_lines(
         .count();
 
     lines.push(format!(
-        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} selected_path {} selected_path_score {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} selected_path {} selected_path_score {} selected_path_mtu {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
         peer_capabilities.contains(peer),
         peer_capabilities.effective_mtu_for(peer, local_mtu),
         support.quic_datagrams,
         selected_path.map_or("none", |path| path.kind.wire_name()),
         selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
+        selected_path.map_or_else(
+            || "none".to_owned(),
+            |path| path
+                .effective_mtu(peer_capabilities.effective_mtu_for(peer, local_mtu))
+                .to_string()
+        ),
     ));
 
     if let Some(capabilities) = peer_capabilities.get(peer) {
@@ -535,13 +541,18 @@ fn extend_runtime_peer_state_lines(
     }
 
     for candidate in candidates {
+        let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {}",
+            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {} estimated_mtu {} effective_mtu {}",
             candidate.kind.wire_name(),
             candidate.healthy,
             candidate.relay,
             candidate.established_connections,
-            candidate.score()
+            candidate.score(),
+            candidate
+                .estimated_mtu
+                .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
+            candidate.effective_mtu(peer_mtu)
         ));
     }
 }
@@ -1038,7 +1049,9 @@ fn drain_outbound_queue(
                 packet_transport_support(context.peer_capabilities, peer),
             )
     }) {
-        let peer_mtu = context.peer_capabilities.effective_mtu_for(
+        let peer_mtu = selected_path_mtu(
+            context.paths,
+            context.peer_capabilities,
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
@@ -1747,7 +1760,15 @@ fn record_path_established(
         return;
     }
 
-    paths.record_established(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+    let kind = path_kind_for_endpoint(endpoint);
+    paths.record_established_with_mtu(
+        PeerId::from_libp2p(peer),
+        kind,
+        Some(initial_path_mtu(
+            kind,
+            u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
+        )),
+    );
 }
 
 fn record_path_closed(
@@ -2134,6 +2155,33 @@ fn runtime_path_stats(
     })
 }
 
+fn selected_path_mtu(
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+    local_mtu: u16,
+) -> u16 {
+    let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+    paths
+        .best_supported_for(peer, packet_transport_support(peer_capabilities, peer))
+        .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu))
+}
+
+const fn initial_path_mtu(kind: PathKind, local_mtu: u16) -> u16 {
+    match kind {
+        PathKind::CircuitRelay => {
+            if local_mtu < 1_200 {
+                local_mtu
+            } else {
+                1_200
+            }
+        }
+        PathKind::DirectQuicDatagram | PathKind::DirectQuicStream | PathKind::DirectTcpStream => {
+            local_mtu
+        }
+    }
+}
+
 fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
     match error {
         ForwardError::NoRoute(_) => PacketDropReason::NoRoute,
@@ -2382,7 +2430,7 @@ mod tests {
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 healthy_paths 1 direct_paths 1 relay_paths 0"
+                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
             )
         }));
         assert!(lines.iter().any(|line| {
@@ -2392,7 +2440,7 @@ mod tests {
         }));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer path state: {remote_overlay} direct_tcp_stream healthy true relay false established_connections 1 score 60"
+                "peer path state: {remote_overlay} direct_tcp_stream healthy true relay false established_connections 1 score 60 estimated_mtu unknown effective_mtu 1200"
             )
         }));
     }
@@ -4195,6 +4243,94 @@ mod tests {
         paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 19));
+        let metrics = RuntimeMetrics::default();
+
+        drain_outbound_queue(
+            &mut node.swarm,
+            &forwarder,
+            &mut queues,
+            &queue_drain_context(&paths, &peer_capabilities, &metrics),
+        );
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 1);
+        assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_respects_selected_path_mtu() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(19));
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
         let metrics = RuntimeMetrics::default();
 
         drain_outbound_queue(

@@ -108,6 +108,12 @@ while that peer has a healthy path that the negotiated packet transport can use.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames over the packet protocol, giving operators liveness
 traffic that does not depend on user IP packets.
+Each active path also carries an MTU estimate. Direct paths start at the local
+effective packet MTU, while circuit-relay paths start at a conservative 1200
+byte estimate. Outbound queue draining and path probes use the selected path's
+estimate as an additional ceiling below the peer-advertised effective MTU, so
+an oversized packet is dropped predictably instead of being pushed onto a path
+that is known to be smaller.
 Until native datagram sending is implemented, datagram-only paths do not release
 packets into the stream fallback. Packets for disconnected peers remain bounded
 by the per-peer queue limits instead of expanding into unbounded stream requests.
@@ -484,12 +490,13 @@ cargo run -- paths --config p2p-vpn.json --live --timeout-seconds 10
 
 `paths` classifies configured peer dial addresses as direct QUIC stream, direct
 TCP stream, or circuit relay paths, shows their default promotion scores, and
-marks addressless peers that depend on mDNS or Kademlia discovery. Live mode
-queries each configured peer's validated control and service status and reports
-its preferred packet path, effective MTU, QUIC datagram support, and whether the
-current capability set can carry path probes. Active daemon connection counts
-and path-probe counters are still exposed through `metrics` until a daemon
-control socket is added.
+prints the initial MTU estimate for each configured address. Addressless peers
+are marked as depending on mDNS or Kademlia discovery. Live mode queries each
+configured peer's validated control and service status and reports its
+preferred packet path, effective MTU, selected path MTU estimate, QUIC datagram
+support, and whether the current capability set can carry path probes. Active
+daemon connection counts, selected path MTU, and path-probe counters are exposed
+through `daemon-state`.
 
 Inspect the local capability contract or validate configured peers' remote
 capabilities:
@@ -634,7 +641,8 @@ requests. `daemon-status` uses the same line-oriented metric names as `metrics`,
 but comes from the running daemon's current queue and path state instead of a
 startup snapshot. `daemon-state` reports the running daemon's configured peers,
 validated capability state, selected path, healthy direct and relay path counts,
-effective MTU, and path-probe counters.
+effective MTU, selected path MTU, per-candidate path MTU estimates, and
+path-probe counters.
 NixOS instances enable this by default at
 `/run/p2p-vpn-<instance>/control.sock` through a `0750` runtime directory; set
 `services.p2p-vpn.instances.<name>.controlSocket = null` to disable it.
