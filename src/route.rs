@@ -155,6 +155,13 @@ impl RouteTable {
         &self.routes
     }
 
+    pub fn routes_for(&self, owner: PeerId) -> impl Iterator<Item = Route> + '_ {
+        self.routes
+            .iter()
+            .copied()
+            .filter(move |route| route.owner == owner)
+    }
+
     #[must_use]
     pub fn resolve(&self, destination: IpAddr) -> Option<Route> {
         self.routes
@@ -366,6 +373,25 @@ mod tests {
         assert!(table.authorizes_route(peer(7), aggregate));
         assert!(!table.authorizes_route(peer(8), aggregate));
         assert!(!table.authorizes_route(peer(7), more_specific));
+    }
+
+    #[test]
+    fn route_table_lists_routes_for_owner() {
+        let mut table = RouteTable::new();
+        let first = Route {
+            owner: peer(7),
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap(),
+            metric: 10,
+        };
+        let second = Route {
+            owner: peer(8),
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 43, 0, 0)), 16).unwrap(),
+            metric: 10,
+        };
+        table.insert(first);
+        table.insert(second);
+
+        assert_eq!(table.routes_for(peer(7)).collect::<Vec<_>>(), vec![first]);
     }
 
     #[test]

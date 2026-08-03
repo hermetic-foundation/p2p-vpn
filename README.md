@@ -76,13 +76,14 @@ rejected requests return a compact rejection reason such as oversized packet,
 replay, unauthorized peer, unauthorized source, unauthorized destination,
 unexpected payload, or malformed packet instead of relying on request timeout.
 
-Route ownership is static and exclusive. Each configured peer may own its
-built-in host routes plus any advertised prefixes, but route compilation rejects
-overlapping prefixes owned by different peers, including more-specific prefixes
-that would hijack another peer's aggregate route. Runtime route advertisements
-are treated as claims, not as dynamic routing input: advertised prefixes must
-match the local static route table for the authenticated libp2p peer, and the
-local node keeps using its configured route metrics for forwarding decisions.
+Route ownership is static and exclusive. The local node and each configured peer
+own their built-in host routes plus configured route prefixes, but route
+compilation rejects overlapping prefixes owned by different peers, including
+more-specific prefixes that would hijack another peer's aggregate route. Runtime
+route advertisements are treated as claims, not as dynamic routing input:
+advertised prefixes must match the local static route table for the
+authenticated libp2p peer, and the local node keeps using its configured route
+metrics for forwarding decisions.
 
 Outbound packet draining is path-aware. The runtime records direct TCP, direct
 QUIC stream, and circuit-relay paths from libp2p connection events, marks paths
@@ -158,6 +159,7 @@ cargo run -- init-config \
   --membership-key <base64-32-byte-or-longer-secret> \
   --listen-address /ip4/0.0.0.0/tcp/0 \
   --listen-address /ip4/0.0.0.0/udp/0/quic-v1 \
+  --local-route 10.41.0.0/24,100 \
   --external-address /dns4/node-a.example.net/udp/4001/quic-v1
 ```
 
@@ -178,11 +180,13 @@ Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Use the same `--membership-key` value on every node that should join
 the private overlay; it must decode to at least 32 bytes. Repeat
-`--peer PEER_ID=MULTIADDR` for additional peer addresses; repeat
-`--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is allowed to
-originate. The default generated route metric is `100`, preserving the built-in
-host routes at metric `0`. Repeat `--bootstrap-peer PEER_ID=MULTIADDR` for
-Kademlia bootstrap nodes. By default the generated config uses the private
+`--local-route CIDR[,METRIC]` for prefixes this node is allowed to originate
+and advertise. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses,
+and repeat `--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is
+allowed to originate. The default generated route metric is `100`, preserving
+the built-in host routes at metric `0`. Repeat `--bootstrap-peer
+PEER_ID=MULTIADDR` for Kademlia bootstrap nodes. By default the generated
+config uses the private
 `/p2p-vpn/kad/1` Kademlia protocol; pass `--kademlia-protocol /ipfs/kad/1.0.0`
 only when you intentionally want IPFS/public-DHT protocol compatibility with
 your bootstrap peers. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
@@ -223,6 +227,12 @@ cargo test --test tun_namespace -- --ignored --nocapture
     "local_peer": "12D3KooW...",
     "private_key": "CAES...",
     "membership_key": "base64-encoded-32-byte-or-longer-secret",
+    "routes": [
+      {
+        "prefix": "10.41.0.0/24",
+        "metric": 100
+      }
+    ],
     "listen_addresses": [
       "/ip4/0.0.0.0/tcp/0",
       "/ip4/0.0.0.0/udp/0/quic-v1"
@@ -302,6 +312,10 @@ when Kademlia discovery is enabled. TCP and QUIC startup dials support DNS
 multiaddrs, including `/dns4`, `/dns6`, `/dns`, and `/dnsaddr`. Kademlia nodes
 advertise themselves under the network provider key and query that same key for
 other configured peers.
+`network.routes` are local route-ownership claims. The node advertises them in
+the control handshake and accepts outbound TUN packets sourced from those
+prefixes; other peers must configure matching `peer.routes` entries for this
+node before they will accept those packets.
 `discovery.kademlia_protocol` defaults to the private `/p2p-vpn/kad/1`
 protocol. Set it to `/ipfs/kad/1.0.0` only for deployments that explicitly use
 IPFS-compatible public bootstrap peers; those peers help discovery and NAT

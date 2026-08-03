@@ -38,7 +38,13 @@ pub struct TunRuntimeConfig {
 impl TunRuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
         let local_peer = config.local_peer_id()?;
-        let routes = config.compile_routes()?.routes().to_vec();
+        let routes = config
+            .compile_routes()?
+            .routes()
+            .iter()
+            .copied()
+            .filter(|route| route.owner != local_peer)
+            .collect();
 
         Ok(Self {
             name: config.interface.name.clone(),
@@ -228,6 +234,7 @@ mod tests {
                 local_peer: local.to_string(),
                 private_key: None,
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -262,6 +269,7 @@ mod tests {
                 local_peer: peer_hex(1),
                 private_key: None,
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -287,13 +295,21 @@ mod tests {
     }
 
     #[test]
-    fn route_commands_install_ipv6_address_and_peer_routes() {
+    fn runtime_config_installs_only_remote_routes() {
+        let remote = PeerId::from_bytes([
+            2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ]);
         let config = Config {
             network: NetworkConfig {
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
                 membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 100,
+                }],
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -305,7 +321,65 @@ mod tests {
                 mtu: 1280,
             },
             peers: vec![PeerConfig {
-                id: peer_hex(2),
+                id: remote.to_string(),
+                name: Some("node-b".to_owned()),
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 10,
+                }],
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+
+        let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
+        let local = config.local_peer_id().expect("local peer");
+
+        assert!(runtime.routes.iter().all(|route| route.owner != local));
+        assert!(
+            runtime
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.42.0.0/24")
+        );
+        assert!(
+            !runtime
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.41.0.0/24")
+        );
+    }
+
+    #[test]
+    fn route_commands_install_ipv6_address_and_peer_routes() {
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: peer_hex(1),
+                private_key: None,
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: PeerId::from_bytes([
+                    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                ])
+                .to_string(),
                 name: Some("node-b".to_owned()),
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {

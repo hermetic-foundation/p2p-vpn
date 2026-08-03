@@ -41,6 +41,25 @@ impl Config {
 
     pub fn compile_routes(&self) -> Result<RouteTable, ConfigError> {
         let mut table = RouteTable::new();
+        let local_peer = self.local_peer_id()?;
+        table.insert_authorized(Route {
+            owner: local_peer,
+            prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(local_peer)), 32)?,
+            metric: 0,
+        })?;
+        table.insert_authorized(Route {
+            owner: local_peer,
+            prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(local_peer)), 128)?,
+            metric: 0,
+        })?;
+        for route in &self.network.routes {
+            table.insert_authorized(Route {
+                owner: local_peer,
+                prefix: route.prefix()?,
+                metric: route.metric,
+            })?;
+        }
+
         for peer in &self.peers {
             let owner = peer.peer_id()?;
             table.insert_authorized(Route {
@@ -159,6 +178,8 @@ pub struct NetworkConfig {
     pub private_key: Option<String>,
     #[serde(default)]
     pub membership_key: Option<String>,
+    #[serde(default)]
+    pub routes: Vec<RouteConfig>,
     #[serde(default)]
     pub listen_addresses: Vec<String>,
     #[serde(default)]
@@ -395,6 +416,7 @@ pub struct InitConfigTemplate {
     pub identity: NodeIdentity,
     pub network_name: String,
     pub membership_key: Option<String>,
+    pub local_routes: Vec<RouteConfig>,
     pub interface_name: String,
     pub mtu: u16,
     pub listen_addresses: Vec<String>,
@@ -419,6 +441,7 @@ impl InitConfigTemplate {
                 local_peer: self.identity.peer_id,
                 private_key: Some(self.identity.private_key),
                 membership_key: self.membership_key,
+                routes: self.local_routes,
                 listen_addresses: self.listen_addresses,
                 external_addresses: self.external_addresses,
                 bootstrap_peers: self
@@ -863,6 +886,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: Some(key),
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -912,6 +936,10 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 75,
+                }],
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -923,7 +951,7 @@ mod tests {
                 mtu: 1280,
             },
             peers: vec![PeerConfig {
-                id: "0101010101010101010101010101010101010101010101010101010101010101".to_owned(),
+                id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
                 name: Some("one".to_owned()),
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
@@ -936,8 +964,15 @@ mod tests {
         };
 
         let owner = config.peers[0].peer_id().expect("valid peer");
+        let local = config.local_peer_id().expect("valid local peer");
         let table = config.compile_routes().expect("routes should compile");
 
+        assert_eq!(
+            table
+                .resolve(IpAddr::V4(Ipv4Addr::new(10, 41, 0, 1)))
+                .map(|route| route.owner),
+            Some(local)
+        );
         assert_eq!(
             table
                 .resolve(IpAddr::V4(Ipv4Addr::new(10, 42, 7, 1)))
@@ -951,6 +986,51 @@ mod tests {
     }
 
     #[test]
+    fn config_rejects_local_and_peer_route_overlap() {
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/16".to_owned(),
+                    metric: 50,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
+                name: Some("one".to_owned()),
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.9.0/24".to_owned(),
+                    metric: 10,
+                }],
+            }],
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.compile_routes(),
+            Err(ConfigError::Route(RouteError::ConflictingOwnership { .. }))
+        ));
+
+        config.peers[0].routes[0].prefix = "10.43.9.0/24".to_owned();
+        assert!(config.compile_routes().is_ok());
+    }
+
+    #[test]
     fn effective_packet_mtu_is_capped_by_wire_payload_length() {
         let mut config = Config {
             network: NetworkConfig {
@@ -959,6 +1039,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1000,6 +1081,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1033,6 +1115,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1090,6 +1173,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
                 bootstrap_peers: vec![BootstrapPeerConfig {
@@ -1150,6 +1234,7 @@ mod tests {
                 local_peer: identity.peer_id,
                 private_key: Some(other.private_key),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1183,6 +1268,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1238,6 +1324,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: vec![BootstrapPeerConfig {
@@ -1296,6 +1383,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -1355,6 +1443,10 @@ mod tests {
             identity: identity.clone(),
             network_name: "lab".to_owned(),
             membership_key: None,
+            local_routes: vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
             interface_name: "hs-lab".to_owned(),
             mtu: 1_400,
             listen_addresses: vec![
@@ -1410,6 +1502,10 @@ mod tests {
         let rendered = serde_json::to_string_pretty(&config).expect("rendered config");
         let decoded = serde_json::from_str::<Config>(&rendered).expect("decoded config");
 
+        assert_generated_init_config(&decoded, &identity);
+    }
+
+    fn assert_generated_init_config(decoded: &Config, identity: &NodeIdentity) {
         assert_eq!(decoded.network.local_peer, identity.peer_id);
         assert_eq!(
             decoded.network.private_key.as_deref(),
@@ -1417,6 +1513,13 @@ mod tests {
         );
         assert_eq!(decoded.interface.name, "hs-lab");
         assert_eq!(decoded.interface.mtu, 1_400);
+        assert_eq!(
+            decoded.network.routes,
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }]
+        );
         assert_eq!(decoded.network.external_addresses.len(), 1);
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);
         assert!(decoded.network.relay.server);

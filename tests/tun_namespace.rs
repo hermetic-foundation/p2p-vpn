@@ -327,6 +327,7 @@ fn node_config(
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),
             membership_key: None,
+            routes: Vec::new(),
             listen_addresses: vec![listen_address.to_owned()],
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),

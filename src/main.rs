@@ -50,6 +50,8 @@ enum Command {
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long = "peer")]
         peers: Vec<EndpointArg>,
+        #[arg(long = "local-route")]
+        local_routes: Vec<LocalRouteArg>,
         #[arg(long = "peer-route")]
         peer_routes: Vec<PeerRouteArg>,
         #[arg(long = "relay-reservation")]
@@ -104,6 +106,7 @@ async fn main() -> Result<(), String> {
             external_addresses,
             bootstrap_peers,
             peers,
+            local_routes,
             peer_routes,
             relay_reservations,
             relay_server,
@@ -124,6 +127,7 @@ async fn main() -> Result<(), String> {
             external_addresses,
             bootstrap_peers,
             peers,
+            local_routes,
             peer_routes,
             discovery: DiscoveryConfig {
                 mdns: !disable_mdns,
@@ -161,6 +165,7 @@ struct InitConfigArgs {
     external_addresses: Vec<String>,
     bootstrap_peers: Vec<EndpointArg>,
     peers: Vec<EndpointArg>,
+    local_routes: Vec<LocalRouteArg>,
     peer_routes: Vec<PeerRouteArg>,
     discovery: DiscoveryConfig,
     relay: RelayConfig,
@@ -171,6 +176,11 @@ struct InitConfigArgs {
 struct EndpointArg {
     id: String,
     address: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocalRouteArg {
+    route: RouteConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +210,16 @@ impl FromStr for EndpointArg {
     }
 }
 
+impl FromStr for LocalRouteArg {
+    type Err = String;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        Ok(Self {
+            route: parse_route_arg(input, "local route")?,
+        })
+    }
+}
+
 impl FromStr for PeerRouteArg {
     type Err = String;
 
@@ -213,26 +233,31 @@ impl FromStr for PeerRouteArg {
         if route.is_empty() {
             return Err("peer route cannot be empty".to_owned());
         }
-        let (prefix, metric) = if let Some((prefix, metric)) = route.split_once(',') {
-            let metric = metric
-                .parse::<u16>()
-                .map_err(|_| format!("peer route metric `{metric}` is not a u16"))?;
-            (prefix, metric)
-        } else {
-            (route, 100)
-        };
-        if prefix.is_empty() {
-            return Err("peer route prefix cannot be empty".to_owned());
-        }
 
         Ok(Self {
             id: id.to_owned(),
-            route: RouteConfig {
-                prefix: prefix.to_owned(),
-                metric,
-            },
+            route: parse_route_arg(route, "peer route")?,
         })
     }
+}
+
+fn parse_route_arg(input: &str, context: &str) -> Result<RouteConfig, String> {
+    let (prefix, metric) = if let Some((prefix, metric)) = input.split_once(',') {
+        let metric = metric
+            .parse::<u16>()
+            .map_err(|_| format!("{context} metric `{metric}` is not a u16"))?;
+        (prefix, metric)
+    } else {
+        (input, 100)
+    };
+    if prefix.is_empty() {
+        return Err(format!("{context} prefix cannot be empty"));
+    }
+
+    Ok(RouteConfig {
+        prefix: prefix.to_owned(),
+        metric,
+    })
 }
 
 fn keygen() -> Result<(), String> {
@@ -273,6 +298,11 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         identity,
         network_name: args.network,
         membership_key: args.membership_key,
+        local_routes: args
+            .local_routes
+            .into_iter()
+            .map(|route| route.route)
+            .collect(),
         interface_name: args.interface,
         mtu: args.mtu,
         listen_addresses: args.listen_addresses,
@@ -393,6 +423,7 @@ fn status(path: &PathBuf) -> Result<(), String> {
             .map(|peer| peer.addresses.len())
             .sum::<usize>()
     );
+    println!("configured local routes: {}", config.network.routes.len());
     println!(
         "configured peer routes: {}",
         config
@@ -634,6 +665,8 @@ mod tests {
             "/ipfs/kad/1.0.0",
             "--membership-key",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "--local-route",
+            "10.41.0.0/24,75",
             "--peer",
             "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
             "--peer-route",
@@ -643,6 +676,7 @@ mod tests {
 
         let Command::InitConfig {
             peers,
+            local_routes,
             peer_routes,
             kademlia_protocol,
             membership_key,
@@ -657,6 +691,15 @@ mod tests {
             vec![EndpointArg {
                 id: "12D3KooWPeer".to_owned(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+            }]
+        );
+        assert_eq!(
+            local_routes,
+            vec![LocalRouteArg {
+                route: RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 75,
+                },
             }]
         );
         assert_eq!(

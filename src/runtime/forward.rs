@@ -9,7 +9,7 @@ use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError, RouteConfig},
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{IpCidr, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
+    route::{RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
     runtime::{
         control::ControlRoute,
         p2p::Behaviour,
@@ -167,21 +167,10 @@ impl Forwarder {
 
     #[must_use]
     pub fn local_advertised_routes(&self) -> Vec<ControlRoute> {
-        [
-            (
-                IpCidr::new(IpAddr::V4(builtin_ipv4(self.local_peer)), 32)
-                    .expect("built-in IPv4 host prefix is valid"),
-                0,
-            ),
-            (
-                IpCidr::new(IpAddr::V6(builtin_ipv6(self.local_peer)), 128)
-                    .expect("built-in IPv6 host prefix is valid"),
-                0,
-            ),
-        ]
-        .into_iter()
-        .map(|(prefix, metric)| ControlRoute::new(prefix.to_string(), metric))
-        .collect()
+        self.routes
+            .routes_for(self.local_peer)
+            .map(|route| ControlRoute::new(route.prefix.to_string(), route.metric))
+            .collect()
     }
 
     #[must_use]
@@ -242,11 +231,9 @@ impl Forwarder {
     }
 
     fn authorize_local_source(&self, source: IpAddr) -> Result<(), ForwardError> {
-        match source {
-            IpAddr::V4(address) if address == builtin_ipv4(self.local_peer) => Ok(()),
-            IpAddr::V6(address) if address == builtin_ipv6(self.local_peer) => Ok(()),
-            _ => Err(ForwardError::UnauthorizedLocalSource { source }),
-        }
+        self.routes
+            .authorize_source(self.local_peer, source)
+            .map_err(|_| ForwardError::UnauthorizedLocalSource { source })
     }
 
     pub fn accept_inbound_packet<'a>(
@@ -452,6 +439,8 @@ impl From<EnqueueError> for ForwardError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use libp2p::identity::Keypair;
 
     use crate::{
@@ -475,6 +464,7 @@ mod tests {
                     .to_string(),
                 private_key: None,
                 membership_key: None,
+                routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
@@ -585,13 +575,49 @@ mod tests {
         let local = config.local_peer_id().expect("local peer");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
 
-        assert_eq!(
-            forwarder.local_advertised_routes(),
-            vec![
-                ControlRoute::new(format!("{}/32", builtin_ipv4(local)), 0),
-                ControlRoute::new(format!("{}/128", builtin_ipv6(local)), 0),
-            ]
+        let advertised = forwarder.local_advertised_routes();
+        assert!(advertised.contains(&ControlRoute::new(format!("{}/32", builtin_ipv4(local)), 0)));
+        assert!(advertised.contains(&ControlRoute::new(
+            format!("{}/128", builtin_ipv6(local)),
+            0
+        )));
+    }
+
+    #[test]
+    fn local_advertised_routes_include_configured_local_prefixes() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = config_for(remote);
+        config.network.routes.push(RouteConfig {
+            prefix: "10.41.0.0/24".to_owned(),
+            metric: 75,
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(
+            forwarder
+                .local_advertised_routes()
+                .contains(&ControlRoute::new("10.41.0.0/24", 75))
         );
+    }
+
+    #[test]
+    fn outbound_packet_allows_configured_local_route_source() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut config = config_for(remote);
+        config.network.routes.push(RouteConfig {
+            prefix: "10.41.0.0/24".to_owned(),
+            metric: 75,
+        });
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(Ipv4Addr::new(10, 41, 0, 9), builtin_ipv4(remote_overlay));
+
+        let mut queues = PeerQueues::with_packet_ttl(4, 4096, Duration::from_secs(1));
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("configured local source accepted");
+
+        assert_eq!(queues.total_stats().queued_packets, 1);
     }
 
     #[test]
