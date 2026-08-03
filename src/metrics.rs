@@ -31,6 +31,8 @@ pub struct RuntimeMetrics {
     tun_write_bytes: AtomicU64,
     outbound_sent_packets: AtomicU64,
     inbound_accepted_packets: AtomicU64,
+    inbound_keepalives_accepted: AtomicU64,
+    inbound_path_probes_accepted: AtomicU64,
     outbound_dropped_packets: AtomicU64,
     inbound_dropped_packets: AtomicU64,
     outbound_drop_malformed_packets: AtomicU64,
@@ -137,6 +139,16 @@ impl RuntimeMetrics {
 
     pub fn record_inbound_accepted(&self) {
         self.inbound_accepted_packets
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_inbound_keepalive_accepted(&self) {
+        self.inbound_keepalives_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_inbound_path_probe_accepted(&self) {
+        self.inbound_path_probes_accepted
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -546,6 +558,10 @@ impl RuntimeMetrics {
         snapshot.tun_write_bytes = self.tun_write_bytes.load(Ordering::Relaxed);
         snapshot.outbound_sent_packets = self.outbound_sent_packets.load(Ordering::Relaxed);
         snapshot.inbound_accepted_packets = self.inbound_accepted_packets.load(Ordering::Relaxed);
+        snapshot.inbound_keepalives_accepted =
+            self.inbound_keepalives_accepted.load(Ordering::Relaxed);
+        snapshot.inbound_path_probes_accepted =
+            self.inbound_path_probes_accepted.load(Ordering::Relaxed);
         snapshot.outbound_dropped_packets = self.outbound_dropped_packets.load(Ordering::Relaxed);
         snapshot.inbound_dropped_packets = self.inbound_dropped_packets.load(Ordering::Relaxed);
         snapshot.outbound_failures = self.outbound_failures.load(Ordering::Relaxed);
@@ -758,6 +774,8 @@ pub struct RuntimeSnapshot {
     pub tun_write_bytes: u64,
     pub outbound_sent_packets: u64,
     pub inbound_accepted_packets: u64,
+    pub inbound_keepalives_accepted: u64,
+    pub inbound_path_probes_accepted: u64,
     pub outbound_dropped_packets: u64,
     pub inbound_dropped_packets: u64,
     pub outbound_drop_malformed_packets: u64,
@@ -857,6 +875,14 @@ impl RuntimeSnapshot {
             format!("tun_write_bytes {}", self.tun_write_bytes),
             format!("outbound_sent_packets {}", self.outbound_sent_packets),
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
+            format!(
+                "inbound_keepalives_accepted {}",
+                self.inbound_keepalives_accepted
+            ),
+            format!(
+                "inbound_path_probes_accepted {}",
+                self.inbound_path_probes_accepted
+            ),
         ];
         self.extend_drop_lines(&mut lines);
         self.extend_transport_lines(&mut lines);
@@ -1235,6 +1261,8 @@ mod tests {
         metrics.record_tun_write(40);
         metrics.record_outbound_sent();
         metrics.record_inbound_accepted();
+        metrics.record_inbound_keepalive_accepted();
+        metrics.record_inbound_path_probe_accepted();
         metrics.record_outbound_drop(PacketDropReason::NoRoute);
         metrics.record_outbound_drop(PacketDropReason::PacketTooLarge);
         metrics.record_outbound_drop(PacketDropReason::QueueFull);
@@ -1366,6 +1394,8 @@ mod tests {
         assert_eq!(snapshot.tun_write_bytes, 40);
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.inbound_accepted_packets, 1);
+        assert_eq!(snapshot.inbound_keepalives_accepted, 1);
+        assert_eq!(snapshot.inbound_path_probes_accepted, 1);
         assert_eq!(snapshot.outbound_dropped_packets, 6);
         assert_eq!(snapshot.inbound_dropped_packets, 7);
         assert_eq!(snapshot.outbound_drop_no_route_packets, 1);
@@ -1462,6 +1492,8 @@ mod tests {
         let snapshot = populated_snapshot();
 
         assert_metric_line(&snapshot, "queue_queued_packets 2");
+        assert_metric_line(&snapshot, "inbound_keepalives_accepted 1");
+        assert_metric_line(&snapshot, "inbound_path_probes_accepted 1");
         assert_metric_line(&snapshot, "queue_oldest_packet_age_millis 45");
         assert_metric_line(&snapshot, "outbound_drop_no_route_packets 1");
         assert_metric_line(&snapshot, "outbound_drop_packet_too_large_packets 1");

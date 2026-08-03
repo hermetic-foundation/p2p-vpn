@@ -38,6 +38,7 @@ use crate::{
         },
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
     },
+    wire::PayloadType,
 };
 
 const TUN_READ_CHANNEL: usize = 1024;
@@ -750,26 +751,7 @@ fn handle_packet_event(
                 request, channel, ..
             },
             ..
-        } => match context.forwarder.accept_inbound_packet(peer, &request) {
-            Ok(packet) => {
-                context.writer.write_packet(packet)?;
-                context.metrics.record_tun_write(packet.len());
-                context.metrics.record_inbound_accepted();
-                Forwarder::send_packet_response(swarm, channel, PacketResponse::Accepted)
-                    .map_err(|_| RunnerError::PacketResponseDropped)?;
-            }
-            Err(error) => {
-                let drop_reason = inbound_drop_reason(&error);
-                context.metrics.record_inbound_drop(drop_reason);
-                eprintln!("dropping inbound packet from {peer}: {error:?}");
-                Forwarder::send_packet_response(
-                    swarm,
-                    channel,
-                    PacketResponse::Rejected(packet_rejection_reason(drop_reason)),
-                )
-                .map_err(|_| RunnerError::PacketResponseDropped)?;
-            }
-        },
+        } => handle_packet_request(swarm, context, peer, &request, channel)?,
         request_response::Event::Message {
             peer,
             message: Message::Response { response, .. },
@@ -796,6 +778,50 @@ fn handle_packet_event(
     }
 
     Ok(())
+}
+
+fn handle_packet_request(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    request: &crate::wire::Frame,
+    channel: request_response::ResponseChannel<PacketResponse>,
+) -> Result<(), RunnerError> {
+    let result = match request.header.payload_type {
+        PayloadType::IpPacket => match context.forwarder.accept_inbound_packet(peer, request) {
+            Ok(packet) => {
+                context.writer.write_packet(packet)?;
+                context.metrics.record_tun_write(packet.len());
+                context.metrics.record_inbound_accepted();
+                Ok(())
+            }
+            Err(error) => Err(error),
+        },
+        PayloadType::Keepalive => context
+            .forwarder
+            .accept_inbound_control_frame(peer, request, PayloadType::Keepalive)
+            .map(|()| context.metrics.record_inbound_keepalive_accepted()),
+        PayloadType::PathProbe => context
+            .forwarder
+            .accept_inbound_control_frame(peer, request, PayloadType::PathProbe)
+            .map(|()| context.metrics.record_inbound_path_probe_accepted()),
+    };
+
+    match result {
+        Ok(()) => Forwarder::send_packet_response(swarm, channel, PacketResponse::Accepted)
+            .map_err(|_| RunnerError::PacketResponseDropped),
+        Err(error) => {
+            let drop_reason = inbound_drop_reason(&error);
+            context.metrics.record_inbound_drop(drop_reason);
+            eprintln!("dropping inbound packet frame from {peer}: {error:?}");
+            Forwarder::send_packet_response(
+                swarm,
+                channel,
+                PacketResponse::Rejected(packet_rejection_reason(drop_reason)),
+            )
+            .map_err(|_| RunnerError::PacketResponseDropped)
+        }
+    }
 }
 
 fn handle_service_event(

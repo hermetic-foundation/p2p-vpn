@@ -241,10 +241,42 @@ impl Forwarder {
         peer: Libp2pPeerId,
         frame: &'a Frame,
     ) -> Result<&'a [u8], ForwardError> {
+        self.validate_inbound_frame_metadata(peer, frame, PayloadType::IpPacket)?;
+
+        let overlay_peer = PeerId::from_libp2p(peer);
+        let source = packet_source(&frame.payload)?;
+        self.routes.authorize_source(overlay_peer, source)?;
+        let destination = packet_destination(&frame.payload)?;
+        self.authorize_local_destination(destination)?;
+        self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
+
+        Ok(&frame.payload)
+    }
+
+    pub fn accept_inbound_control_frame(
+        &mut self,
+        peer: Libp2pPeerId,
+        frame: &Frame,
+        expected_payload_type: PayloadType,
+    ) -> Result<(), ForwardError> {
+        self.validate_inbound_frame_metadata(peer, frame, expected_payload_type)?;
+        self.accept_sequence(
+            PeerId::from_libp2p(peer),
+            frame.header.session_id,
+            frame.header.sequence,
+        )
+    }
+
+    fn validate_inbound_frame_metadata(
+        &mut self,
+        peer: Libp2pPeerId,
+        frame: &Frame,
+        expected_payload_type: PayloadType,
+    ) -> Result<(), ForwardError> {
         if !self.authorized_peers.allows(&peer) {
             return Err(ForwardError::UnauthorizedPeer(peer));
         }
-        if frame.header.payload_type != PayloadType::IpPacket {
+        if frame.header.payload_type != expected_payload_type {
             return Err(ForwardError::UnexpectedPayload(frame.header.payload_type));
         }
         if usize::from(frame.header.payload_len) != frame.payload.len() {
@@ -260,14 +292,7 @@ impl Forwarder {
             });
         }
 
-        let overlay_peer = PeerId::from_libp2p(peer);
-        let source = packet_source(&frame.payload)?;
-        self.routes.authorize_source(overlay_peer, source)?;
-        let destination = packet_destination(&frame.payload)?;
-        self.authorize_local_destination(destination)?;
-        self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
-
-        Ok(&frame.payload)
+        Ok(())
     }
 
     fn accept_sequence(
@@ -794,6 +819,58 @@ mod tests {
         forwarder
             .accept_inbound_packet(remote, &second_session)
             .expect("second session accepted");
+    }
+
+    #[test]
+    fn inbound_keepalive_is_authorized_and_replay_checked() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let frame = Frame::keepalive(7, 42).expect("frame");
+
+        forwarder
+            .accept_inbound_control_frame(remote, &frame, PayloadType::Keepalive)
+            .expect("keepalive accepted");
+
+        assert!(matches!(
+            forwarder.accept_inbound_control_frame(remote, &frame, PayloadType::Keepalive),
+            Err(ForwardError::ReplayedPacket {
+                peer,
+                session_id: 7,
+                sequence: 42
+            }) if peer == remote_overlay
+        ));
+    }
+
+    #[test]
+    fn inbound_path_probe_is_authorized_and_bounded_by_mtu() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = config_for(remote);
+        config.interface.mtu = 4;
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let accepted = Frame::path_probe(7, 42, vec![1, 2, 3, 4]).expect("probe");
+        let rejected = Frame::path_probe(7, 43, vec![1, 2, 3, 4, 5]).expect("probe");
+
+        forwarder
+            .accept_inbound_control_frame(remote, &accepted, PayloadType::PathProbe)
+            .expect("path probe accepted");
+
+        assert!(matches!(
+            forwarder.accept_inbound_control_frame(remote, &rejected, PayloadType::PathProbe),
+            Err(ForwardError::PacketTooLarge { actual: 5, max: 4 })
+        ));
+    }
+
+    #[test]
+    fn inbound_control_frame_rejects_unexpected_payload_type() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let frame = Frame::keepalive(7, 42).expect("frame");
+
+        assert!(matches!(
+            forwarder.accept_inbound_control_frame(remote, &frame, PayloadType::PathProbe),
+            Err(ForwardError::UnexpectedPayload(PayloadType::Keepalive))
+        ));
     }
 
     #[tokio::test]

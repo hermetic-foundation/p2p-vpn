@@ -87,6 +87,10 @@ for a remote peer. Accepted packet requests receive a compact success response;
 rejected requests return a compact rejection reason such as oversized packet,
 replay, unauthorized peer, unauthorized source, unauthorized destination,
 unexpected payload, or malformed packet instead of relying on request timeout.
+The same fixed packet header also carries authorized keepalive and path-probe
+frames. Those frames are length-checked, bounded by the effective MTU, and
+replay-checked per peer/session, but they are acknowledged without writing any
+payload to TUN.
 
 Route ownership is static and exclusive. The local node and each configured peer
 own their built-in host routes plus configured route prefixes, but route
@@ -389,7 +393,8 @@ cargo run -- metrics --config p2p-vpn.json
 The metrics output includes control-plane exchange counters, capability
 acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
-inbound and outbound packet drop reasons including expired outbound queue packets,
+inbound accepted IP packets, accepted keepalive and path-probe frames, inbound
+and outbound packet drop reasons including expired outbound queue packets,
 direct versus relayed connection
 counts, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed

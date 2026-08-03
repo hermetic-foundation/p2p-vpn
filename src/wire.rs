@@ -102,7 +102,8 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn packet(
+    pub fn new(
+        payload_type: PayloadType,
         session_id: SessionId,
         sequence: Sequence,
         payload: Vec<u8>,
@@ -114,9 +115,29 @@ impl Frame {
             })?;
 
         Ok(Self {
-            header: Header::new(PayloadType::IpPacket, session_id, sequence, payload_len),
+            header: Header::new(payload_type, session_id, sequence, payload_len),
             payload,
         })
+    }
+
+    pub fn packet(
+        session_id: SessionId,
+        sequence: Sequence,
+        payload: Vec<u8>,
+    ) -> Result<Self, FrameError> {
+        Self::new(PayloadType::IpPacket, session_id, sequence, payload)
+    }
+
+    pub fn keepalive(session_id: SessionId, sequence: Sequence) -> Result<Self, FrameError> {
+        Self::new(PayloadType::Keepalive, session_id, sequence, Vec::new())
+    }
+
+    pub fn path_probe(
+        session_id: SessionId,
+        sequence: Sequence,
+        payload: Vec<u8>,
+    ) -> Result<Self, FrameError> {
+        Self::new(PayloadType::PathProbe, session_id, sequence, payload)
     }
 
     #[must_use]
@@ -178,5 +199,25 @@ mod tests {
                 max: MAX_PAYLOAD_LEN
             }
         );
+    }
+
+    #[test]
+    fn keepalive_frame_has_no_payload() {
+        let frame = Frame::keepalive(7, 42).expect("frame");
+
+        assert_eq!(frame.header.payload_type, PayloadType::Keepalive);
+        assert_eq!(frame.header.session_id, 7);
+        assert_eq!(frame.header.sequence, 42);
+        assert_eq!(frame.header.payload_len, 0);
+        assert!(frame.payload.is_empty());
+    }
+
+    #[test]
+    fn path_probe_frame_carries_probe_payload() {
+        let frame = Frame::path_probe(7, 42, b"probe".to_vec()).expect("frame");
+
+        assert_eq!(frame.header.payload_type, PayloadType::PathProbe);
+        assert_eq!(frame.header.payload_len, 5);
+        assert_eq!(frame.payload, b"probe");
     }
 }
