@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     PeerId,
-    config::Config,
+    config::{Config, effective_packet_mtu},
     route::{IpCidr, Route, builtin_ipv4, builtin_ipv6},
 };
 
@@ -42,7 +42,7 @@ impl TunRuntimeConfig {
 
         Ok(Self {
             name: config.interface.name.clone(),
-            mtu: config.interface.mtu,
+            mtu: effective_packet_mtu(config.interface.mtu),
             addresses: TunAddresses::for_peer(local_peer),
             routes,
         })
@@ -245,6 +245,34 @@ mod tests {
         assert_eq!(runtime.name, "hs0");
         assert_eq!(runtime.mtu, 1280);
         assert_eq!(runtime.addresses.ipv4, builtin_ipv4(local));
+    }
+
+    #[test]
+    fn runtime_config_uses_effective_packet_mtu() {
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: peer_hex(1),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: u16::MAX,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+            },
+        };
+
+        let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
+
+        assert_eq!(runtime.mtu, config.effective_packet_mtu());
     }
 
     #[test]

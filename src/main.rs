@@ -80,6 +80,7 @@ fn status(path: &PathBuf) -> Result<(), String> {
         "interface: {} mtu {}",
         config.interface.name, config.interface.mtu
     );
+    println!("effective packet mtu: {}", config.effective_packet_mtu());
     println!(
         "packet session: {}",
         session_id_for_peer(
@@ -156,7 +157,8 @@ async fn up(
         .map_err(|error| format!("failed to prepare TUN runtime: {error:?}"))?;
 
     println!("interface: {}", runtime.name);
-    println!("mtu: {}", runtime.mtu);
+    println!("configured mtu: {}", config.interface.mtu);
+    println!("effective packet mtu: {}", runtime.mtu);
     println!("address4: {}/32", runtime.addresses.ipv4);
     println!("address6: {}/128", runtime.addresses.ipv6);
 

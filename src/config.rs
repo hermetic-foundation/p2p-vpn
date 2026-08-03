@@ -12,6 +12,7 @@ use crate::{
     identity::NodeIdentity,
     path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
+    wire::MAX_PAYLOAD_LEN,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -103,6 +104,11 @@ impl Config {
 
     pub fn relay_reservation_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
         parse_multiaddrs(&self.network.relay.reservations)
+    }
+
+    #[must_use]
+    pub fn effective_packet_mtu(&self) -> u16 {
+        effective_packet_mtu(self.interface.mtu)
     }
 }
 
@@ -298,6 +304,11 @@ fn default_interface() -> InterfaceConfig {
     }
 }
 
+#[must_use]
+pub fn effective_packet_mtu(configured_mtu: u16) -> u16 {
+    configured_mtu.min(u16::try_from(MAX_PAYLOAD_LEN).expect("wire payload length fits u16"))
+}
+
 fn parse_cidr(input: &str) -> Result<IpCidr, RoutePrefixError> {
     let (address, prefix) = input
         .split_once('/')
@@ -408,6 +419,36 @@ mod tests {
         assert_eq!(
             table.authorize_source(owner, IpAddr::V4(builtin_ipv4(owner))),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn effective_packet_mtu_is_capped_by_wire_payload_length() {
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                listen_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+        };
+
+        assert_eq!(config.effective_packet_mtu(), 1280);
+
+        config.interface.mtu = u16::MAX;
+        assert_eq!(
+            config.effective_packet_mtu(),
+            u16::try_from(MAX_PAYLOAD_LEN).expect("wire payload length fits u16")
         );
     }
 

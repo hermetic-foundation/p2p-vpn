@@ -14,7 +14,7 @@ use crate::{
         p2p::Behaviour,
         packet::{AuthorizedPeers, PacketResponse},
     },
-    wire::{Frame, FrameError, MAX_PAYLOAD_LEN, PayloadType},
+    wire::{Frame, FrameError, PayloadType},
 };
 
 #[derive(Debug)]
@@ -44,8 +44,13 @@ impl Forwarder {
             authorized_peers: AuthorizedPeers::from_config(config),
             session_id: session_id_for_peer(config.local_peer_id()?),
             next_sequence: 0,
-            mtu: usize::from(config.interface.mtu).min(MAX_PAYLOAD_LEN),
+            mtu: usize::from(config.effective_packet_mtu()),
         })
+    }
+
+    #[must_use]
+    pub const fn mtu(&self) -> usize {
+        self.mtu
     }
 
     pub fn send_tun_packet(
@@ -471,6 +476,16 @@ mod tests {
             forwarder.enqueue_tun_packet(&mut queues, packet),
             Err(ForwardError::Enqueue(EnqueueError::QueueFull { .. }))
         ));
+    }
+
+    #[test]
+    fn forwarder_uses_effective_packet_mtu() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = config_for(remote);
+        config.interface.mtu = u16::MAX;
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert_eq!(forwarder.mtu(), usize::from(config.effective_packet_mtu()));
     }
 
     #[test]

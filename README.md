@@ -45,6 +45,11 @@ while that peer has a healthy path. Packets for disconnected peers remain
 bounded by the per-peer queue limits instead of expanding into unbounded stream
 requests.
 
+The configured interface MTU is treated as the requested packet MTU. The
+effective packet MTU is capped by the fixed wire header's `u16` payload length
+field and is used consistently by the TUN setup and packet forwarder. The
+`status` and `up` commands print both configured and effective MTU values.
+
 ## Development
 
 Enter the reproducible development shell:
