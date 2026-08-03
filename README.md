@@ -135,6 +135,9 @@ nodes can bound pending handshakes, established connections, and connections per
 peer. Runtime validation rejects zero per-peer packet queue capacity and zero
 total or per-peer established connection capacity, because those settings would
 make an otherwise valid node unable to forward VPN traffic.
+When `relay.server` is enabled, runtime validation also requires non-zero relay
+reservation, circuit, duration, and byte limits so the relay can actually accept
+reservations and carry fallback traffic.
 
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
@@ -346,7 +349,8 @@ also contain full relayed target addresses such as
 `relay.server` to `true` on nodes that should accept relay reservations and
 relay circuits for the overlay. `relay.resources` maps to circuit relay v2
 server limits; its defaults match libp2p's relay defaults while retaining the
-library's default rate limiters.
+library's default rate limiters. Nodes with `relay.server` enabled reject zero
+relay reservation, circuit, duration, or byte limits during config validation.
 
 Inspect the compiled local view:
 
@@ -359,7 +363,9 @@ the private key matches `network.local_peer`, the optional membership key is
 valid base64 key material, configured routes compile, all listen and external
 multiaddrs parse, bootstrap and peer multiaddrs either omit an explicit peer id
 or match the configured peer, and relay reservation multiaddrs contain
-`/p2p/<relay>/p2p-circuit`. The output includes the local overlay IPv4/IPv6
+`/p2p/<relay>/p2p-circuit`. It also checks that packet queues, established
+connection capacity, and enabled relay-server limits are non-zero. The output
+includes the local overlay IPv4/IPv6
 addresses plus built-in and configured route ownership lines, which are the
 claims peers must mirror in their `peer.routes` entries before accepting routed
 traffic from this node.

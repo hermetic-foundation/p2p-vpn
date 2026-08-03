@@ -120,6 +120,10 @@ impl Config {
                 ResourceValidationError::NoEstablishedConnections,
             ));
         }
+        if self.network.relay.server {
+            validate_relay_server_resources(self.network.relay.resources)
+                .map_err(ConfigError::Resource)?;
+        }
 
         Ok(())
     }
@@ -579,6 +583,13 @@ pub enum ResourceValidationError {
     EmptyQueueBytes,
     NoEstablishedConnectionsPerPeer,
     NoEstablishedConnections,
+    RelayServerNoReservations,
+    RelayServerNoReservationsPerPeer,
+    RelayServerNoReservationDuration,
+    RelayServerNoCircuits,
+    RelayServerNoCircuitsPerPeer,
+    RelayServerNoCircuitDuration,
+    RelayServerNoCircuitBytes,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -690,6 +701,34 @@ const fn default_relay_max_circuit_duration_secs() -> u64 {
 
 const fn default_relay_max_circuit_bytes() -> u64 {
     1 << 17
+}
+
+fn validate_relay_server_resources(
+    resources: RelayResourceConfig,
+) -> Result<(), ResourceValidationError> {
+    if resources.max_reservations == 0 {
+        return Err(ResourceValidationError::RelayServerNoReservations);
+    }
+    if resources.max_reservations_per_peer == 0 {
+        return Err(ResourceValidationError::RelayServerNoReservationsPerPeer);
+    }
+    if resources.reservation_duration_secs == 0 {
+        return Err(ResourceValidationError::RelayServerNoReservationDuration);
+    }
+    if resources.max_circuits == 0 {
+        return Err(ResourceValidationError::RelayServerNoCircuits);
+    }
+    if resources.max_circuits_per_peer == 0 {
+        return Err(ResourceValidationError::RelayServerNoCircuitsPerPeer);
+    }
+    if resources.max_circuit_duration_secs == 0 {
+        return Err(ResourceValidationError::RelayServerNoCircuitDuration);
+    }
+    if resources.max_circuit_bytes == 0 {
+        return Err(ResourceValidationError::RelayServerNoCircuitBytes);
+    }
+
+    Ok(())
 }
 
 fn default_interface() -> InterfaceConfig {
@@ -1381,6 +1420,101 @@ mod tests {
                 ResourceValidationError::NoEstablishedConnections
             ))
         ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_non_operational_relay_server_limits() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig {
+                    server: true,
+                    reservations: Vec::new(),
+                    resources: RelayResourceConfig::default(),
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        config.network.relay.resources.max_reservations = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoReservations
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.max_reservations_per_peer = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoReservationsPerPeer
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.reservation_duration_secs = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoReservationDuration
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.max_circuits = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoCircuits
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.max_circuits_per_peer = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoCircuitsPerPeer
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.max_circuit_duration_secs = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoCircuitDuration
+            ))
+        ));
+
+        config.network.relay.resources = RelayResourceConfig::default();
+        config.network.relay.resources.max_circuit_bytes = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::RelayServerNoCircuitBytes
+            ))
+        ));
+
+        config.network.relay.server = false;
+        assert!(config.validate_runtime().is_ok());
     }
 
     #[test]
