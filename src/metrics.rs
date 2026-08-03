@@ -101,6 +101,9 @@ pub struct RuntimeMetrics {
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
     outgoing_connection_errors: AtomicU64,
+    discovered_addresses_accepted: AtomicU64,
+    discovered_address_dial_attempts: AtomicU64,
+    discovered_address_dial_failures: AtomicU64,
     discovered_addresses_rejected: AtomicU64,
     discovered_addresses_expired: AtomicU64,
     outbound_queue_blocked_no_supported_path_events: AtomicU64,
@@ -432,6 +435,21 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_discovered_address_accepted(&self) {
+        self.discovered_addresses_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_discovered_address_dial_attempt(&self) {
+        self.discovered_address_dial_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_discovered_address_dial_failure(&self) {
+        self.discovered_address_dial_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_discovered_address_rejected(&self) {
         self.discovered_addresses_rejected
             .fetch_add(1, Ordering::Relaxed);
@@ -649,6 +667,14 @@ impl RuntimeMetrics {
         snapshot.redial_failures = self.redial_failures.load(Ordering::Relaxed);
         snapshot.outgoing_connection_errors =
             self.outgoing_connection_errors.load(Ordering::Relaxed);
+        snapshot.discovered_addresses_accepted =
+            self.discovered_addresses_accepted.load(Ordering::Relaxed);
+        snapshot.discovered_address_dial_attempts = self
+            .discovered_address_dial_attempts
+            .load(Ordering::Relaxed);
+        snapshot.discovered_address_dial_failures = self
+            .discovered_address_dial_failures
+            .load(Ordering::Relaxed);
         snapshot.discovered_addresses_rejected =
             self.discovered_addresses_rejected.load(Ordering::Relaxed);
         snapshot.discovered_addresses_expired =
@@ -737,6 +763,9 @@ pub struct RuntimeSnapshot {
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
     pub outgoing_connection_errors: u64,
+    pub discovered_addresses_accepted: u64,
+    pub discovered_address_dial_attempts: u64,
+    pub discovered_address_dial_failures: u64,
     pub discovered_addresses_rejected: u64,
     pub discovered_addresses_expired: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
@@ -960,6 +989,18 @@ impl RuntimeSnapshot {
                 self.outgoing_connection_errors
             ),
             format!(
+                "discovered_addresses_accepted {}",
+                self.discovered_addresses_accepted
+            ),
+            format!(
+                "discovered_address_dial_attempts {}",
+                self.discovered_address_dial_attempts
+            ),
+            format!(
+                "discovered_address_dial_failures {}",
+                self.discovered_address_dial_failures
+            ),
+            format!(
                 "discovered_addresses_rejected {}",
                 self.discovered_addresses_rejected
             ),
@@ -1149,6 +1190,9 @@ mod tests {
         metrics.record_redial_skipped_connected();
         metrics.record_redial_failure();
         metrics.record_outgoing_connection_error();
+        metrics.record_discovered_address_accepted();
+        metrics.record_discovered_address_dial_attempt();
+        metrics.record_discovered_address_dial_failure();
         metrics.record_discovered_address_rejected();
         metrics.record_discovered_address_expired(2);
         metrics.record_outbound_queue_blocked_no_supported_path();
@@ -1256,6 +1300,9 @@ mod tests {
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
         assert_eq!(snapshot.outgoing_connection_errors, 1);
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 1);
+        assert_eq!(snapshot.discovered_address_dial_failures, 1);
         assert_eq!(snapshot.discovered_addresses_rejected, 1);
         assert_eq!(snapshot.discovered_addresses_expired, 2);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
@@ -1335,6 +1382,9 @@ mod tests {
         assert_metric_line(&snapshot, "redial_skipped_connected 1");
         assert_metric_line(&snapshot, "redial_failures 1");
         assert_metric_line(&snapshot, "outgoing_connection_errors 1");
+        assert_metric_line(&snapshot, "discovered_addresses_accepted 1");
+        assert_metric_line(&snapshot, "discovered_address_dial_attempts 1");
+        assert_metric_line(&snapshot, "discovered_address_dial_failures 1");
         assert_metric_line(&snapshot, "discovered_addresses_rejected 1");
         assert_metric_line(&snapshot, "discovered_addresses_expired 2");
         assert_metric_line(

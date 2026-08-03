@@ -1264,6 +1264,7 @@ fn learn_peer_address(
         return;
     }
 
+    metrics.record_discovered_address_accepted();
     discovered_peer_addresses.insert(peer, address.clone());
 
     if discovery.kademlia {
@@ -1283,7 +1284,9 @@ fn learn_peer_address(
     }
 
     let dial_address = peer_dial_address(peer, address);
+    metrics.record_discovered_address_dial_attempt();
     if let Err(error) = swarm.dial(dial_address) {
+        metrics.record_discovered_address_dial_failure();
         eprintln!("dial discovered peer {peer} failed: {error}");
     }
 }
@@ -1505,6 +1508,42 @@ mod tests {
         packet[12..16].copy_from_slice(&source.octets());
         packet[16..20].copy_from_slice(&destination.octets());
         packet
+    }
+
+    fn config_with_peer(
+        local_identity: &crate::identity::NodeIdentity,
+        peer: Libp2pPeerId,
+    ) -> Config {
+        Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: peer.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        }
     }
 
     #[test]
@@ -2029,6 +2068,148 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.autonat_probes_scheduled, 0);
+    }
+
+    #[tokio::test]
+    async fn learn_peer_address_records_accepted_address_and_dial_attempt() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &metrics,
+            configured,
+            address.clone(),
+            &DiscoveryConfig::default(),
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 1);
+        assert_eq!(snapshot.discovered_address_dial_failures, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 0);
+        assert_eq!(discovered.as_vec(), vec![(configured, address)]);
+    }
+
+    #[tokio::test]
+    async fn learn_peer_address_ignores_unconfigured_peers_without_metrics() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let unconfigured = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &metrics,
+            unconfigured,
+            address,
+            &DiscoveryConfig::default(),
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(snapshot.discovered_address_dial_failures, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 0);
+        assert!(discovered.as_vec().is_empty());
+    }
+
+    #[tokio::test]
+    async fn learn_peer_address_counts_mismatched_discovered_targets_as_rejected() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let other = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}")
+            .parse()
+            .expect("address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &metrics,
+            configured,
+            address,
+            &DiscoveryConfig::default(),
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(snapshot.discovered_address_dial_failures, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert!(discovered.as_vec().is_empty());
     }
 
     #[test]

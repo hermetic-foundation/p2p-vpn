@@ -391,7 +391,7 @@ external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT cur
 public/private/unknown reachability gauges and status-change counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap
 refresh counts, unauthorized connection drops, configured peer redial counters,
-rejected and expired discovered-address counters, asynchronous outgoing
+accepted/dialed/rejected/expired discovered-address counters, asynchronous outgoing
 connection error counts, healthy path counts by transport kind, configured peers
 with and without a currently supported packet path, and queue-drain stalls
 caused by peers having no currently supported packet path. Those counters are
