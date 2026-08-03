@@ -600,11 +600,15 @@ sudo target/debug/p2p-vpn up \
   --control-socket /run/p2p-vpn/control.sock
 
 cargo run -- daemon-status --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-state --socket /run/p2p-vpn/control.sock
 ```
 
-The control socket currently serves a bounded, read-only `status` request. Its
-output uses the same line-oriented metric names as `metrics`, but comes from the
-running daemon's current queue and path state instead of a startup snapshot.
+The control socket currently serves bounded, read-only `status` and `state`
+requests. `daemon-status` uses the same line-oriented metric names as `metrics`,
+but comes from the running daemon's current queue and path state instead of a
+startup snapshot. `daemon-state` reports the running daemon's configured peers,
+validated capability state, selected path, healthy direct and relay path counts,
+effective MTU, and path-probe counters.
 NixOS instances enable this by default at
 `/run/p2p-vpn-<instance>/control.sock` through a `0750` runtime directory; set
 `services.p2p-vpn.instances.<name>.controlSocket = null` to disable it.

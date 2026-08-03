@@ -293,6 +293,9 @@ where
             }, if control_rx.is_some() => {
                 handle_runtime_control_request(
                     request,
+                    &forwarder,
+                    &paths,
+                    &peer_capabilities,
                     &metrics,
                     queues.total_stats(),
                     runtime_path_stats(&forwarder, &paths, &peer_capabilities),
@@ -383,15 +386,31 @@ fn send_path_probes(
 
 fn handle_runtime_control_request(
     request: RuntimeControlRequest,
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
     metrics: &RuntimeMetrics,
     queue: crate::queue::QueueStats,
-    path: crate::path::PathRuntimeStats,
+    path_stats: crate::path::PathRuntimeStats,
 ) {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
-            let lines = runtime_status_lines(metrics, queue, path);
+            let lines = runtime_status_lines(metrics, queue, path_stats);
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
+            }
+        }
+        RuntimeControlRequest::State { respond_to } => {
+            let lines = runtime_state_lines(
+                forwarder,
+                paths,
+                peer_capabilities,
+                metrics,
+                queue,
+                path_stats,
+            );
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket state response receiver dropped");
             }
         }
     }
@@ -403,6 +422,128 @@ fn runtime_status_lines(
     path: crate::path::PathRuntimeStats,
 ) -> Vec<String> {
     metrics.snapshot_with_paths(queue, path).lines()
+}
+
+fn runtime_state_lines(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    metrics: &RuntimeMetrics,
+    queue: crate::queue::QueueStats,
+    path_stats: crate::path::PathRuntimeStats,
+) -> Vec<String> {
+    let snapshot = metrics.snapshot_with_paths(queue, path_stats);
+    let mut peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
+    peers.sort_by_key(ToString::to_string);
+
+    let mut lines = vec![
+        "daemon state: running".to_owned(),
+        format!("configured peers: {}", peers.len()),
+        format!("validated peers: {}", peer_capabilities.len()),
+        format!(
+            "outbound_path_probes_sent {}",
+            snapshot.outbound_path_probes_sent
+        ),
+        format!(
+            "outbound_path_probe_failures {}",
+            snapshot.outbound_path_probe_failures
+        ),
+        format!(
+            "inbound_path_probes_accepted {}",
+            snapshot.inbound_path_probes_accepted
+        ),
+        format!(
+            "peers_with_supported_path {}",
+            snapshot.path.peers_with_supported_path
+        ),
+        format!(
+            "peers_without_supported_path {}",
+            snapshot.path.peers_without_supported_path
+        ),
+        format!(
+            "healthy_direct_quic_datagram_paths {}",
+            snapshot.path.healthy_direct_quic_datagram_paths
+        ),
+        format!(
+            "healthy_direct_quic_stream_paths {}",
+            snapshot.path.healthy_direct_quic_stream_paths
+        ),
+        format!(
+            "healthy_direct_tcp_stream_paths {}",
+            snapshot.path.healthy_direct_tcp_stream_paths
+        ),
+        format!("healthy_relay_paths {}", snapshot.path.healthy_relay_paths),
+    ];
+
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    for peer in peers {
+        extend_runtime_peer_state_lines(
+            &mut lines,
+            forwarder,
+            paths,
+            peer_capabilities,
+            peer,
+            local_mtu,
+        );
+    }
+
+    lines
+}
+
+fn extend_runtime_peer_state_lines(
+    lines: &mut Vec<String>,
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+    local_mtu: u16,
+) {
+    let transport = forwarder
+        .transport_peer_for_overlay(peer)
+        .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
+    let support = packet_transport_support(peer_capabilities, peer);
+    let selected_path = paths.best_supported_for(peer, support);
+    let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
+    let healthy_paths = candidates
+        .iter()
+        .filter(|candidate| candidate.healthy)
+        .count();
+    let direct_paths = candidates
+        .iter()
+        .filter(|candidate| candidate.healthy && !candidate.relay)
+        .count();
+    let relay_paths = candidates
+        .iter()
+        .filter(|candidate| candidate.healthy && candidate.relay)
+        .count();
+
+    lines.push(format!(
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} selected_path {} selected_path_score {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        peer_capabilities.contains(peer),
+        peer_capabilities.effective_mtu_for(peer, local_mtu),
+        support.quic_datagrams,
+        selected_path.map_or("none", |path| path.kind.wire_name()),
+        selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
+    ));
+
+    if let Some(capabilities) = peer_capabilities.get(peer) {
+        lines.push(format!(
+            "peer capability state: {peer} preferred_path {} advertised_routes {}",
+            capabilities.preferred_path,
+            capabilities.advertised_routes.len()
+        ));
+    }
+
+    for candidate in candidates {
+        lines.push(format!(
+            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {}",
+            candidate.kind.wire_name(),
+            candidate.healthy,
+            candidate.relay,
+            candidate.established_connections,
+            candidate.score()
+        ));
+    }
 }
 
 fn handle_redial_tick(
@@ -2206,6 +2347,54 @@ mod tests {
     fn shutdown_reason_has_stable_log_values() {
         assert_eq!(ShutdownReason::Interrupt.as_str(), "interrupt");
         assert_eq!(ShutdownReason::Terminate.as_str(), "terminate");
+    }
+
+    #[test]
+    fn runtime_state_lines_include_peer_capabilities_paths_and_probes() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1200)
+                .with_advertised_routes(vec![ControlRoute::new("10.0.0.2/32", 100)]),
+        );
+        let metrics = RuntimeMetrics::default();
+        metrics.record_outbound_path_probe_sent();
+
+        let lines = runtime_state_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+            crate::queue::QueueStats::default(),
+            runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+        );
+
+        assert!(lines.contains(&"daemon state: running".to_owned()));
+        assert!(lines.contains(&"configured peers: 1".to_owned()));
+        assert!(lines.contains(&"validated peers: 1".to_owned()));
+        assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 healthy_paths 1 direct_paths 1 relay_paths 0"
+            )
+        }));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "peer capability state: {remote_overlay} preferred_path direct_quic_stream advertised_routes 1"
+            )
+        }));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "peer path state: {remote_overlay} direct_tcp_stream healthy true relay false established_connections 1 score 60"
+            )
+        }));
     }
 
     #[test]

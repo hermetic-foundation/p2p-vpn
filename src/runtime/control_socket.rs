@@ -10,6 +10,7 @@ use tokio::{
 };
 
 const STATUS_REQUEST: &[u8] = b"status\n";
+const STATE_REQUEST: &[u8] = b"state\n";
 const MAX_REQUEST_LEN: usize = 64;
 const MAX_RESPONSE_LEN: usize = 256 * 1024;
 const REQUEST_CHANNEL: usize = 16;
@@ -17,6 +18,9 @@ const REQUEST_CHANNEL: usize = 16;
 #[derive(Debug)]
 pub enum RuntimeControlRequest {
     Status {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    State {
         respond_to: oneshot::Sender<Vec<String>>,
     },
 }
@@ -82,22 +86,45 @@ async fn handle_connection(
     tx: mpsc::Sender<RuntimeControlRequest>,
 ) -> io::Result<()> {
     let request = read_bounded_request(&mut stream).await?;
-    if request != STATUS_REQUEST {
-        stream.write_all(b"error unsupported request\n").await?;
-        return Ok(());
-    }
+    let request = match request.as_slice() {
+        STATUS_REQUEST => RequestKind::Status,
+        STATE_REQUEST => RequestKind::State,
+        _ => {
+            stream.write_all(b"error unsupported request\n").await?;
+            return Ok(());
+        }
+    };
 
     let (respond_to, response) = oneshot::channel();
-    tx.send(RuntimeControlRequest::Status { respond_to })
+    match request {
+        RequestKind::Status => {
+            tx.send(RuntimeControlRequest::Status { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+        RequestKind::State => {
+            tx.send(RuntimeControlRequest::State { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+    }
+    let lines = response
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped"))?;
-    let lines = response.await.map_err(|_| {
-        io::Error::new(io::ErrorKind::BrokenPipe, "runtime status response dropped")
-    })?;
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "runtime response dropped"))?;
 
     stream
-        .write_all(encode_status_response(&lines).as_bytes())
+        .write_all(encode_line_response(&lines).as_bytes())
         .await
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestKind {
+    Status,
+    State,
 }
 
 async fn read_bounded_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
@@ -120,7 +147,7 @@ async fn read_bounded_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
     ))
 }
 
-fn encode_status_response(lines: &[String]) -> String {
+fn encode_line_response(lines: &[String]) -> String {
     let mut response = String::from("ok\n");
     for line in lines {
         response.push_str(line);
@@ -133,10 +160,25 @@ pub async fn query_status(
     path: &Path,
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, STATUS_REQUEST).await
+}
+
+pub async fn query_state(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, STATE_REQUEST).await
+}
+
+async fn query_lines(
+    path: &Path,
+    timeout: std::time::Duration,
+    request: &'static [u8],
+) -> Result<Vec<String>, QueryError> {
     let mut stream = tokio::time::timeout(timeout, UnixStream::connect(path))
         .await
         .map_err(|_| QueryError::TimedOut)??;
-    tokio::time::timeout(timeout, stream.write_all(STATUS_REQUEST))
+    tokio::time::timeout(timeout, stream.write_all(request))
         .await
         .map_err(|_| QueryError::TimedOut)??;
 
@@ -150,10 +192,10 @@ pub async fn query_status(
     .await
     .map_err(|_| QueryError::TimedOut)??;
 
-    decode_status_response(&response)
+    decode_line_response(&response)
 }
 
-fn decode_status_response(response: &str) -> Result<Vec<String>, QueryError> {
+fn decode_line_response(response: &str) -> Result<Vec<String>, QueryError> {
     let mut lines = response.lines();
     match lines.next() {
         Some("ok") => Ok(lines.map(ToOwned::to_owned).collect()),
@@ -182,14 +224,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_response_round_trips_lines() {
-        let response = encode_status_response(&[
+    fn line_response_round_trips_lines() {
+        let response = encode_line_response(&[
             "network lab".to_owned(),
             "outbound_path_probes_sent 1".to_owned(),
         ]);
 
         assert_eq!(
-            decode_status_response(&response).expect("status response"),
+            decode_line_response(&response).expect("line response"),
             vec![
                 "network lab".to_owned(),
                 "outbound_path_probes_sent 1".to_owned()
@@ -198,9 +240,9 @@ mod tests {
     }
 
     #[test]
-    fn status_response_rejects_remote_errors() {
+    fn line_response_rejects_remote_errors() {
         assert!(matches!(
-            decode_status_response("error unsupported request\n"),
+            decode_line_response("error unsupported request\n"),
             Err(QueryError::Remote(_))
         ));
     }
@@ -231,5 +273,41 @@ mod tests {
         responder.await.expect("responder");
         drop(socket);
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn control_socket_serves_state_lines() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-control-{}-{}.sock",
+            std::process::id(),
+            "state"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::State { respond_to }) = rx.recv().await else {
+                panic!("expected state request");
+            };
+            respond_to
+                .send(vec![
+                    "daemon state: running".to_owned(),
+                    "configured peers: 1".to_owned(),
+                ])
+                .expect("state response accepted");
+        });
+
+        let lines = query_state(&path, std::time::Duration::from_secs(1))
+            .await
+            .expect("query");
+
+        assert_eq!(
+            lines,
+            vec![
+                "daemon state: running".to_owned(),
+                "configured peers: 1".to_owned()
+            ]
+        );
+        responder.await.expect("responder");
+        drop(socket);
     }
 }

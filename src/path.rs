@@ -115,6 +115,13 @@ impl PathSet {
             .max_by_key(|candidate| candidate.score())
     }
 
+    pub fn candidates_for(&self, peer: PeerId) -> impl Iterator<Item = PathCandidate> + '_ {
+        self.candidates
+            .iter()
+            .copied()
+            .filter(move |candidate| candidate.peer == peer)
+    }
+
     pub fn mark_unhealthy(&mut self, peer: PeerId, kind: PathKind) {
         if let Some(candidate) = self
             .candidates

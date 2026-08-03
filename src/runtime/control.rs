@@ -116,6 +116,11 @@ impl PeerCapabilities {
     }
 
     #[must_use]
+    pub fn get(&self, peer: PeerId) -> Option<&ControlCapabilities> {
+        self.peers.get(&peer)
+    }
+
+    #[must_use]
     pub fn effective_mtu_for(&self, peer: PeerId, fallback_mtu: u16) -> u16 {
         self.peers
             .get(&peer)

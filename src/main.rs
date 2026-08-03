@@ -190,6 +190,12 @@ enum Command {
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
     },
+    DaemonState {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
     PeerStatus {
         peer: String,
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -332,6 +338,10 @@ async fn main() -> Result<(), String> {
             socket,
             timeout_seconds,
         } => Box::pin(daemon_status(&socket, timeout_seconds)).await,
+        Command::DaemonState {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_state(&socket, timeout_seconds)).await,
         Command::PeerStatus {
             peer,
             config,
@@ -1336,6 +1346,21 @@ async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String
     )
     .await
     .map_err(|error| format!("daemon status query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+async fn daemon_state(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_state(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon state query failed: {error:?}"))?;
 
     for line in lines {
         println!("{line}");
@@ -2379,6 +2404,30 @@ mod tests {
         } = cli.command
         else {
             panic!("expected daemon-status command");
+        };
+
+        assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_daemon_state_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "daemon-state",
+            "--socket",
+            "/run/p2p-vpn-node-a/control.sock",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::DaemonState {
+            socket,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected daemon-state command");
         };
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
