@@ -65,7 +65,7 @@ impl TunRuntimeConfig {
         commands.extend(
             self.routes
                 .iter()
-                .map(|route| IpCommand::route_replace(self.name.clone(), route.prefix)),
+                .map(|route| IpCommand::route_replace(self.name.clone(), route.prefix, self.mtu)),
         );
         commands
     }
@@ -92,7 +92,7 @@ impl IpCommand {
     }
 
     #[must_use]
-    pub fn route_replace(interface: String, prefix: IpCidr) -> Self {
+    pub fn route_replace(interface: String, prefix: IpCidr, mtu: u16) -> Self {
         let mut args = Vec::new();
         if prefix.address().is_ipv6() {
             args.push("-6".to_owned());
@@ -105,7 +105,12 @@ impl IpCommand {
             interface,
             "metric".to_owned(),
             "3000".to_owned(),
+            "mtu".to_owned(),
+            mtu.to_string(),
         ]);
+        if let Some(advmss) = route_advmss(prefix, mtu) {
+            args.extend(["advmss".to_owned(), advmss.to_string()]);
+        }
         Self { args }
     }
 
@@ -123,6 +128,14 @@ impl fmt::Display for IpCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "ip {}", self.args.join(" "))
     }
+}
+
+fn route_advmss(prefix: IpCidr, mtu: u16) -> Option<u16> {
+    let header_bytes = match prefix.address() {
+        IpAddr::V4(_) => 40,
+        IpAddr::V6(_) => 60,
+    };
+    mtu.checked_sub(header_bytes)
 }
 
 #[cfg(target_os = "linux")]
@@ -407,15 +420,46 @@ mod tests {
                 |command| command.starts_with("ip -6 addr replace fd00:6879:7072:7370:6163:65")
             )
         );
-        assert!(
-            commands
-                .iter()
-                .any(|command| command == "ip route replace 10.42.0.0/24 dev hs0 metric 3000")
-        );
+        assert!(commands.iter().any(|command| command
+            == "ip route replace 10.42.0.0/24 dev hs0 metric 3000 mtu 1280 advmss 1240"));
         assert!(runtime.routes.iter().any(|route| {
             route
                 .prefix
                 .contains(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 10)))
         }));
+    }
+
+    #[test]
+    fn route_commands_add_ipv6_mtu_and_mss_hint() {
+        let command = IpCommand::route_replace(
+            "hs0".to_owned(),
+            IpCidr::new(
+                "fd00:6879:7072:7370:6163:6500:4200:0"
+                    .parse()
+                    .expect("IPv6 network"),
+                112,
+            )
+            .expect("IPv6 CIDR"),
+            1280,
+        );
+
+        assert_eq!(
+            command.to_string(),
+            "ip -6 route replace fd00:6879:7072:7370:6163:6500:4200:0/112 dev hs0 metric 3000 mtu 1280 advmss 1220"
+        );
+    }
+
+    #[test]
+    fn route_commands_omit_mss_hint_when_mtu_is_too_small() {
+        let command = IpCommand::route_replace(
+            "hs0".to_owned(),
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 24).expect("IPv4 CIDR"),
+            39,
+        );
+
+        assert_eq!(
+            command.to_string(),
+            "ip route replace 10.42.0.0/24 dev hs0 metric 3000 mtu 39"
+        );
     }
 }

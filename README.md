@@ -648,6 +648,11 @@ Inspect the Linux interface setup plan without requiring root:
 cargo run -- up --config p2p-vpn.json --dry-run
 ```
 
+Remote route commands include the effective overlay MTU and, where the MTU is
+large enough, a Linux `advmss` hint derived from the IP family. This avoids
+silent oversized TCP segments on routed overlay prefixes without adding
+fragmentation inside the p2p-vpn packet protocol.
+
 Attempt to create the TUN device and install routes:
 
 ```sh
