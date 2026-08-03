@@ -121,6 +121,10 @@ refreshed when rediscovered, removed when mDNS expires them, and aged out after
 10 minutes so stale transient addresses are not retried indefinitely. Redial
 attempts, connected-peer skips, failures, and discovered-address expiry are
 exposed in the runtime metrics output.
+Direct configured peer addresses are dialed during startup. Configured peer
+addresses that go through `/p2p-circuit` are kept for the periodic redial loop
+instead, so relay reservations and relay connections can come up before the node
+attempts the relayed peer circuit.
 Relay peers named by configured reservation addresses are also kept as
 infrastructure redial targets, so relay fallback can recover even when the
 relay is not a packet-routing VPN peer.

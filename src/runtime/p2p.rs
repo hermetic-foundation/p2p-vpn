@@ -249,17 +249,29 @@ fn install_listeners_and_dials(
         swarm.listen_on(peer_dial_address(local_peer_id, address.clone())?)?;
     }
 
-    for (peer, address) in config
-        .bootstrap_peers
-        .iter()
-        .chain(config.known_peers.iter())
-    {
+    for (peer, address) in &config.bootstrap_peers {
         swarm.behaviour_mut().kad.add_address(peer, address.clone());
         let dial_address = peer_dial_address(*peer, address.clone())?;
         swarm.dial(dial_address)?;
     }
 
+    for (peer, address) in &config.known_peers {
+        swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        if is_relayed_address(address) {
+            continue;
+        }
+
+        let dial_address = peer_dial_address(*peer, address.clone())?;
+        swarm.dial(dial_address)?;
+    }
+
     Ok(())
+}
+
+fn is_relayed_address(address: &Multiaddr) -> bool {
+    address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
 }
 
 fn relay_peer_addresses_from_reservations(reservations: &[Multiaddr]) -> Vec<(PeerId, Multiaddr)> {
@@ -616,6 +628,39 @@ mod tests {
         });
 
         assert!(matches!(result, Err(P2pBuildError::Dial(_))));
+    }
+
+    #[tokio::test]
+    async fn build_node_defers_relayed_configured_peer_dials() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let address = format!("/memory/9/p2p/{relay}/p2p-circuit/p2p/{peer}")
+            .parse()
+            .expect("relayed peer address");
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(peer, address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig {
+                max_pending_outgoing_connections: 0,
+                ..crate::config::ResourceConfig::default()
+            },
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("relayed configured peer should not be dialed at startup");
+
+        assert_eq!(node.configured_peer_addresses.len(), 1);
     }
 
     #[tokio::test]
