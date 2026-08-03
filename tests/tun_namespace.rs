@@ -278,9 +278,11 @@ async fn run_ready_node(
     wait_for_listen_address(&mut node).await;
     fs::write(ready_file, b"ready").expect("write ready file");
     let forwarder = Forwarder::from_config(&config)?;
+    let membership = runner::OverlayMembership::from_config(&config)?;
     runner::run_node(
         node,
         forwarder,
+        membership,
         device,
         config.interface.mtu,
         config.queue,

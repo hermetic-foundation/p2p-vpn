@@ -43,6 +43,7 @@ pub struct RuntimeMetrics {
     inbound_failures: AtomicU64,
     direct_connections_established: AtomicU64,
     relayed_connections_established: AtomicU64,
+    unauthorized_connections_dropped: AtomicU64,
     relay_reservations_accepted: AtomicU64,
     relay_outbound_circuits_established: AtomicU64,
     relay_inbound_circuits_established: AtomicU64,
@@ -153,6 +154,11 @@ impl RuntimeMetrics {
             self.direct_connections_established
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn record_unauthorized_connection_dropped(&self) {
+        self.unauthorized_connections_dropped
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_relay_reservation_accepted(&self) {
@@ -275,6 +281,9 @@ impl RuntimeMetrics {
             relayed_connections_established: self
                 .relayed_connections_established
                 .load(Ordering::Relaxed),
+            unauthorized_connections_dropped: self
+                .unauthorized_connections_dropped
+                .load(Ordering::Relaxed),
             relay_reservations_accepted: self.relay_reservations_accepted.load(Ordering::Relaxed),
             relay_outbound_circuits_established: self
                 .relay_outbound_circuits_established
@@ -329,6 +338,7 @@ pub struct RuntimeSnapshot {
     pub inbound_failures: u64,
     pub direct_connections_established: u64,
     pub relayed_connections_established: u64,
+    pub unauthorized_connections_dropped: u64,
     pub relay_reservations_accepted: u64,
     pub relay_outbound_circuits_established: u64,
     pub relay_inbound_circuits_established: u64,
@@ -368,6 +378,10 @@ impl RuntimeSnapshot {
             format!(
                 "relayed_connections_established {}",
                 self.relayed_connections_established
+            ),
+            format!(
+                "unauthorized_connections_dropped {}",
+                self.unauthorized_connections_dropped
             ),
             format!(
                 "relay_reservations_accepted {}",
@@ -499,6 +513,7 @@ mod tests {
         metrics.record_inbound_failure();
         metrics.record_connection_established(false);
         metrics.record_connection_established(true);
+        metrics.record_unauthorized_connection_dropped();
         metrics.record_relay_reservation_accepted();
         metrics.record_relay_outbound_circuit_established();
         metrics.record_relay_inbound_circuit_established();
@@ -555,6 +570,7 @@ mod tests {
         assert_eq!(snapshot.inbound_failures, 1);
         assert_eq!(snapshot.direct_connections_established, 1);
         assert_eq!(snapshot.relayed_connections_established, 1);
+        assert_eq!(snapshot.unauthorized_connections_dropped, 1);
         assert_eq!(snapshot.relay_reservations_accepted, 1);
         assert_eq!(snapshot.relay_outbound_circuits_established, 1);
         assert_eq!(snapshot.relay_inbound_circuits_established, 1);
@@ -588,6 +604,7 @@ mod tests {
         assert_metric_line(&snapshot, "inbound_drop_unauthorized_destination_packets 1");
         assert_metric_line(&snapshot, "inbound_drop_unexpected_payload_packets 1");
         assert_metric_line(&snapshot, "relayed_connections_established 1");
+        assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");
         assert_metric_line(&snapshot, "dcutr_successes 1");
         assert_metric_line(&snapshot, "control_requests_sent 1");
         assert_metric_line(&snapshot, "control_requests_received 1");

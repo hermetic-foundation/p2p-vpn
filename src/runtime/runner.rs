@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     PathKind, PeerId,
-    config::{Config, DiscoveryConfig, QueueConfig},
+    config::{Config, ConfigError, DiscoveryConfig, QueueConfig},
     metrics::{PacketDropReason, RuntimeMetrics},
     path::PathSet,
     queue::PeerQueues,
@@ -56,10 +56,12 @@ pub async fn run_config(
         discovery: config.network.discovery,
     })?;
     let forwarder = Forwarder::from_config(&config)?;
+    let membership = OverlayMembership::from_config(&config)?;
 
     run_node(
         node,
         forwarder,
+        membership,
         device,
         config.effective_packet_mtu(),
         config.queue,
@@ -71,6 +73,7 @@ pub async fn run_config(
 pub async fn run_node(
     mut node: P2pNode,
     mut forwarder: Forwarder,
+    membership: OverlayMembership,
     device: TunDevice,
     mtu: u16,
     queue_config: QueueConfig,
@@ -135,6 +138,7 @@ pub async fn run_node(
                     &mut node.swarm,
                     SwarmEventContext {
                         forwarder: &mut forwarder,
+                        membership: &membership,
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
@@ -274,6 +278,78 @@ impl DiscoveredPeerAddresses {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OverlayMembership {
+    peers: HashSet<Libp2pPeerId>,
+}
+
+impl OverlayMembership {
+    pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
+        let mut peers = HashSet::new();
+        peers.insert(
+            config
+                .network
+                .local_peer
+                .parse()
+                .map_err(ConfigError::Libp2pPeerId)?,
+        );
+
+        for peer in &config.peers {
+            peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
+        }
+
+        for peer in &config.network.bootstrap_peers {
+            peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
+        }
+
+        for (_, address) in config
+            .bootstrap_multiaddrs()?
+            .into_iter()
+            .chain(config.peer_multiaddrs()?)
+        {
+            if let Some(peer) = relay_peer_from_relayed_address(&address) {
+                peers.insert(peer);
+            }
+        }
+
+        for address in config.relay_reservation_multiaddrs()? {
+            if let Some(peer) = relay_peer_from_relayed_address(&address) {
+                peers.insert(peer);
+            }
+        }
+
+        Ok(Self { peers })
+    }
+
+    #[must_use]
+    pub fn allows(&self, peer: Libp2pPeerId) -> bool {
+        self.peers.contains(&peer)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.peers.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.peers.is_empty()
+    }
+}
+
+fn relay_peer_from_relayed_address(address: &Multiaddr) -> Option<Libp2pPeerId> {
+    let mut relay_peer = None;
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            Protocol::P2pCircuit => return relay_peer,
+            _ => {}
+        }
+    }
+
+    None
+}
+
 fn spawn_tun_reader(
     mut reader: TunReader,
     metrics: Arc<RuntimeMetrics>,
@@ -325,6 +401,7 @@ fn drain_outbound_queue(
 
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
+    membership: &'a OverlayMembership,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
@@ -359,6 +436,13 @@ fn handle_swarm_event(
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
+            if !authorize_established_connection(context.membership, context.metrics, peer_id) {
+                eprintln!("disconnecting unauthorized peer {peer_id}");
+                if swarm.disconnect_peer_id(peer_id).is_err() {
+                    eprintln!("unauthorized peer {peer_id} was already disconnected");
+                }
+                return Ok(());
+            }
             record_path_established(context.paths, context.forwarder, peer_id, &endpoint);
             send_control_capabilities(
                 swarm,
@@ -624,6 +708,19 @@ fn record_path_closed(
     }
 
     paths.record_closed(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+}
+
+fn authorize_established_connection(
+    membership: &OverlayMembership,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+) -> bool {
+    if membership.allows(peer) {
+        return true;
+    }
+
+    metrics.record_unauthorized_connection_dropped();
+    false
 }
 
 fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
@@ -958,7 +1055,7 @@ impl From<TunRuntimeError> for RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::{collections::HashSet, net::Ipv4Addr};
 
     use libp2p::{
         core::{Endpoint, transport::PortUse},
@@ -966,7 +1063,10 @@ mod tests {
     };
 
     use crate::{
-        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
+        config::{
+            BootstrapPeerConfig, Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
+            RelayConfig, ResourceConfig,
+        },
         route::builtin_ipv4,
     };
 
@@ -1121,6 +1221,107 @@ mod tests {
         discovered.remove(peer, &address);
 
         assert_eq!(discovered.as_slice(), &[(peer, other_address)]);
+    }
+
+    #[test]
+    fn overlay_membership_includes_local_peers_bootstrap_and_relay_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let local = local_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("local peer");
+        let configured = peer_id();
+        let bootstrap = peer_id();
+        let relay = peer_id();
+        let peer_address_relay = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                listen_addresses: Vec::new(),
+                bootstrap_peers: vec![BootstrapPeerConfig {
+                    id: bootstrap.to_string(),
+                    address: "/ip4/127.0.0.1/tcp/4001".to_owned(),
+                }],
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig {
+                    server: false,
+                    reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit")],
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: configured.to_string(),
+                name: None,
+                addresses: vec![format!(
+                    "/ip4/127.0.0.1/tcp/4003/p2p/{peer_address_relay}/p2p-circuit/p2p/{configured}"
+                )],
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+
+        let membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert_eq!(membership.len(), 5);
+        assert!(membership.allows(local));
+        assert!(membership.allows(configured));
+        assert!(membership.allows(bootstrap));
+        assert!(membership.allows(relay));
+        assert!(membership.allows(peer_address_relay));
+        assert!(!membership.allows(peer_id()));
+    }
+
+    #[test]
+    fn relay_peer_is_extracted_from_reservation_address() {
+        let relay = peer_id();
+        let target = peer_id();
+        let reservation: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("reservation");
+        let target_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit/p2p/{target}")
+                .parse()
+                .expect("target address");
+
+        assert_eq!(relay_peer_from_relayed_address(&reservation), Some(relay));
+        assert_eq!(
+            relay_peer_from_relayed_address(&target_address),
+            Some(relay)
+        );
+    }
+
+    #[test]
+    fn unauthorized_connections_are_rejected_and_counted() {
+        let allowed = peer_id();
+        let rejected = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::from([allowed]),
+        };
+        let metrics = RuntimeMetrics::default();
+
+        assert!(authorize_established_connection(
+            &membership,
+            &metrics,
+            allowed
+        ));
+        assert!(!authorize_established_connection(
+            &membership,
+            &metrics,
+            rejected
+        ));
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.unauthorized_connections_dropped, 1);
     }
 
     #[test]

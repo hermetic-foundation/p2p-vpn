@@ -24,6 +24,13 @@ relays can be useful for experiments only when they support the needed relay
 reservations and are acceptable for the deployment's trust and availability
 requirements.
 
+Runtime connections are membership-filtered before they are used for control or
+packet forwarding. The local peer, configured VPN peers, configured bootstrap
+peers, and relay peers named in reservation addresses are allowed to remain
+connected; other peers are disconnected and counted as unauthorized connection
+drops. This connection-level membership does not grant routing authority:
+packet source ownership is still checked separately against configured routes.
+
 Discovery toggles control runtime behaviour construction. Disabling mDNS or
 DCUtR prevents the corresponding libp2p behaviour from being installed in the
 swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
@@ -241,9 +248,10 @@ The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons, direct versus relayed connection counts, relay
 reservation/circuit counts, relay-server accept counts, DCUtR success/failure
-counts, and configured-peer redial counters. Those counters are intended to show
-whether a deployment is exchanging capabilities, using direct paths, relay
-fallback, hole-punching, and connection recovery as expected.
+counts, unauthorized connection drops, and configured-peer redial counters.
+Those counters are intended to show whether a deployment is exchanging
+capabilities, using direct paths, relay fallback, hole-punching, enforcing
+membership, and recovering connections as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
