@@ -19,6 +19,9 @@ use p2p_vpn::{
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
+const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
+const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
+
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
@@ -101,8 +104,10 @@ enum Command {
         disable_kademlia: bool,
         #[arg(long)]
         disable_kademlia_provider_advertisement: bool,
-        #[arg(long, default_value = "/p2p-vpn/kad/1")]
+        #[arg(long, default_value = PRIVATE_KADEMLIA_PROTOCOL)]
         kademlia_protocol: String,
+        #[arg(long)]
+        ipfs_kademlia: bool,
         #[arg(long)]
         disable_dcutr: bool,
         #[arg(long)]
@@ -172,6 +177,7 @@ async fn main() -> Result<(), String> {
             disable_kademlia,
             disable_kademlia_provider_advertisement,
             kademlia_protocol,
+            ipfs_kademlia,
             disable_dcutr,
             disable_autonat,
             force,
@@ -195,7 +201,7 @@ async fn main() -> Result<(), String> {
                 disable_dcutr,
                 disable_autonat,
             }
-            .into_config(kademlia_protocol),
+            .into_config(kademlia_protocol, ipfs_kademlia),
             relay: RelayConfig {
                 server: relay_server,
                 reservations: relay_reservations,
@@ -246,15 +252,23 @@ struct InitDiscoveryFlags {
 }
 
 impl InitDiscoveryFlags {
-    fn into_config(self, kademlia_protocol: String) -> DiscoveryConfig {
+    fn into_config(self, kademlia_protocol: String, ipfs_kademlia: bool) -> DiscoveryConfig {
         DiscoveryConfig {
             mdns: !self.disable_mdns,
             kademlia: !self.disable_kademlia,
             kademlia_provider_advertisement: !self.disable_kademlia_provider_advertisement,
-            kademlia_protocol,
+            kademlia_protocol: selected_kademlia_protocol(kademlia_protocol, ipfs_kademlia),
             dcutr: !self.disable_dcutr,
             autonat: !self.disable_autonat,
         }
+    }
+}
+
+fn selected_kademlia_protocol(kademlia_protocol: String, ipfs_kademlia: bool) -> String {
+    if ipfs_kademlia {
+        IPFS_KADEMLIA_PROTOCOL.to_owned()
+    } else {
+        kademlia_protocol
     }
 }
 
@@ -597,6 +611,20 @@ fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
         "kademlia protocol: {}",
         config.network.discovery.kademlia_protocol
     ));
+    lines.push(format!(
+        "kademlia scope: {}",
+        kademlia_scope(&config.network.discovery.kademlia_protocol)
+    ));
+}
+
+fn kademlia_scope(protocol: &str) -> &'static str {
+    if protocol == IPFS_KADEMLIA_PROTOCOL {
+        "ipfs-compatible public dht"
+    } else if protocol == PRIVATE_KADEMLIA_PROTOCOL {
+        "private overlay"
+    } else {
+        "custom"
+    }
 }
 
 fn push_relay_status(lines: &mut Vec<String>, config: &Config) {
@@ -887,6 +915,11 @@ mod tests {
                 .iter()
                 .any(|line| line.starts_with("local overlay ipv6: "))
         );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "kademlia scope: private overlay")
+        );
         assert!(lines.iter().any(|line| line
             == "protocols: control=/p2p-vpn/control/1 packet=/p2p-vpn/packet/1 service=/p2p-vpn/service/1"));
         assert!(
@@ -997,6 +1030,30 @@ mod tests {
         assert_eq!(max_concurrent_control_streams, 11);
         assert_eq!(max_concurrent_packet_streams, 22);
         assert_eq!(max_established_connections, 88);
+    }
+
+    #[test]
+    fn ipfs_kademlia_flag_selects_public_dht_protocol() {
+        let cli = Cli::try_parse_from(["p2p-vpn", "init-config", "--ipfs-kademlia"]).expect("cli");
+        let Command::InitConfig {
+            kademlia_protocol,
+            ipfs_kademlia,
+            ..
+        } = cli.command
+        else {
+            panic!("expected init-config command");
+        };
+
+        assert!(ipfs_kademlia);
+        assert_eq!(
+            selected_kademlia_protocol(kademlia_protocol, ipfs_kademlia),
+            IPFS_KADEMLIA_PROTOCOL
+        );
+        assert_eq!(
+            kademlia_scope(IPFS_KADEMLIA_PROTOCOL),
+            "ipfs-compatible public dht"
+        );
+        assert_eq!(kademlia_scope("/custom/kad/1"), "custom");
     }
 
     #[test]

@@ -221,9 +221,13 @@ allowed to originate. The default generated route metric is `100`, preserving
 the built-in host routes at metric `0`. Repeat `--bootstrap-peer
 PEER_ID=MULTIADDR` for Kademlia bootstrap nodes. By default the generated
 config uses the private
-`/p2p-vpn/kad/1` Kademlia protocol; pass `--kademlia-protocol /ipfs/kad/1.0.0`
-only when you intentionally want IPFS/public-DHT protocol compatibility with
-your bootstrap peers. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
+`/p2p-vpn/kad/1` Kademlia protocol; pass `--ipfs-kademlia` as shorthand for
+`--kademlia-protocol /ipfs/kad/1.0.0` only when you intentionally want
+IPFS/public-DHT protocol compatibility with your bootstrap peers. Public
+bootstrap peers are reachability infrastructure only: they can help route
+Kademlia queries, AutoNAT probes, and relay/DCUtR setup, but configured peer
+IDs and route ownership still define the VPN overlay. DNS multiaddrs, including
+`/dns4`, `/dns6`, `/dns`, and
 `/dnsaddr`, are resolved by the libp2p transport for startup dials and redials.
 Repeat `--external-address MULTIADDR` for stable public or DNS addresses that
 libp2p should advertise to peers in addition to observed addresses learned
