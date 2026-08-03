@@ -1419,7 +1419,7 @@ fn handle_behaviour_event(
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
         }
         BehaviourEvent::Autonat(event) if discovery.autonat => {
-            handle_autonat_event(metrics, event);
+            handle_autonat_event(swarm, metrics, event);
         }
         _ => {}
     }
@@ -1439,9 +1439,16 @@ fn schedule_autonat_probe(
     true
 }
 
-fn handle_autonat_event(metrics: &RuntimeMetrics, event: autonat::Event) {
+fn handle_autonat_event(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    event: autonat::Event,
+) {
     match event {
         autonat::Event::StatusChanged { old, new } => {
+            if let autonat::NatStatus::Public(address) = &new {
+                swarm.add_external_address(address.clone());
+            }
             metrics.record_autonat_status(autonat_reachability(&new));
             eprintln!("autonat status changed: {old:?} -> {new:?}");
         }
@@ -2598,19 +2605,49 @@ mod tests {
         assert!(discovered.as_vec().is_empty());
     }
 
-    #[test]
-    fn autonat_status_changes_update_reachability_metrics() {
+    #[tokio::test]
+    async fn autonat_status_changes_update_reachability_metrics() {
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig {
+                mdns: false,
+                dcutr: false,
+                ..DiscoveryConfig::default()
+            },
+        })
+        .expect("node");
         let metrics = RuntimeMetrics::default();
         let public_address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().expect("address");
 
         handle_autonat_event(
+            &mut node.swarm,
             &metrics,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Unknown,
-                new: autonat::NatStatus::Public(public_address),
+                new: autonat::NatStatus::Public(public_address.clone()),
             },
         );
+        assert!(
+            node.swarm
+                .external_addresses()
+                .any(|address| address == &public_address)
+        );
+
         handle_autonat_event(
+            &mut node.swarm,
             &metrics,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Public(

@@ -140,10 +140,10 @@ bootstrap. That lets a long-running node find configured peers that join the DHT
 after startup rather than relying on the initial one-shot provider query.
 Observed external address candidates reported by libp2p identify are passed to
 AutoNAT when that behaviour is enabled, and configured bootstrap/peer addresses
-are registered as AutoNAT probe servers. AutoNAT probes candidate reachability
-through connected or configured probe peers, so later identify exchanges and
-Kademlia announcements can carry a tested public address alongside any
-operator-configured external addresses.
+are registered as AutoNAT probe servers. When AutoNAT confirms a public address,
+the runtime registers it as an advertised external swarm address, so later
+identify exchanges and Kademlia announcements can carry a tested public address
+alongside any operator-configured external addresses.
 Candidate, scheduled-probe, confirmed, and expired external address events are
 exposed in metrics for NAT traversal diagnostics.
 
@@ -367,7 +367,8 @@ IPFS-compatible public bootstrap peers; those peers help discovery and NAT
 traversal, but do not grant overlay membership or route authority.
 `external_addresses` are registered with the libp2p swarm as explicit
 advertised addresses; use them for stable public socket, DNS, or port-forwarded
-addresses that peers should prefer over wildcard listen addresses.
+addresses that peers should prefer over wildcard listen addresses. Confirmed
+AutoNAT public addresses are registered the same way at runtime.
 `relay.reservations` are full libp2p relay listen addresses; listening on
 one asks that relay for a circuit relay v2 reservation. Peer `addresses` may
 also contain full relayed target addresses such as
