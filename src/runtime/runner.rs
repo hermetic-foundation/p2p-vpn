@@ -16,7 +16,7 @@ use crate::{
     PathKind, PeerId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig},
     metrics::{PacketDropReason, RuntimeMetrics},
-    path::PathSet,
+    path::{PathSet, PathTransportSupport},
     queue::PeerQueues,
     route::RouteError,
     runtime::{
@@ -35,6 +35,7 @@ use crate::{
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
+const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
 
 pub async fn run_config(
     config: Config,
@@ -398,7 +399,9 @@ fn drain_outbound_queue(
     metrics: &RuntimeMetrics,
 ) {
     expire_outbound_queue(queues);
-    while let Some(packet) = queues.dequeue_ready(|peer| paths.has_healthy_path(peer)) {
+    while let Some(packet) = queues.dequeue_ready(|peer| {
+        paths.has_supported_path(peer, packet_transport_support(peer_capabilities, peer))
+    }) {
         let peer_mtu = peer_capabilities.effective_mtu_for(
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
@@ -409,6 +412,16 @@ fn drain_outbound_queue(
         } else {
             metrics.record_outbound_sent();
         }
+    }
+}
+
+fn packet_transport_support(
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+) -> PathTransportSupport {
+    PathTransportSupport {
+        quic_datagrams: LOCAL_QUIC_DATAGRAMS_SUPPORTED
+            && peer_capabilities.supports_quic_datagrams_for(peer),
     }
 }
 
@@ -1662,6 +1675,91 @@ mod tests {
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_waits_when_only_datagram_path_is_unsupported() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut capabilities = ControlCapabilities::local(1280);
+        capabilities.supports_quic_datagrams = true;
+        peer_capabilities.record(remote_overlay, capabilities);
+        let metrics = RuntimeMetrics::default();
+
+        drain_outbound_queue(
+            &mut node.swarm,
+            &forwarder,
+            &mut queues,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+        );
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.queue.queued_packets, 1);
     }
 
     #[test]

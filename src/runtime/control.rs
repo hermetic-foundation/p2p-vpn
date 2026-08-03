@@ -82,6 +82,13 @@ impl PeerCapabilities {
     }
 
     #[must_use]
+    pub fn supports_quic_datagrams_for(&self, peer: PeerId) -> bool {
+        self.peers
+            .get(&peer)
+            .is_some_and(|capabilities| capabilities.supports_quic_datagrams)
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
         self.peers.len()
     }
@@ -342,6 +349,20 @@ mod tests {
 
         capabilities.record(peer, ControlCapabilities::local(1420));
         assert_eq!(capabilities.effective_mtu_for(peer, 1280), 1280);
+    }
+
+    #[test]
+    fn peer_capabilities_report_quic_datagram_support() {
+        let peer = PeerId::from_bytes([1; 32]);
+        let mut capabilities = PeerCapabilities::default();
+
+        assert!(!capabilities.supports_quic_datagrams_for(peer));
+
+        let mut peer_capabilities = ControlCapabilities::local(1280);
+        peer_capabilities.supports_quic_datagrams = true;
+        capabilities.record(peer, peer_capabilities);
+
+        assert!(capabilities.supports_quic_datagrams_for(peer));
     }
 
     #[test]

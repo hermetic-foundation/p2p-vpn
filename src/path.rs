@@ -36,6 +36,25 @@ impl PathCandidate {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PathTransportSupport {
+    pub quic_datagrams: bool,
+}
+
+impl PathTransportSupport {
+    #[must_use]
+    pub const fn stream_fallback() -> Self {
+        Self {
+            quic_datagrams: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn supports(self, kind: PathKind) -> bool {
+        !kind.requires_quic_datagrams() || self.quic_datagrams
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PathSet {
     candidates: Vec<PathCandidate>,
@@ -63,10 +82,26 @@ impl PathSet {
 
     #[must_use]
     pub fn best_for(&self, peer: PeerId) -> Option<PathCandidate> {
+        self.best_supported_for(
+            peer,
+            PathTransportSupport {
+                quic_datagrams: true,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn best_supported_for(
+        &self,
+        peer: PeerId,
+        support: PathTransportSupport,
+    ) -> Option<PathCandidate> {
         self.candidates
             .iter()
             .copied()
-            .filter(|candidate| candidate.peer == peer && candidate.healthy)
+            .filter(|candidate| {
+                candidate.peer == peer && candidate.healthy && support.supports(candidate.kind)
+            })
             .max_by_key(|candidate| candidate.score())
     }
 
@@ -112,6 +147,11 @@ impl PathSet {
     pub fn has_healthy_path(&self, peer: PeerId) -> bool {
         self.best_for(peer).is_some()
     }
+
+    #[must_use]
+    pub fn has_supported_path(&self, peer: PeerId, support: PathTransportSupport) -> bool {
+        self.best_supported_for(peer, support).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +185,51 @@ mod tests {
         assert_eq!(
             paths.best_for(peer(1)).map(|path| path.kind),
             Some(PathKind::CircuitRelay)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_supported_path_when_datagrams_are_unavailable() {
+        let mut paths = PathSet::new();
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicDatagram));
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicStream));
+
+        assert_eq!(
+            paths
+                .best_supported_for(peer(1), PathTransportSupport::stream_fallback())
+                .map(|path| path.kind),
+            Some(PathKind::DirectQuicStream)
+        );
+    }
+
+    #[test]
+    fn ignores_datagram_only_path_when_datagrams_are_unavailable() {
+        let mut paths = PathSet::new();
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicDatagram));
+
+        assert_eq!(
+            paths.best_supported_for(peer(1), PathTransportSupport::stream_fallback()),
+            None
+        );
+        assert!(!paths.has_supported_path(peer(1), PathTransportSupport::stream_fallback()));
+    }
+
+    #[test]
+    fn prefers_datagrams_when_transport_support_allows_them() {
+        let mut paths = PathSet::new();
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicStream));
+        paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicDatagram));
+
+        assert_eq!(
+            paths
+                .best_supported_for(
+                    peer(1),
+                    PathTransportSupport {
+                        quic_datagrams: true
+                    }
+                )
+                .map(|path| path.kind),
+            Some(PathKind::DirectQuicDatagram)
         );
     }
 
