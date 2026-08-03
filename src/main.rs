@@ -13,6 +13,7 @@ use p2p_vpn::{
     runtime::{
         forward::session_id_for_peer,
         runner,
+        service::SERVICE_PROTOCOL,
         tun::{TunAddresses, TunDevice, TunRuntimeConfig},
     },
     wire::{HEADER_LEN, WIRE_VERSION},
@@ -506,6 +507,12 @@ fn status_lines(config: &Config) -> Result<Vec<String>, String> {
         "wire: v{WIRE_VERSION}, {HEADER_LEN}-byte packet header"
     ));
     lines.push(format!(
+        "protocols: control={} packet={} service={}",
+        p2p_vpn::runtime::control::CONTROL_PROTOCOL,
+        p2p_vpn::runtime::packet::PACKET_PROTOCOL,
+        SERVICE_PROTOCOL
+    ));
+    lines.push(format!(
         "preferred path: {} (score {})",
         path_name(defaults.preferred_path),
         defaults.preferred_path.default_score()
@@ -852,6 +859,8 @@ mod tests {
                 .iter()
                 .any(|line| line.starts_with("local overlay ipv6: "))
         );
+        assert!(lines.iter().any(|line| line
+            == "protocols: control=/p2p-vpn/control/1 packet=/p2p-vpn/packet/1 service=/p2p-vpn/service/1"));
         assert!(
             lines
                 .iter()

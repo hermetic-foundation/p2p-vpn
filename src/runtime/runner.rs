@@ -32,6 +32,10 @@ use crate::{
         forward::{ForwardError, Forwarder},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
+        service::{
+            ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
+            ServiceStatusResponse, validate_status_request, validate_status_response,
+        },
         tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
     },
 };
@@ -42,6 +46,7 @@ const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const LOCAL_QUIC_DATAGRAMS_SUPPORTED: bool = false;
+const SERVICE_STATUS_NONCE: u64 = 1;
 
 pub async fn run_config(
     config: Config,
@@ -589,6 +594,9 @@ fn handle_swarm_event(
         SwarmEvent::Behaviour(BehaviourEvent::Packet(event)) => {
             handle_packet_event(swarm, &mut context, event)?;
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Service(event)) => {
+            handle_service_event(swarm, &mut context, event)?;
+        }
         SwarmEvent::Behaviour(event) => {
             handle_behaviour_event(
                 swarm,
@@ -620,6 +628,13 @@ fn handle_swarm_event(
             );
             record_path_established(context.paths, context.forwarder, peer_id, &endpoint);
             send_control_capabilities(
+                swarm,
+                context.forwarder,
+                peer_id,
+                context.local_capabilities,
+                context.metrics,
+            );
+            send_service_status_request(
                 swarm,
                 context.forwarder,
                 peer_id,
@@ -783,6 +798,48 @@ fn handle_packet_event(
     Ok(())
 }
 
+fn handle_service_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    event: request_response::Event<ServiceRequest, ServiceResponse>,
+) -> Result<(), RunnerError> {
+    match event {
+        request_response::Event::Message {
+            peer,
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
+        } => {
+            handle_service_request(swarm, context, peer, request, channel)?;
+        }
+        request_response::Event::Message {
+            peer,
+            message: Message::Response { response, .. },
+            ..
+        } => {
+            handle_service_response(
+                context.metrics,
+                peer,
+                response,
+                &context.local_capabilities.network_name,
+                context.local_capabilities.membership_tag.as_deref(),
+            );
+        }
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            context.metrics.record_service_failure();
+            eprintln!("service request to {peer} failed: {error}");
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_service_failure();
+            eprintln!("service request from {peer} failed: {error}");
+        }
+        request_response::Event::ResponseSent { .. } => {}
+    }
+
+    Ok(())
+}
+
 fn handle_control_request(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
@@ -825,6 +882,71 @@ fn handle_control_request(
     }
 
     Ok(())
+}
+
+fn handle_service_request(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    request: ServiceRequest,
+    channel: request_response::ResponseChannel<ServiceResponse>,
+) -> Result<(), RunnerError> {
+    match request {
+        ServiceRequest::Status(request) => {
+            context.metrics.record_service_request_received();
+            eprintln!("service status request from {peer}: {request:?}");
+            let response = service_status_response_for_peer(
+                context.forwarder,
+                peer,
+                &request,
+                context.local_capabilities,
+            );
+            match &response {
+                ServiceResponse::Status(_) => context.metrics.record_service_status_accept(),
+                ServiceResponse::Rejected(reason) => {
+                    context.metrics.record_service_status_rejection(*reason);
+                    context.metrics.record_service_failure();
+                    eprintln!("rejecting service status request from {peer}: {reason:?}");
+                }
+            }
+            swarm
+                .behaviour_mut()
+                .service
+                .send_response(channel, response)
+                .map_err(|_| RunnerError::ServiceResponseDropped)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_service_response(
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    response: ServiceResponse,
+    expected_network: &str,
+    expected_membership_tag: Option<&str>,
+) {
+    metrics.record_service_response_received();
+    match response {
+        ServiceResponse::Status(status) => {
+            if let Some(reason) =
+                validate_status_response(&status, expected_network, expected_membership_tag)
+            {
+                metrics.record_service_status_rejection(reason);
+                metrics.record_service_failure();
+                eprintln!("ignoring incompatible service status response from {peer}: {reason:?}");
+            } else {
+                metrics.record_service_status_accept();
+                eprintln!("service status response from {peer}: {status:?}");
+            }
+        }
+        ServiceResponse::Rejected(reason) => {
+            metrics.record_service_status_rejection(reason);
+            metrics.record_service_failure();
+            eprintln!("service status request rejected by {peer}: {reason:?}");
+        }
+    }
 }
 
 fn handle_control_response(
@@ -888,6 +1010,32 @@ fn capability_response_for_peer(
     }
 
     accepted_capabilities_response(local_capabilities)
+}
+
+fn service_status_response_for_peer(
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    request: &ServiceStatusRequest,
+    local_capabilities: &ControlCapabilities,
+) -> ServiceResponse {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer);
+    }
+
+    if let Some(reason) = validate_status_request(
+        request,
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.as_deref(),
+    ) {
+        return ServiceResponse::Rejected(reason);
+    }
+
+    ServiceResponse::Status(ServiceStatusResponse::local(
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.clone(),
+        request.nonce,
+        local_capabilities.effective_mtu,
+    ))
 }
 
 fn validate_peer_capabilities(
@@ -969,6 +1117,28 @@ fn send_control_capabilities(
         ControlRequest::Capabilities(local_capabilities.clone()),
     );
     metrics.record_control_request_sent();
+}
+
+fn send_service_status_request(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    peer: Libp2pPeerId,
+    local_capabilities: &ControlCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    swarm.behaviour_mut().service.send_request(
+        &peer,
+        ServiceRequest::Status(ServiceStatusRequest::local(
+            &local_capabilities.network_name,
+            local_capabilities.membership_tag.clone(),
+            SERVICE_STATUS_NONCE,
+        )),
+    );
+    metrics.record_service_request_sent();
 }
 
 fn record_path_established(
@@ -1452,6 +1622,7 @@ pub enum RunnerError {
     Tun(TunRuntimeError),
     PacketResponseDropped,
     ControlResponseDropped,
+    ServiceResponseDropped,
 }
 
 impl From<crate::config::ConfigError> for RunnerError {
@@ -2430,6 +2601,99 @@ mod tests {
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
         );
+    }
+
+    #[test]
+    fn service_status_response_accepts_configured_compatible_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+
+        assert_eq!(
+            service_status_response_for_peer(
+                &forwarder,
+                remote,
+                &ServiceStatusRequest::local("lab", None, 42),
+                &local_capabilities,
+            ),
+            ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280))
+        );
+    }
+
+    #[test]
+    fn service_status_response_rejects_unconfigured_or_wrong_overlay_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let unconfigured = peer_id();
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities =
+            ControlCapabilities::local("lab", Some("expected".to_owned()), 1280);
+
+        assert_eq!(
+            service_status_response_for_peer(
+                &forwarder,
+                unconfigured,
+                &ServiceStatusRequest::local("lab", Some("expected".to_owned()), 1),
+                &local_capabilities,
+            ),
+            ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer)
+        );
+        assert_eq!(
+            service_status_response_for_peer(
+                &forwarder,
+                remote,
+                &ServiceStatusRequest::local("prod", Some("expected".to_owned()), 1),
+                &local_capabilities,
+            ),
+            ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork)
+        );
+        assert_eq!(
+            service_status_response_for_peer(
+                &forwarder,
+                remote,
+                &ServiceStatusRequest::local("lab", Some("wrong".to_owned()), 1),
+                &local_capabilities,
+            ),
+            ServiceResponse::Rejected(ServiceRejectionReason::MembershipMismatch)
+        );
+    }
+
+    #[test]
+    fn service_responses_update_status_metrics() {
+        let remote = peer_id();
+        let metrics = RuntimeMetrics::default();
+
+        handle_service_response(
+            &metrics,
+            remote,
+            ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280)),
+            "lab",
+            None,
+        );
+        handle_service_response(
+            &metrics,
+            remote,
+            ServiceResponse::Status(ServiceStatusResponse::local("prod", None, 42, 1280)),
+            "lab",
+            None,
+        );
+        handle_service_response(
+            &metrics,
+            remote,
+            ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork),
+            "lab",
+            None,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.service_responses_received, 3);
+        assert_eq!(snapshot.service_status_accepts, 1);
+        assert_eq!(snapshot.service_status_rejections, 2);
+        assert_eq!(snapshot.service_reject_wrong_network, 2);
+        assert_eq!(snapshot.service_failures, 2);
     }
 
     #[test]

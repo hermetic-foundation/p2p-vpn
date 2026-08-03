@@ -16,6 +16,7 @@ use crate::{
     runtime::{
         control::{self, ControlCodec},
         packet::{self, PacketCodec},
+        service::{self, ServiceCodec},
     },
 };
 
@@ -34,6 +35,7 @@ pub struct Behaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
+    pub service: request_response::Behaviour<ServiceCodec>,
 }
 
 pub struct P2pNode {
@@ -161,6 +163,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     mdns: mdns.into(),
                     control: control::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
+                    service: service::behaviour(control_streams),
                 })
             },
         )?
@@ -408,6 +411,9 @@ mod tests {
 
     use crate::{
         runtime::control::{ControlCapabilities, ControlRequest, ControlResponse},
+        runtime::service::{
+            ServiceRequest, ServiceResponse, ServiceStatusRequest, ServiceStatusResponse,
+        },
         wire::{Frame, PayloadType},
     };
 
@@ -878,6 +884,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_nodes_exchange_service_status() {
+        let mut listener = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("listener node");
+        let listener_address = next_listen_address(&mut listener.swarm).await;
+
+        let mut dialer = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener.local_peer_id, listener_address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("dialer node");
+        let request = ServiceRequest::Status(ServiceStatusRequest::local("lab", None, 42));
+        let request_id = dialer
+            .swarm
+            .behaviour_mut()
+            .service
+            .send_request(&listener.local_peer_id, request.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_service_response(
+                &mut listener.swarm,
+                &mut dialer.swarm,
+                request,
+                request_id,
+            ),
+        )
+        .await
+        .expect("service exchange timed out");
+    }
+
+    #[tokio::test]
     async fn relayed_nodes_exchange_packet_request() {
         let discovery = relay_test_discovery();
         let mut relay = build_node(&HostConfig {
@@ -1150,6 +1216,47 @@ mod tests {
                         assert_eq!(
                             response,
                             ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn exchange_until_service_response(
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        expected_request: ServiceRequest,
+        expected_request_id: request_response::OutboundRequestId,
+    ) {
+        loop {
+            tokio::select! {
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Service(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. },
+                        ..
+                    })) = event {
+                        assert_eq!(request, expected_request);
+                        listener
+                            .behaviour_mut()
+                            .service
+                            .send_response(
+                                channel,
+                                ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280)),
+                            )
+                            .expect("send response");
+                    }
+                }
+                event = dialer.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Service(request_response::Event::Message {
+                        message: Message::Response { request_id, response },
+                        ..
+                    })) = event {
+                        assert_eq!(request_id, expected_request_id);
+                        assert_eq!(
+                            response,
+                            ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280))
                         );
                         return;
                     }

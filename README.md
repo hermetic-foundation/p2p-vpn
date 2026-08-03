@@ -48,6 +48,12 @@ DCUtR prevents the corresponding libp2p behaviour from being installed in the
 swarm; disabling AutoNAT prevents libp2p reachability probing; disabling
 Kademlia prevents overlay provider advertisement and lookup.
 
+The service plane exposes `/p2p-vpn/service/1` over a bounded reliable
+request-response stream. Configured peers exchange lightweight status requests
+on connection, scoped by the same network name and optional membership tag as
+the control plane. This gives operators and future service discovery features a
+separate protocol surface without overloading the packet data path.
+
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
@@ -388,18 +394,20 @@ direct versus relayed connection
 counts, relay reservation/circuit counts, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT current
-public/private/unknown reachability gauges and status-change counters, Kademlia
+public/private/unknown reachability gauges and status-change counters,
+service-plane request/response/status/rejection/failure counters, Kademlia
 provider lookup/result/configured-provider-dial/advertisement and bootstrap
 refresh counts, unauthorized connection drops, configured peer redial counters,
-accepted/dialed/rejected/expired discovered-address counters, asynchronous outgoing
-connection error counts, healthy path counts by transport kind, configured peers
-with and without a currently supported packet path, and queue-drain stalls
-caused by peers having no currently supported packet path. Those counters are
+accepted/dialed/rejected/expired discovered-address counters, asynchronous
+outgoing connection error counts, healthy path counts by transport kind,
+configured peers with and without a currently supported packet path, and
+queue-drain stalls caused by peers having no currently supported packet path.
+Those counters are
 intended to show whether a deployment is
-exchanging capabilities, probing and advertising observed public addresses,
-refreshing DHT discovery, rejecting bad discovered addresses, using direct
-paths, relay fallback, hole-punching, enforcing membership, recovering
-connections, and waiting on path negotiation as expected.
+exchanging capabilities, checking service status, probing and advertising
+observed public addresses, refreshing DHT discovery, rejecting bad discovered
+addresses, using direct paths, relay fallback, hole-punching, enforcing
+membership, recovering connections, and waiting on path negotiation as expected.
 Outbound drop-reason counters also include packet requests rejected by the
 remote peer, so peer-side MTU, authorization, replay, and payload validation
 failures remain visible on the sender.

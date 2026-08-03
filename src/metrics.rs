@@ -97,6 +97,15 @@ pub struct RuntimeMetrics {
     control_reject_unsupported_preferred_path: AtomicU64,
     control_reject_unauthorized_route_advertisement: AtomicU64,
     control_failures: AtomicU64,
+    service_requests_sent: AtomicU64,
+    service_requests_received: AtomicU64,
+    service_responses_received: AtomicU64,
+    service_status_accepts: AtomicU64,
+    service_status_rejections: AtomicU64,
+    service_reject_unauthorized_peer: AtomicU64,
+    service_reject_wrong_network: AtomicU64,
+    service_reject_membership_mismatch: AtomicU64,
+    service_failures: AtomicU64,
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
@@ -417,6 +426,47 @@ impl RuntimeMetrics {
         self.control_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_service_request_sent(&self) {
+        self.service_requests_sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_service_request_received(&self) {
+        self.service_requests_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_service_response_received(&self) {
+        self.service_responses_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_service_status_accept(&self) {
+        self.service_status_accepts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_service_status_rejection(
+        &self,
+        reason: crate::runtime::service::ServiceRejectionReason,
+    ) {
+        self.service_status_rejections
+            .fetch_add(1, Ordering::Relaxed);
+        match reason {
+            crate::runtime::service::ServiceRejectionReason::UnauthorizedPeer => self
+                .service_reject_unauthorized_peer
+                .fetch_add(1, Ordering::Relaxed),
+            crate::runtime::service::ServiceRejectionReason::WrongNetwork => self
+                .service_reject_wrong_network
+                .fetch_add(1, Ordering::Relaxed),
+            crate::runtime::service::ServiceRejectionReason::MembershipMismatch => self
+                .service_reject_membership_mismatch
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    pub fn record_service_failure(&self) {
+        self.service_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_redial_attempt(&self) {
         self.redial_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -662,6 +712,21 @@ impl RuntimeMetrics {
             .control_reject_unauthorized_route_advertisement
             .load(Ordering::Relaxed);
         snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
+        snapshot.service_requests_sent = self.service_requests_sent.load(Ordering::Relaxed);
+        snapshot.service_requests_received = self.service_requests_received.load(Ordering::Relaxed);
+        snapshot.service_responses_received =
+            self.service_responses_received.load(Ordering::Relaxed);
+        snapshot.service_status_accepts = self.service_status_accepts.load(Ordering::Relaxed);
+        snapshot.service_status_rejections = self.service_status_rejections.load(Ordering::Relaxed);
+        snapshot.service_reject_unauthorized_peer = self
+            .service_reject_unauthorized_peer
+            .load(Ordering::Relaxed);
+        snapshot.service_reject_wrong_network =
+            self.service_reject_wrong_network.load(Ordering::Relaxed);
+        snapshot.service_reject_membership_mismatch = self
+            .service_reject_membership_mismatch
+            .load(Ordering::Relaxed);
+        snapshot.service_failures = self.service_failures.load(Ordering::Relaxed);
         snapshot.redial_attempts = self.redial_attempts.load(Ordering::Relaxed);
         snapshot.redial_skipped_connected = self.redial_skipped_connected.load(Ordering::Relaxed);
         snapshot.redial_failures = self.redial_failures.load(Ordering::Relaxed);
@@ -759,6 +824,15 @@ pub struct RuntimeSnapshot {
     pub control_reject_unsupported_preferred_path: u64,
     pub control_reject_unauthorized_route_advertisement: u64,
     pub control_failures: u64,
+    pub service_requests_sent: u64,
+    pub service_requests_received: u64,
+    pub service_responses_received: u64,
+    pub service_status_accepts: u64,
+    pub service_status_rejections: u64,
+    pub service_reject_unauthorized_peer: u64,
+    pub service_reject_wrong_network: u64,
+    pub service_reject_membership_mismatch: u64,
+    pub service_failures: u64,
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
@@ -976,6 +1050,33 @@ impl RuntimeSnapshot {
                 self.control_reject_unauthorized_route_advertisement
             ),
             format!("control_failures {}", self.control_failures),
+            format!("service_requests_sent {}", self.service_requests_sent),
+            format!(
+                "service_requests_received {}",
+                self.service_requests_received
+            ),
+            format!(
+                "service_responses_received {}",
+                self.service_responses_received
+            ),
+            format!("service_status_accepts {}", self.service_status_accepts),
+            format!(
+                "service_status_rejections {}",
+                self.service_status_rejections
+            ),
+            format!(
+                "service_reject_unauthorized_peer {}",
+                self.service_reject_unauthorized_peer
+            ),
+            format!(
+                "service_reject_wrong_network {}",
+                self.service_reject_wrong_network
+            ),
+            format!(
+                "service_reject_membership_mismatch {}",
+                self.service_reject_membership_mismatch
+            ),
+            format!("service_failures {}", self.service_failures),
         ]);
     }
 
@@ -1121,6 +1222,15 @@ mod tests {
 
     fn populated_snapshot() -> RuntimeSnapshot {
         let metrics = RuntimeMetrics::default();
+        populate_packet_metrics(&metrics);
+        populate_transport_and_discovery_metrics(&metrics);
+        populate_control_and_service_metrics(&metrics);
+        populate_runtime_state_metrics(&metrics);
+
+        metrics.snapshot_with_paths(populated_queue_stats(), populated_path_stats())
+    }
+
+    fn populate_packet_metrics(metrics: &RuntimeMetrics) {
         metrics.record_tun_read(20);
         metrics.record_tun_write(40);
         metrics.record_outbound_sent();
@@ -1139,6 +1249,9 @@ mod tests {
         metrics.record_inbound_drop(PacketDropReason::UnexpectedPayload);
         metrics.record_outbound_failure();
         metrics.record_inbound_failure();
+    }
+
+    fn populate_transport_and_discovery_metrics(metrics: &RuntimeMetrics) {
         metrics.record_connection_established(false);
         metrics.record_connection_established(true);
         metrics.record_unauthorized_connection_dropped();
@@ -1168,6 +1281,9 @@ mod tests {
         metrics.record_kademlia_provider_advertisement_failure();
         metrics.record_kademlia_bootstrap_refresh();
         metrics.record_kademlia_bootstrap_failure();
+    }
+
+    fn populate_control_and_service_metrics(metrics: &RuntimeMetrics) {
         metrics.record_control_request_sent();
         metrics.record_control_request_received();
         metrics.record_control_response_received();
@@ -1186,6 +1302,21 @@ mod tests {
             metrics.record_control_capability_rejection(reason);
         }
         metrics.record_control_failure();
+        metrics.record_service_request_sent();
+        metrics.record_service_request_received();
+        metrics.record_service_response_received();
+        metrics.record_service_status_accept();
+        for reason in [
+            crate::runtime::service::ServiceRejectionReason::UnauthorizedPeer,
+            crate::runtime::service::ServiceRejectionReason::WrongNetwork,
+            crate::runtime::service::ServiceRejectionReason::MembershipMismatch,
+        ] {
+            metrics.record_service_status_rejection(reason);
+        }
+        metrics.record_service_failure();
+    }
+
+    fn populate_runtime_state_metrics(metrics: &RuntimeMetrics) {
         metrics.record_redial_attempt();
         metrics.record_redial_skipped_connected();
         metrics.record_redial_failure();
@@ -1196,26 +1327,29 @@ mod tests {
         metrics.record_discovered_address_rejected();
         metrics.record_discovered_address_expired(2);
         metrics.record_outbound_queue_blocked_no_supported_path();
+    }
 
-        metrics.snapshot_with_paths(
-            QueueStats {
-                queued_packets: 2,
-                queued_bytes: 80,
-                oldest_packet_age_millis: 45,
-                dropped_packets: 3,
-                dropped_bytes: 120,
-                expired_packets: 2,
-                expired_bytes: 60,
-            },
-            PathRuntimeStats {
-                healthy_direct_quic_datagram_paths: 1,
-                healthy_direct_quic_stream_paths: 2,
-                healthy_direct_tcp_stream_paths: 3,
-                healthy_relay_paths: 4,
-                peers_with_supported_path: 5,
-                peers_without_supported_path: 6,
-            },
-        )
+    fn populated_queue_stats() -> QueueStats {
+        QueueStats {
+            queued_packets: 2,
+            queued_bytes: 80,
+            oldest_packet_age_millis: 45,
+            dropped_packets: 3,
+            dropped_bytes: 120,
+            expired_packets: 2,
+            expired_bytes: 60,
+        }
+    }
+
+    fn populated_path_stats() -> PathRuntimeStats {
+        PathRuntimeStats {
+            healthy_direct_quic_datagram_paths: 1,
+            healthy_direct_quic_stream_paths: 2,
+            healthy_direct_tcp_stream_paths: 3,
+            healthy_relay_paths: 4,
+            peers_with_supported_path: 5,
+            peers_without_supported_path: 6,
+        }
     }
 
     fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
@@ -1296,6 +1430,15 @@ mod tests {
         assert_eq!(snapshot.control_reject_unsupported_preferred_path, 1);
         assert_eq!(snapshot.control_reject_unauthorized_route_advertisement, 1);
         assert_eq!(snapshot.control_failures, 1);
+        assert_eq!(snapshot.service_requests_sent, 1);
+        assert_eq!(snapshot.service_requests_received, 1);
+        assert_eq!(snapshot.service_responses_received, 1);
+        assert_eq!(snapshot.service_status_accepts, 1);
+        assert_eq!(snapshot.service_status_rejections, 3);
+        assert_eq!(snapshot.service_reject_unauthorized_peer, 1);
+        assert_eq!(snapshot.service_reject_wrong_network, 1);
+        assert_eq!(snapshot.service_reject_membership_mismatch, 1);
+        assert_eq!(snapshot.service_failures, 1);
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
@@ -1378,6 +1521,15 @@ mod tests {
             "control_reject_unauthorized_route_advertisement 1",
         );
         assert_metric_line(&snapshot, "control_failures 1");
+        assert_metric_line(&snapshot, "service_requests_sent 1");
+        assert_metric_line(&snapshot, "service_requests_received 1");
+        assert_metric_line(&snapshot, "service_responses_received 1");
+        assert_metric_line(&snapshot, "service_status_accepts 1");
+        assert_metric_line(&snapshot, "service_status_rejections 3");
+        assert_metric_line(&snapshot, "service_reject_unauthorized_peer 1");
+        assert_metric_line(&snapshot, "service_reject_wrong_network 1");
+        assert_metric_line(&snapshot, "service_reject_membership_mismatch 1");
+        assert_metric_line(&snapshot, "service_failures 1");
         assert_metric_line(&snapshot, "redial_attempts 1");
         assert_metric_line(&snapshot, "redial_skipped_connected 1");
         assert_metric_line(&snapshot, "redial_failures 1");
