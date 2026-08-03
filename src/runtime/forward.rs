@@ -371,6 +371,7 @@ mod tests {
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
+            relay_server: false,
             discovery: crate::config::DiscoveryConfig::default(),
         })
         .expect("node");

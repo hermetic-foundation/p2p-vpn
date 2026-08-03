@@ -153,6 +153,8 @@ impl Default for DiscoveryConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct RelayConfig {
     #[serde(default)]
+    pub server: bool,
+    #[serde(default)]
     pub reservations: Vec<String>,
 }
 
@@ -431,6 +433,7 @@ mod tests {
                     dcutr: true,
                 },
                 relay: RelayConfig {
+                    server: true,
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{remote}/p2p-circuit")],
                 },
             },
@@ -458,6 +461,7 @@ mod tests {
                 .len(),
             1
         );
+        assert!(config.network.relay.server);
         assert!(!config.network.discovery.mdns);
     }
 }

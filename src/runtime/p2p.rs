@@ -1,8 +1,11 @@
 use std::error::Error;
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, dcutr, identify, identity::Keypair, kad, mdns, noise,
-    ping, relay, request_response, swarm::NetworkBehaviour, tcp, yamux,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, dcutr, identify,
+    identity::Keypair,
+    kad, mdns, noise, ping, relay, request_response,
+    swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
+    tcp, yamux,
 };
 
 use crate::{
@@ -19,6 +22,7 @@ pub struct Behaviour {
     pub ping: ping::Behaviour,
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
     pub relay: relay::client::Behaviour,
+    pub relay_server: Toggle<relay::Behaviour>,
     pub dcutr: dcutr::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
     pub packet: request_response::Behaviour<PacketCodec>,
@@ -38,6 +42,7 @@ pub struct HostConfig {
     pub bootstrap_peers: Vec<(PeerId, Multiaddr)>,
     pub known_peers: Vec<(PeerId, Multiaddr)>,
     pub relay_reservations: Vec<Multiaddr>,
+    pub relay_server: bool,
     pub discovery: DiscoveryConfig,
 }
 
@@ -45,6 +50,7 @@ pub struct HostConfig {
 pub struct StartupStatus {
     pub kad_bootstrap_started: bool,
     pub relay_reservations_started: usize,
+    pub relay_server_enabled: bool,
 }
 
 pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
@@ -76,6 +82,10 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                     ping: ping::Behaviour::default(),
                     kad,
                     relay,
+                    relay_server: config
+                        .relay_server
+                        .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default()))
+                        .into(),
                     dcutr: dcutr::Behaviour::new(local_peer_id),
                     mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?,
                     packet: packet::behaviour(config.mtu),
@@ -114,6 +124,7 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         startup: StartupStatus {
             kad_bootstrap_started,
             relay_reservations_started,
+            relay_server_enabled: config.relay_server,
         },
     })
 }
@@ -201,11 +212,14 @@ mod tests {
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
+            relay_server: false,
             discovery: DiscoveryConfig::default(),
         })
         .expect("node should build");
 
         assert_eq!(node.local_peer_id, expected_peer_id);
+        assert!(!node.startup.relay_server_enabled);
+        assert!(!node.swarm.behaviour().relay_server.is_enabled());
     }
 
     #[tokio::test]
@@ -225,12 +239,15 @@ mod tests {
             bootstrap_peers: vec![(relay, bootstrap_address)],
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation],
+            relay_server: true,
             discovery: DiscoveryConfig::default(),
         })
         .expect("node");
 
         assert!(node.startup.kad_bootstrap_started);
         assert_eq!(node.startup.relay_reservations_started, 1);
+        assert!(node.startup.relay_server_enabled);
+        assert!(node.swarm.behaviour().relay_server.is_enabled());
     }
 
     #[tokio::test]
@@ -242,6 +259,7 @@ mod tests {
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: Vec::new(),
+            relay_server: false,
             discovery: DiscoveryConfig::default(),
         })
         .expect("listener node");
@@ -254,6 +272,7 @@ mod tests {
             bootstrap_peers: Vec::new(),
             known_peers: vec![(listener.local_peer_id, listener_address)],
             relay_reservations: Vec::new(),
+            relay_server: false,
             discovery: DiscoveryConfig::default(),
         })
         .expect("dialer node");

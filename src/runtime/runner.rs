@@ -34,6 +34,7 @@ pub async fn run_config(
         bootstrap_peers: config.bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
+        relay_server: config.network.relay.server,
         discovery: config.network.discovery,
     })?;
     let forwarder = Forwarder::from_config(&config)?;
@@ -75,6 +76,9 @@ pub async fn run_node(
             "relay reservation listeners started: {}",
             node.startup.relay_reservations_started
         );
+    }
+    if node.startup.relay_server_enabled {
+        eprintln!("relay server enabled");
     }
 
     loop {
@@ -233,11 +237,56 @@ fn handle_behaviour_event(
             eprintln!("kademlia query progressed: {result:?}");
         }
         BehaviourEvent::Relay(event) => handle_relay_event(&event),
+        BehaviourEvent::RelayServer(event) => handle_relay_server_event(&event),
         BehaviourEvent::Dcutr(dcutr::Event {
             remote_peer_id,
             result,
         }) if discovery.dcutr => {
             eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
+        }
+        _ => {}
+    }
+}
+
+fn handle_relay_server_event(event: &relay::Event) {
+    match event {
+        relay::Event::ReservationReqAccepted {
+            src_peer_id,
+            renewed,
+        } => {
+            eprintln!("relay server accepted reservation from {src_peer_id} renewed={renewed}");
+        }
+        relay::Event::ReservationReqDenied {
+            src_peer_id,
+            status,
+        } => {
+            eprintln!("relay server denied reservation from {src_peer_id}: {status:?}");
+        }
+        relay::Event::ReservationClosed { src_peer_id } => {
+            eprintln!("relay server reservation closed for {src_peer_id}");
+        }
+        relay::Event::ReservationTimedOut { src_peer_id } => {
+            eprintln!("relay server reservation timed out for {src_peer_id}");
+        }
+        relay::Event::CircuitReqDenied {
+            src_peer_id,
+            dst_peer_id,
+            status,
+        } => {
+            eprintln!("relay server denied circuit {src_peer_id} -> {dst_peer_id}: {status:?}");
+        }
+        relay::Event::CircuitReqAccepted {
+            src_peer_id,
+            dst_peer_id,
+        } => {
+            eprintln!("relay server accepted circuit {src_peer_id} -> {dst_peer_id}");
+        }
+        relay::Event::CircuitClosed {
+            src_peer_id,
+            dst_peer_id,
+            error,
+        } => {
+            eprintln!("relay server circuit closed {src_peer_id} -> {dst_peer_id}: {error:?}");
         }
         _ => {}
     }

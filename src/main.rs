@@ -102,6 +102,7 @@ fn status(path: &PathBuf) -> Result<(), String> {
         config.network.discovery.kademlia,
         config.network.discovery.dcutr
     );
+    println!("relay server: {}", config.network.relay.server);
     println!(
         "relay reservations: {}",
         config.network.relay.reservations.len()
@@ -160,6 +161,9 @@ async fn up(
             format!("failed to parse relay reservation listen address: {error:?}")
         })? {
             println!("libp2p listen {address}");
+        }
+        if config.network.relay.server {
+            println!("libp2p relay server enabled");
         }
         return Ok(());
     }
