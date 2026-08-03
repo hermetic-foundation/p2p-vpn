@@ -76,6 +76,12 @@ pub async fn run_node(
     let mut metrics_tick = metrics_interval.map(tokio::time::interval);
     let discovery = node.discovery;
 
+    if node.startup.mdns_enabled {
+        eprintln!("mdns discovery enabled");
+    }
+    if node.startup.dcutr_enabled {
+        eprintln!("dcutr hole punching enabled");
+    }
     if node.startup.kademlia.bootstrap_started {
         eprintln!("kademlia bootstrap started");
     }

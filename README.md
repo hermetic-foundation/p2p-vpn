@@ -24,6 +24,10 @@ relays can be useful for experiments only when they support the needed relay
 reservations and are acceptable for the deployment's trust and availability
 requirements.
 
+Discovery toggles control runtime behaviour construction. Disabling mDNS or
+DCUtR prevents the corresponding libp2p behaviour from being installed in the
+swarm; disabling Kademlia prevents overlay provider advertisement and lookup.
+
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a non-zero packet session id derived from
 the local peer identity plus a per-session packet sequence number. It is

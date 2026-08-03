@@ -25,8 +25,8 @@ pub struct Behaviour {
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
     pub relay: relay::client::Behaviour,
     pub relay_server: Toggle<relay::Behaviour>,
-    pub dcutr: dcutr::Behaviour,
-    pub mdns: mdns::tokio::Behaviour,
+    pub dcutr: Toggle<dcutr::Behaviour>,
+    pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub packet: request_response::Behaviour<PacketCodec>,
 }
 
@@ -51,6 +51,8 @@ pub struct HostConfig {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StartupStatus {
+    pub mdns_enabled: bool,
+    pub dcutr_enabled: bool,
     pub kademlia: KademliaStartupStatus,
     pub relay_reservations_started: usize,
     pub relay_server_enabled: bool,
@@ -87,6 +89,14 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                 } else {
                     kad.set_mode(Some(kad::Mode::Client));
                 }
+                let mdns = if config.discovery.mdns {
+                    Some(mdns::tokio::Behaviour::new(
+                        mdns::Config::default(),
+                        local_peer_id,
+                    )?)
+                } else {
+                    None
+                };
 
                 Ok(Behaviour {
                     identify: identify::Behaviour::new(identify::Config::new(
@@ -100,8 +110,12 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
                         .relay_server
                         .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default()))
                         .into(),
-                    dcutr: dcutr::Behaviour::new(local_peer_id),
-                    mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?,
+                    dcutr: config
+                        .discovery
+                        .dcutr
+                        .then(|| dcutr::Behaviour::new(local_peer_id))
+                        .into(),
+                    mdns: mdns.into(),
                     packet: packet::behaviour(config.mtu),
                 })
             },
@@ -144,6 +158,8 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm,
         discovery: config.discovery,
         startup: StartupStatus {
+            mdns_enabled: config.discovery.mdns,
+            dcutr_enabled: config.discovery.dcutr,
             kademlia: KademliaStartupStatus {
                 bootstrap_started: kad_bootstrap_started,
                 rendezvous_advertise_started: kad_rendezvous_advertise_started,
@@ -271,8 +287,42 @@ mod tests {
         .expect("node should build");
 
         assert_eq!(node.local_peer_id, expected_peer_id);
+        assert!(node.startup.mdns_enabled);
+        assert!(node.startup.dcutr_enabled);
+        assert!(node.swarm.behaviour().mdns.is_enabled());
+        assert!(node.swarm.behaviour().dcutr.is_enabled());
         assert!(!node.startup.relay_server_enabled);
         assert!(!node.swarm.behaviour().relay_server.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn build_node_disables_optional_discovery_behaviours() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            dcutr: false,
+        };
+
+        let node = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery,
+        })
+        .expect("node should build");
+
+        assert!(!node.startup.mdns_enabled);
+        assert!(!node.startup.dcutr_enabled);
+        assert!(!node.startup.kademlia.bootstrap_started);
+        assert!(!node.startup.kademlia.rendezvous_advertise_started);
+        assert!(!node.startup.kademlia.rendezvous_lookup_started);
+        assert!(!node.swarm.behaviour().mdns.is_enabled());
+        assert!(!node.swarm.behaviour().dcutr.is_enabled());
     }
 
     #[tokio::test]
@@ -301,6 +351,8 @@ mod tests {
         assert!(node.startup.kademlia.bootstrap_started);
         assert!(node.startup.kademlia.rendezvous_advertise_started);
         assert!(node.startup.kademlia.rendezvous_lookup_started);
+        assert!(node.startup.mdns_enabled);
+        assert!(node.startup.dcutr_enabled);
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
