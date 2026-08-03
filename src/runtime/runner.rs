@@ -413,6 +413,9 @@ fn drain_outbound_queue(
             metrics.record_outbound_sent();
         }
     }
+    if queues.total_stats().queued_packets > 0 {
+        metrics.record_outbound_queue_blocked_no_supported_path();
+    }
 }
 
 fn packet_transport_support(
@@ -1759,6 +1762,7 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
     }
 

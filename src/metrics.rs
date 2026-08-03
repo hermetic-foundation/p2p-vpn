@@ -58,6 +58,7 @@ pub struct RuntimeMetrics {
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
+    outbound_queue_blocked_no_supported_path_events: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -225,6 +226,11 @@ impl RuntimeMetrics {
         self.redial_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_outbound_queue_blocked_no_supported_path(&self) {
+        self.outbound_queue_blocked_no_supported_path_events
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
         RuntimeSnapshot {
@@ -306,6 +312,9 @@ impl RuntimeMetrics {
             redial_attempts: self.redial_attempts.load(Ordering::Relaxed),
             redial_skipped_connected: self.redial_skipped_connected.load(Ordering::Relaxed),
             redial_failures: self.redial_failures.load(Ordering::Relaxed),
+            outbound_queue_blocked_no_supported_path_events: self
+                .outbound_queue_blocked_no_supported_path_events
+                .load(Ordering::Relaxed),
             queue,
         }
     }
@@ -353,6 +362,7 @@ pub struct RuntimeSnapshot {
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
+    pub outbound_queue_blocked_no_supported_path_events: u64,
     pub queue: QueueStats,
 }
 
@@ -418,6 +428,10 @@ impl RuntimeSnapshot {
             format!("redial_attempts {}", self.redial_attempts),
             format!("redial_skipped_connected {}", self.redial_skipped_connected),
             format!("redial_failures {}", self.redial_failures),
+            format!(
+                "outbound_queue_blocked_no_supported_path_events {}",
+                self.outbound_queue_blocked_no_supported_path_events
+            ),
             format!("queue_queued_packets {}", self.queue.queued_packets),
             format!("queue_queued_bytes {}", self.queue.queued_bytes),
             format!("queue_dropped_packets {}", self.queue.dropped_packets),
@@ -528,6 +542,7 @@ mod tests {
         metrics.record_redial_attempt();
         metrics.record_redial_skipped_connected();
         metrics.record_redial_failure();
+        metrics.record_outbound_queue_blocked_no_supported_path();
 
         metrics.snapshot(QueueStats {
             queued_packets: 2,
@@ -585,6 +600,7 @@ mod tests {
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
+        assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
     }
 
     #[test]
@@ -613,6 +629,10 @@ mod tests {
         assert_metric_line(&snapshot, "redial_attempts 1");
         assert_metric_line(&snapshot, "redial_skipped_connected 1");
         assert_metric_line(&snapshot, "redial_failures 1");
+        assert_metric_line(
+            &snapshot,
+            "outbound_queue_blocked_no_supported_path_events 1",
+        );
         assert_metric_line(&snapshot, "queue_expired_packets 2");
         assert_metric_line(&snapshot, "queue_expired_bytes 60");
     }

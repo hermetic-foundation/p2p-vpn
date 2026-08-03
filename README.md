@@ -284,10 +284,11 @@ The metrics output includes control-plane exchange counters, packet counters,
 queue occupancy, total queue drops, queue expiry drops, inbound and outbound
 packet drop reasons, direct versus relayed connection counts, relay
 reservation/circuit counts, relay-server accept counts, DCUtR success/failure
-counts, unauthorized connection drops, and configured-peer redial counters.
+counts, unauthorized connection drops, configured-peer redial counters, and
+queue-drain stalls caused by peers having no currently supported packet path.
 Those counters are intended to show whether a deployment is exchanging
 capabilities, using direct paths, relay fallback, hole-punching, enforcing
-membership, and recovering connections as expected.
+membership, recovering connections, and waiting on path negotiation as expected.
 
 Inspect the Linux interface setup plan without requiring root:
 
