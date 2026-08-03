@@ -102,7 +102,7 @@ pub fn build_node(config: HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     let relay_reservations_started = config.relay_reservations.len();
     for address in config.relay_reservations {
-        swarm.listen_on(address)?;
+        swarm.listen_on(peer_dial_address(local_peer_id, address)?)?;
     }
 
     for (peer, address) in config.bootstrap_peers.into_iter().chain(config.known_peers) {
@@ -205,6 +205,7 @@ mod tests {
 
     use futures::StreamExt as _;
     use libp2p::{
+        multiaddr::Protocol,
         request_response::{self, Message},
         swarm::SwarmEvent,
     };
@@ -287,6 +288,22 @@ mod tests {
         assert_eq!(dial, address);
     }
 
+    #[test]
+    fn peer_dial_address_appends_target_to_relay_reservation_address() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let target = Keypair::generate_ed25519().public().to_peer_id();
+        let reservation: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("reservation address");
+
+        let listen_address = peer_dial_address(target, reservation).expect("listen address");
+
+        assert_eq!(
+            listen_address.to_string(),
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+        );
+    }
+
     #[tokio::test]
     async fn two_nodes_exchange_packet_request() {
         let mut listener = build_node(HostConfig {
@@ -328,10 +345,179 @@ mod tests {
         .expect("packet exchange timed out");
     }
 
+    #[tokio::test]
+    async fn relayed_nodes_exchange_packet_request() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            dcutr: false,
+        };
+        let mut relay = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("relay identity"),
+            mtu: 1280,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            discovery,
+        })
+        .expect("relay node");
+        let relay_address = next_listen_address(&mut relay.swarm).await;
+        relay.swarm.add_external_address(relay_address.clone());
+        let relay_peer = relay.local_peer_id;
+        let relayed_listener_address = relay_address
+            .clone()
+            .with_p2p(relay_peer)
+            .expect("relay p2p address")
+            .with(Protocol::P2pCircuit);
+
+        let mut listener = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relayed_listener_address.clone()],
+            relay_server: false,
+            discovery,
+        })
+        .expect("listener node");
+        let listener_peer = listener.local_peer_id;
+        let relayed_target_address = relayed_listener_address
+            .clone()
+            .with(Protocol::P2p(listener_peer));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_relay_reservation(
+                &mut relay.swarm,
+                &mut listener.swarm,
+                relayed_target_address.clone(),
+                relay_peer,
+            ),
+        )
+        .await
+        .expect("relay reservation timed out");
+
+        let mut dialer = build_node(HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener_peer, relayed_target_address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            discovery,
+        })
+        .expect("dialer node");
+        let frame = Frame::packet(2, 9, vec![0x45, 0, 0, 20]).expect("frame");
+        let request_id = dialer
+            .swarm
+            .behaviour_mut()
+            .packet
+            .send_request(&listener_peer, frame.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_relayed_response(
+                &mut relay.swarm,
+                &mut listener.swarm,
+                &mut dialer.swarm,
+                frame,
+                request_id,
+            ),
+        )
+        .await
+        .expect("relayed packet exchange timed out");
+    }
+
     async fn next_listen_address(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
         loop {
             if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
                 return address;
+            }
+        }
+    }
+
+    async fn wait_for_relay_reservation(
+        relay: &mut Swarm<Behaviour>,
+        listener: &mut Swarm<Behaviour>,
+        relayed_address: Multiaddr,
+        relay_peer: PeerId,
+    ) {
+        let mut listen_addr_reported = false;
+        let mut reservation_accepted = false;
+
+        loop {
+            tokio::select! {
+                event = relay.select_next_some() => {
+                    let _ = event;
+                }
+                event = listener.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                            relay::client::Event::ReservationReqAccepted {
+                                relay_peer_id,
+                                renewal,
+                                ..
+                            },
+                        )) if relay_peer_id == relay_peer && !renewal => {
+                            reservation_accepted = true;
+                        }
+                        SwarmEvent::NewListenAddr { address, .. } if address == relayed_address => {
+                            listen_addr_reported = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if listen_addr_reported && reservation_accepted {
+                return;
+            }
+        }
+    }
+
+    async fn exchange_until_relayed_response(
+        relay: &mut Swarm<Behaviour>,
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        expected_frame: Frame,
+        expected_request_id: request_response::OutboundRequestId,
+    ) {
+        loop {
+            tokio::select! {
+                event = relay.select_next_some() => {
+                    let _ = event;
+                }
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Packet(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. },
+                        ..
+                    })) = event {
+                        assert_eq!(request, expected_frame);
+                        listener
+                            .behaviour_mut()
+                            .packet
+                            .send_response(channel, packet::PacketResponse::Accepted)
+                            .expect("send response");
+                    }
+                }
+                event = dialer.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Packet(
+                        request_response::Event::Message {
+                            message: Message::Response { request_id, response },
+                            ..
+                        },
+                    )) = event
+                    {
+                        assert_eq!(request_id, expected_request_id);
+                        assert_eq!(response, packet::PacketResponse::Accepted);
+                        assert_eq!(expected_frame.header.payload_type, PayloadType::IpPacket);
+                        return;
+                    }
+                }
             }
         }
     }
