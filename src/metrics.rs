@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{path::PathRuntimeStats, queue::QueueStats};
+use crate::{path::PathRuntimeStats, queue::QueueStats, runtime::control::ControlRejectionReason};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutoNatReachability {
@@ -85,6 +85,17 @@ pub struct RuntimeMetrics {
     control_requests_sent: AtomicU64,
     control_requests_received: AtomicU64,
     control_responses_received: AtomicU64,
+    control_capability_accepts: AtomicU64,
+    control_capability_rejections: AtomicU64,
+    control_reject_unauthorized_peer: AtomicU64,
+    control_reject_wrong_network: AtomicU64,
+    control_reject_membership_mismatch: AtomicU64,
+    control_reject_unsupported_wire_version: AtomicU64,
+    control_reject_unsupported_packet_protocol: AtomicU64,
+    control_reject_unsupported_packet_header_length: AtomicU64,
+    control_reject_invalid_effective_mtu: AtomicU64,
+    control_reject_unsupported_preferred_path: AtomicU64,
+    control_reject_unauthorized_route_advertisement: AtomicU64,
     control_failures: AtomicU64,
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
@@ -360,6 +371,45 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_control_capability_accept(&self) {
+        self.control_capability_accepts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_control_capability_rejection(&self, reason: ControlRejectionReason) {
+        self.control_capability_rejections
+            .fetch_add(1, Ordering::Relaxed);
+        match reason {
+            ControlRejectionReason::UnauthorizedPeer => self
+                .control_reject_unauthorized_peer
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::WrongNetwork => self
+                .control_reject_wrong_network
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::MembershipMismatch => self
+                .control_reject_membership_mismatch
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::UnsupportedWireVersion => self
+                .control_reject_unsupported_wire_version
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::UnsupportedPacketProtocol => self
+                .control_reject_unsupported_packet_protocol
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::UnsupportedPacketHeaderLength => self
+                .control_reject_unsupported_packet_header_length
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::InvalidEffectiveMtu => self
+                .control_reject_invalid_effective_mtu
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::UnsupportedPreferredPath => self
+                .control_reject_unsupported_preferred_path
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::UnauthorizedRouteAdvertisement => self
+                .control_reject_unauthorized_route_advertisement
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
     pub fn record_control_failure(&self) {
         self.control_failures.fetch_add(1, Ordering::Relaxed);
     }
@@ -563,6 +613,36 @@ impl RuntimeMetrics {
         snapshot.control_requests_received = self.control_requests_received.load(Ordering::Relaxed);
         snapshot.control_responses_received =
             self.control_responses_received.load(Ordering::Relaxed);
+        snapshot.control_capability_accepts =
+            self.control_capability_accepts.load(Ordering::Relaxed);
+        snapshot.control_capability_rejections =
+            self.control_capability_rejections.load(Ordering::Relaxed);
+        snapshot.control_reject_unauthorized_peer = self
+            .control_reject_unauthorized_peer
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_wrong_network =
+            self.control_reject_wrong_network.load(Ordering::Relaxed);
+        snapshot.control_reject_membership_mismatch = self
+            .control_reject_membership_mismatch
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_unsupported_wire_version = self
+            .control_reject_unsupported_wire_version
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_unsupported_packet_protocol = self
+            .control_reject_unsupported_packet_protocol
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_unsupported_packet_header_length = self
+            .control_reject_unsupported_packet_header_length
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_invalid_effective_mtu = self
+            .control_reject_invalid_effective_mtu
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_unsupported_preferred_path = self
+            .control_reject_unsupported_preferred_path
+            .load(Ordering::Relaxed);
+        snapshot.control_reject_unauthorized_route_advertisement = self
+            .control_reject_unauthorized_route_advertisement
+            .load(Ordering::Relaxed);
         snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
         snapshot.redial_attempts = self.redial_attempts.load(Ordering::Relaxed);
         snapshot.redial_skipped_connected = self.redial_skipped_connected.load(Ordering::Relaxed);
@@ -641,6 +721,17 @@ pub struct RuntimeSnapshot {
     pub control_requests_sent: u64,
     pub control_requests_received: u64,
     pub control_responses_received: u64,
+    pub control_capability_accepts: u64,
+    pub control_capability_rejections: u64,
+    pub control_reject_unauthorized_peer: u64,
+    pub control_reject_wrong_network: u64,
+    pub control_reject_membership_mismatch: u64,
+    pub control_reject_unsupported_wire_version: u64,
+    pub control_reject_unsupported_packet_protocol: u64,
+    pub control_reject_unsupported_packet_header_length: u64,
+    pub control_reject_invalid_effective_mtu: u64,
+    pub control_reject_unsupported_preferred_path: u64,
+    pub control_reject_unauthorized_route_advertisement: u64,
     pub control_failures: u64,
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
@@ -795,6 +886,12 @@ impl RuntimeSnapshot {
     }
 
     fn extend_control_and_queue_lines(&self, lines: &mut Vec<String>) {
+        self.extend_control_lines(lines);
+        self.extend_runtime_state_lines(lines);
+        self.extend_path_and_queue_lines(lines);
+    }
+
+    fn extend_control_lines(&self, lines: &mut Vec<String>) {
         lines.extend([
             format!("control_requests_sent {}", self.control_requests_sent),
             format!(
@@ -805,7 +902,56 @@ impl RuntimeSnapshot {
                 "control_responses_received {}",
                 self.control_responses_received
             ),
+            format!(
+                "control_capability_accepts {}",
+                self.control_capability_accepts
+            ),
+            format!(
+                "control_capability_rejections {}",
+                self.control_capability_rejections
+            ),
+            format!(
+                "control_reject_unauthorized_peer {}",
+                self.control_reject_unauthorized_peer
+            ),
+            format!(
+                "control_reject_wrong_network {}",
+                self.control_reject_wrong_network
+            ),
+            format!(
+                "control_reject_membership_mismatch {}",
+                self.control_reject_membership_mismatch
+            ),
+            format!(
+                "control_reject_unsupported_wire_version {}",
+                self.control_reject_unsupported_wire_version
+            ),
+            format!(
+                "control_reject_unsupported_packet_protocol {}",
+                self.control_reject_unsupported_packet_protocol
+            ),
+            format!(
+                "control_reject_unsupported_packet_header_length {}",
+                self.control_reject_unsupported_packet_header_length
+            ),
+            format!(
+                "control_reject_invalid_effective_mtu {}",
+                self.control_reject_invalid_effective_mtu
+            ),
+            format!(
+                "control_reject_unsupported_preferred_path {}",
+                self.control_reject_unsupported_preferred_path
+            ),
+            format!(
+                "control_reject_unauthorized_route_advertisement {}",
+                self.control_reject_unauthorized_route_advertisement
+            ),
             format!("control_failures {}", self.control_failures),
+        ]);
+    }
+
+    fn extend_runtime_state_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
             format!("redial_attempts {}", self.redial_attempts),
             format!("redial_skipped_connected {}", self.redial_skipped_connected),
             format!("redial_failures {}", self.redial_failures),
@@ -825,6 +971,11 @@ impl RuntimeSnapshot {
                 "outbound_queue_blocked_no_supported_path_events {}",
                 self.outbound_queue_blocked_no_supported_path_events
             ),
+        ]);
+    }
+
+    fn extend_path_and_queue_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
             format!(
                 "path_healthy_direct_quic_datagram_paths {}",
                 self.path.healthy_direct_quic_datagram_paths
@@ -975,6 +1126,20 @@ mod tests {
         metrics.record_control_request_sent();
         metrics.record_control_request_received();
         metrics.record_control_response_received();
+        metrics.record_control_capability_accept();
+        for reason in [
+            ControlRejectionReason::UnauthorizedPeer,
+            ControlRejectionReason::WrongNetwork,
+            ControlRejectionReason::MembershipMismatch,
+            ControlRejectionReason::UnsupportedWireVersion,
+            ControlRejectionReason::UnsupportedPacketProtocol,
+            ControlRejectionReason::UnsupportedPacketHeaderLength,
+            ControlRejectionReason::InvalidEffectiveMtu,
+            ControlRejectionReason::UnsupportedPreferredPath,
+            ControlRejectionReason::UnauthorizedRouteAdvertisement,
+        ] {
+            metrics.record_control_capability_rejection(reason);
+        }
         metrics.record_control_failure();
         metrics.record_redial_attempt();
         metrics.record_redial_skipped_connected();
@@ -1070,6 +1235,17 @@ mod tests {
         assert_eq!(snapshot.control_requests_sent, 1);
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
+        assert_eq!(snapshot.control_capability_accepts, 1);
+        assert_eq!(snapshot.control_capability_rejections, 9);
+        assert_eq!(snapshot.control_reject_unauthorized_peer, 1);
+        assert_eq!(snapshot.control_reject_wrong_network, 1);
+        assert_eq!(snapshot.control_reject_membership_mismatch, 1);
+        assert_eq!(snapshot.control_reject_unsupported_wire_version, 1);
+        assert_eq!(snapshot.control_reject_unsupported_packet_protocol, 1);
+        assert_eq!(snapshot.control_reject_unsupported_packet_header_length, 1);
+        assert_eq!(snapshot.control_reject_invalid_effective_mtu, 1);
+        assert_eq!(snapshot.control_reject_unsupported_preferred_path, 1);
+        assert_eq!(snapshot.control_reject_unauthorized_route_advertisement, 1);
         assert_eq!(snapshot.control_failures, 1);
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
@@ -1131,6 +1307,23 @@ mod tests {
         assert_metric_line(&snapshot, "control_requests_sent 1");
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");
+        assert_metric_line(&snapshot, "control_capability_accepts 1");
+        assert_metric_line(&snapshot, "control_capability_rejections 9");
+        assert_metric_line(&snapshot, "control_reject_unauthorized_peer 1");
+        assert_metric_line(&snapshot, "control_reject_wrong_network 1");
+        assert_metric_line(&snapshot, "control_reject_membership_mismatch 1");
+        assert_metric_line(&snapshot, "control_reject_unsupported_wire_version 1");
+        assert_metric_line(&snapshot, "control_reject_unsupported_packet_protocol 1");
+        assert_metric_line(
+            &snapshot,
+            "control_reject_unsupported_packet_header_length 1",
+        );
+        assert_metric_line(&snapshot, "control_reject_invalid_effective_mtu 1");
+        assert_metric_line(&snapshot, "control_reject_unsupported_preferred_path 1");
+        assert_metric_line(
+            &snapshot,
+            "control_reject_unauthorized_route_advertisement 1",
+        );
         assert_metric_line(&snapshot, "control_failures 1");
         assert_metric_line(&snapshot, "redial_attempts 1");
         assert_metric_line(&snapshot, "redial_skipped_connected 1");

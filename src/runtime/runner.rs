@@ -790,8 +790,10 @@ fn handle_control_request(
                         peer,
                         capabilities.clone(),
                     );
+                    context.metrics.record_control_capability_accept();
                 }
                 ControlResponse::CapabilitiesRejected(reason) => {
+                    context.metrics.record_control_capability_rejection(*reason);
                     context.metrics.record_control_failure();
                     eprintln!("rejecting control capabilities from {peer}: {reason:?}");
                 }
@@ -825,15 +827,18 @@ fn handle_control_response(
                 expected_network,
                 expected_membership_tag,
             ) {
+                metrics.record_control_capability_rejection(reason);
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
             } else {
                 record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
+                metrics.record_control_capability_accept();
                 metrics.record_control_response_received();
                 eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
             }
         }
         ControlResponse::CapabilitiesRejected(reason) => {
+            metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("control capabilities rejected by {peer}: {reason:?}");
         }
@@ -2194,6 +2199,117 @@ mod tests {
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
         );
+    }
+
+    #[test]
+    fn accepted_control_response_records_capability_metrics() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+
+        handle_control_response(
+            &forwarder,
+            &mut peer_capabilities,
+            &metrics,
+            remote,
+            ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1200)),
+            "lab",
+            None,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(peer_capabilities.len(), 1);
+        assert_eq!(snapshot.control_capability_accepts, 1);
+        assert_eq!(snapshot.control_responses_received, 1);
+        assert_eq!(snapshot.control_failures, 0);
+    }
+
+    #[test]
+    fn rejected_control_response_records_rejection_reason_metrics() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+
+        handle_control_response(
+            &forwarder,
+            &mut peer_capabilities,
+            &metrics,
+            remote,
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::WrongNetwork),
+            "lab",
+            None,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert!(peer_capabilities.is_empty());
+        assert_eq!(snapshot.control_capability_accepts, 0);
+        assert_eq!(snapshot.control_capability_rejections, 1);
+        assert_eq!(snapshot.control_reject_wrong_network, 1);
+        assert_eq!(snapshot.control_failures, 1);
     }
 
     #[test]
