@@ -216,6 +216,9 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         relay: args.relay,
     }
     .into_config();
+    config
+        .validate_runtime()
+        .map_err(|error| format!("generated config is invalid: {error:?}"))?;
     let rendered = serde_json::to_string_pretty(&config)
         .map_err(|error| format!("failed to render config: {error}"))?;
 
@@ -242,6 +245,9 @@ impl From<EndpointArg> for InitPeer {
 
 fn status(path: &PathBuf) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
     let routes = config
         .compile_routes()
         .map_err(|error| format!("failed to compile routes: {error:?}"))?;
@@ -327,6 +333,9 @@ async fn up(
     metrics_interval_seconds: Option<u64>,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
     let runtime = TunRuntimeConfig::from_config(&config)
         .map_err(|error| format!("failed to prepare TUN runtime: {error:?}"))?;
 

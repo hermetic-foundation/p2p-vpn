@@ -216,6 +216,10 @@ Inspect the compiled local view:
 cargo run -- status --config p2p-vpn.json
 ```
 
+`status` validates the config before printing the compiled view. It checks that
+the private key matches `network.local_peer`, configured routes compile, and all
+listen, bootstrap, peer, and relay reservation multiaddrs parse.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh

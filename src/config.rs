@@ -61,6 +61,16 @@ impl Config {
         Ok(table)
     }
 
+    pub fn validate_runtime(&self) -> Result<(), ConfigError> {
+        self.identity()?;
+        self.compile_routes()?;
+        self.listen_multiaddrs()?;
+        self.bootstrap_multiaddrs()?;
+        self.peer_multiaddrs()?;
+        self.relay_reservation_multiaddrs()?;
+        Ok(())
+    }
+
     pub fn local_peer_id(&self) -> Result<PeerId, ConfigError> {
         PeerId::from_str(&self.network.local_peer).map_err(ConfigError::PeerId)
     }
@@ -692,6 +702,78 @@ mod tests {
         assert!(config.network.relay.server);
         assert!(!config.network.discovery.mdns);
         assert_eq!(config.resources.packet_stream_limit(), 256);
+    }
+
+    #[test]
+    fn runtime_validation_requires_matching_private_key() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let other = NodeIdentity::generate_ed25519().expect("other identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id,
+                private_key: Some(other.private_key),
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::IdentityPeerMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_checks_transport_addresses() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let remote = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                listen_addresses: vec!["not-a-multiaddr".to_owned()],
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Multiaddr(_))
+        ));
+
+        config.network.listen_addresses = Vec::new();
+        config.peers[0].addresses = vec!["not-a-multiaddr".to_owned()];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Multiaddr(_))
+        ));
     }
 
     #[test]
