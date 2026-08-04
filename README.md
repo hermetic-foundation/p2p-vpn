@@ -91,12 +91,12 @@ authenticated datagram envelope keyed by packet session id and sequence. The
 packet-plane runtime can send and receive those sealed frames over its bound UDP
 listeners and keeps a per-peer session registry with endpoint, MTU, role, and
 local/remote packet session ids visible through daemon state and capability
-views. Outbound queue draining can prefer an established packet-plane datagram
-session over stream fallback when peer capabilities and path selection allow it.
-The daemon also accepts inbound UDP frames from established packet-plane
-sessions through the same route authorization, replay protection, rate limiting,
-and TUN write path as stream packets. Automatic packet-plane session negotiation
-remains future packet-plane work.
+views. Peers that both advertise packet-plane endpoints negotiate those sessions
+over the authenticated control plane with a deterministic single initiator,
+then use the owned UDP packet plane for outbound queue draining when path
+selection allows it. The daemon also accepts inbound UDP frames from established
+packet-plane sessions through the same route authorization, replay protection,
+rate limiting, and TUN write path as stream packets.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the

@@ -231,6 +231,11 @@ fn handle_control_event(
             ControlResponse::CapabilitiesRejected(reason) => {
                 return Err(RemoteQueryError::RejectedCapabilities(reason));
             }
+            ControlResponse::PacketPlaneAccepted(_) | ControlResponse::PacketPlaneRejected(_) => {
+                return Err(RemoteQueryError::ControlFailure(
+                    "unexpected packet-plane negotiation response".to_owned(),
+                ));
+            }
         },
         request_response::Event::OutboundFailure { peer, error, .. } if peer == target_peer => {
             return Err(RemoteQueryError::ControlFailure(error.to_string()));
@@ -347,6 +352,9 @@ fn inbound_capability_response(
                 );
             }
             accepted_capabilities_response(local_capabilities)
+        }
+        ControlRequest::PacketPlaneHello(_) => {
+            ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath)
         }
     }
 }

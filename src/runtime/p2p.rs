@@ -40,6 +40,7 @@ pub struct Behaviour {
 
 pub struct P2pNode {
     pub local_peer_id: PeerId,
+    pub identity: NodeIdentity,
     pub network_name: String,
     pub membership_tag: Option<String>,
     pub swarm: Swarm<Behaviour>,
@@ -177,6 +178,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     Ok(P2pNode {
         local_peer_id,
+        identity: config.identity.clone(),
         network_name: config.network_name.clone(),
         membership_tag: config.membership_tag.clone(),
         swarm,

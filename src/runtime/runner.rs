@@ -17,11 +17,13 @@ use libp2p::{
     request_response::{self, Message},
     swarm::SwarmEvent,
 };
+use rand_core::{OsRng, RngCore as _};
 use tokio::sync::mpsc;
 
 use crate::{
-    PathKind, PeerId,
+    PathKind, PeerId, SessionId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
+    identity::NodeIdentity,
     metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics, RuntimeSnapshot},
     path::{PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
@@ -37,8 +39,10 @@ use crate::{
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
         packet_plane::{
-            PacketPlaneIoError, PacketPlaneReceivedFrame, PacketPlaneRuntime,
-            PacketPlaneSessionRole, PacketPlaneSnapshot,
+            PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeError,
+            PacketPlaneHandshakeKind, PacketPlaneHandshakeParams, PacketPlaneIoError,
+            PacketPlaneReceivedFrame, PacketPlaneRuntime, PacketPlaneSessionError,
+            PacketPlaneSessionRole, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
         },
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
@@ -80,6 +84,41 @@ impl LocalPacketDataPlane {
 
 fn local_packet_data_plane() -> LocalPacketDataPlane {
     LOCAL_PACKET_DATA_PLANE
+}
+
+#[derive(Debug, Default)]
+struct PacketPlaneNegotiator {
+    pending: HashMap<PeerId, PendingPacketPlaneHello>,
+}
+
+#[derive(Debug)]
+struct PendingPacketPlaneHello {
+    secret: PacketPlaneEphemeralSecret,
+    hello: VerifiedPacketPlaneHandshake,
+}
+
+impl PacketPlaneNegotiator {
+    fn insert(
+        &mut self,
+        peer: PeerId,
+        secret: PacketPlaneEphemeralSecret,
+        hello: VerifiedPacketPlaneHandshake,
+    ) {
+        self.pending
+            .insert(peer, PendingPacketPlaneHello { secret, hello });
+    }
+
+    fn remove(&mut self, peer: PeerId) -> Option<PendingPacketPlaneHello> {
+        self.pending.remove(&peer)
+    }
+
+    fn has_pending(&self, peer: PeerId) -> bool {
+        self.pending.contains_key(&peer)
+    }
+
+    fn remove_peer(&mut self, peer: PeerId) {
+        self.pending.remove(&peer);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -270,7 +309,7 @@ pub async fn run_node_until<Shutdown>(
     resources: ResourceConfig,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
-    packet_plane: PacketPlaneRuntime,
+    mut packet_plane: PacketPlaneRuntime,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -286,6 +325,7 @@ where
     );
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
+    let mut packet_plane_negotiator = PacketPlaneNegotiator::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
@@ -295,10 +335,21 @@ where
         kademlia_rendezvous_key.is_some(),
         queue_config,
     );
-    let local_capabilities =
+    let mut packet_endpoint_candidates = node.packet_endpoint_candidates.clone();
+    for listener in packet_plane.snapshot().listeners {
+        if !listener.ip().is_unspecified() {
+            let listener = listener.to_string();
+            if !packet_endpoint_candidates.contains(&listener) {
+                packet_endpoint_candidates.push(listener);
+            }
+        }
+    }
+    let mut local_capabilities =
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
-            .with_packet_endpoint_candidates(node.packet_endpoint_candidates.clone())
+            .with_packet_endpoint_candidates(packet_endpoint_candidates)
             .with_advertised_routes(forwarder.local_advertised_routes());
+    local_capabilities.supports_quic_datagrams = packet_plane.primary_listener().is_some()
+        && !local_capabilities.packet_endpoint_candidates.is_empty();
     timers.prime().await;
     let discovery = node.discovery.clone();
     let (_control_socket, mut control_rx) = match control_socket {
@@ -372,6 +423,9 @@ where
                         local_capabilities: &local_capabilities,
                         previous_membership_tags: &previous_membership_tags,
                         discovery: &discovery,
+                        identity: &node.identity,
+                        packet_plane: &mut packet_plane,
+                        packet_plane_negotiator: &mut packet_plane_negotiator,
                     },
                     event,
                 )?;
@@ -2204,6 +2258,9 @@ struct SwarmEventContext<'a> {
     local_capabilities: &'a ControlCapabilities,
     previous_membership_tags: &'a [String],
     discovery: &'a DiscoveryConfig,
+    identity: &'a NodeIdentity,
+    packet_plane: &'a mut PacketPlaneRuntime,
+    packet_plane_negotiator: &'a mut PacketPlaneNegotiator,
 }
 
 #[derive(Clone, Copy)]
@@ -2334,6 +2391,9 @@ fn handle_swarm_event(
             );
             if num_established == 0 {
                 context.inbound_packet_rate_limiters.remove(peer_id);
+                context
+                    .packet_plane_negotiator
+                    .remove_peer(PeerId::from_libp2p(peer_id));
             }
             log_runtime_event(
                 LogLevel::Info,
@@ -2410,7 +2470,8 @@ fn handle_control_event(
             message: Message::Response { response, .. },
             ..
         } => {
-            handle_control_response(
+            handle_control_response_event(
+                swarm,
                 context.forwarder,
                 context.peer_capabilities,
                 context.metrics,
@@ -2420,6 +2481,10 @@ fn handle_control_event(
                     context.local_capabilities,
                     context.previous_membership_tags,
                 ),
+                context.local_capabilities,
+                context.packet_plane,
+                context.packet_plane_negotiator,
+                context.identity,
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -2730,6 +2795,28 @@ fn handle_control_request(
                     context.metrics.record_control_failure();
                     audit_control_capabilities_rejection(peer, *reason);
                 }
+                ControlResponse::PacketPlaneAccepted(_)
+                | ControlResponse::PacketPlaneRejected(_) => {}
+            }
+            swarm
+                .behaviour_mut()
+                .control
+                .send_response(channel, response)
+                .map_err(|_| RunnerError::ControlResponseDropped)?;
+        }
+        ControlRequest::PacketPlaneHello(handshake) => {
+            context.metrics.record_control_request_received();
+            let response = packet_plane_accept_response_for_peer(
+                context.forwarder,
+                context.peer_capabilities,
+                context.packet_plane,
+                context.identity,
+                context.local_capabilities,
+                peer,
+                &handshake,
+            );
+            if matches!(response, ControlResponse::PacketPlaneRejected(_)) {
+                context.metrics.record_control_failure();
             }
             swarm
                 .behaviour_mut()
@@ -2812,6 +2899,82 @@ fn handle_service_response(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_control_response_event(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    peer_capabilities: &mut PeerCapabilities,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    response: ControlResponse,
+    validation: MembershipValidationScope<'_>,
+    local_capabilities: &ControlCapabilities,
+    packet_plane: &mut PacketPlaneRuntime,
+    packet_plane_negotiator: &mut PacketPlaneNegotiator,
+    identity: &NodeIdentity,
+) {
+    metrics.record_control_response_received();
+    match response {
+        ControlResponse::CapabilitiesAccepted(capabilities) => {
+            if let Some(reason) = validate_peer_capabilities(
+                forwarder,
+                peer,
+                &capabilities,
+                validation.network,
+                validation.current_tag,
+                validation.previous_tags,
+            ) {
+                metrics.record_control_capability_rejection(reason);
+                metrics.record_control_failure();
+                eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
+            } else {
+                record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
+                metrics.record_control_capability_accept();
+                eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+                maybe_send_packet_plane_hello(
+                    swarm,
+                    forwarder,
+                    packet_plane,
+                    packet_plane_negotiator,
+                    identity,
+                    local_capabilities,
+                    peer,
+                    &capabilities,
+                    metrics,
+                );
+            }
+        }
+        ControlResponse::CapabilitiesRejected(reason) => {
+            metrics.record_control_capability_rejection(reason);
+            metrics.record_control_failure();
+            eprintln!("control capabilities rejected by {peer}: {reason:?}");
+        }
+        ControlResponse::PacketPlaneAccepted(handshake) => {
+            if let Err(error) = complete_packet_plane_hello(
+                forwarder,
+                peer_capabilities,
+                packet_plane,
+                packet_plane_negotiator,
+                peer,
+                &handshake,
+                validation.network,
+            ) {
+                metrics.record_control_failure();
+                eprintln!(
+                    "packet-plane accept from {peer} failed: {}",
+                    error.describe()
+                );
+            }
+        }
+        ControlResponse::PacketPlaneRejected(reason) => {
+            metrics.record_control_capability_rejection(reason);
+            metrics.record_control_failure();
+            eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 fn handle_control_response(
     forwarder: &Forwarder,
     peer_capabilities: &mut PeerCapabilities,
@@ -2844,6 +3007,15 @@ fn handle_control_response(
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("control capabilities rejected by {peer}: {reason:?}");
+        }
+        ControlResponse::PacketPlaneAccepted(_) => {
+            metrics.record_control_failure();
+            eprintln!("unexpected packet-plane accept response from {peer}");
+        }
+        ControlResponse::PacketPlaneRejected(reason) => {
+            metrics.record_control_capability_rejection(reason);
+            metrics.record_control_failure();
+            eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
         }
     }
 }
@@ -2937,6 +3109,306 @@ fn record_peer_capabilities(
 ) {
     if forwarder.is_configured_transport_peer(peer) {
         peer_capabilities.record(PeerId::from_libp2p(peer), capabilities);
+    }
+}
+
+#[derive(Debug)]
+enum PacketPlaneNegotiationError {
+    UnauthorizedPeer,
+    MissingLocalEndpoint,
+    MissingRemoteCapabilities,
+    MissingRemoteEndpoint,
+    EndpointNotAdvertised,
+    Decode(PacketPlaneHandshakeError),
+    Verify(PacketPlaneHandshakeError),
+    Encode(PacketPlaneHandshakeError),
+    Session(PacketPlaneSessionError),
+    NoPendingHello,
+}
+
+impl PacketPlaneNegotiationError {
+    fn describe(&self) -> String {
+        match self {
+            Self::UnauthorizedPeer => "unauthorized_peer".to_owned(),
+            Self::MissingLocalEndpoint => "missing_local_endpoint".to_owned(),
+            Self::MissingRemoteCapabilities => "missing_remote_capabilities".to_owned(),
+            Self::MissingRemoteEndpoint => "missing_remote_endpoint".to_owned(),
+            Self::EndpointNotAdvertised => "endpoint_not_advertised".to_owned(),
+            Self::Decode(error) => format!("decode: {error:?}"),
+            Self::Verify(error) => format!("verify: {error:?}"),
+            Self::Encode(error) => format!("encode: {error:?}"),
+            Self::Session(error) => format!("session: {error:?}"),
+            Self::NoPendingHello => "no_pending_hello".to_owned(),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_send_packet_plane_hello(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    packet_plane: &PacketPlaneRuntime,
+    negotiator: &mut PacketPlaneNegotiator,
+    identity: &NodeIdentity,
+    local_capabilities: &ControlCapabilities,
+    peer: Libp2pPeerId,
+    remote_capabilities: &ControlCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    let local_overlay = PeerId::from_libp2p(*swarm.local_peer_id());
+    let remote_overlay = PeerId::from_libp2p(peer);
+    if !forwarder.is_configured_transport_peer(peer)
+        || !remote_capabilities.supports_quic_datagrams
+        || remote_capabilities.packet_endpoint_candidates.is_empty()
+        || !local_capabilities.supports_quic_datagrams
+        || packet_plane.has_session(remote_overlay)
+        || negotiator.has_pending(remote_overlay)
+        || local_overlay.as_bytes() > remote_overlay.as_bytes()
+    {
+        return;
+    }
+
+    match signed_packet_plane_handshake(
+        PacketPlaneHandshakeKind::Hello,
+        identity,
+        local_capabilities,
+    ) {
+        Ok((secret, handshake, verified)) => match handshake.encode() {
+            Ok(encoded) => {
+                negotiator.insert(remote_overlay, secret, verified);
+                swarm
+                    .behaviour_mut()
+                    .control
+                    .send_request(&peer, ControlRequest::PacketPlaneHello(encoded));
+                metrics.record_control_request_sent();
+                log_runtime_event(
+                    LogLevel::Info,
+                    "packet_plane_hello_sent",
+                    &[("peer", &remote_overlay.to_string())],
+                );
+            }
+            Err(error) => {
+                metrics.record_control_failure();
+                eprintln!("packet-plane hello encode failed for {peer}: {error:?}");
+            }
+        },
+        Err(error) => {
+            metrics.record_control_failure();
+            eprintln!("packet-plane hello signing failed for {peer}: {error:?}");
+        }
+    }
+}
+
+fn packet_plane_accept_response_for_peer(
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: &mut PacketPlaneRuntime,
+    identity: &NodeIdentity,
+    local_capabilities: &ControlCapabilities,
+    peer: Libp2pPeerId,
+    handshake: &[u8],
+) -> ControlResponse {
+    match accept_packet_plane_hello(
+        forwarder,
+        peer_capabilities,
+        packet_plane,
+        identity,
+        local_capabilities,
+        peer,
+        handshake,
+    ) {
+        Ok(encoded) => ControlResponse::PacketPlaneAccepted(encoded),
+        Err(error) => {
+            eprintln!(
+                "packet-plane hello from {peer} rejected: {}",
+                error.describe()
+            );
+            ControlResponse::PacketPlaneRejected(packet_plane_negotiation_rejection(&error))
+        }
+    }
+}
+
+fn accept_packet_plane_hello(
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: &mut PacketPlaneRuntime,
+    identity: &NodeIdentity,
+    local_capabilities: &ControlCapabilities,
+    peer: Libp2pPeerId,
+    handshake: &[u8],
+) -> Result<Vec<u8>, PacketPlaneNegotiationError> {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
+    }
+    let remote_overlay = PeerId::from_libp2p(peer);
+    let remote_capabilities = peer_capabilities
+        .get(remote_overlay)
+        .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
+    if !remote_capabilities.supports_quic_datagrams {
+        return Err(PacketPlaneNegotiationError::MissingRemoteEndpoint);
+    }
+    let hello = PacketPlaneHandshake::decode(handshake)
+        .map_err(PacketPlaneNegotiationError::Decode)?
+        .verify(&local_capabilities.network_name, Some(remote_overlay))
+        .map_err(PacketPlaneNegotiationError::Verify)?;
+    if hello.kind != PacketPlaneHandshakeKind::Hello
+        || !endpoint_is_advertised(remote_capabilities, hello.endpoint)
+    {
+        return Err(PacketPlaneNegotiationError::EndpointNotAdvertised);
+    }
+    let (secret, accept, verified_accept) = signed_packet_plane_handshake(
+        PacketPlaneHandshakeKind::Accept,
+        identity,
+        local_capabilities,
+    )?;
+    packet_plane
+        .establish_session(
+            PacketPlaneSessionRole::Responder,
+            &secret,
+            &verified_accept,
+            &hello,
+        )
+        .map_err(PacketPlaneNegotiationError::Session)?;
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_session_established",
+        &[
+            ("peer", &remote_overlay.to_string()),
+            ("role", "responder"),
+            ("endpoint", &hello.endpoint.to_string()),
+        ],
+    );
+    accept.encode().map_err(PacketPlaneNegotiationError::Encode)
+}
+
+fn complete_packet_plane_hello(
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: &mut PacketPlaneRuntime,
+    negotiator: &mut PacketPlaneNegotiator,
+    peer: Libp2pPeerId,
+    handshake: &[u8],
+    network_name: &str,
+) -> Result<(), PacketPlaneNegotiationError> {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
+    }
+    let remote_overlay = PeerId::from_libp2p(peer);
+    let pending = negotiator
+        .remove(remote_overlay)
+        .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
+    let remote_capabilities = peer_capabilities
+        .get(remote_overlay)
+        .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
+    let accept = PacketPlaneHandshake::decode(handshake)
+        .map_err(PacketPlaneNegotiationError::Decode)?
+        .verify(network_name, Some(remote_overlay))
+        .map_err(PacketPlaneNegotiationError::Verify)?;
+    if accept.kind != PacketPlaneHandshakeKind::Accept
+        || !endpoint_is_advertised(remote_capabilities, accept.endpoint)
+    {
+        return Err(PacketPlaneNegotiationError::EndpointNotAdvertised);
+    }
+    packet_plane
+        .establish_session(
+            PacketPlaneSessionRole::Initiator,
+            &pending.secret,
+            &pending.hello,
+            &accept,
+        )
+        .map_err(PacketPlaneNegotiationError::Session)?;
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_session_established",
+        &[
+            ("peer", &remote_overlay.to_string()),
+            ("role", "initiator"),
+            ("endpoint", &accept.endpoint.to_string()),
+        ],
+    );
+    Ok(())
+}
+
+fn signed_packet_plane_handshake(
+    kind: PacketPlaneHandshakeKind,
+    identity: &NodeIdentity,
+    local_capabilities: &ControlCapabilities,
+) -> Result<
+    (
+        PacketPlaneEphemeralSecret,
+        PacketPlaneHandshake,
+        VerifiedPacketPlaneHandshake,
+    ),
+    PacketPlaneNegotiationError,
+> {
+    let endpoint = first_packet_plane_endpoint(local_capabilities)
+        .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?;
+    let secret = PacketPlaneEphemeralSecret::generate();
+    let handshake = PacketPlaneHandshake::signed(
+        kind,
+        identity,
+        PacketPlaneHandshakeParams {
+            network_name: local_capabilities.network_name.clone(),
+            session_id: random_nonzero_session_id(),
+            nonce: OsRng.next_u64(),
+            mtu: local_capabilities.effective_mtu,
+            ephemeral_public_key: secret.public_key(),
+            endpoint,
+        },
+    )
+    .map_err(PacketPlaneNegotiationError::Encode)?;
+    let local_overlay = identity
+        .peer_id
+        .parse::<PeerId>()
+        .map_err(|_| PacketPlaneNegotiationError::UnauthorizedPeer)?;
+    let verified = handshake
+        .verify(&local_capabilities.network_name, Some(local_overlay))
+        .map_err(PacketPlaneNegotiationError::Verify)?;
+    Ok((secret, handshake, verified))
+}
+
+fn random_nonzero_session_id() -> SessionId {
+    loop {
+        let id = OsRng.next_u32();
+        if id != 0 {
+            return id;
+        }
+    }
+}
+
+fn first_packet_plane_endpoint(capabilities: &ControlCapabilities) -> Option<std::net::SocketAddr> {
+    capabilities
+        .packet_endpoint_candidates
+        .iter()
+        .find_map(|endpoint| endpoint.parse().ok())
+}
+
+fn endpoint_is_advertised(
+    capabilities: &ControlCapabilities,
+    endpoint: std::net::SocketAddr,
+) -> bool {
+    capabilities
+        .packet_endpoint_candidates
+        .iter()
+        .any(|candidate| candidate.parse::<std::net::SocketAddr>() == Ok(endpoint))
+}
+
+const fn packet_plane_negotiation_rejection(
+    error: &PacketPlaneNegotiationError,
+) -> ControlRejectionReason {
+    match error {
+        PacketPlaneNegotiationError::UnauthorizedPeer => ControlRejectionReason::UnauthorizedPeer,
+        PacketPlaneNegotiationError::Decode(_)
+        | PacketPlaneNegotiationError::Verify(_)
+        | PacketPlaneNegotiationError::EndpointNotAdvertised
+        | PacketPlaneNegotiationError::MissingLocalEndpoint
+        | PacketPlaneNegotiationError::MissingRemoteCapabilities
+        | PacketPlaneNegotiationError::MissingRemoteEndpoint
+        | PacketPlaneNegotiationError::Encode(_)
+        | PacketPlaneNegotiationError::Session(_)
+        | PacketPlaneNegotiationError::NoPendingHello => {
+            ControlRejectionReason::UnsupportedPreferredPath
+        }
     }
 }
 
@@ -6934,6 +7406,120 @@ mod tests {
                 1_280,
             ),
             1_000
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn packet_plane_control_negotiation_establishes_sessions() {
+        let initiator_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("initiator identity");
+        let responder_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("responder identity");
+        let initiator_peer = initiator_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("initiator libp2p peer");
+        let responder_peer = responder_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("responder libp2p peer");
+        let initiator_overlay = PeerId::from_libp2p(initiator_peer);
+        let responder_overlay = PeerId::from_libp2p(responder_peer);
+        let initiator_forwarder =
+            Forwarder::from_config(&config_with_peer(&initiator_identity, responder_peer))
+                .expect("initiator forwarder");
+        let responder_forwarder =
+            Forwarder::from_config(&config_with_peer(&responder_identity, initiator_peer))
+                .expect("responder forwarder");
+        let mut initiator_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("initiator socket")])
+                .await
+                .expect("initiator packet plane");
+        let mut responder_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("responder socket")])
+                .await
+                .expect("responder packet plane");
+        let mut initiator_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_packet_endpoint_candidates(vec![
+                initiator_packet_plane
+                    .primary_listener()
+                    .expect("initiator listener")
+                    .to_string(),
+            ]);
+        initiator_capabilities.supports_quic_datagrams = true;
+        let mut responder_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_packet_endpoint_candidates(vec![
+                responder_packet_plane
+                    .primary_listener()
+                    .expect("responder listener")
+                    .to_string(),
+            ]);
+        responder_capabilities.supports_quic_datagrams = true;
+        let mut responder_peer_capabilities = PeerCapabilities::default();
+        responder_peer_capabilities.record(initiator_overlay, initiator_capabilities.clone());
+        let mut initiator_peer_capabilities = PeerCapabilities::default();
+        initiator_peer_capabilities.record(responder_overlay, responder_capabilities.clone());
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let (secret, hello, verified_hello) = signed_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &initiator_identity,
+            &initiator_capabilities,
+        )
+        .expect("signed hello");
+        negotiator.insert(responder_overlay, secret, verified_hello);
+        let encoded_hello = hello.encode().expect("encoded hello");
+
+        let response = packet_plane_accept_response_for_peer(
+            &responder_forwarder,
+            &responder_peer_capabilities,
+            &mut responder_packet_plane,
+            &responder_identity,
+            &responder_capabilities,
+            initiator_peer,
+            &encoded_hello,
+        );
+        let ControlResponse::PacketPlaneAccepted(encoded_accept) = response else {
+            panic!("expected packet-plane accept, got {response:?}");
+        };
+        complete_packet_plane_hello(
+            &initiator_forwarder,
+            &initiator_peer_capabilities,
+            &mut initiator_packet_plane,
+            &mut negotiator,
+            responder_peer,
+            &encoded_accept,
+            "lab",
+        )
+        .expect("complete hello");
+
+        let initiator_session = initiator_packet_plane
+            .snapshot()
+            .sessions
+            .into_iter()
+            .find(|session| session.peer == responder_overlay)
+            .expect("initiator session");
+        let responder_session = responder_packet_plane
+            .snapshot()
+            .sessions
+            .into_iter()
+            .find(|session| session.peer == initiator_overlay)
+            .expect("responder session");
+        assert_eq!(initiator_session.role, PacketPlaneSessionRole::Initiator);
+        assert_eq!(responder_session.role, PacketPlaneSessionRole::Responder);
+        assert_eq!(initiator_session.mtu, 1200);
+        assert_eq!(responder_session.mtu, 1200);
+        assert_eq!(
+            initiator_session.endpoint,
+            responder_packet_plane
+                .primary_listener()
+                .expect("responder")
+        );
+        assert_eq!(
+            responder_session.endpoint,
+            initiator_packet_plane
+                .primary_listener()
+                .expect("initiator")
         );
     }
 

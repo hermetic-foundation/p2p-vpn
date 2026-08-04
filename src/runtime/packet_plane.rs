@@ -868,6 +868,11 @@ impl PacketPlaneRuntime {
     }
 
     #[must_use]
+    pub fn primary_listener(&self) -> Option<SocketAddr> {
+        self.listeners.first().copied()
+    }
+
+    #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }

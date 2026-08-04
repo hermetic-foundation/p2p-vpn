@@ -17,7 +17,7 @@ path.
 
 | Area | Status | Current evidence | Verification |
 | --- | --- | --- | --- |
-| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs`, `src/runtime/control.rs`, and `src/runtime/packet_plane.rs` expose owned packet-plane listener config, bind configured UDP listeners, advertise direct endpoint candidates, provide signed hello/accept handshakes with ephemeral X25519 keys, derive directional ChaCha20-Poly1305 packet keys, register per-peer packet-plane sessions with endpoint/MTU/session metadata, seal/open encrypted datagram envelopes around the existing packet frame, exchange sealed frames over bound UDP sockets, let outbound queue draining prefer an established packet-plane datagram session when peer capabilities and path selection allow it, and accept inbound UDP frames from established sessions through the same route authorization/replay/TUN write path as stream packets. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::packet_plane::tests`; outbound daemon integration: `nix develop -c cargo test runtime::runner::tests::drain_outbound_queue_prefers_established_packet_plane_datagram_path`; inbound daemon integration: `nix develop -c cargo test runtime::runner::tests` |
+| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs`, `src/runtime/control.rs`, and `src/runtime/packet_plane.rs` expose owned packet-plane listener config, bind configured UDP listeners, advertise direct endpoint candidates, negotiate signed hello/accept handshakes over the authenticated control plane, derive directional ChaCha20-Poly1305 packet keys with ephemeral X25519 keys, register per-peer packet-plane sessions with endpoint/MTU/session metadata, seal/open encrypted datagram envelopes around the existing packet frame, exchange sealed frames over bound UDP sockets, let outbound queue draining prefer an established packet-plane datagram session when peer capabilities and path selection allow it, and accept inbound UDP frames from established sessions through the same route authorization/replay/TUN write path as stream packets. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::packet_plane::tests`; negotiation: `nix develop -c cargo test runtime::runner::tests::packet_plane_control_negotiation_establishes_sessions`; outbound daemon integration: `nix develop -c cargo test runtime::runner::tests::drain_outbound_queue_prefers_established_packet_plane_datagram_path`; inbound daemon integration: `nix develop -c cargo test runtime::runner::tests` |
 | Native QUIC datagrams | blocked | `src/runtime/runner.rs` advertises local QUIC datagrams as unsupported because the locked `libp2p-quic`/`Swarm` surface does not expose an application datagram sender/receiver. Datagrams are modelled as a preferred path kind, but packets are not falsely reported as datagram-sent. | `nix develop -c cargo test runtime::runner::tests::local_packet_data_plane_is_identity_keyed_stream_fallback_only` |
 | Stream fallback | operational | The fallback uses identity-keyed request-response streams, per-peer send windows, and flow shards so same-shard packets stay queued while unrelated shards can drain. | `nix develop -c cargo test runtime::runner::tests::drain_outbound_queue_gates_stream_fallback_by_flow_shard` |
 | Queueing and backpressure | operational | `src/queue.rs` enforces packet count, byte count, packet age, per-peer fairness, expired drops, and blocked-peer retention. Runtime metrics expose queue drops and blocked reasons. | `nix develop -c cargo test queue::tests` |
@@ -43,12 +43,12 @@ path.
    dependency surface. Closing this requires a lower-level transport integration,
    a dependency upgrade that exposes application datagrams, or a different
    datagram-capable substrate. Owned packet-plane listener configuration,
-   listener binding, endpoint capability advertisement, signed packet session
-   handshakes, X25519 key agreement, per-peer packet-plane session state,
-   encrypted datagram frame primitives, socket-level UDP send/receive
-   primitives, daemon outbound queue sends over an established packet-plane
-   session, and daemon inbound handling for established packet-plane sessions
-   exist, but there is not yet automatic packet-plane session negotiation.
+   listener binding, endpoint capability advertisement, automatic signed packet
+   session negotiation over the control plane, X25519 key agreement, per-peer
+   packet-plane session state, encrypted datagram frame primitives, socket-level
+   UDP send/receive primitives, daemon outbound queue sends over an established
+   packet-plane session, and daemon inbound handling for established
+   packet-plane sessions exist.
 2. MTU handling deliberately rejects oversized packets, writes local
    packet-too-big feedback where possible, and provides Linux route MSS hints,
    but it does not implement overlay fragmentation or active PMTUD.

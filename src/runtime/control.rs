@@ -84,12 +84,15 @@ impl ControlCapabilities {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ControlRequest {
     Capabilities(ControlCapabilities),
+    PacketPlaneHello(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ControlResponse {
     CapabilitiesAccepted(ControlCapabilities),
     CapabilitiesRejected(ControlRejectionReason),
+    PacketPlaneAccepted(Vec<u8>),
+    PacketPlaneRejected(ControlRejectionReason),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -428,6 +431,47 @@ mod tests {
             .expect("read response");
 
         assert_eq!(decoded, response);
+    }
+
+    #[tokio::test]
+    async fn control_codec_round_trips_packet_plane_negotiation() {
+        let mut codec = ControlCodec;
+        let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
+        let request = ControlRequest::PacketPlaneHello(vec![1, 2, 3, 4]);
+        let response = ControlResponse::PacketPlaneAccepted(vec![5, 6, 7, 8]);
+        let mut written_request = Cursor::new(Vec::new());
+        let mut written_response = Cursor::new(Vec::new());
+
+        request_response::Codec::write_request(
+            &mut codec,
+            &protocol,
+            &mut written_request,
+            request.clone(),
+        )
+        .await
+        .expect("write request");
+        request_response::Codec::write_response(
+            &mut codec,
+            &protocol,
+            &mut written_response,
+            response.clone(),
+        )
+        .await
+        .expect("write response");
+
+        written_request.set_position(0);
+        written_response.set_position(0);
+        let decoded_request =
+            request_response::Codec::read_request(&mut codec, &protocol, &mut written_request)
+                .await
+                .expect("read request");
+        let decoded_response =
+            request_response::Codec::read_response(&mut codec, &protocol, &mut written_response)
+                .await
+                .expect("read response");
+
+        assert_eq!(decoded_request, request);
+        assert_eq!(decoded_response, response);
     }
 
     #[tokio::test]
