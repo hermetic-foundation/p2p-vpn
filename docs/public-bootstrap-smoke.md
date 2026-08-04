@@ -130,7 +130,10 @@ and requires direct relay multiaddrs with `/p2p/RELAY` but without
 acceptance or relayed listen-address publication timed out. Failures after
 reservation setup include the same detailed bootstrap-check lines that
 successful candidates print, so failed relayed-circuit and DCUtR probes show
-which prerequisite was missing. Successful candidates also print a
+which prerequisite was missing. DCUtR failures also include the last libp2p
+hole-punch error as `dcutr last_error`, which distinguishes cases such as no
+direct connection, rejected relay prerequisites, or direct handshake timeouts.
+Successful candidates also print a
 `public relay candidate config:` line with the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
 address to feed into `init-config`. Use `--write-config PATH` to write that

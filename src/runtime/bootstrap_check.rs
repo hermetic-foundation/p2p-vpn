@@ -69,12 +69,13 @@ pub enum BootstrapAutoNatStatus {
     Private,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BootstrapDcutrCheck {
     pub enabled: bool,
     pub ready: bool,
     pub successes: usize,
     pub failures: usize,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +154,10 @@ impl BootstrapCheckReport {
             format!("dcutr ready: {}", self.dcutr.ready),
             format!("dcutr successes: {}", self.dcutr.successes),
             format!("dcutr failures: {}", self.dcutr.failures),
+            format!(
+                "dcutr last_error: {}",
+                self.dcutr.last_error.as_deref().unwrap_or("none")
+            ),
             format!(
                 "kademlia bootstrap started: {}",
                 self.kademlia.bootstrap_started
@@ -522,6 +527,7 @@ pub async fn check_config_bootstrap(
             ready: dcutr_ready,
             successes: poll.dcutr_successes,
             failures: poll.dcutr_failures,
+            last_error: poll.dcutr_last_error.clone(),
         },
         configured_bootstrap_peers: bootstrap_peers.len(),
         connected_bootstrap_peers: poll.connected_bootstrap_peers.len(),
@@ -1388,10 +1394,14 @@ fn record_bootstrap_event(
             result.outbound_circuit_relays.insert(relay_peer_id);
         }
         SwarmEvent::Behaviour(BehaviourEvent::Dcutr(dcutr::Event { result: event, .. })) => {
-            if event.is_ok() {
-                result.dcutr_successes += 1;
-            } else {
-                result.dcutr_failures += 1;
+            match event {
+                Ok(_) => {
+                    result.dcutr_successes += 1;
+                }
+                Err(error) => {
+                    result.dcutr_failures += 1;
+                    result.dcutr_last_error = Some(format!("{error:?}"));
+                }
             }
         }
         SwarmEvent::NewListenAddr { address, .. } => {
@@ -1424,6 +1434,7 @@ struct BootstrapPollResult {
     relayed_peer_dial_failures: Vec<(Libp2pPeerId, String)>,
     dcutr_successes: usize,
     dcutr_failures: usize,
+    dcutr_last_error: Option<String>,
     autonat_status: BootstrapAutoNatStatus,
 }
 
@@ -1871,7 +1882,12 @@ mod tests {
                 address: format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}"),
                 succeeded: false,
                 error: Some("dcutr success check did not meet success threshold".to_owned()),
-                bootstrap: Some(dcutr_success_report(true, 0, 0)),
+                bootstrap: Some(dcutr_success_report(
+                    true,
+                    0,
+                    1,
+                    Some("NoDirectConnection".to_owned()),
+                )),
             }],
         };
 
@@ -1889,6 +1905,9 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("public relay candidate detail: dcutr successes: 0"))
         );
+        assert!(lines.iter().any(|line| {
+            line.contains("public relay candidate detail: dcutr last_error: NoDirectConnection")
+        }));
     }
 
     #[test]
@@ -2155,6 +2174,7 @@ mod tests {
                 ready: false,
                 successes: 0,
                 failures: 1,
+                last_error: Some("HandshakeTimedOut".to_owned()),
             },
             configured_bootstrap_peers: 2,
             connected_bootstrap_peers: 1,
@@ -2209,6 +2229,7 @@ mod tests {
         assert!(lines.contains(&"dcutr ready: false".to_owned()));
         assert!(lines.contains(&"dcutr successes: 0".to_owned()));
         assert!(lines.contains(&"dcutr failures: 1".to_owned()));
+        assert!(lines.contains(&"dcutr last_error: HandshakeTimedOut".to_owned()));
         assert!(
             lines.contains(
                 &"relay reservations: 1 accepted 0 relayed_listen_addresses 0".to_owned()
@@ -2342,10 +2363,12 @@ mod tests {
 
     #[test]
     fn bootstrap_check_can_require_dcutr_success_event() {
-        assert!(dcutr_success_report(true, 1, 0).succeeded());
-        assert!(!dcutr_success_report(true, 0, 0).succeeded());
-        assert!(!dcutr_success_report(true, 0, 1).succeeded());
-        assert!(!dcutr_success_report(false, 1, 0).succeeded());
+        assert!(dcutr_success_report(true, 1, 0, None).succeeded());
+        assert!(!dcutr_success_report(true, 0, 0, None).succeeded());
+        assert!(
+            !dcutr_success_report(true, 0, 1, Some("NoDirectConnection".to_owned())).succeeded()
+        );
+        assert!(!dcutr_success_report(false, 1, 0, None).succeeded());
     }
 
     #[test]
@@ -2532,6 +2555,7 @@ mod tests {
                 ready: false,
                 successes: 0,
                 failures: 0,
+                last_error: None,
             },
             configured_bootstrap_peers: 0,
             connected_bootstrap_peers: 0,
@@ -2621,6 +2645,7 @@ mod tests {
                     ),
                 successes: 0,
                 failures: 0,
+                last_error: None,
             },
             configured_bootstrap_peers: 0,
             connected_bootstrap_peers: 0,
@@ -2643,6 +2668,7 @@ mod tests {
         dcutr_enabled: bool,
         dcutr_successes: usize,
         dcutr_failures: usize,
+        dcutr_last_error: Option<String>,
     ) -> BootstrapCheckReport {
         BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::Any,
@@ -2660,6 +2686,7 @@ mod tests {
                 ready: false,
                 successes: dcutr_successes,
                 failures: dcutr_failures,
+                last_error: dcutr_last_error,
             },
             configured_bootstrap_peers: 0,
             connected_bootstrap_peers: 0,

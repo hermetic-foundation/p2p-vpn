@@ -72,10 +72,12 @@ path.
    acceptance, relayed circuit dialing, and relay-assisted config generation
    against a routing-table relay candidate. A follow-up `--require-dcutr-success`
    run against that relay connected the relayed circuit but timed out during the
-   direct QUIC hole-punch attempt, so the project still needs recorded
-   public-relay-assisted DCUtR success from this host or another suitable NAT
-   topology. Public infrastructure is not, and should not become, membership or
-   route authority.
+   direct QUIC hole-punch attempt. Bootstrap and relay-check reports now expose
+   the most recent libp2p DCUtR failure as `dcutr last_error`, so future public
+   relay runs can distinguish prerequisite failures from direct handshake
+   failures. The project still needs recorded public-relay-assisted DCUtR
+   success from this host or another suitable NAT topology. Public
+   infrastructure is not, and should not become, membership or route authority.
 3. Privileged namespace tests passed on this host on 2026-08-04, including a
    focused owned-QUIC packet-plane path, but they still
    require a Linux kernel with user namespaces, network namespaces, veth, and

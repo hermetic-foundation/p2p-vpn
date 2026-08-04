@@ -868,7 +868,8 @@ candidate-level failures when none work. Failed candidates report whether relay
 reservation acceptance or relayed listen-address publication timed out; when the
 probe reaches the bootstrap-check phase, the failed candidate also includes the
 same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
-`bootstrap-check`. Successful candidates also print a
+`bootstrap-check`, including `dcutr last_error` for the most recent libp2p
+hole-punch failure. Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
 `--relay-reservation .../p2p-circuit` address for `init-config`. Pass
