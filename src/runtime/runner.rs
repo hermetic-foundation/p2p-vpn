@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -3856,21 +3857,81 @@ fn random_nonzero_session_id() -> SessionId {
     }
 }
 
-fn first_packet_plane_endpoint(capabilities: &ControlCapabilities) -> Option<std::net::SocketAddr> {
+fn first_packet_plane_endpoint(capabilities: &ControlCapabilities) -> Option<SocketAddr> {
     capabilities
         .packet_endpoint_candidates
         .iter()
-        .find_map(|endpoint| endpoint.parse().ok())
+        .filter_map(|endpoint| endpoint.parse().ok())
+        .min_by_key(|endpoint| packet_endpoint_priority(*endpoint))
 }
 
-fn endpoint_is_advertised(
-    capabilities: &ControlCapabilities,
-    endpoint: std::net::SocketAddr,
-) -> bool {
+fn endpoint_is_advertised(capabilities: &ControlCapabilities, endpoint: SocketAddr) -> bool {
     capabilities
         .packet_endpoint_candidates
         .iter()
         .any(|candidate| candidate.parse::<std::net::SocketAddr>() == Ok(endpoint))
+}
+
+fn packet_endpoint_priority(endpoint: SocketAddr) -> (u8, u16) {
+    (
+        packet_endpoint_reachability_rank(endpoint.ip()),
+        endpoint.port(),
+    )
+}
+
+fn packet_endpoint_reachability_rank(address: IpAddr) -> u8 {
+    match address {
+        IpAddr::V4(address) => packet_ipv4_reachability_rank(address.octets()),
+        IpAddr::V6(address) => packet_ipv6_reachability_rank(address.octets()),
+    }
+}
+
+fn packet_ipv4_reachability_rank(octets: [u8; 4]) -> u8 {
+    if octets[0] == 0 {
+        return 3;
+    }
+    if octets[0] == 127 || octets[0] == 169 && octets[1] == 254 {
+        return 2;
+    }
+    if octets[0] == 10
+        || octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31
+        || octets[0] == 192 && octets[1] == 168
+    {
+        return 1;
+    }
+
+    0
+}
+
+fn packet_ipv6_reachability_rank(octets: [u8; 16]) -> u8 {
+    if octets == [0; 16] {
+        return 3;
+    }
+    if octets[15] == 1
+        && octets[0] == 0
+        && octets[1] == 0
+        && octets[2] == 0
+        && octets[3] == 0
+        && octets[4] == 0
+        && octets[5] == 0
+        && octets[6] == 0
+        && octets[7] == 0
+        && octets[8] == 0
+        && octets[9] == 0
+        && octets[10] == 0
+        && octets[11] == 0
+        && octets[12] == 0
+        && octets[13] == 0
+        && octets[14] == 0
+        || octets[0] == 0xfe && octets[1] & 0xc0 == 0x80
+    {
+        return 2;
+    }
+    if octets[0] & 0xfe == 0xfc {
+        return 1;
+    }
+
+    0
 }
 
 const fn packet_plane_negotiation_rejection(
@@ -8961,6 +9022,37 @@ mod tests {
             initiator_packet_plane
                 .primary_listener()
                 .expect("initiator")
+        );
+    }
+
+    #[test]
+    fn packet_plane_endpoint_selection_prefers_reachable_candidates() {
+        let capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec![
+                "0.0.0.0:51820".to_owned(),
+                "127.0.0.1:51820".to_owned(),
+                "10.0.0.7:51820".to_owned(),
+                "8.8.8.8:51820".to_owned(),
+            ]);
+
+        assert_eq!(
+            first_packet_plane_endpoint(&capabilities),
+            Some("8.8.8.8:51820".parse().expect("endpoint"))
+        );
+    }
+
+    #[test]
+    fn packet_plane_endpoint_selection_prefers_private_before_loopback_or_wildcard() {
+        let capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec![
+                "127.0.0.1:51820".to_owned(),
+                "0.0.0.0:51820".to_owned(),
+                "192.168.1.10:51820".to_owned(),
+            ]);
+
+        assert_eq!(
+            first_packet_plane_endpoint(&capabilities),
+            Some("192.168.1.10:51820".parse().expect("endpoint"))
         );
     }
 

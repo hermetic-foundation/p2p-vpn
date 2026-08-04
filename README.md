@@ -75,7 +75,12 @@ endpoints are advertised as packet endpoint candidates in the capability
 exchange. The daemon binds the configured packet-plane UDP listeners during
 startup, keeps those sockets alive for the future owned data plane, logs the
 bound listener addresses, and exposes them through daemon status, state, and
-capability views. The current local capability advertises the node's built-in
+capability views. Packet-plane negotiation ranks advertised socket endpoints
+before signing the packet-plane handshake, preferring public-style addresses
+over private addresses, private addresses over loopback or link-local
+addresses, and concrete addresses over wildcard listener addresses. That keeps
+a generated public endpoint from being shadowed by a local bind address when
+both are advertised. The current local capability advertises the node's built-in
 IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
 datagrams as unsupported, so peers do not negotiate an unreliable data path
 before one is implemented. Outbound queue draining respects the
