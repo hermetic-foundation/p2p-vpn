@@ -67,7 +67,8 @@ path.
    the public `/ipfs/kad/1.0.0` routing table while filtering unsupported
    transport addresses. `relay-scan --check-candidates` can
    immediately test scanned candidates with the same reservation/circuit/DCUtR
-   proof path as `relay-check`. Recorded 2026-08-04 public smokes now prove
+   proof path as `relay-check`, while skipping IPv6-only validation candidates
+   on hosts without a usable IPv6 route. Recorded 2026-08-04 public smokes now prove
    public Kademlia-assisted relay discovery, public relay reservation
    acceptance, relayed circuit dialing, and relay-assisted config generation
    against a routing-table relay candidate. A follow-up `--require-dcutr-success`

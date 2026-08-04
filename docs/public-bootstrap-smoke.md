@@ -96,7 +96,10 @@ relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
 the candidate must also prove public-relay-assisted hole punching. Validation
 tries scanned candidates round-robin by relay peer, so a scan with many
 addresses for one relay still tests other relays before cycling through that
-peer's alternate addresses. Add
+peer's alternate addresses. Hosts without a usable IPv6 route skip IPv6-only
+relay candidates during validation and print each skip with
+`reason ipv6_unreachable`, while still showing the candidate in the scan output.
+Add
 `--write-config PATH` with `--check-candidates` to write a default
 relay-assisted config from the first validated scanned candidate. When the scan
 uses `--config p2p-vpn.json`, the output preserves that config's overlay
