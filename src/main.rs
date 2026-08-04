@@ -262,6 +262,12 @@ enum Command {
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
     },
+    DaemonMtu {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
     DaemonCapabilities {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -477,6 +483,10 @@ async fn main() -> Result<(), String> {
             socket,
             timeout_seconds,
         } => Box::pin(daemon_paths(&socket, timeout_seconds)).await,
+        Command::DaemonMtu {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_mtu(&socket, timeout_seconds)).await,
         Command::DaemonCapabilities {
             socket,
             timeout_seconds,
@@ -1796,6 +1806,21 @@ async fn daemon_paths(socket: &Path, timeout_seconds: u64) -> Result<(), String>
     Ok(())
 }
 
+async fn daemon_mtu(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_mtu(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon mtu query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
 async fn daemon_capabilities(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_capabilities(
         socket,
@@ -3027,6 +3052,7 @@ mod tests {
             "daemon-peers",
             "daemon-routes",
             "daemon-paths",
+            "daemon-mtu",
             "daemon-capabilities",
         ] {
             let cli = Cli::try_parse_from([
@@ -3049,6 +3075,10 @@ mod tests {
                     timeout_seconds,
                 }
                 | Command::DaemonPaths {
+                    socket,
+                    timeout_seconds,
+                }
+                | Command::DaemonMtu {
                     socket,
                     timeout_seconds,
                 }

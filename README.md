@@ -735,19 +735,21 @@ cargo run -- daemon-state --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-peers --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-routes --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-paths --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-mtu --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-capabilities --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-shutdown --socket /run/p2p-vpn/control.sock
 ```
 
 The control socket serves bounded `status`, `state`, `peers`, `routes`,
-`paths`, `capabilities`, and `shutdown` requests. `daemon-status` uses the same
-line-oriented metric names as `metrics`, but comes from the running daemon's
-current queue and path state instead of a startup snapshot. `daemon-state`
-reports the running daemon's configured peers, validated capability state,
-selected path, healthy direct and relay path counts, effective MTU, selected
-path MTU, per-candidate path MTU estimates, and path-probe, DCUtR, and AutoNAT
-counters. The narrower `daemon-peers`, `daemon-routes`, `daemon-paths`, and
-`daemon-capabilities` commands expose those live daemon views directly for
+`paths`, `mtu`, `capabilities`, and `shutdown` requests. `daemon-status` uses
+the same line-oriented metric names as `metrics`, but comes from the running
+daemon's current queue and path state instead of a startup snapshot.
+`daemon-state` reports the running daemon's configured peers, validated
+capability state, selected path, healthy direct and relay path counts, effective
+MTU, selected path MTU, per-candidate path MTU estimates, and path-probe, DCUtR,
+and AutoNAT counters. The narrower `daemon-peers`, `daemon-routes`,
+`daemon-paths`, `daemon-mtu`, and `daemon-capabilities` commands expose those
+live daemon views directly for
 scripts and operators that do not want to parse the full state dump.
 `daemon-shutdown` asks the daemon to acknowledge the request, print the final
 metrics snapshot, remove the control socket, and exit through the same orderly

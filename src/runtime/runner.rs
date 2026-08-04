@@ -562,6 +562,14 @@ fn handle_runtime_control_request(
             }
             None
         }
+        RuntimeControlRequest::Mtu { respond_to } => {
+            let lines =
+                runtime_mtu_lines(context.forwarder, context.paths, context.peer_capabilities);
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket mtu response receiver dropped");
+            }
+            None
+        }
         RuntimeControlRequest::Capabilities { respond_to } => {
             let lines = runtime_capability_lines(
                 context.forwarder,
@@ -690,6 +698,47 @@ fn runtime_path_lines(
                 !candidate.relay,
                 candidate.established_connections,
                 candidate.score(),
+                candidate
+                    .estimated_mtu
+                    .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
+                candidate.effective_mtu(peer_mtu)
+            ));
+        }
+    }
+
+    lines
+}
+
+fn runtime_mtu_lines(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+) -> Vec<String> {
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    let mut peers = sorted_configured_peers(forwarder);
+    let mut lines = vec![
+        format!("local effective packet mtu: {local_mtu}"),
+        format!("peers: {}", peers.len()),
+    ];
+
+    for peer in peers.drain(..) {
+        let support = packet_transport_support(peer_capabilities, peer);
+        let selected_path = paths.best_supported_for(peer, support);
+        let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+        let selected_path_mtu = selected_path.map(|path| path.effective_mtu(peer_mtu));
+        lines.push(format!(
+            "peer mtu: {peer} validated {} effective_mtu {} selected_path {} selected_path_mtu {}",
+            peer_capabilities.contains(peer),
+            peer_mtu,
+            selected_path.map_or("none", |path| path.kind.wire_name()),
+            selected_path_mtu.map_or_else(|| "none".to_owned(), |mtu| mtu.to_string())
+        ));
+
+        for candidate in paths.candidates_for(peer) {
+            lines.push(format!(
+                "peer path mtu: {peer} {} healthy {} estimated_mtu {} effective_mtu {}",
+                candidate.kind.wire_name(),
+                candidate.healthy,
                 candidate
                     .estimated_mtu
                     .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
@@ -3409,6 +3458,19 @@ mod tests {
         )));
         assert!(path_lines.contains(&format!(
             "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000"
+        )));
+
+        let mtu_lines = runtime_mtu_lines(&forwarder, &paths, &peer_capabilities);
+        assert!(mtu_lines.contains(&"local effective packet mtu: 1280".to_owned()));
+        assert!(mtu_lines.contains(&"peers: 1".to_owned()));
+        assert!(mtu_lines.contains(&format!(
+            "peer mtu: {remote_overlay} validated true effective_mtu 1200 selected_path direct_tcp_stream selected_path_mtu 1180"
+        )));
+        assert!(mtu_lines.contains(&format!(
+            "peer path mtu: {remote_overlay} direct_tcp_stream healthy true estimated_mtu 1180 effective_mtu 1180"
+        )));
+        assert!(mtu_lines.contains(&format!(
+            "peer path mtu: {remote_overlay} circuit_relay healthy true estimated_mtu 1000 effective_mtu 1000"
         )));
 
         let capability_lines =

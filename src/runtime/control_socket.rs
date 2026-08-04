@@ -14,6 +14,7 @@ const STATE_REQUEST: &[u8] = b"state\n";
 const PEERS_REQUEST: &[u8] = b"peers\n";
 const ROUTES_REQUEST: &[u8] = b"routes\n";
 const PATHS_REQUEST: &[u8] = b"paths\n";
+const MTU_REQUEST: &[u8] = b"mtu\n";
 const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const MAX_REQUEST_LEN: usize = 64;
@@ -35,6 +36,9 @@ pub enum RuntimeControlRequest {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     Paths {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Mtu {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     Capabilities {
@@ -112,6 +116,7 @@ async fn handle_connection(
         PEERS_REQUEST => RequestKind::Peers,
         ROUTES_REQUEST => RequestKind::Routes,
         PATHS_REQUEST => RequestKind::Paths,
+        MTU_REQUEST => RequestKind::Mtu,
         CAPABILITIES_REQUEST => RequestKind::Capabilities,
         SHUTDOWN_REQUEST => RequestKind::Shutdown,
         _ => {
@@ -157,6 +162,13 @@ async fn handle_connection(
                     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
                 })?;
         }
+        RequestKind::Mtu => {
+            tx.send(RuntimeControlRequest::Mtu { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
         RequestKind::Capabilities => {
             tx.send(RuntimeControlRequest::Capabilities { respond_to })
                 .await
@@ -188,6 +200,7 @@ enum RequestKind {
     Peers,
     Routes,
     Paths,
+    Mtu,
     Capabilities,
     Shutdown,
 }
@@ -254,6 +267,13 @@ pub async fn query_paths(
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
     query_lines(path, timeout, PATHS_REQUEST).await
+}
+
+pub async fn query_mtu(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, MTU_REQUEST).await
 }
 
 pub async fn query_capabilities(
@@ -448,7 +468,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
         let responder = tokio::spawn(async move {
-            for expected in ["peers", "routes", "paths", "capabilities"] {
+            for expected in ["peers", "routes", "paths", "mtu", "capabilities"] {
                 match (expected, rx.recv().await) {
                     ("peers", Some(RuntimeControlRequest::Peers { respond_to })) => {
                         respond_to
@@ -464,6 +484,11 @@ mod tests {
                         respond_to
                             .send(vec!["peer selected path: abc direct_tcp_stream".to_owned()])
                             .expect("paths response accepted");
+                    }
+                    ("mtu", Some(RuntimeControlRequest::Mtu { respond_to })) => {
+                        respond_to
+                            .send(vec!["peer mtu: abc selected_path_mtu 1200".to_owned()])
+                            .expect("mtu response accepted");
                     }
                     ("capabilities", Some(RuntimeControlRequest::Capabilities { respond_to })) => {
                         respond_to
@@ -492,6 +517,12 @@ mod tests {
                 .await
                 .expect("paths"),
             vec!["peer selected path: abc direct_tcp_stream".to_owned()]
+        );
+        assert_eq!(
+            query_mtu(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("mtu"),
+            vec!["peer mtu: abc selected_path_mtu 1200".to_owned()]
         );
         assert_eq!(
             query_capabilities(&path, std::time::Duration::from_secs(1))
