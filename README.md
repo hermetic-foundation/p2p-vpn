@@ -64,8 +64,9 @@ request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
 path, overlay network name, advertised route prefixes, and whether native QUIC
 datagrams are currently supported. Configs can also declare owned packet-plane
-UDP bind addresses under `network.packet_plane.listen` and externally reachable
-direct packet endpoints under `network.packet_plane.external_endpoints`; the
+UDP bind addresses under `network.packet_plane.listen`, externally reachable
+direct packet endpoints under `network.packet_plane.external_endpoints`, and
+the packet session lifetime under `network.packet_plane.session_ttl_seconds`; the
 external endpoints are advertised as packet endpoint candidates in the
 capability exchange. The daemon binds the configured packet-plane UDP listeners
 during startup, keeps those sockets alive for the future owned data plane, logs
@@ -98,9 +99,10 @@ selection allows it. The daemon also accepts inbound UDP frames from established
 packet-plane sessions through the same route authorization, replay protection,
 rate limiting, and TUN write path as stream packets.
 Packet-plane sessions are intentionally bounded: the daemon expires established
-sessions after ten minutes, marks the associated direct datagram path unhealthy,
-records `packet_plane_sessions_expired`, and attempts packet-plane negotiation
-again when this node is responsible for initiating the hello.
+sessions after the configured lifetime, defaulting to 600 seconds, marks the
+associated direct datagram path unhealthy, records
+`packet_plane_sessions_expired`, and attempts packet-plane negotiation again
+when this node is responsible for initiating the hello.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the
@@ -756,8 +758,11 @@ to the unit path for interface setup, grants `CAP_NET_ADMIN` and `CAP_NET_RAW`,
 restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
 firewall. Keep JSON configs that contain `network.private_key` or
 `network.membership_key` outside the Nix store, for example under
-`/etc/p2p-vpn`, with permissions managed by your deployment system. A two-node
-deployment skeleton is available as the `nixos-mesh` flake template in
+`/etc/p2p-vpn`, with permissions managed by your deployment system. Those JSON
+configs can tune packet-plane expiry with
+`network.packet_plane.session_ttl_seconds`; generated configs default it to
+600 seconds. A two-node deployment skeleton is available as the `nixos-mesh`
+flake template in
 `examples/nixos-mesh`.
 
 The daemon handles Ctrl-C and systemd's SIGTERM as orderly shutdown requests.

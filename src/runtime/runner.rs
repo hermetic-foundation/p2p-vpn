@@ -57,7 +57,6 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-const PACKET_PLANE_SESSION_TTL: Duration = Duration::from_mins(10);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const SERVICE_STATUS_NONCE: u64 = 1;
@@ -244,6 +243,7 @@ where
         metrics_interval,
         control_socket,
         packet_plane,
+        config.network.packet_plane.session_ttl(),
         shutdown,
     ))
     .await
@@ -286,6 +286,7 @@ pub async fn run_node(
         options.metrics_interval,
         None,
         PacketPlaneRuntime::disabled(),
+        options.packet_plane_session_ttl,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -297,6 +298,7 @@ pub struct RuntimeNodeOptions {
     pub queue: QueueConfig,
     pub resources: ResourceConfig,
     pub metrics_interval: Option<Duration>,
+    pub packet_plane_session_ttl: Duration,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -313,6 +315,7 @@ pub async fn run_node_until<Shutdown>(
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
+    packet_plane_session_ttl: Duration,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -498,6 +501,7 @@ where
                     identity: &node.identity,
                     local_capabilities: &local_capabilities,
                     metrics: &metrics,
+                    session_ttl: packet_plane_session_ttl,
                 };
                 expire_packet_plane_sessions(&mut expiry_context);
             }
@@ -3660,12 +3664,11 @@ struct PacketPlaneExpiryContext<'a> {
     identity: &'a NodeIdentity,
     local_capabilities: &'a ControlCapabilities,
     metrics: &'a RuntimeMetrics,
+    session_ttl: Duration,
 }
 
 fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
-    let expired = context
-        .packet_plane
-        .expire_sessions(PACKET_PLANE_SESSION_TTL);
+    let expired = context.packet_plane.expire_sessions(context.session_ttl);
     for session in expired {
         context.metrics.record_packet_plane_session_expired();
         let change = context
@@ -6510,6 +6513,7 @@ mod tests {
             1280,
             remote_endpoint,
         );
+        let session_ttl = Duration::from_secs(3);
         packet_plane
             .establish_test_session_at(
                 PacketPlaneSessionRole::Initiator,
@@ -6517,7 +6521,7 @@ mod tests {
                 &hello,
                 &accept,
                 Instant::now()
-                    .checked_sub(PACKET_PLANE_SESSION_TTL)
+                    .checked_sub(session_ttl)
                     .expect("established time"),
             )
             .expect("session");
@@ -6541,6 +6545,7 @@ mod tests {
             identity: &local_identity,
             local_capabilities: &local_capabilities,
             metrics: &metrics,
+            session_ttl,
         };
         expire_packet_plane_sessions(&mut expiry_context);
 

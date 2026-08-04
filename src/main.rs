@@ -12,6 +12,7 @@ use p2p_vpn::{
     config::{
         Config, DiscoveryConfig, InitConfigTemplate, InitPeer, PacketPlaneConfig, QueueConfig,
         RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
+        default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
     invite::{
@@ -89,6 +90,11 @@ enum Command {
         packet_listen: Vec<String>,
         #[arg(long = "packet-endpoint")]
         packet_endpoints: Vec<String>,
+        #[arg(
+            long = "packet-session-ttl-seconds",
+            default_value_t = default_packet_plane_session_ttl_seconds()
+        )]
+        packet_session_ttl_seconds: u64,
         #[arg(long = "bootstrap-peer")]
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long)]
@@ -322,6 +328,7 @@ async fn main() -> Result<(), String> {
             external_addresses,
             packet_listen,
             packet_endpoints,
+            packet_session_ttl_seconds,
             bootstrap_peers,
             ipfs_bootstrap_peers,
             peers,
@@ -369,6 +376,7 @@ async fn main() -> Result<(), String> {
             packet_plane: PacketPlaneConfig {
                 listen: packet_listen,
                 external_endpoints: packet_endpoints,
+                session_ttl_seconds: packet_session_ttl_seconds,
             },
             bootstrap_peers,
             ipfs_bootstrap_peers,
@@ -2137,6 +2145,7 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2214,6 +2223,7 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2277,6 +2287,7 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2673,6 +2684,7 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2905,12 +2917,15 @@ mod tests {
             "0.0.0.0:51820",
             "--packet-endpoint",
             "203.0.113.10:51820",
+            "--packet-session-ttl-seconds",
+            "45",
         ])
         .expect("cli");
 
         let Command::InitConfig {
             packet_listen,
             packet_endpoints,
+            packet_session_ttl_seconds,
             ..
         } = cli.command
         else {
@@ -2919,6 +2934,7 @@ mod tests {
 
         assert_eq!(packet_listen, vec!["0.0.0.0:51820"]);
         assert_eq!(packet_endpoints, vec!["203.0.113.10:51820"]);
+        assert_eq!(packet_session_ttl_seconds, 45);
     }
 
     #[test]

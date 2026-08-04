@@ -1084,6 +1084,7 @@ async fn run_ready_node(
         Some(Duration::from_secs(1)),
         None,
         packet_plane,
+        config.network.packet_plane.session_ttl(),
         std::future::pending::<runner::ShutdownReason>(),
     ))
     .await

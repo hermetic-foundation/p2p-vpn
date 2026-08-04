@@ -99,6 +99,7 @@ impl Config {
         self.relay_reservation_multiaddrs()?;
         self.packet_plane_listen_addrs()?;
         self.packet_plane_external_endpoints()?;
+        self.validate_packet_plane()?;
         self.validate_peer_reachability()?;
         self.validate_discovery()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
@@ -170,6 +171,16 @@ impl Config {
         if self.network.relay.server {
             validate_relay_server_resources(self.network.relay.resources)
                 .map_err(ConfigError::Resource)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_packet_plane(&self) -> Result<(), ConfigError> {
+        if self.network.packet_plane.session_ttl_seconds == 0 {
+            return Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::NoSessionTtl,
+            ));
         }
 
         Ok(())
@@ -348,12 +359,31 @@ pub struct RelayConfig {
     pub resources: RelayResourceConfig,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PacketPlaneConfig {
     #[serde(default)]
     pub listen: Vec<String>,
     #[serde(default)]
     pub external_endpoints: Vec<String>,
+    #[serde(default = "default_packet_plane_session_ttl_seconds")]
+    pub session_ttl_seconds: u64,
+}
+
+impl Default for PacketPlaneConfig {
+    fn default() -> Self {
+        Self {
+            listen: Vec::new(),
+            external_endpoints: Vec::new(),
+            session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+        }
+    }
+}
+
+impl PacketPlaneConfig {
+    #[must_use]
+    pub fn session_ttl(&self) -> Duration {
+        Duration::from_secs(self.session_ttl_seconds.max(1))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -629,6 +659,7 @@ pub enum ConfigError {
     Interface(InterfaceValidationError),
     Resource(ResourceValidationError),
     Discovery(DiscoveryValidationError),
+    PacketPlane(PacketPlaneValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
 }
@@ -718,6 +749,11 @@ pub enum DiscoveryValidationError {
     ProviderAdvertisementWithoutKademlia,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PacketPlaneValidationError {
+    NoSessionTtl,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MembershipKeyError {
     InvalidBase64,
@@ -790,6 +826,11 @@ const fn default_max_established_connections() -> u32 {
 
 const fn default_true() -> bool {
     true
+}
+
+#[must_use]
+pub const fn default_packet_plane_session_ttl_seconds() -> u64 {
+    10 * 60
 }
 
 fn default_discovery() -> DiscoveryConfig {
@@ -1785,6 +1826,7 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: vec!["0.0.0.0:51820".to_owned()],
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                 },
             },
             interface: InterfaceConfig {
@@ -1807,6 +1849,61 @@ mod tests {
             vec!["203.0.113.10:51820"]
         );
         assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn packet_plane_config_defaults_session_ttl_for_existing_configs() {
+        let decoded = serde_json::from_str::<PacketPlaneConfig>(
+            r#"{"listen":["0.0.0.0:51820"],"external_endpoints":["203.0.113.10:51820"]}"#,
+        )
+        .expect("packet plane config");
+
+        assert_eq!(
+            decoded.session_ttl_seconds,
+            default_packet_plane_session_ttl_seconds()
+        );
+        assert_eq!(
+            decoded.session_ttl(),
+            Duration::from_secs(default_packet_plane_session_ttl_seconds())
+        );
+    }
+
+    #[test]
+    fn runtime_validation_rejects_zero_packet_plane_session_ttl() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    session_ttl_seconds: 0,
+                    ..PacketPlaneConfig::default()
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::NoSessionTtl
+            ))
+        ));
     }
 
     #[test]
@@ -2212,6 +2309,7 @@ mod tests {
             packet_plane: PacketPlaneConfig {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                session_ttl_seconds: 120,
             },
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
@@ -2294,6 +2392,7 @@ mod tests {
             PacketPlaneConfig {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                session_ttl_seconds: 120,
             }
         );
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);
