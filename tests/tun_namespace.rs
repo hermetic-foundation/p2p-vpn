@@ -248,6 +248,7 @@ fn run_mdns_orchestrator() {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+    wait_for_packet_plane_datagrams(&temp_dir);
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -260,13 +261,15 @@ fn run_mdns_orchestrator() {
         &responder_addresses,
         &responder_routes,
     );
-    let node_a_log = read_log(&temp_dir.join("node-a.log"));
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
     assert!(
-        node_a_log.contains("control capabilities accepted")
-            && node_a_log.contains("discovered_address_dial_attempts 1"),
-        "node A did not discover and validate node B through mDNS\nnode-a log:\n{node_a_log}\nnode-b log:\n{}",
-        read_log(&temp_dir.join("node-b.log"))
+        initiator_log.contains("control capabilities accepted")
+            && initiator_log.contains("discovered_address_dial_attempts 1"),
+        "node A did not discover and validate node B through mDNS\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
+    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     let _ = fs::remove_dir_all(temp_dir);
 }
 
@@ -522,6 +525,7 @@ fn run_dht_orchestrator() {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+    wait_for_packet_plane_datagrams(&temp_dir);
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -535,14 +539,16 @@ fn run_dht_orchestrator() {
         &responder_addresses,
         &responder_routes,
     );
-    let node_a_log = read_log(&temp_dir.join("node-a.log"));
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
+    let bootstrap_log = read_log(&temp_dir.join("node-bootstrap.log"));
     assert!(
-        node_a_log.contains("kademlia query progressed")
-            && node_a_log.contains("control capabilities accepted"),
-        "node A did not discover and validate node B through Kademlia\nnode-a log:\n{node_a_log}\nnode-b log:\n{}\nbootstrap log:\n{}",
-        read_log(&temp_dir.join("node-b.log")),
-        read_log(&temp_dir.join("node-bootstrap.log"))
+        initiator_log.contains("kademlia query progressed")
+            && initiator_log.contains("control capabilities accepted"),
+        "node A did not discover and validate node B through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
     );
+    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     let _ = fs::remove_dir_all(temp_dir);
 }
 
@@ -879,6 +885,11 @@ fn direct_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity
     config
 }
 
+fn enable_test_packet_plane(config: &mut Config, endpoint: &str) {
+    config.network.packet_plane.listen = vec![endpoint.to_owned()];
+    config.network.packet_plane.external_endpoints = vec![endpoint.to_owned()];
+}
+
 fn relay_overlay_config(
     role: &str,
     local: &NodeIdentity,
@@ -940,10 +951,11 @@ fn relay_promotion_overlay_config(
 }
 
 fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
-    let (interface, listen, local_routes, peer_routes) = match role {
+    let (interface, listen, packet_endpoint, local_routes, peer_routes) = match role {
         "a" => (
             "hse2ea",
             "/ip4/10.250.0.1/tcp/42101",
+            "10.250.0.1:43101",
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
                 metric: 100,
@@ -953,6 +965,7 @@ fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) 
         "b" => (
             "hse2eb",
             "/ip4/10.250.0.2/tcp/42102",
+            "10.250.0.2:43102",
             Vec::new(),
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
@@ -970,6 +983,7 @@ fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) 
         peer_config(remote, None, peer_routes),
     );
     config.network.discovery = mdns_test_discovery();
+    enable_test_packet_plane(&mut config, packet_endpoint);
     config
 }
 
@@ -979,10 +993,11 @@ fn dht_overlay_config(
     remote: &NodeIdentity,
     bootstrap: &NodeIdentity,
 ) -> Config {
-    let (interface, listen, local_routes, peer_routes) = match role {
+    let (interface, listen, packet_endpoint, local_routes, peer_routes) = match role {
         "a" => (
             "hse2ea",
             "/ip4/10.252.0.1/tcp/42301",
+            "10.252.0.1:43301",
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
                 metric: 100,
@@ -992,6 +1007,7 @@ fn dht_overlay_config(
         "b" => (
             "hse2eb",
             "/ip4/10.252.0.2/tcp/42302",
+            "10.252.0.2:43302",
             Vec::new(),
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
@@ -1013,6 +1029,7 @@ fn dht_overlay_config(
         address: format!("/ip4/10.252.0.254/tcp/42300/p2p/{}", bootstrap.peer_id),
     }];
     config.network.discovery = dht_test_discovery();
+    enable_test_packet_plane(&mut config, packet_endpoint);
     config
 }
 
