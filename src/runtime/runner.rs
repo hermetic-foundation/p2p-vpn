@@ -57,6 +57,7 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+const PACKET_PLANE_SESSION_TTL: Duration = Duration::from_mins(10);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const SERVICE_STATUS_NONCE: u64 = 1;
@@ -487,6 +488,18 @@ where
                     let count = expired_replay_sessions.to_string();
                     log_runtime_event(LogLevel::Info, "replay_sessions_expired", &[("count", &count)]);
                 }
+                let mut expiry_context = PacketPlaneExpiryContext {
+                    swarm: &mut node.swarm,
+                    forwarder: &forwarder,
+                    paths: &mut paths,
+                    peer_capabilities: &peer_capabilities,
+                    packet_plane: &mut packet_plane,
+                    negotiator: &mut packet_plane_negotiator,
+                    identity: &node.identity,
+                    local_capabilities: &local_capabilities,
+                    metrics: &metrics,
+                };
+                expire_packet_plane_sessions(&mut expiry_context);
             }
             _ = timers.path_probe.tick() => {
                 send_path_probes(
@@ -3637,6 +3650,57 @@ fn complete_packet_plane_hello(
     Ok(())
 }
 
+struct PacketPlaneExpiryContext<'a> {
+    swarm: &'a mut Swarm<Behaviour>,
+    forwarder: &'a Forwarder,
+    paths: &'a mut PathSet,
+    peer_capabilities: &'a PeerCapabilities,
+    packet_plane: &'a mut PacketPlaneRuntime,
+    negotiator: &'a mut PacketPlaneNegotiator,
+    identity: &'a NodeIdentity,
+    local_capabilities: &'a ControlCapabilities,
+    metrics: &'a RuntimeMetrics,
+}
+
+fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
+    let expired = context
+        .packet_plane
+        .expire_sessions(PACKET_PLANE_SESSION_TTL);
+    for session in expired {
+        context.metrics.record_packet_plane_session_expired();
+        let change = context
+            .paths
+            .mark_unhealthy(session.peer, PathKind::DirectQuicDatagram);
+        record_path_selection_change(context.metrics, change);
+        log_runtime_event(
+            LogLevel::Info,
+            "packet_plane_session_expired",
+            &[
+                ("peer", &session.peer.to_string()),
+                ("endpoint", &session.endpoint.to_string()),
+                ("role", packet_plane_session_role_name(session.role)),
+            ],
+        );
+
+        if let Some(peer) = context.forwarder.transport_peer_for_overlay(session.peer)
+            && let Some(capabilities) = context.peer_capabilities.get(session.peer)
+        {
+            maybe_send_packet_plane_hello(
+                context.swarm,
+                context.forwarder,
+                context.paths,
+                context.packet_plane,
+                context.negotiator,
+                context.identity,
+                context.local_capabilities,
+                peer,
+                capabilities,
+                context.metrics,
+            );
+        }
+    }
+}
+
 fn record_packet_plane_path_established(
     paths: &mut PathSet,
     metrics: &RuntimeMetrics,
@@ -4803,7 +4867,7 @@ mod tests {
         runtime::control::ControlRoute,
         runtime::packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeKind,
-            PacketPlaneHandshakeParams, PacketPlaneSessionSnapshot,
+            PacketPlaneHandshakeParams, PacketPlaneSessionSnapshot, VerifiedPacketPlaneHandshake,
         },
     };
 
@@ -4863,6 +4927,42 @@ mod tests {
         )
     }
 
+    fn verified_test_packet_plane_handshake(
+        kind: PacketPlaneHandshakeKind,
+        identity: &crate::identity::NodeIdentity,
+        secret: &PacketPlaneEphemeralSecret,
+        mtu: u16,
+        endpoint: std::net::SocketAddr,
+    ) -> VerifiedPacketPlaneHandshake {
+        let (session_id, nonce) = match kind {
+            PacketPlaneHandshakeKind::Hello => (11, 101),
+            PacketPlaneHandshakeKind::Accept => (13, 103),
+        };
+        PacketPlaneHandshake::signed(
+            kind,
+            identity,
+            PacketPlaneHandshakeParams {
+                network_name: "lab".to_owned(),
+                session_id,
+                nonce,
+                mtu,
+                ephemeral_public_key: secret.public_key(),
+                endpoint,
+            },
+        )
+        .expect("signed handshake")
+        .verify("lab", None)
+        .expect("verified handshake")
+    }
+
+    fn packet_plane_test_capabilities(endpoint: std::net::SocketAddr) -> ControlCapabilities {
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.supports_quic_datagrams = true;
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        capabilities.packet_endpoint_candidates = vec![endpoint.to_string()];
+        capabilities
+    }
+
     fn config_with_peer(
         local_identity: &crate::identity::NodeIdentity,
         peer: Libp2pPeerId,
@@ -4912,36 +5012,20 @@ mod tests {
     ) {
         let sender_addr = sender.snapshot().listeners[0];
         let receiver_addr = receiver.snapshot().listeners[0];
-        let hello = PacketPlaneHandshake::signed(
+        let hello = verified_test_packet_plane_handshake(
             PacketPlaneHandshakeKind::Hello,
             sender_identity,
-            PacketPlaneHandshakeParams {
-                network_name: "lab".to_owned(),
-                session_id: 11,
-                nonce: 101,
-                mtu,
-                ephemeral_public_key: sender_secret.public_key(),
-                endpoint: sender_addr,
-            },
-        )
-        .expect("signed hello")
-        .verify("lab", None)
-        .expect("verified hello");
-        let accept = PacketPlaneHandshake::signed(
+            sender_secret,
+            mtu,
+            sender_addr,
+        );
+        let accept = verified_test_packet_plane_handshake(
             PacketPlaneHandshakeKind::Accept,
             receiver_identity,
-            PacketPlaneHandshakeParams {
-                network_name: "lab".to_owned(),
-                session_id: 13,
-                nonce: 103,
-                mtu,
-                ephemeral_public_key: receiver_secret.public_key(),
-                endpoint: receiver_addr,
-            },
-        )
-        .expect("signed accept")
-        .verify("lab", None)
-        .expect("verified accept");
+            receiver_secret,
+            mtu,
+            receiver_addr,
+        );
 
         sender
             .establish_session(
@@ -6371,6 +6455,104 @@ mod tests {
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.packet_plane_path_demotions, 0);
         assert_eq!(snapshot.path_fallbacks_to_relay, 0);
+    }
+
+    #[tokio::test]
+    async fn packet_plane_session_expiry_marks_datagram_path_unhealthy() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_peer = remote_identity.peer_id.parse().expect("remote peer");
+        let remote_overlay = PeerId::from_libp2p(remote_peer);
+        let config = config_with_peer(&local_identity, remote_peer);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+
+        let mut packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+                .await
+                .expect("packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        let local_endpoint = packet_plane.primary_listener().expect("listener");
+        let remote_endpoint = "127.0.0.1:51820".parse().expect("remote endpoint");
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &local_identity,
+            &local_secret,
+            1280,
+            local_endpoint,
+        );
+        let accept = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Accept,
+            &remote_identity,
+            &remote_secret,
+            1280,
+            remote_endpoint,
+        );
+        packet_plane
+            .establish_test_session_at(
+                PacketPlaneSessionRole::Initiator,
+                &local_secret,
+                &hello,
+                &accept,
+                Instant::now()
+                    .checked_sub(PACKET_PLANE_SESSION_TTL)
+                    .expect("established time"),
+            )
+            .expect("session");
+
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            packet_plane_test_capabilities(remote_endpoint),
+        );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let metrics = RuntimeMetrics::default();
+        let local_capabilities = packet_plane_test_capabilities(local_endpoint);
+
+        let mut expiry_context = PacketPlaneExpiryContext {
+            swarm: &mut node.swarm,
+            forwarder: &forwarder,
+            paths: &mut paths,
+            peer_capabilities: &peer_capabilities,
+            packet_plane: &mut packet_plane,
+            negotiator: &mut negotiator,
+            identity: &local_identity,
+            local_capabilities: &local_capabilities,
+            metrics: &metrics,
+        };
+        expire_packet_plane_sessions(&mut expiry_context);
+
+        assert!(!packet_plane.has_session(remote_overlay));
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::DirectQuicStream)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.packet_plane_sessions_expired, 1);
     }
 
     #[test]

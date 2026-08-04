@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt, io, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    fmt, io,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
@@ -259,6 +264,7 @@ pub struct PacketPlaneSession {
     role: PacketPlaneSessionRole,
     local_session_id: SessionId,
     remote_session_id: SessionId,
+    established_at: Instant,
     keys: PacketPlaneSessionKeys,
 }
 
@@ -904,6 +910,17 @@ impl PacketPlaneRuntime {
         local: &VerifiedPacketPlaneHandshake,
         remote: &VerifiedPacketPlaneHandshake,
     ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
+        self.establish_session_at(role, local_secret, local, remote, Instant::now())
+    }
+
+    fn establish_session_at(
+        &mut self,
+        role: PacketPlaneSessionRole,
+        local_secret: &PacketPlaneEphemeralSecret,
+        local: &VerifiedPacketPlaneHandshake,
+        remote: &VerifiedPacketPlaneHandshake,
+        established_at: Instant,
+    ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
         let keys = PacketPlaneSessionKeys::derive(role, local_secret, local, remote)?;
         let session = PacketPlaneSession {
             peer: remote.peer,
@@ -912,11 +929,49 @@ impl PacketPlaneRuntime {
             role,
             local_session_id: local.session_id,
             remote_session_id: remote.session_id,
+            established_at,
             keys,
         };
         let snapshot = session.snapshot();
         self.sessions.insert(remote.peer, session);
         Ok(snapshot)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn establish_test_session_at(
+        &mut self,
+        role: PacketPlaneSessionRole,
+        local_secret: &PacketPlaneEphemeralSecret,
+        local: &VerifiedPacketPlaneHandshake,
+        remote: &VerifiedPacketPlaneHandshake,
+        established_at: Instant,
+    ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneSessionError> {
+        self.establish_session_at(role, local_secret, local, remote, established_at)
+    }
+
+    pub fn expire_sessions(&mut self, max_age: Duration) -> Vec<PacketPlaneSessionSnapshot> {
+        self.expire_sessions_at(Instant::now(), max_age)
+    }
+
+    fn expire_sessions_at(
+        &mut self,
+        now: Instant,
+        max_age: Duration,
+    ) -> Vec<PacketPlaneSessionSnapshot> {
+        let expired_peers = self
+            .sessions
+            .iter()
+            .filter_map(|(peer, session)| {
+                (now.saturating_duration_since(session.established_at) >= max_age).then_some(*peer)
+            })
+            .collect::<Vec<_>>();
+        let mut expired = expired_peers
+            .into_iter()
+            .filter_map(|peer| self.sessions.remove(&peer))
+            .map(|session| session.snapshot())
+            .collect::<Vec<_>>();
+        expired.sort_by_key(|session| session.peer.to_string());
+        expired
     }
 
     pub async fn send_frame_to(
@@ -1711,6 +1766,51 @@ mod tests {
         assert_eq!(session.remote_session_id, accept.session_id);
         assert_eq!(snapshot.sessions, vec![session]);
         assert!(runtime.session_for(accept.peer).is_some());
+    }
+
+    #[test]
+    fn runtime_expires_sessions_at_configured_age() {
+        let now = Instant::now();
+        let ttl = Duration::from_mins(1);
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::disabled();
+
+        let session = runtime
+            .establish_session_at(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+                now.checked_sub(ttl).expect("established time"),
+            )
+            .expect("establish session");
+
+        assert_eq!(runtime.expire_sessions_at(now, ttl), vec![session]);
+        assert_eq!(runtime.session_count(), 0);
+        assert!(!runtime.has_session(accept.peer));
+    }
+
+    #[test]
+    fn runtime_keeps_sessions_younger_than_configured_age() {
+        let now = Instant::now();
+        let ttl = Duration::from_mins(1);
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::disabled();
+
+        runtime
+            .establish_session_at(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+                now.checked_sub(Duration::from_secs(59))
+                    .expect("established time"),
+            )
+            .expect("establish session");
+
+        assert!(runtime.expire_sessions_at(now, ttl).is_empty());
+        assert_eq!(runtime.session_count(), 1);
+        assert!(runtime.has_session(accept.peer));
     }
 
     #[tokio::test]

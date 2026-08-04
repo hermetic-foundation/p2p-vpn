@@ -97,6 +97,10 @@ then use the owned UDP packet plane for outbound queue draining when path
 selection allows it. The daemon also accepts inbound UDP frames from established
 packet-plane sessions through the same route authorization, replay protection,
 rate limiting, and TUN write path as stream packets.
+Packet-plane sessions are intentionally bounded: the daemon expires established
+sessions after ten minutes, marks the associated direct datagram path unhealthy,
+records `packet_plane_sessions_expired`, and attempts packet-plane negotiation
+again when this node is responsible for initiating the hello.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the
@@ -676,7 +680,7 @@ acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/ACK/failure counters, path-MTU update and probe-confirmation
-counters, inbound and outbound packet drop reasons
+counters, packet-plane session expiry counters, inbound and outbound packet drop reasons
 including rate-limited inbound frames and expired outbound queue packets, stream
 fallback sends, attempted native QUIC datagram sends, datagram-unavailable queue
 stalls, direct versus

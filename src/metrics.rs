@@ -37,6 +37,7 @@ pub struct RuntimeMetrics {
     outbound_path_probes_sent: AtomicU64,
     outbound_path_probe_acks_sent: AtomicU64,
     outbound_path_probe_failures: AtomicU64,
+    packet_plane_sessions_expired: AtomicU64,
     inbound_accepted_packets: AtomicU64,
     inbound_keepalives_accepted: AtomicU64,
     inbound_path_probes_accepted: AtomicU64,
@@ -181,6 +182,11 @@ impl RuntimeMetrics {
 
     pub fn record_outbound_path_probe_failure(&self) {
         self.outbound_path_probe_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_packet_plane_session_expired(&self) {
+        self.packet_plane_sessions_expired
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -665,6 +671,8 @@ impl RuntimeMetrics {
             self.outbound_path_probe_acks_sent.load(Ordering::Relaxed);
         snapshot.outbound_path_probe_failures =
             self.outbound_path_probe_failures.load(Ordering::Relaxed);
+        snapshot.packet_plane_sessions_expired =
+            self.packet_plane_sessions_expired.load(Ordering::Relaxed);
         snapshot.inbound_accepted_packets = self.inbound_accepted_packets.load(Ordering::Relaxed);
         snapshot.inbound_keepalives_accepted =
             self.inbound_keepalives_accepted.load(Ordering::Relaxed);
@@ -910,6 +918,7 @@ pub struct RuntimeSnapshot {
     pub outbound_path_probes_sent: u64,
     pub outbound_path_probe_acks_sent: u64,
     pub outbound_path_probe_failures: u64,
+    pub packet_plane_sessions_expired: u64,
     pub inbound_accepted_packets: u64,
     pub inbound_keepalives_accepted: u64,
     pub inbound_path_probes_accepted: u64,
@@ -1044,6 +1053,10 @@ impl RuntimeSnapshot {
             format!(
                 "outbound_path_probe_failures {}",
                 self.outbound_path_probe_failures
+            ),
+            format!(
+                "packet_plane_sessions_expired {}",
+                self.packet_plane_sessions_expired
             ),
             format!(
                 "outbound_packet_too_big_notifications {}",
@@ -1474,6 +1487,7 @@ mod tests {
         metrics.record_outbound_path_probe_sent();
         metrics.record_outbound_path_probe_ack_sent();
         metrics.record_outbound_path_probe_failure();
+        metrics.record_packet_plane_session_expired();
         metrics.record_inbound_accepted();
         metrics.record_inbound_keepalive_accepted();
         metrics.record_inbound_path_probe_accepted();
@@ -1656,6 +1670,7 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probes_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_acks_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_failures, 1);
+        assert_eq!(snapshot.packet_plane_sessions_expired, 1);
         assert_eq!(snapshot.inbound_accepted_packets, 1);
         assert_eq!(snapshot.inbound_keepalives_accepted, 1);
         assert_eq!(snapshot.inbound_path_probes_accepted, 1);
@@ -1771,6 +1786,7 @@ mod tests {
         assert_metric_line(&snapshot, "outbound_path_probes_sent 1");
         assert_metric_line(&snapshot, "outbound_path_probe_acks_sent 1");
         assert_metric_line(&snapshot, "outbound_path_probe_failures 1");
+        assert_metric_line(&snapshot, "packet_plane_sessions_expired 1");
         assert_metric_line(&snapshot, "inbound_keepalives_accepted 1");
         assert_metric_line(&snapshot, "inbound_path_probes_accepted 1");
         assert_metric_line(&snapshot, "queue_oldest_packet_age_millis 45");
