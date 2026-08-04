@@ -1217,6 +1217,10 @@ fn runtime_state_summary_lines(
             "outbound_path_mtu_updates {}",
             snapshot.outbound_path_mtu_updates
         ),
+        format!(
+            "outbound_path_mtu_probe_confirmations {}",
+            snapshot.outbound_path_mtu_probe_confirmations
+        ),
         format!("dcutr_successes {}", snapshot.dcutr_successes),
         format!("dcutr_failures {}", snapshot.dcutr_failures),
         format!(
@@ -1237,6 +1241,10 @@ fn runtime_state_summary_lines(
         format!(
             "outbound_path_probes_sent {}",
             snapshot.outbound_path_probes_sent
+        ),
+        format!(
+            "outbound_path_probe_acks_sent {}",
+            snapshot.outbound_path_probe_acks_sent
         ),
         format!(
             "outbound_path_probe_failures {}",
@@ -2871,6 +2879,8 @@ async fn handle_packet_plane_path_probe(
             if let Err(error) = packet_plane.send_frame_to_peer(overlay_peer, &frame).await {
                 metrics.record_outbound_path_probe_failure();
                 eprintln!("packet-plane path probe ack to {overlay_peer} failed: {error:?}");
+            } else {
+                metrics.record_outbound_path_probe_ack_sent();
             }
         }
         Err(error) => {
@@ -4272,6 +4282,7 @@ fn maybe_confirm_path_mtu_probe(
     let ceiling = selected_path_mtu_ceiling(peer_capabilities, packet_plane, peer, local_mtu);
     if paths.raise_path_mtu(peer, path.kind, confirmed_mtu, ceiling) {
         metrics.record_outbound_path_mtu_update();
+        metrics.record_outbound_path_mtu_probe_confirmation();
         let mtu = confirmed_mtu.min(ceiling);
         log_runtime_event(
             LogLevel::Info,
@@ -5032,6 +5043,8 @@ mod tests {
         );
         let metrics = RuntimeMetrics::default();
         metrics.record_outbound_path_probe_sent();
+        metrics.record_outbound_path_probe_ack_sent();
+        metrics.record_outbound_path_mtu_probe_confirmation();
         metrics.record_dcutr_result(true);
         metrics.record_dcutr_result(false);
         metrics.record_autonat_probe_scheduled();
@@ -5082,6 +5095,8 @@ mod tests {
         assert!(lines.contains(&"autonat_status_changes_to_public 1".to_owned()));
         assert!(lines.contains(&"autonat_status_changes_to_private 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
+        assert!(lines.contains(&"outbound_path_probe_acks_sent 1".to_owned()));
+        assert!(lines.contains(&"outbound_path_mtu_probe_confirmations 1".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_no_supported_path_events 0".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_packet_window_events 0".to_owned()));
         assert!(lines.contains(&"packet_stream_fallback_in_flight 2".to_owned()));
@@ -7978,12 +7993,10 @@ mod tests {
             sender_paths.path_mtu(remote_overlay, PathKind::DirectQuicDatagram),
             Some(1_064)
         );
-        assert_eq!(
-            metrics
-                .snapshot(crate::queue::QueueStats::default())
-                .outbound_path_mtu_updates,
-            1
-        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_path_probe_acks_sent, 1);
+        assert_eq!(snapshot.outbound_path_mtu_updates, 1);
+        assert_eq!(snapshot.outbound_path_mtu_probe_confirmations, 1);
     }
 
     #[tokio::test]

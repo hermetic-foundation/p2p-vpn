@@ -667,7 +667,8 @@ The metrics output includes control-plane exchange counters, capability
 acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
-path-probe send/failure counters, inbound and outbound packet drop reasons
+path-probe send/ACK/failure counters, path-MTU update and probe-confirmation
+counters, inbound and outbound packet drop reasons
 including rate-limited inbound frames and expired outbound queue packets, stream
 fallback sends, attempted native QUIC datagram sends, datagram-unavailable queue
 stalls, direct versus
