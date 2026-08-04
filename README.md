@@ -75,9 +75,10 @@ endpoints are advertised as packet endpoint candidates in the capability
 exchange. The daemon binds the configured packet-plane UDP listeners during
 startup, keeps those sockets alive for the future owned data plane, logs the
 bound listener addresses, and exposes them through daemon status, state, and
-capability views. Packet-plane negotiation ranks advertised socket endpoints
-before signing the packet-plane handshake, preferring public-style addresses
-over private addresses, private addresses over loopback or link-local
+capability views. Packet-plane negotiation resolves advertised DNS-style
+`host:port` endpoint candidates to concrete socket endpoints, ranks the resolved
+endpoints before signing the packet-plane handshake, preferring public-style
+addresses over private addresses, private addresses over loopback or link-local
 addresses, and concrete addresses over wildcard listener addresses. That keeps
 a generated public endpoint from being shadowed by a local bind address when
 both are advertised. The current local capability advertises the node's built-in
@@ -91,8 +92,9 @@ overlay network name, compatible wire version, packet protocol, packet header
 length, matching membership tag when a key is configured, known preferred path,
 coherent datagram support, non-zero effective MTU, and no route prefixes outside
 their configured ownership. Packet endpoint candidates must parse as socket
-addresses; they are candidates for the owned packet data plane, not membership
-or route authority. The packet-plane session primitive uses fixed binary
+addresses or DNS-style `host:port` endpoints; they are candidates for the owned
+packet data plane, not membership or route authority. The packet-plane session
+primitive uses fixed binary
 hello/accept handshakes signed by the node's libp2p identity key and bound to
 the overlay network name, session id, nonce, MTU, endpoint, identity public key,
 and ephemeral X25519 public key. Verified handshakes can derive directional

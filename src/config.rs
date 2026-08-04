@@ -276,16 +276,12 @@ impl Config {
         parse_socket_addrs(&self.network.packet_plane.listen)
     }
 
-    pub fn packet_plane_external_endpoints(&self) -> Result<Vec<SocketAddr>, ConfigError> {
-        parse_socket_addrs(&self.network.packet_plane.external_endpoints)
+    pub fn packet_plane_external_endpoints(&self) -> Result<Vec<String>, ConfigError> {
+        parse_packet_plane_endpoint_candidates(&self.network.packet_plane.external_endpoints)
     }
 
     pub fn packet_plane_endpoint_candidates(&self) -> Result<Vec<String>, ConfigError> {
-        Ok(self
-            .packet_plane_external_endpoints()?
-            .into_iter()
-            .map(|endpoint| endpoint.to_string())
-            .collect())
+        self.packet_plane_external_endpoints()
     }
 
     #[must_use]
@@ -763,10 +759,11 @@ pub enum DiscoveryValidationError {
     ProviderAdvertisementWithoutKademlia,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PacketPlaneValidationError {
     NoSessionTtl,
     NoReplayWindows,
+    InvalidEndpoint(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1004,6 +1001,52 @@ fn parse_socket_addrs(input: &[String]) -> Result<Vec<SocketAddr>, ConfigError> 
         .iter()
         .map(|address| address.parse().map_err(ConfigError::SocketAddr))
         .collect()
+}
+
+fn parse_packet_plane_endpoint_candidates(input: &[String]) -> Result<Vec<String>, ConfigError> {
+    input
+        .iter()
+        .map(|endpoint| {
+            if validate_packet_plane_endpoint_candidate(endpoint) {
+                Ok(endpoint.clone())
+            } else {
+                Err(ConfigError::PacketPlane(
+                    PacketPlaneValidationError::InvalidEndpoint(endpoint.clone()),
+                ))
+            }
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn validate_packet_plane_endpoint_candidate(endpoint: &str) -> bool {
+    if endpoint.parse::<SocketAddr>().is_ok() {
+        return true;
+    }
+    let Some((host, port)) = endpoint.rsplit_once(':') else {
+        return false;
+    };
+    if !valid_packet_plane_dns_host(host) {
+        return false;
+    }
+    port.parse::<u16>().is_ok()
+}
+
+fn valid_packet_plane_dns_host(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.is_empty() || host.len() > 253 || host.contains(':') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        let bytes = label.as_bytes();
+        !bytes.is_empty()
+            && bytes.len() <= 63
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+    })
 }
 
 fn parse_peer_address(
@@ -1874,6 +1917,97 @@ mod tests {
             vec!["203.0.113.10:51820"]
         );
         assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn packet_plane_config_accepts_dns_endpoint_candidates() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: vec!["0.0.0.0:51820".to_owned()],
+                    external_endpoints: vec!["vpn-a.example.net:51820".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert_eq!(
+            config
+                .packet_plane_endpoint_candidates()
+                .expect("endpoint candidates"),
+            vec!["vpn-a.example.net:51820"]
+        );
+        assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn packet_plane_config_rejects_endpoint_candidates_without_ports() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: Vec::new(),
+                    external_endpoints: vec!["vpn-a.example.net".to_owned()],
+                    session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::InvalidEndpoint(endpoint)
+            )) if endpoint == "vpn-a.example.net"
+        ));
+
+        config.network.packet_plane.external_endpoints = vec!["vpn_a.example.net:51820".to_owned()];
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::InvalidEndpoint(endpoint)
+            )) if endpoint == "vpn_a.example.net:51820"
+        ));
     }
 
     #[test]

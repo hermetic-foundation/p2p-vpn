@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     PathKind, PeerId,
+    config::validate_packet_plane_endpoint_candidate,
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -196,7 +197,7 @@ pub fn validate_capabilities(
     if capabilities
         .packet_endpoint_candidates
         .iter()
-        .any(|endpoint| endpoint.parse::<std::net::SocketAddr>().is_err())
+        .any(|endpoint| !validate_packet_plane_endpoint_candidate(endpoint))
     {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
@@ -622,6 +623,9 @@ mod tests {
         );
 
         capabilities.supports_quic_datagrams = true;
+        assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
+
+        capabilities.packet_endpoint_candidates = vec!["vpn-a.example.net:51820".to_owned()];
         assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
 
         capabilities.packet_endpoint_candidates = vec!["not-a-socket".to_owned()];

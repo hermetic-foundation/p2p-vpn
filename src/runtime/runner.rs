@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -3861,7 +3861,7 @@ fn first_packet_plane_endpoint(capabilities: &ControlCapabilities) -> Option<Soc
     capabilities
         .packet_endpoint_candidates
         .iter()
-        .filter_map(|endpoint| endpoint.parse().ok())
+        .flat_map(|endpoint| resolve_packet_plane_endpoint_candidate(endpoint))
         .min_by_key(|endpoint| packet_endpoint_priority(*endpoint))
 }
 
@@ -3869,7 +3869,22 @@ fn endpoint_is_advertised(capabilities: &ControlCapabilities, endpoint: SocketAd
     capabilities
         .packet_endpoint_candidates
         .iter()
-        .any(|candidate| candidate.parse::<std::net::SocketAddr>() == Ok(endpoint))
+        .any(|candidate| {
+            candidate.parse::<SocketAddr>() == Ok(endpoint)
+                || resolve_packet_plane_endpoint_candidate(candidate)
+                    .into_iter()
+                    .any(|resolved| resolved == endpoint)
+        })
+}
+
+fn resolve_packet_plane_endpoint_candidate(candidate: &str) -> Vec<SocketAddr> {
+    if let Ok(endpoint) = candidate.parse() {
+        return vec![endpoint];
+    }
+    candidate
+        .to_socket_addrs()
+        .map(Iterator::collect)
+        .unwrap_or_default()
 }
 
 fn packet_endpoint_priority(endpoint: SocketAddr) -> (u8, u16) {
@@ -9054,6 +9069,29 @@ mod tests {
             first_packet_plane_endpoint(&capabilities),
             Some("192.168.1.10:51820".parse().expect("endpoint"))
         );
+    }
+
+    #[test]
+    fn packet_plane_endpoint_selection_resolves_dns_candidates() {
+        let capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec!["localhost:51820".to_owned()]);
+        let endpoint = first_packet_plane_endpoint(&capabilities).expect("resolved endpoint");
+
+        assert!(endpoint.ip().is_loopback());
+        assert_eq!(endpoint.port(), 51820);
+    }
+
+    #[test]
+    fn packet_plane_endpoint_advertisement_accepts_resolved_dns_candidate() {
+        let capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec!["localhost:51820".to_owned()]);
+        let endpoint = first_packet_plane_endpoint(&capabilities).expect("resolved endpoint");
+
+        assert!(endpoint_is_advertised(&capabilities, endpoint));
+        assert!(!endpoint_is_advertised(
+            &capabilities,
+            "127.0.0.1:51821".parse().expect("other endpoint")
+        ));
     }
 
     #[test]
