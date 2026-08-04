@@ -1717,6 +1717,43 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         status.peer, status.service.supports_owned_quic_packet_plane
     ));
     lines.push(format!(
+        "peer live owned quic packet plane certificate bytes: {} {}",
+        status.peer,
+        status
+            .capabilities
+            .owned_quic_packet_plane_certificate_der
+            .as_ref()
+            .map_or_else(
+                || "none".to_owned(),
+                |certificate| { certificate.len().to_string() }
+            )
+    ));
+    lines.push(format!(
+        "peer live owned quic packet endpoints: {} {}",
+        status.peer,
+        status
+            .capabilities
+            .owned_quic_packet_endpoint_candidates
+            .len()
+    ));
+    for endpoint in &status.capabilities.owned_quic_packet_endpoint_candidates {
+        lines.push(format!(
+            "peer live owned quic packet endpoint: {} {}",
+            status.peer, endpoint
+        ));
+    }
+    lines.push(format!(
+        "peer live packet endpoints: {} {}",
+        status.peer,
+        status.capabilities.packet_endpoint_candidates.len()
+    ));
+    for endpoint in &status.capabilities.packet_endpoint_candidates {
+        lines.push(format!(
+            "peer live packet endpoint: {} {}",
+            status.peer, endpoint
+        ));
+    }
+    lines.push(format!(
         "peer live packet plane session ttl seconds: {} {}",
         status.peer,
         optional_seconds(status.service.packet_plane_session_ttl_seconds)
@@ -3330,6 +3367,9 @@ mod tests {
             .public()
             .to_peer_id();
         let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+            .with_packet_endpoint_candidates(vec!["203.0.113.10:51820".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["203.0.113.10:4433".to_owned()])
+            .with_owned_quic_packet_plane_certificate(vec![1, 2, 3, 4])
             .with_advertised_routes(vec![p2p_vpn::runtime::control::ControlRoute::new(
                 "10.42.0.0/24",
                 100,
@@ -3465,6 +3505,9 @@ mod tests {
             .public()
             .to_peer_id();
         let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+            .with_packet_endpoint_candidates(vec!["203.0.113.10:51820".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["203.0.113.10:4433".to_owned()])
+            .with_owned_quic_packet_plane_certificate(vec![1, 2, 3, 4])
             .with_advertised_routes(vec![p2p_vpn::runtime::control::ControlRoute::new(
                 "10.42.0.0/24",
                 100,
@@ -3487,6 +3530,25 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == &format!("peer live mtu: {peer} 1200"))
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!("peer live owned quic packet plane certificate bytes: {peer} 4")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live owned quic packet endpoints: {peer} 1"))
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!("peer live owned quic packet endpoint: {peer} 203.0.113.10:4433")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live packet endpoints: {peer} 1"))
+        );
+        assert!(
+            lines.iter().any(
+                |line| line == &format!("peer live packet endpoint: {peer} 203.0.113.10:51820")
+            )
         );
         assert!(
             lines.iter().any(|line| line
