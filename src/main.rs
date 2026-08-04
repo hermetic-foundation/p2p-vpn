@@ -5004,6 +5004,8 @@ mod tests {
                 p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateReport {
                     address,
                     succeeded: true,
+                    failure_stage:
+                        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::None,
                     error: None,
                     bootstrap: None,
                 },

@@ -298,26 +298,50 @@ pub struct PublicRelayProbeReport {
 pub struct PublicRelayCandidateReport {
     pub address: String,
     pub succeeded: bool,
+    pub failure_stage: PublicRelayCandidateFailureStage,
     pub error: Option<String>,
     pub bootstrap: Option<BootstrapCheckReport>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublicRelayCandidateFailureStage {
+    None,
+    CandidateSetup,
+    RelayReservation,
+    RelayedPeerCircuit,
+    DcutrSuccess,
+}
+
 #[derive(Debug)]
 struct PublicRelayProbeFailure {
+    stage: PublicRelayCandidateFailureStage,
     message: String,
     bootstrap: Option<BootstrapCheckReport>,
 }
 
 impl PublicRelayProbeFailure {
     fn without_bootstrap(message: impl Into<String>) -> Self {
+        Self::at_stage(
+            PublicRelayCandidateFailureStage::CandidateSetup,
+            message.into(),
+        )
+    }
+
+    fn at_stage(stage: PublicRelayCandidateFailureStage, message: impl Into<String>) -> Self {
         Self {
+            stage,
             message: message.into(),
             bootstrap: None,
         }
     }
 
-    fn with_bootstrap(message: impl Into<String>, bootstrap: BootstrapCheckReport) -> Self {
+    fn with_bootstrap(
+        stage: PublicRelayCandidateFailureStage,
+        message: impl Into<String>,
+        bootstrap: BootstrapCheckReport,
+    ) -> Self {
         Self {
+            stage,
             message: message.into(),
             bootstrap: Some(bootstrap),
         }
@@ -388,9 +412,10 @@ impl PublicRelayProbeReport {
 
         for candidate in &self.candidates {
             lines.push(format!(
-                "public relay candidate: {} succeeded {} error {}",
+                "public relay candidate: {} succeeded {} failure_stage {} error {}",
                 candidate.address,
                 candidate.succeeded,
+                candidate.failure_stage.as_str(),
                 candidate.error.as_deref().unwrap_or("none")
             ));
             if candidate.succeeded
@@ -409,6 +434,18 @@ impl PublicRelayProbeReport {
         }
 
         lines
+    }
+}
+
+impl PublicRelayCandidateFailureStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::CandidateSetup => "candidate_setup",
+            Self::RelayReservation => "relay_reservation",
+            Self::RelayedPeerCircuit => "relayed_peer_circuit",
+            Self::DcutrSuccess => "dcutr_success",
+        }
     }
 }
 
@@ -694,12 +731,14 @@ pub async fn check_public_relay_candidates(
             Ok(report) => PublicRelayCandidateReport {
                 address: relay_address.to_string(),
                 succeeded: true,
+                failure_stage: PublicRelayCandidateFailureStage::None,
                 error: None,
                 bootstrap: Some(report),
             },
             Err(failure) => PublicRelayCandidateReport {
                 address: relay_address.to_string(),
                 succeeded: false,
+                failure_stage: failure.stage,
                 error: Some(failure.message),
                 bootstrap: failure.bootstrap,
             },
@@ -820,7 +859,9 @@ async fn live_public_relayed_peer_circuit(
         timeout,
     )
     .await
-    .map_err(PublicRelayProbeFailure::without_bootstrap)?;
+    .map_err(|error| {
+        PublicRelayProbeFailure::at_stage(PublicRelayCandidateFailureStage::RelayReservation, error)
+    })?;
 
     let _listener_task = tokio::spawn(async move {
         loop {
@@ -843,12 +884,18 @@ async fn live_public_relayed_peer_circuit(
         },
     )
     .await
-    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
+    .map_err(|error| {
+        PublicRelayProbeFailure::at_stage(
+            PublicRelayCandidateFailureStage::RelayedPeerCircuit,
+            format!("{error:?}"),
+        )
+    })?;
 
     if report.succeeded() {
         Ok(report)
     } else {
         Err(PublicRelayProbeFailure::with_bootstrap(
+            PublicRelayCandidateFailureStage::RelayedPeerCircuit,
             "relayed peer circuit check did not meet success threshold",
             report,
         ))
@@ -893,7 +940,9 @@ async fn live_public_dcutr_success(
         timeout,
     )
     .await
-    .map_err(PublicRelayProbeFailure::without_bootstrap)?;
+    .map_err(|error| {
+        PublicRelayProbeFailure::at_stage(PublicRelayCandidateFailureStage::RelayReservation, error)
+    })?;
 
     let _listener_task = tokio::spawn(async move {
         loop {
@@ -921,12 +970,18 @@ async fn live_public_dcutr_success(
         },
     )
     .await
-    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
+    .map_err(|error| {
+        PublicRelayProbeFailure::at_stage(
+            PublicRelayCandidateFailureStage::DcutrSuccess,
+            format!("{error:?}"),
+        )
+    })?;
 
     if report.succeeded() {
         Ok(report)
     } else {
         Err(PublicRelayProbeFailure::with_bootstrap(
+            PublicRelayCandidateFailureStage::DcutrSuccess,
             "dcutr success check did not meet success threshold",
             report,
         ))
@@ -2051,6 +2106,7 @@ mod tests {
             candidates: vec![PublicRelayCandidateReport {
                 address: format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}"),
                 succeeded: false,
+                failure_stage: PublicRelayCandidateFailureStage::DcutrSuccess,
                 error: Some("dcutr success check did not meet success threshold".to_owned()),
                 bootstrap: Some(dcutr_success_report(
                     true,
@@ -2065,6 +2121,10 @@ mod tests {
 
         assert!(!report.succeeded());
         assert!(lines.contains(&"public relay probe: failed".to_owned()));
+        assert!(lines.iter().any(|line| {
+            line.contains("failure_stage dcutr_success")
+                && line.contains("dcutr success check did not meet success threshold")
+        }));
         assert!(lines.iter().any(|line| line
             .contains("public relay candidate detail: bootstrap check: failed")));
         assert!(lines.iter().any(|line| {
@@ -2089,6 +2149,7 @@ mod tests {
             candidates: vec![PublicRelayCandidateReport {
                 address: address.clone(),
                 succeeded: true,
+                failure_stage: PublicRelayCandidateFailureStage::None,
                 error: None,
                 bootstrap: Some(relayed_peer_report(1, 1)),
             }],
