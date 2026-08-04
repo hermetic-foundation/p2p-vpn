@@ -48,7 +48,8 @@ use crate::{
             PacketPlaneHandshakeKind, PacketPlaneHandshakeParams, PacketPlaneIoError,
             PacketPlaneQuicError, PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot,
             PacketPlaneReceivedFrame, PacketPlaneRuntime, PacketPlaneSessionError,
-            PacketPlaneSessionRole, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
+            PacketPlaneSessionRole, PacketPlaneSessionSnapshot, PacketPlaneSnapshot,
+            VerifiedPacketPlaneHandshake,
         },
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
@@ -4381,38 +4382,57 @@ struct PacketPlaneExpiryContext<'a> {
 fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
     let expired = context.packet_plane.expire_sessions(context.session_ttl);
     for session in expired {
-        context.metrics.record_packet_plane_session_expired();
-        let change = context
-            .paths
-            .mark_unhealthy(session.peer, PathKind::DirectQuicDatagram);
-        record_path_selection_change(context.metrics, change);
-        log_runtime_event(
-            LogLevel::Info,
-            "packet_plane_session_expired",
-            &[
-                ("peer", &session.peer.to_string()),
-                ("endpoint", &session.endpoint.to_string()),
-                ("role", packet_plane_session_role_name(session.role)),
-            ],
-        );
+        handle_expired_packet_plane_session(context, &session, "owned_udp");
+    }
 
-        if let Some(peer) = context.forwarder.transport_peer_for_overlay(session.peer)
-            && let Some(capabilities) = context.peer_capabilities.get(session.peer)
-        {
-            maybe_send_packet_plane_hello(
-                context.swarm,
-                context.forwarder,
-                context.paths,
-                context.packet_plane,
-                context.packet_plane_quic.as_deref(),
-                context.negotiator,
-                context.identity,
-                context.local_capabilities,
-                peer,
-                capabilities,
-                context.metrics,
-            );
-        }
+    let expired = context
+        .packet_plane_quic
+        .as_deref_mut()
+        .map_or_else(Vec::new, |packet_plane_quic| {
+            packet_plane_quic.expire_sessions(context.session_ttl)
+        });
+    for session in expired {
+        handle_expired_packet_plane_session(context, &session, "owned_quic");
+    }
+}
+
+fn handle_expired_packet_plane_session(
+    context: &mut PacketPlaneExpiryContext<'_>,
+    session: &PacketPlaneSessionSnapshot,
+    backend: &'static str,
+) {
+    context.metrics.record_packet_plane_session_expired();
+    let change = context
+        .paths
+        .mark_unhealthy(session.peer, PathKind::DirectQuicDatagram);
+    record_path_selection_change(context.metrics, change);
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_session_expired",
+        &[
+            ("peer", &session.peer.to_string()),
+            ("endpoint", &session.endpoint.to_string()),
+            ("role", packet_plane_session_role_name(session.role)),
+            ("backend", backend),
+        ],
+    );
+
+    if let Some(peer) = context.forwarder.transport_peer_for_overlay(session.peer)
+        && let Some(capabilities) = context.peer_capabilities.get(session.peer)
+    {
+        maybe_send_packet_plane_hello(
+            context.swarm,
+            context.forwarder,
+            context.paths,
+            context.packet_plane,
+            context.packet_plane_quic.as_deref(),
+            context.negotiator,
+            context.identity,
+            context.local_capabilities,
+            peer,
+            capabilities,
+            context.metrics,
+        );
     }
 }
 
@@ -7876,6 +7896,106 @@ mod tests {
         expire_packet_plane_sessions(&mut expiry_context);
 
         assert!(!packet_plane.has_session(remote_overlay));
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::DirectQuicStream)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.packet_plane_sessions_expired, 1);
+    }
+
+    #[tokio::test]
+    async fn packet_plane_quic_session_expiry_marks_datagram_path_unhealthy() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_peer = remote_identity.peer_id.parse().expect("remote peer");
+        let remote_overlay = PeerId::from_libp2p(remote_peer);
+        let config = config_with_peer(&local_identity, remote_peer);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+
+        let mut packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+                .await
+                .expect("packet plane");
+        let mut packet_plane_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("local quic"))
+                .expect("local quic");
+        let mut remote_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("remote quic"))
+                .expect("remote quic");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_quic_sessions(
+            &mut packet_plane_quic,
+            &mut remote_quic,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1_200,
+        )
+        .await;
+
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut remote_capabilities =
+            ControlCapabilities::local("lab", None, 1_280).with_owned_quic_packet_plane(true);
+        remote_capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        remote_capabilities.owned_quic_packet_endpoint_candidates =
+            vec![remote_quic.local_addr().to_string()];
+        remote_capabilities.owned_quic_packet_plane_certificate_der =
+            Some(remote_quic.server_certificate().as_ref().to_vec());
+        peer_capabilities.record(remote_overlay, remote_capabilities);
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let metrics = RuntimeMetrics::default();
+        let mut local_capabilities =
+            ControlCapabilities::local("lab", None, 1_280).with_owned_quic_packet_plane(true);
+        local_capabilities.owned_quic_packet_endpoint_candidates =
+            vec![packet_plane_quic.local_addr().to_string()];
+        local_capabilities.owned_quic_packet_plane_certificate_der =
+            Some(packet_plane_quic.server_certificate().as_ref().to_vec());
+
+        {
+            let mut expiry_context = PacketPlaneExpiryContext {
+                swarm: &mut node.swarm,
+                forwarder: &forwarder,
+                paths: &mut paths,
+                peer_capabilities: &peer_capabilities,
+                packet_plane: &mut packet_plane,
+                packet_plane_quic: Some(&mut packet_plane_quic),
+                negotiator: &mut negotiator,
+                identity: &local_identity,
+                local_capabilities: &local_capabilities,
+                metrics: &metrics,
+                session_ttl: Duration::ZERO,
+            };
+            expire_packet_plane_sessions(&mut expiry_context);
+        }
+
+        assert!(!packet_plane_quic.has_session(remote_overlay));
         assert_eq!(
             paths
                 .best_for(remote_overlay)

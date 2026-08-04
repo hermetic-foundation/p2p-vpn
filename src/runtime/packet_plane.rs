@@ -1423,6 +1423,34 @@ impl PacketPlaneQuicRuntime {
             .any(|peer| self.connections.contains_key(peer))
     }
 
+    pub fn expire_sessions(&mut self, max_age: Duration) -> Vec<PacketPlaneSessionSnapshot> {
+        self.expire_sessions_at(Instant::now(), max_age)
+    }
+
+    fn expire_sessions_at(
+        &mut self,
+        now: Instant,
+        max_age: Duration,
+    ) -> Vec<PacketPlaneSessionSnapshot> {
+        let expired_peers = self
+            .sessions
+            .iter()
+            .filter_map(|(peer, session)| {
+                (now.saturating_duration_since(session.established_at) >= max_age).then_some(*peer)
+            })
+            .collect::<Vec<_>>();
+        let mut expired = expired_peers
+            .into_iter()
+            .filter_map(|peer| {
+                self.connections.remove(&peer);
+                self.sessions.remove(&peer)
+            })
+            .map(|session| session.snapshot())
+            .collect::<Vec<_>>();
+        expired.sort_by_key(|session| session.peer.to_string());
+        expired
+    }
+
     pub async fn connect_peer(
         &mut self,
         peer: PeerId,
@@ -2461,6 +2489,56 @@ mod tests {
             certificate.len() > 64 && certificate.starts_with(&[0x30])
         }));
         assert!(snapshot.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn quic_runtime_expires_sessions_and_connections() {
+        let mut sender =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
+                .expect("sender bind");
+        let mut receiver =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver socket"))
+                .expect("receiver bind");
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+        let receiver_certificate = receiver.server_certificate();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+
+        let (connect, accept_connection) = tokio::join!(
+            sender.connect_peer(accept.peer, receiver_addr, receiver_certificate),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.expect("sender connection");
+        accept_connection.expect("receiver connection");
+
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+
+        assert!(sender.has_session(accept.peer));
+        assert!(sender.can_receive());
+        assert!(sender.expire_sessions(Duration::from_mins(1)).is_empty());
+
+        let expired = sender.expire_sessions(Duration::ZERO);
+
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].peer, accept.peer);
+        assert!(!sender.has_session(accept.peer));
+        assert!(!sender.can_receive());
     }
 
     #[tokio::test]
