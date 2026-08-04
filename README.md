@@ -40,7 +40,9 @@ configured peers whose tag does not match. During a membership-key rotation,
 acceptable for inbound control and service-plane validation. Nodes still
 advertise only the current tag derived from `network.membership_key`; previous
 tags are an acceptance window, not an authority to originate routes or a value
-sent as the local identity.
+sent as the local identity. Kademlia refreshes query previous-tag rendezvous
+keys during that acceptance window so peers can still discover each other while
+membership-key rotation is in progress.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
@@ -556,6 +558,9 @@ without exposing the overlay under a network-name-only rendezvous key. Nodes
 with `discovery.kademlia_provider_advertisement` enabled also advertise
 themselves under that key; disable it on public/bootstrap infrastructure that
 should help route discovery without claiming to be an overlay VPN endpoint.
+During membership-key rotation, runtime refreshes query the current provider key
+and any `network.previous_membership_tags`, but provider advertisement remains
+limited to the current key.
 `network.routes` are local route-ownership claims. The node advertises them in
 the control handshake and accepts outbound TUN packets sourced from those
 prefixes; other peers must configure matching `peer.routes` entries for this

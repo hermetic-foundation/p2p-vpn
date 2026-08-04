@@ -343,9 +343,14 @@ where
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
+    let kademlia_lookup_keys = kademlia_lookup_keys(
+        &node.network_name,
+        kademlia_rendezvous_key.as_ref(),
+        &previous_membership_tags,
+    );
     let mut timers = RuntimeTimers::new(
         metrics_interval,
-        kademlia_rendezvous_key.is_some(),
+        !kademlia_lookup_keys.is_empty(),
         queue_config,
     );
     let mut packet_endpoint_candidates = node.packet_endpoint_candidates.clone();
@@ -489,6 +494,7 @@ where
                     kademlia_rendezvous_key
                         .as_ref()
                         .expect("kademlia rendezvous key is present"),
+                    &kademlia_lookup_keys,
                     discovery.kademlia_provider_advertisement,
                     &metrics,
                 );
@@ -1636,7 +1642,8 @@ fn expire_discovered_peer_addresses(
 
 fn refresh_kademlia_rendezvous(
     swarm: &mut Swarm<Behaviour>,
-    rendezvous_key: &kad::RecordKey,
+    advertise_key: &kad::RecordKey,
+    lookup_keys: &[kad::RecordKey],
     advertise_provider: bool,
     metrics: &RuntimeMetrics,
 ) {
@@ -1644,7 +1651,7 @@ fn refresh_kademlia_rendezvous(
         match swarm
             .behaviour_mut()
             .kad
-            .start_providing(rendezvous_key.clone())
+            .start_providing(advertise_key.clone())
         {
             Ok(_) => metrics.record_kademlia_provider_advertisement(),
             Err(error) => {
@@ -1658,11 +1665,10 @@ fn refresh_kademlia_rendezvous(
         }
     }
 
-    swarm
-        .behaviour_mut()
-        .kad
-        .get_providers(rendezvous_key.clone());
-    metrics.record_kademlia_provider_lookup();
+    for lookup_key in lookup_keys {
+        swarm.behaviour_mut().kad.get_providers(lookup_key.clone());
+        metrics.record_kademlia_provider_lookup();
+    }
 
     match swarm.behaviour_mut().kad.bootstrap() {
         Ok(_) => metrics.record_kademlia_bootstrap_refresh(),
@@ -1675,6 +1681,24 @@ fn refresh_kademlia_rendezvous(
             );
         }
     }
+}
+
+fn kademlia_lookup_keys(
+    network_name: &str,
+    current_key: Option<&kad::RecordKey>,
+    previous_membership_tags: &[String],
+) -> Vec<kad::RecordKey> {
+    let Some(current_key) = current_key else {
+        return Vec::new();
+    };
+    let mut keys = vec![current_key.clone()];
+    for tag in previous_membership_tags {
+        let key = crate::runtime::p2p::kademlia_rendezvous_key(network_name, Some(tag));
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 fn redial_known_addresses(
@@ -5601,8 +5625,9 @@ mod tests {
         .expect("node");
         let metrics = RuntimeMetrics::default();
         let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+        let keys = vec![key.clone()];
 
-        refresh_kademlia_rendezvous(&mut node.swarm, &key, true, &metrics);
+        refresh_kademlia_rendezvous(&mut node.swarm, &key, &keys, true, &metrics);
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -5642,16 +5667,73 @@ mod tests {
         .expect("node");
         let metrics = RuntimeMetrics::default();
         let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+        let keys = vec![key.clone()];
 
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(node.startup.kademlia.rendezvous_lookup_started);
 
-        refresh_kademlia_rendezvous(&mut node.swarm, &key, false, &metrics);
+        refresh_kademlia_rendezvous(&mut node.swarm, &key, &keys, false, &metrics);
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 0);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn kademlia_refresh_queries_previous_membership_rendezvous_keys() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            kademlia_provider_advertisement: true,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: Some("current".to_owned()),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let current_key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+        let keys = kademlia_lookup_keys(
+            &node.network_name,
+            Some(&current_key),
+            &[
+                "previous-a".to_owned(),
+                "previous-b".to_owned(),
+                "previous-a".to_owned(),
+            ],
+        );
+
+        assert_eq!(
+            keys,
+            vec![
+                current_key.clone(),
+                crate::runtime::p2p::kademlia_rendezvous_key("lab", Some("previous-a")),
+                crate::runtime::p2p::kademlia_rendezvous_key("lab", Some("previous-b")),
+            ]
+        );
+
+        refresh_kademlia_rendezvous(&mut node.swarm, &current_key, &keys, true, &metrics);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 3);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
     }
 
     #[tokio::test]
