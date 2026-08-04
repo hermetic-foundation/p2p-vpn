@@ -330,18 +330,38 @@ fn validate_inviter_addresses(payload: &InvitePayload) -> Result<(), InviteError
 
 fn validate_peer_address(peer: &Libp2pPeerId, address: &str) -> Result<(), InviteError> {
     let address = address.parse::<Multiaddr>()?;
-    for protocol in &address {
-        if let Protocol::P2p(target) = protocol
-            && target != *peer
-        {
-            return Err(InviteError::AddressPeerMismatch {
-                expected: peer.to_string(),
-                actual: target.to_string(),
-            });
-        }
+    let Some(target) = peer_address_target(&address) else {
+        return Ok(());
+    };
+    if target != *peer {
+        return Err(InviteError::AddressPeerMismatch {
+            expected: peer.to_string(),
+            actual: target.to_string(),
+        });
     }
 
     Ok(())
+}
+
+fn peer_address_target(address: &Multiaddr) -> Option<Libp2pPeerId> {
+    let mut direct_target = None;
+    let mut relayed_target = None;
+    let mut after_circuit = false;
+
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(peer) if after_circuit => relayed_target = Some(peer),
+            Protocol::P2p(peer) => direct_target = Some(peer),
+            Protocol::P2pCircuit => after_circuit = true,
+            _ => {}
+        }
+    }
+
+    if after_circuit {
+        relayed_target
+    } else {
+        direct_target
+    }
 }
 
 fn validate_routes(routes: &[RouteConfig]) -> Result<(), InviteError> {
@@ -363,10 +383,33 @@ fn validate_bootstrap_peers(peers: &[BootstrapPeerConfig]) -> Result<(), InviteE
 
 fn validate_multiaddrs(addresses: &[String]) -> Result<(), InviteError> {
     for address in addresses {
-        address.parse::<Multiaddr>()?;
+        validate_relay_reservation(address)?;
     }
 
     Ok(())
+}
+
+fn validate_relay_reservation(address: &str) -> Result<(), InviteError> {
+    let address = address.parse::<Multiaddr>()?;
+    let mut relay_peer = None;
+    let mut saw_circuit = false;
+    for protocol in &address {
+        match protocol {
+            Protocol::P2p(_) if saw_circuit => {
+                return Err(InviteError::UnexpectedRelayTarget);
+            }
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            Protocol::P2pCircuit if relay_peer.is_some() => saw_circuit = true,
+            Protocol::P2pCircuit => return Err(InviteError::MissingRelayPeer),
+            _ => {}
+        }
+    }
+
+    if saw_circuit {
+        Ok(())
+    } else {
+        Err(InviteError::MissingRelayCircuit)
+    }
 }
 
 fn upsert_bootstrap_peer(peers: &mut Vec<BootstrapPeerConfig>, id: &str, address: String) {
@@ -440,6 +483,9 @@ pub enum InviteError {
     IncompatibleProtocols,
     PublicKeyPeerMismatch { expected: String, actual: String },
     AddressPeerMismatch { expected: String, actual: String },
+    MissingRelayCircuit,
+    MissingRelayPeer,
+    UnexpectedRelayTarget,
     InvalidSignature,
     Expired { expired_at: u64, now: u64 },
     ExpiredBeforeIssued,
@@ -500,7 +546,7 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     use crate::{
-        config::{NetworkConfig, RelayConfig},
+        config::{BootstrapPeerConfig, NetworkConfig, RelayConfig},
         identity::NodeIdentity,
     };
 
@@ -588,6 +634,66 @@ mod tests {
     }
 
     #[test]
+    fn signed_invite_round_trips_relay_assisted_reachability() {
+        let mut source = config_with_membership();
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relayed_inviter_address = format!(
+            "/dns4/relay.example.net/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
+            relay.peer_id, source.network.local_peer
+        );
+        source.network.external_addresses = vec![relayed_inviter_address.clone()];
+        source.network.listen_addresses = Vec::new();
+        source.network.bootstrap_peers = vec![BootstrapPeerConfig {
+            id: relay.peer_id.clone(),
+            address: format!("/dns4/relay.example.net/tcp/4001/p2p/{}", relay.peer_id),
+        }];
+        source.network.relay.reservations = vec![format!(
+            "/dns4/relay.example.net/tcp/4001/p2p/{}/p2p-circuit",
+            relay.peer_id
+        )];
+        let invited = NodeIdentity::generate_ed25519().expect("invited identity");
+
+        let invite = export_signed_invite_at(&source, InviteExportOptions::default(), 1_000)
+            .expect("invite");
+        invite.verify_at(1_000).expect("verified invite");
+        let imported = import_invite_config_at(
+            &invite,
+            InviteImportOptions {
+                identity: invited,
+                interface_name: "hs1".to_owned(),
+                mtu: 1280,
+                local_routes: Vec::new(),
+                peer_name: Some("node-a".to_owned()),
+            },
+            1_000,
+        )
+        .expect("imported config");
+
+        assert_eq!(
+            invite.payload.inviter_addresses,
+            vec![relayed_inviter_address]
+        );
+        assert_eq!(
+            invite.payload.bootstrap_peers,
+            source.network.bootstrap_peers
+        );
+        assert_eq!(
+            invite.payload.relay_reservations,
+            source.network.relay.reservations
+        );
+        assert_eq!(imported.network.bootstrap_peers.len(), 2);
+        assert_eq!(
+            imported.network.relay.reservations,
+            source.network.relay.reservations
+        );
+        assert_eq!(
+            imported.peers[0].addresses,
+            invite.payload.inviter_addresses
+        );
+        imported.validate_runtime().expect("runtime config");
+    }
+
+    #[test]
     fn invite_rejects_tampered_payload() {
         let source = config_with_membership();
         let mut invite = export_signed_invite_at(&source, InviteExportOptions::default(), 1_000)
@@ -658,6 +764,32 @@ mod tests {
         assert!(matches!(
             invite.verify_at(1_000),
             Err(InviteError::IncompatibleProtocols)
+        ));
+    }
+
+    #[test]
+    fn invite_rejects_malformed_relay_reservation_payloads() {
+        let source = config_with_membership();
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let mut invite = export_signed_invite_at(&source, InviteExportOptions::default(), 1_000)
+            .expect("invite");
+
+        invite.payload.relay_reservations = vec![format!(
+            "/dns4/relay.example.net/tcp/4001/p2p/{}",
+            relay.peer_id
+        )];
+        assert!(matches!(
+            invite.verify_at(1_000),
+            Err(InviteError::MissingRelayCircuit)
+        ));
+
+        invite.payload.relay_reservations = vec![format!(
+            "/dns4/relay.example.net/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
+            relay.peer_id, source.network.local_peer
+        )];
+        assert!(matches!(
+            invite.verify_at(1_000),
+            Err(InviteError::UnexpectedRelayTarget)
         ));
     }
 }

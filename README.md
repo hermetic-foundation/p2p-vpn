@@ -348,7 +348,11 @@ private overlay; treat invite files as sensitive. `--membership-epoch` and
 repeatable `--previous-membership-tag` metadata let operators label membership
 key rotations and distribute compatibility hints. Imported configs preserve
 those previous tags, and the daemon and remote status query path accept peers
-using them while continuing to advertise the current invite key's tag.
+using them while continuing to advertise the current invite key's tag. Invites
+also preserve bootstrap peers and relay reservation addresses, and importer-side
+validation accepts relayed inviter addresses shaped as
+`/p2p/<relay>/p2p-circuit/p2p/<inviter>` while rejecting malformed relay
+reservation payloads.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
