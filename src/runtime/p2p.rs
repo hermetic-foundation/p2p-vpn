@@ -236,16 +236,30 @@ fn register_autonat_servers(swarm: &mut Swarm<Behaviour>, config: &HostConfig) -
         return 0;
     };
     let mut registered = 0;
-    for (peer, address) in config
-        .bootstrap_peers
-        .iter()
-        .chain(config.known_peers.iter())
-    {
-        autonat.add_server(*peer, Some(address.clone()));
+    for (peer, address) in autonat_server_addresses(config) {
+        autonat.add_server(peer, Some(address));
         registered += 1;
     }
 
     registered
+}
+
+fn autonat_server_addresses(config: &HostConfig) -> Vec<(PeerId, Multiaddr)> {
+    let mut addresses = Vec::new();
+    let relay_peers = relay_peer_addresses_from_reservations(&config.relay_reservations);
+    for (peer, address) in config
+        .bootstrap_peers
+        .iter()
+        .chain(config.known_peers.iter())
+        .chain(relay_peers.iter())
+    {
+        let entry = (*peer, address.clone());
+        if !addresses.contains(&entry) {
+            addresses.push(entry);
+        }
+    }
+
+    addresses
 }
 
 fn install_listeners_and_dials(
@@ -748,7 +762,7 @@ mod tests {
         assert!(node.startup.mdns_enabled);
         assert!(node.startup.dcutr_enabled);
         assert!(node.startup.autonat_enabled);
-        assert_eq!(node.startup.autonat_servers_registered, 1);
+        assert_eq!(node.startup.autonat_servers_registered, 2);
         assert_eq!(node.startup.relay_reservations_started, 1);
         assert_eq!(
             node.relay_peer_addresses,
@@ -761,6 +775,76 @@ mod tests {
         );
         assert!(node.startup.relay_server_enabled);
         assert!(node.swarm.behaviour().relay_server.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn build_node_registers_relay_reservations_as_autonat_servers() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let relay_address = "/memory/92"
+            .parse::<Multiaddr>()
+            .expect("relay base address")
+            .with_p2p(relay)
+            .expect("relay p2p address");
+        let relay_reservation = relay_address
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit);
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+
+        assert_eq!(node.startup.autonat_servers_registered, 1);
+        assert_eq!(node.relay_peer_addresses, vec![(relay, relay_address)]);
+    }
+
+    #[test]
+    fn autonat_server_addresses_deduplicate_relay_infrastructure() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let relay_address = "/memory/93"
+            .parse::<Multiaddr>()
+            .expect("relay base address")
+            .with_p2p(relay)
+            .expect("relay p2p address");
+        let relay_reservation = relay_address
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit);
+        let config = HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: vec![(relay, relay_address.clone())],
+            known_peers: vec![(relay, relay_address.clone())],
+            relay_reservations: vec![relay_reservation],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        };
+
+        assert_eq!(
+            autonat_server_addresses(&config),
+            vec![(relay, relay_address)]
+        );
     }
 
     #[test]

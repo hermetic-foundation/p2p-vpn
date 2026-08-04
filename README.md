@@ -205,11 +205,12 @@ provider advertisement, reruns the provider lookup, and retries Kademlia
 bootstrap. That lets a long-running node find configured peers that join the DHT
 after startup rather than relying on the initial one-shot provider query.
 Observed external address candidates reported by libp2p identify are passed to
-AutoNAT when that behaviour is enabled, and configured bootstrap/peer addresses
-are registered as AutoNAT probe servers. When AutoNAT confirms a public address,
-the runtime registers it as an advertised external swarm address, so later
-identify exchanges and Kademlia announcements can carry a tested public address
-alongside any operator-configured external addresses.
+AutoNAT when that behaviour is enabled, and configured bootstrap peers, peer
+addresses, and relay-reservation peers are registered as AutoNAT probe servers.
+When AutoNAT confirms a public address, the runtime registers it as an
+advertised external swarm address, so later identify exchanges and Kademlia
+announcements can carry a tested public address alongside any operator-configured
+external addresses.
 Candidate, scheduled-probe, confirmed, and expired external address events are
 exposed in metrics for NAT traversal diagnostics.
 
@@ -539,7 +540,10 @@ membership or route authority.
 `external_addresses` are registered with the libp2p swarm as explicit
 advertised addresses; use them for stable public socket, DNS, or port-forwarded
 addresses that peers should prefer over wildcard listen addresses. Confirmed
-AutoNAT public addresses are registered the same way at runtime.
+AutoNAT public addresses are registered the same way at runtime. Bootstrap,
+configured peer, and relay-reservation addresses are also registered as AutoNAT
+probe servers when AutoNAT is enabled, so public libp2p/IPFS infrastructure can
+assist reachability checks without becoming VPN membership or routing authority.
 `relay.reservations` are full libp2p relay listen addresses; listening on
 one asks that relay for a circuit relay v2 reservation. Peer `addresses` may
 also contain full relayed target addresses such as
