@@ -2026,6 +2026,13 @@ async fn send_dequeued_packet_plane_datagram(
                 context.metrics.record_outbound_quic_datagram();
             }
             Err(error) => {
+                maybe_demote_packet_plane_path(
+                    context.paths,
+                    context.metrics,
+                    packet.peer(),
+                    path,
+                    &error,
+                );
                 context
                     .metrics
                     .record_outbound_drop(packet_plane_drop_reason(&error));
@@ -3784,6 +3791,33 @@ fn record_path_selection_change(
     }
 }
 
+fn maybe_demote_packet_plane_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    path: PathKind,
+    error: &PacketPlaneIoError,
+) {
+    if !packet_plane_send_failure_demotes_path(error) {
+        return;
+    }
+
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_packet_plane_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "packet_plane_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", packet_plane_io_error_name(error)),
+        ],
+    );
+}
+
 fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChange) {
     let peer = change.peer.to_string();
     let previous = change
@@ -4368,6 +4402,16 @@ fn packet_plane_inbound_drop_reason(error: &PacketPlaneIoError) -> PacketDropRea
             PacketDropReason::MalformedPacket
         }
     }
+}
+
+fn packet_plane_send_failure_demotes_path(error: &PacketPlaneIoError) -> bool {
+    matches!(
+        error,
+        PacketPlaneIoError::NoListener { .. }
+            | PacketPlaneIoError::NoSession { .. }
+            | PacketPlaneIoError::NoSessions
+            | PacketPlaneIoError::Io(_)
+    )
 }
 
 fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
@@ -6156,6 +6200,76 @@ mod tests {
             PacketDropReason::MalformedPacket
         );
         assert_eq!(packet_plane_io_error_name(&decrypt), "decrypt");
+    }
+
+    #[test]
+    fn packet_plane_transport_failure_demotes_datagram_path_to_relay() {
+        let peer = PeerId::from_bytes([9; 32]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::CircuitRelay,
+        ));
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::DirectQuicDatagram,
+        ));
+
+        maybe_demote_packet_plane_path(
+            &mut paths,
+            &metrics,
+            peer,
+            PathKind::DirectQuicDatagram,
+            &PacketPlaneIoError::NoSession { peer },
+        );
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
+    fn packet_plane_payload_error_does_not_demote_datagram_path() {
+        use crate::runtime::packet_plane::PacketPlaneDatagramError;
+
+        let peer = PeerId::from_bytes([10; 32]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::CircuitRelay,
+        ));
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::DirectQuicDatagram,
+        ));
+
+        let error = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::PayloadTooLarge {
+            actual: 1_500,
+            max: 1_280,
+        });
+        maybe_demote_packet_plane_path(
+            &mut paths,
+            &metrics,
+            peer,
+            PathKind::DirectQuicDatagram,
+            &error,
+        );
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::DirectQuicDatagram)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.packet_plane_path_demotions, 0);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 0);
     }
 
     #[test]

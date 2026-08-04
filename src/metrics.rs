@@ -64,6 +64,7 @@ pub struct RuntimeMetrics {
     relayed_connections_established: AtomicU64,
     path_promotions_to_direct: AtomicU64,
     path_fallbacks_to_relay: AtomicU64,
+    packet_plane_path_demotions: AtomicU64,
     outbound_path_mtu_updates: AtomicU64,
     outbound_path_mtu_probe_confirmations: AtomicU64,
     unauthorized_connections_dropped: AtomicU64,
@@ -293,6 +294,11 @@ impl RuntimeMetrics {
 
     pub fn record_path_fallback_to_relay(&self) {
         self.path_fallbacks_to_relay.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_packet_plane_path_demotion(&self) {
+        self.packet_plane_path_demotions
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_outbound_path_mtu_update(&self) {
@@ -712,6 +718,8 @@ impl RuntimeMetrics {
             self.relayed_connections_established.load(Ordering::Relaxed);
         snapshot.path_promotions_to_direct = self.path_promotions_to_direct.load(Ordering::Relaxed);
         snapshot.path_fallbacks_to_relay = self.path_fallbacks_to_relay.load(Ordering::Relaxed);
+        snapshot.packet_plane_path_demotions =
+            self.packet_plane_path_demotions.load(Ordering::Relaxed);
         snapshot.outbound_path_mtu_updates = self.outbound_path_mtu_updates.load(Ordering::Relaxed);
         snapshot.outbound_path_mtu_probe_confirmations = self
             .outbound_path_mtu_probe_confirmations
@@ -911,6 +919,7 @@ pub struct RuntimeSnapshot {
     pub relayed_connections_established: u64,
     pub path_promotions_to_direct: u64,
     pub path_fallbacks_to_relay: u64,
+    pub packet_plane_path_demotions: u64,
     pub outbound_path_mtu_updates: u64,
     pub outbound_path_mtu_probe_confirmations: u64,
     pub unauthorized_connections_dropped: u64,
@@ -1054,6 +1063,10 @@ impl RuntimeSnapshot {
                 self.path_promotions_to_direct
             ),
             format!("path_fallbacks_to_relay {}", self.path_fallbacks_to_relay),
+            format!(
+                "packet_plane_path_demotions {}",
+                self.packet_plane_path_demotions
+            ),
             format!(
                 "outbound_path_mtu_updates {}",
                 self.outbound_path_mtu_updates
@@ -1459,6 +1472,7 @@ mod tests {
         metrics.record_connection_established(true);
         metrics.record_path_promotion_to_direct();
         metrics.record_path_fallback_to_relay();
+        metrics.record_packet_plane_path_demotion();
         metrics.record_outbound_path_mtu_update();
         metrics.record_outbound_path_mtu_probe_confirmation();
         metrics.record_unauthorized_connection_dropped();
@@ -1709,6 +1723,7 @@ mod tests {
 
         assert_eq!(snapshot.path_promotions_to_direct, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+        assert_eq!(snapshot.packet_plane_path_demotions, 1);
         assert_eq!(snapshot.outbound_path_mtu_updates, 1);
         assert_eq!(snapshot.outbound_path_mtu_probe_confirmations, 1);
     }
@@ -1731,6 +1746,7 @@ mod tests {
         assert_metric_line(&snapshot, "relayed_connections_established 1");
         assert_metric_line(&snapshot, "path_promotions_to_direct 1");
         assert_metric_line(&snapshot, "path_fallbacks_to_relay 1");
+        assert_metric_line(&snapshot, "packet_plane_path_demotions 1");
         assert_metric_line(&snapshot, "outbound_path_mtu_updates 1");
         assert_metric_line(&snapshot, "outbound_path_mtu_probe_confirmations 1");
         assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");

@@ -171,7 +171,8 @@ impl PathSet {
             .filter(move |candidate| candidate.peer == peer)
     }
 
-    pub fn mark_unhealthy(&mut self, peer: PeerId, kind: PathKind) {
+    pub fn mark_unhealthy(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
             .iter_mut()
@@ -179,6 +180,7 @@ impl PathSet {
         {
             candidate.healthy = false;
         }
+        self.selection_change(peer, previous)
     }
 
     pub fn record_established(
@@ -350,11 +352,23 @@ mod tests {
         paths.upsert(PathCandidate::new(peer(1), PathKind::CircuitRelay));
         paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicDatagram));
 
-        paths.mark_unhealthy(peer(1), PathKind::DirectQuicDatagram);
+        let change = paths.mark_unhealthy(peer(1), PathKind::DirectQuicDatagram);
 
         assert_eq!(
             paths.best_for(peer(1)).map(|path| path.kind),
             Some(PathKind::CircuitRelay)
+        );
+        assert_eq!(
+            change.map(|change| {
+                (
+                    change.previous.map(|candidate| candidate.kind),
+                    change.current.map(|candidate| candidate.kind),
+                )
+            }),
+            Some((
+                Some(PathKind::DirectQuicDatagram),
+                Some(PathKind::CircuitRelay)
+            ))
         );
     }
 
