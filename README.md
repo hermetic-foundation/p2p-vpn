@@ -726,6 +726,7 @@ cargo run -- bootstrap-check --config p2p-vpn.json --require-all --timeout-secon
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relay-reservations --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-autonat-status --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-ready --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-success --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relayed-peer-circuits --timeout-seconds 30
 ```
 
@@ -750,27 +751,35 @@ that same relay has a corresponding relayed listen address. Use
 `--require-dcutr-ready` to fail unless DCUtR is enabled and the relay
 reservation prerequisites for DCUtR are usable on each configured relay;
 this is a rootless readiness check, not proof that a remote peer has completed a
-hole punch. Use `--require-relayed-peer-circuits` when the VPN peer list contains
-full relayed target addresses such as
+hole punch. Use `--require-dcutr-success` to fail unless the check observes a
+successful libp2p DCUtR hole-punch event before the timeout. Use
+`--require-relayed-peer-circuits` when the VPN peer list contains full relayed
+target addresses such as
 `/dns4/relay.example.net/tcp/4001/p2p/RELAY/p2p-circuit/p2p/PEER`; the command
 dials each configured relayed peer target, reports per-peer circuit status, and
 fails unless every configured relayed peer circuit connects before the timeout.
 It does not add bootstrap or relay peers to VPN membership or grant route
 authority.
 
-Run the ignored live public relay smoke when you want to validate a specific
+Run the ignored live public relay smokes when you want to validate a specific
 shared relay outside the deterministic local test suite:
 
 ```sh
 P2P_VPN_LIVE_RELAY_MULTIADDR=/dns4/relay.example.net/tcp/4001/p2p/RELAY \
   cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_relayed_peer_circuit \
   -- --ignored --exact --nocapture
+
+P2P_VPN_LIVE_RELAY_MULTIADDR=/dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_dcutr_success \
+  -- --ignored --exact --nocapture
 ```
 
 The supplied relay multiaddr must be the relay's direct address with its
 `/p2p/RELAY` peer ID and without `/p2p-circuit`. The test creates a temporary
 listener, reserves a circuit on that relay, then uses `bootstrap-check` against a
-second temporary node to prove the relayed target can be dialed.
+second temporary node to prove the relayed target can be dialed. The DCUtR smoke
+also gives both temporary nodes direct listen sockets and fails unless
+`bootstrap-check` observes a successful DCUtR hole-punch event.
 
 Inspect the runtime metric names and startup snapshot:
 

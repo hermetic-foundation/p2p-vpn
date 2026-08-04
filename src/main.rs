@@ -235,6 +235,8 @@ enum Command {
         #[arg(long)]
         require_dcutr_ready: bool,
         #[arg(long)]
+        require_dcutr_success: bool,
+        #[arg(long)]
         require_relayed_peer_circuits: bool,
     },
     InviteExport {
@@ -483,6 +485,7 @@ async fn main() -> Result<(), String> {
             require_relay_reservations,
             require_autonat_status,
             require_dcutr_ready,
+            require_dcutr_success,
             require_relayed_peer_circuits,
         } => {
             let threshold = if require_all {
@@ -498,6 +501,7 @@ async fn main() -> Result<(), String> {
                     relay_reservations: require_relay_reservations,
                     autonat_status: require_autonat_status,
                     dcutr_ready: require_dcutr_ready,
+                    dcutr_success: require_dcutr_success,
                     relayed_peer_circuits: require_relayed_peer_circuits,
                 },
             ))
