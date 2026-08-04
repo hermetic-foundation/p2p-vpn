@@ -2179,14 +2179,24 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
 fn relay_scan_candidate_multiaddrs(
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
 ) -> Result<Vec<libp2p::Multiaddr>, String> {
-    let raw = report
+    report
         .candidates
         .iter()
-        .map(|candidate| candidate.address.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    parse_public_relay_addresses(&raw)
-        .map_err(|error| format!("failed to parse scanned relay candidates: {error}"))
+        .map(|candidate| {
+            parse_public_relay_addresses(&candidate.address)
+                .and_then(|mut addresses| {
+                    addresses
+                        .pop()
+                        .ok_or_else(|| "empty scanned relay candidate".to_owned())
+                })
+                .map_err(|error| {
+                    format!(
+                        "failed to parse scanned relay candidate {}: {error}",
+                        candidate.address
+                    )
+                })
+        })
+        .collect()
 }
 
 fn relay_scan_config(
@@ -3945,25 +3955,9 @@ mod tests {
 
     #[test]
     fn relay_scan_candidate_multiaddrs_parse_report_candidates() {
-        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
-            .parse()
-            .expect("peer id");
-        let report = p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
-            scanned_bootstrap_peers: 1,
-            connected_bootstrap_peers: 1,
-            identified_bootstrap_peers: 1,
-            relay_capable_peers: 1,
-            dial_failures: 0,
-            candidates: vec![
-                p2p_vpn::runtime::bootstrap_check::PublicRelayScanCandidate {
-                    peer_id: peer,
-                    address:
-                        "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
-                            .to_owned(),
-                },
-            ],
-            peer_results: Vec::new(),
-        };
+        let report = relay_scan_report_with_candidates(&[
+            "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        ]);
 
         let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
 
@@ -3972,6 +3966,65 @@ mod tests {
             candidates[0].to_string(),
             "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
         );
+    }
+
+    #[test]
+    fn relay_scan_candidate_multiaddrs_accept_full_scan_limit() {
+        let addresses = [
+            "/dns4/relay-0.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "/dns4/relay-1.example.net/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+            "/dns4/relay-2.example.net/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+            "/dns4/relay-3.example.net/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+            "/dns4/relay-4.example.net/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+            "/dns4/relay-5.example.net/tcp/4001/p2p/QmNLeiTeX4gikNaGnwmN8vV1E6AbY3JdC9GrCpVJKiKfVn",
+            "/dns4/relay-6.example.net/tcp/4001/p2p/QmRz5F2Yk5YzgT1cJNtSL9vGvDeX9xC4UvK8ZdtXqT6NhP",
+            "/dns4/relay-7.example.net/tcp/4001/p2p/QmSoLueR4xBeUbY9WZ9xGUUxunbKWcrNFTDAadQJmocnWm",
+            "/dns4/relay-8.example.net/tcp/4001/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
+            "/dns4/relay-9.example.net/tcp/4001/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd",
+            "/dns4/relay-10.example.net/tcp/4001/p2p/QmSoLueR4xBeUbY9WZ9xGUUxunbKWcrNFTDAadQJmocnWm",
+            "/dns4/relay-11.example.net/tcp/4001/p2p/QmRz5F2Yk5YzgT1cJNtSL9vGvDeX9xC4UvK8ZdtXqT6NhP",
+            "/dns4/relay-12.example.net/tcp/4001/p2p/QmNLeiTeX4gikNaGnwmN8vV1E6AbY3JdC9GrCpVJKiKfVn",
+            "/dns4/relay-13.example.net/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+            "/dns4/relay-14.example.net/tcp/4001/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+            "/dns4/relay-15.example.net/tcp/4001/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+        ];
+        let report = relay_scan_report_with_candidates(&addresses);
+
+        let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
+
+        assert_eq!(candidates.len(), addresses.len());
+    }
+
+    fn relay_scan_report_with_candidates(
+        addresses: &[&str],
+    ) -> p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
+        let candidates = addresses
+            .iter()
+            .map(|address| {
+                let parsed = address.parse::<libp2p::Multiaddr>().expect("multiaddr");
+                let peer_id = parsed
+                    .iter()
+                    .find_map(|protocol| match protocol {
+                        libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
+                        _ => None,
+                    })
+                    .expect("candidate peer id");
+                p2p_vpn::runtime::bootstrap_check::PublicRelayScanCandidate {
+                    peer_id,
+                    address: (*address).to_owned(),
+                }
+            })
+            .collect();
+
+        p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
+            scanned_bootstrap_peers: addresses.len(),
+            connected_bootstrap_peers: addresses.len(),
+            identified_bootstrap_peers: addresses.len(),
+            relay_capable_peers: addresses.len(),
+            dial_failures: 0,
+            candidates,
+            peer_results: Vec::new(),
+        }
     }
 
     #[test]
