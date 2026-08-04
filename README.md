@@ -158,8 +158,12 @@ also does not report a native datagram packet as sent unless a real
 datagram-capable local data plane exists; datagram-only paths remain blocked
 instead of silently degrading into fake success.
 Configured peers with validated capabilities and a supported path are also sent
-periodic path-probe frames over the packet protocol, giving operators liveness
-traffic that does not depend on user IP packets.
+periodic path-probe frames, giving operators liveness traffic that does not
+depend on user IP packets. When an owned packet-plane datagram session is the
+selected path, probes are sent over that UDP session and padded to the selected
+path/session MTU so the preferred data plane is exercised directly. Stream and
+relay paths keep using the authenticated libp2p packet request-response
+fallback for probes.
 Each active path also carries an MTU estimate. Direct paths start at the local
 effective packet MTU, while circuit-relay paths start at a conservative 1200
 byte estimate. Outbound queue draining and path probes use the selected path's

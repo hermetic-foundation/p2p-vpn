@@ -253,6 +253,24 @@ impl Forwarder {
         peer_mtu: u16,
         payload: &[u8],
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let transport_peer = self
+            .peers
+            .get(&peer)
+            .copied()
+            .ok_or(ForwardError::NoTransportPeer(peer))?;
+        let frame = self.path_probe_frame_with_mtu(peer_mtu, payload)?;
+
+        Ok(swarm
+            .behaviour_mut()
+            .packet
+            .send_request(&transport_peer, frame))
+    }
+
+    pub fn path_probe_frame_with_mtu(
+        &mut self,
+        peer_mtu: u16,
+        payload: &[u8],
+    ) -> Result<Frame, ForwardError> {
         let max = self.mtu.min(usize::from(peer_mtu));
         if payload.len() > max {
             return Err(ForwardError::PacketTooLarge {
@@ -261,17 +279,9 @@ impl Forwarder {
             });
         }
 
-        let transport_peer = self
-            .peers
-            .get(&peer)
-            .ok_or(ForwardError::NoTransportPeer(peer))?;
         let frame = Frame::path_probe(self.session_id, self.next_sequence, payload.to_vec())?;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-
-        Ok(swarm
-            .behaviour_mut()
-            .packet
-            .send_request(transport_peer, frame))
+        Ok(frame)
     }
 
     fn mtu_u16(&self) -> u16 {
