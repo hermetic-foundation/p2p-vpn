@@ -10,9 +10,10 @@ use clap::{Parser, Subcommand};
 use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
-        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, PacketPlaneConfig, QueueConfig,
-        RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
-        default_packet_plane_replay_windows_per_session, default_packet_plane_session_ttl_seconds,
+        BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate, InitPeer,
+        PacketPlaneConfig, QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig,
+        RouteConfig, RuntimeDefaults, default_packet_plane_replay_windows_per_session,
+        default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
     invite::{
@@ -25,6 +26,7 @@ use p2p_vpn::{
         bootstrap_check::{
             BootstrapCheckRequirements, BootstrapCheckThreshold, PublicRelayProbeMode,
             check_config_bootstrap, check_public_relay_candidates, parse_public_relay_addresses,
+            scan_public_relay_candidates,
         },
         forward::session_id_for_peer,
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
@@ -251,6 +253,18 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
         timeout_seconds: u64,
+    },
+    RelayScan {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long = "bootstrap-peer")]
+        bootstrap_peers: Vec<EndpointArg>,
+        #[arg(long)]
+        ipfs_bootstrap_peers: bool,
+        #[arg(long, default_value_t = 30)]
+        timeout_seconds: u64,
+        #[arg(long, default_value_t = 8)]
+        max_candidates: usize,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -535,6 +549,22 @@ async fn main() -> Result<(), String> {
                 PublicRelayProbeMode::RelayedPeerCircuit
             };
             Box::pin(relay_check(&relay_candidates, timeout_seconds, mode)).await
+        }
+        Command::RelayScan {
+            config,
+            bootstrap_peers,
+            ipfs_bootstrap_peers,
+            timeout_seconds,
+            max_candidates,
+        } => {
+            Box::pin(relay_scan(
+                config.as_deref(),
+                bootstrap_peers,
+                ipfs_bootstrap_peers,
+                timeout_seconds,
+                max_candidates,
+            ))
+            .await
         }
         Command::InviteExport {
             config,
@@ -2059,6 +2089,104 @@ async fn relay_check(
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
     }
+}
+
+async fn relay_scan(
+    config_path: Option<&Path>,
+    bootstrap_peers: Vec<EndpointArg>,
+    ipfs_bootstrap_peers: bool,
+    timeout_seconds: u64,
+    max_candidates: usize,
+) -> Result<(), String> {
+    if max_candidates == 0 {
+        return Err("--max-candidates must be greater than zero".to_owned());
+    }
+    let config = relay_scan_config(config_path, bootstrap_peers, ipfs_bootstrap_peers)?;
+    if config.network.bootstrap_peers.is_empty() {
+        return Err(
+            "relay-scan needs at least one bootstrap peer; pass --config, --bootstrap-peer, or --ipfs-bootstrap-peers"
+                .to_owned(),
+        );
+    }
+    let report = Box::pin(scan_public_relay_candidates(
+        &config,
+        Duration::from_secs(timeout_seconds.max(1)),
+        max_candidates,
+    ))
+    .await
+    .map_err(|error| format!("public relay scan failed to start: {error:?}"))?;
+    let succeeded = report.succeeded();
+
+    for line in report.lines() {
+        println!("{line}");
+    }
+
+    if succeeded {
+        Ok(())
+    } else {
+        Err("public relay scan did not discover a relay-hop candidate".to_owned())
+    }
+}
+
+fn relay_scan_config(
+    config_path: Option<&Path>,
+    bootstrap_peers: Vec<EndpointArg>,
+    ipfs_bootstrap_peers: bool,
+) -> Result<Config, String> {
+    let mut config = if let Some(path) = config_path {
+        Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?
+    } else {
+        NodeIdentity::generate_ed25519()
+            .map_err(|error| format!("failed to generate identity: {error:?}"))
+            .map(|identity| {
+                InitConfigTemplate {
+                    identity,
+                    network_name: "relay-scan".to_owned(),
+                    membership_key: None,
+                    local_routes: Vec::new(),
+                    interface_name: "hs0".to_owned(),
+                    mtu: 1280,
+                    listen_addresses: Vec::new(),
+                    external_addresses: Vec::new(),
+                    packet_plane: PacketPlaneConfig::default(),
+                    bootstrap_peers: Vec::new(),
+                    peers: Vec::new(),
+                    discovery: DiscoveryConfig {
+                        mdns: false,
+                        kademlia: false,
+                        kademlia_provider_advertisement: false,
+                        kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                        dcutr: false,
+                        autonat: false,
+                    },
+                    relay: RelayConfig::default(),
+                }
+                .into_config()
+            })?
+    };
+
+    for peer in init_bootstrap_peers(bootstrap_peers, Vec::new(), ipfs_bootstrap_peers) {
+        let Some(address) = peer.address else {
+            return Err(format!(
+                "bootstrap peer {} must include an address as PEER_ID=MULTIADDR",
+                peer.id
+            ));
+        };
+        let bootstrap_peer = BootstrapPeerConfig {
+            id: peer.id,
+            address,
+        };
+        if !config
+            .network
+            .bootstrap_peers
+            .iter()
+            .any(|existing| existing == &bootstrap_peer)
+        {
+            config.network.bootstrap_peers.push(bootstrap_peer);
+        }
+    }
+
+    Ok(config)
 }
 
 async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
@@ -3695,6 +3823,53 @@ mod tests {
         assert!(relay_candidates[0].contains("relay.example.net"));
         assert!(require_dcutr_success);
         assert_eq!(timeout_seconds, 60);
+    }
+
+    #[test]
+    fn cli_parses_relay_scan_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-scan",
+            "--bootstrap-peer",
+            "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN=/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "--ipfs-bootstrap-peers",
+            "--timeout-seconds",
+            "60",
+            "--max-candidates",
+            "4",
+        ])
+        .expect("cli");
+
+        let Command::RelayScan {
+            config,
+            bootstrap_peers,
+            ipfs_bootstrap_peers,
+            timeout_seconds,
+            max_candidates,
+        } = cli.command
+        else {
+            panic!("expected relay-scan command");
+        };
+
+        assert_eq!(config, None);
+        assert_eq!(bootstrap_peers.len(), 1);
+        assert!(ipfs_bootstrap_peers);
+        assert_eq!(timeout_seconds, 60);
+        assert_eq!(max_candidates, 4);
+    }
+
+    #[test]
+    fn relay_scan_config_can_use_ipfs_bootstrap_defaults_without_local_config() {
+        let config =
+            relay_scan_config(None, Vec::new(), true).expect("relay scan config from ipfs");
+
+        assert_eq!(config.network.name, "relay-scan");
+        assert_eq!(
+            config.network.bootstrap_peers.len(),
+            IPFS_BOOTSTRAP_PEERS.len()
+        );
+        assert!(!config.network.discovery.mdns);
+        assert!(!config.network.discovery.kademlia);
     }
 
     #[test]

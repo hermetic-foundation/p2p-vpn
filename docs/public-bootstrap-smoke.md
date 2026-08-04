@@ -59,8 +59,23 @@ reservation acceptance, relayed peer circuit dialing, or public-relay-assisted
 DCUtR hole punching; those require a known public circuit-relay v2 endpoint that
 accepts reservations for the test.
 
-To record the remaining relay evidence, run the ignored live relay smokes with a
-known-good relay or a candidate set. The preferred rootless operator command is:
+To record the remaining relay evidence, first scan configured or public
+bootstrap peers for peers that advertise the circuit-relay v2 hop protocol:
+
+```sh
+nix develop -c cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
+
+nix develop -c cargo run -- relay-scan \
+  --bootstrap-peer PEER_ID=/dnsaddr/bootstrap.example.net/p2p/PEER_ID \
+  --timeout-seconds 30
+```
+
+`relay-scan` reports direct `/p2p/RELAY` candidate multiaddrs. Treat these as
+candidate hints only; the peer can advertise relay-hop support and still reject
+reservations because of load, policy, or resource limits.
+
+Then run the live relay smokes with a known-good relay or the scanned candidate
+set. The preferred rootless operator command is:
 
 ```sh
 nix develop -c cargo run -- relay-check \
@@ -94,3 +109,25 @@ P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/d
 `P2P_VPN_LIVE_RELAY_MULTIADDRS` accepts up to eight comma, semicolon, or
 newline-separated direct relay multiaddrs. `P2P_VPN_LIVE_RELAY_MULTIADDR`
 remains supported for a single relay.
+
+Recorded public relay scan evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 15 --max-candidates 8
+public relay scan: ok
+public relay scan peers: 5
+public relay scan connected: 2
+public relay scan identified: 2
+public relay scan relay_capable: 2
+public relay scan dial_failures: 0
+public relay candidates: 8
+```
+
+The scan found TCP/QUIC relay-hop candidate addresses for
+`QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ` and
+`QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa`. A follow-up
+`relay-check` against their IPv4 TCP and QUIC candidates did not prove usable
+relay service: all four candidates timed out waiting for relay reservation
+acceptance. That means the public Identify scan is operational, but public
+reservation and public-relay-assisted DCUtR evidence still require a relay that
+both advertises hop support and accepts reservations at the time of the smoke.

@@ -803,6 +803,8 @@ shared relay, or a small candidate set of relays, outside the deterministic
 local test suite:
 
 ```sh
+cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
+
 cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --timeout-seconds 45
@@ -812,6 +814,16 @@ cargo run -- relay-check \
   --require-dcutr-success \
   --timeout-seconds 45
 ```
+
+`relay-scan` is rootless. It dials configured or supplied bootstrap peers,
+waits for libp2p Identify responses, and prints direct relay candidate
+TCP/QUIC multiaddrs for peers that advertise the circuit-relay v2 hop protocol.
+Use `--config p2p-vpn.json` to scan the config's bootstrap peers, repeat
+`--bootstrap-peer PEER_ID=MULTIADDR` to scan explicit peers, or pass
+`--ipfs-bootstrap-peers` to scan the bundled public IPFS bootstrap set. A
+discovered candidate is only a hint that the peer advertises relay-hop support;
+run `relay-check` against the printed candidate before using it for a VPN
+reservation or DCUtR path.
 
 `relay-check` is rootless. In its default mode it creates a temporary listener,
 reserves a circuit on the supplied relay, and dials that listener from a second
