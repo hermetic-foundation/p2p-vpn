@@ -3,6 +3,7 @@ pub mod control_socket;
 pub mod forward;
 pub mod p2p;
 pub mod packet;
+pub mod packet_plane;
 pub mod remote;
 pub mod runner;
 pub mod service;

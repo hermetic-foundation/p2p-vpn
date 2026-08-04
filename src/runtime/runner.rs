@@ -36,6 +36,7 @@ use crate::{
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
+        packet_plane::{PacketPlaneRuntime, PacketPlaneSnapshot},
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
@@ -179,6 +180,9 @@ where
         discovery: config.network.discovery.clone(),
     })?;
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
+    let packet_plane = PacketPlaneRuntime::bind(config.packet_plane_listen_addrs()?)
+        .await
+        .map_err(RunnerError::PacketPlane)?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
     let previous_membership_tags = config.previous_membership_tags()?;
@@ -194,6 +198,7 @@ where
         config.resources,
         metrics_interval,
         control_socket,
+        packet_plane,
         shutdown,
     ))
     .await
@@ -235,6 +240,7 @@ pub async fn run_node(
         options.resources,
         options.metrics_interval,
         None,
+        PacketPlaneRuntime::disabled(),
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -261,6 +267,7 @@ pub async fn run_node_until<Shutdown>(
     resources: ResourceConfig,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
+    packet_plane: PacketPlaneRuntime,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -305,6 +312,7 @@ where
     };
 
     log_startup_status(node.startup);
+    log_packet_plane_status(packet_plane.snapshot());
     log_runtime_event(
         LogLevel::Info,
         "runtime_started",
@@ -425,8 +433,9 @@ where
                     queue: queues.total_stats(),
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
+                    packet_plane: packet_plane.snapshot(),
                 };
-                if let Some(reason) = handle_runtime_control_request(request, control_context) {
+                if let Some(reason) = handle_runtime_control_request(request, &control_context) {
                     log_runtime_event(
                         LogLevel::Info,
                         "runtime_shutdown",
@@ -523,7 +532,6 @@ fn send_path_probes(
     }
 }
 
-#[derive(Clone, Copy)]
 struct RuntimeControlContext<'a> {
     forwarder: &'a Forwarder,
     paths: &'a PathSet,
@@ -533,30 +541,37 @@ struct RuntimeControlContext<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
+    packet_plane: PacketPlaneSnapshot,
 }
 
 fn handle_runtime_control_request(
     request: RuntimeControlRequest,
-    context: RuntimeControlContext<'_>,
+    context: &RuntimeControlContext<'_>,
 ) -> Option<ShutdownReason> {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
-            let lines = runtime_status_lines(context.metrics, context.queue, context.path_stats);
+            let lines = runtime_status_lines(
+                context.metrics,
+                context.queue,
+                context.path_stats,
+                &context.packet_plane,
+            );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
             None
         }
         RuntimeControlRequest::State { respond_to } => {
-            let lines = runtime_state_lines(
-                context.forwarder,
-                context.paths,
-                context.peer_capabilities,
-                context.metrics,
-                context.queue,
-                context.path_stats,
-                context.packet_in_flight,
-            );
+            let lines = runtime_state_lines(RuntimeStateView {
+                forwarder: context.forwarder,
+                paths: context.paths,
+                peer_capabilities: context.peer_capabilities,
+                metrics: context.metrics,
+                queue: context.queue,
+                path_stats: context.path_stats,
+                packet_in_flight: context.packet_in_flight,
+                packet_plane: &context.packet_plane,
+            });
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
             }
@@ -598,6 +613,7 @@ fn handle_runtime_control_request(
                 context.forwarder,
                 context.peer_capabilities,
                 context.local_capabilities,
+                &context.packet_plane,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket capabilities response receiver dropped");
@@ -777,8 +793,26 @@ fn runtime_capability_lines(
     forwarder: &Forwarder,
     peer_capabilities: &PeerCapabilities,
     local_capabilities: &ControlCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
 ) -> Vec<String> {
     let mut peers = sorted_configured_peers(forwarder);
+    let mut lines = local_capability_lines(local_capabilities, packet_plane);
+    lines.push(format!("validated peers: {}", peer_capabilities.len()));
+    for peer in peers.drain(..) {
+        let Some(capabilities) = peer_capabilities.get(peer) else {
+            lines.push(format!("remote capability peer: {peer} unvalidated"));
+            continue;
+        };
+        extend_remote_capability_lines(&mut lines, peer, capabilities);
+    }
+
+    lines
+}
+
+fn local_capability_lines(
+    local_capabilities: &ControlCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+) -> Vec<String> {
     let mut lines = vec![
         format!(
             "local capability network: {}",
@@ -810,63 +844,99 @@ fn runtime_capability_lines(
             local_capabilities.supports_quic_datagrams
         ),
         format!(
+            "local capability packet endpoint candidates: {}",
+            local_capabilities.packet_endpoint_candidates.len()
+        ),
+        format!("packet plane listeners: {}", packet_plane.listeners.len()),
+        format!(
             "local capability advertised routes: {}",
             local_capabilities.advertised_routes.len()
         ),
-        format!("validated peers: {}", peer_capabilities.len()),
     ];
+    extend_local_capability_detail_lines(&mut lines, local_capabilities, packet_plane);
+    lines
+}
 
+fn extend_local_capability_detail_lines(
+    lines: &mut Vec<String>,
+    local_capabilities: &ControlCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+) {
     for route in &local_capabilities.advertised_routes {
         lines.push(format!(
             "local capability advertised route: {} metric {}",
             route.prefix, route.metric
         ));
     }
-    for peer in peers.drain(..) {
-        let Some(capabilities) = peer_capabilities.get(peer) else {
-            lines.push(format!("remote capability peer: {peer} unvalidated"));
-            continue;
-        };
-        lines.push(format!("remote capability peer: {peer}"));
+    for endpoint in &local_capabilities.packet_endpoint_candidates {
         lines.push(format!(
-            "remote capability network: {peer} {}",
-            capabilities.network_name
-        ));
-        lines.push(format!(
-            "remote capability membership key matched: {peer} {}",
-            capabilities.membership_tag.is_some()
-        ));
-        lines.push(format!(
-            "remote capability wire version: {peer} {}",
-            capabilities.wire_version
-        ));
-        lines.push(format!(
-            "remote capability packet protocol: {peer} {}",
-            capabilities.packet_protocol
-        ));
-        lines.push(format!(
-            "remote capability packet header length: {peer} {}",
-            capabilities.packet_header_len
-        ));
-        lines.push(format!(
-            "remote capability mtu: {peer} {}",
-            capabilities.effective_mtu
-        ));
-        lines.push(format!(
-            "remote capability preferred path: {peer} {}",
-            capabilities.preferred_path
-        ));
-        lines.push(format!(
-            "remote capability supports quic datagrams: {peer} {}",
-            capabilities.supports_quic_datagrams
-        ));
-        lines.push(format!(
-            "remote capability advertised routes: {peer} {}",
-            capabilities.advertised_routes.len()
+            "local capability packet endpoint candidate: {endpoint}"
         ));
     }
+    for listener in &packet_plane.listeners {
+        lines.push(format!("packet plane listener: {listener}"));
+    }
+}
 
-    lines
+fn extend_remote_capability_lines(
+    lines: &mut Vec<String>,
+    peer: PeerId,
+    capabilities: &ControlCapabilities,
+) {
+    lines.push(format!("remote capability peer: {peer}"));
+    lines.push(format!(
+        "remote capability network: {peer} {}",
+        capabilities.network_name
+    ));
+    lines.push(format!(
+        "remote capability membership key matched: {peer} {}",
+        capabilities.membership_tag.is_some()
+    ));
+    lines.push(format!(
+        "remote capability wire version: {peer} {}",
+        capabilities.wire_version
+    ));
+    lines.push(format!(
+        "remote capability packet protocol: {peer} {}",
+        capabilities.packet_protocol
+    ));
+    lines.push(format!(
+        "remote capability packet header length: {peer} {}",
+        capabilities.packet_header_len
+    ));
+    lines.push(format!(
+        "remote capability mtu: {peer} {}",
+        capabilities.effective_mtu
+    ));
+    lines.push(format!(
+        "remote capability preferred path: {peer} {}",
+        capabilities.preferred_path
+    ));
+    lines.push(format!(
+        "remote capability supports quic datagrams: {peer} {}",
+        capabilities.supports_quic_datagrams
+    ));
+    extend_remote_packet_endpoint_lines(lines, peer, capabilities);
+    lines.push(format!(
+        "remote capability advertised routes: {peer} {}",
+        capabilities.advertised_routes.len()
+    ));
+}
+
+fn extend_remote_packet_endpoint_lines(
+    lines: &mut Vec<String>,
+    peer: PeerId,
+    capabilities: &ControlCapabilities,
+) {
+    lines.push(format!(
+        "remote capability packet endpoint candidates: {peer} {}",
+        capabilities.packet_endpoint_candidates.len()
+    ));
+    for endpoint in &capabilities.packet_endpoint_candidates {
+        lines.push(format!(
+            "remote capability packet endpoint candidate: {peer} {endpoint}"
+        ));
+    }
 }
 
 fn sorted_configured_peers(forwarder: &Forwarder) -> Vec<PeerId> {
@@ -879,38 +949,54 @@ fn runtime_status_lines(
     metrics: &RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path: crate::path::PathRuntimeStats,
+    packet_plane: &PacketPlaneSnapshot,
 ) -> Vec<String> {
-    metrics.snapshot_with_paths(queue, path).lines()
+    let mut lines = metrics.snapshot_with_paths(queue, path).lines();
+    lines.push(format!(
+        "packet_plane_listeners {}",
+        packet_plane.listeners.len()
+    ));
+    lines
 }
 
-fn runtime_state_lines(
-    forwarder: &Forwarder,
-    paths: &PathSet,
-    peer_capabilities: &PeerCapabilities,
-    metrics: &RuntimeMetrics,
+#[derive(Clone, Copy)]
+struct RuntimeStateView<'a> {
+    forwarder: &'a Forwarder,
+    paths: &'a PathSet,
+    peer_capabilities: &'a PeerCapabilities,
+    metrics: &'a RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
-) -> Vec<String> {
-    let snapshot = metrics.snapshot_with_paths(queue, path_stats);
-    let mut peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
+    packet_plane: &'a PacketPlaneSnapshot,
+}
+
+fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
+    let snapshot = view
+        .metrics
+        .snapshot_with_paths(view.queue, view.path_stats);
+    let mut peers = view
+        .forwarder
+        .configured_overlay_peers()
+        .collect::<Vec<_>>();
     peers.sort_by_key(ToString::to_string);
 
     let mut lines = runtime_state_summary_lines(
         &snapshot,
         peers.len(),
-        peer_capabilities.len(),
-        forwarder.replay_window_count(),
-        packet_in_flight,
+        view.peer_capabilities.len(),
+        view.forwarder.replay_window_count(),
+        view.packet_in_flight,
+        view.packet_plane,
     );
 
-    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    let local_mtu = u16::try_from(view.forwarder.mtu()).unwrap_or(u16::MAX);
     for peer in peers {
         extend_runtime_peer_state_lines(
             &mut lines,
-            forwarder,
-            paths,
-            peer_capabilities,
+            view.forwarder,
+            view.paths,
+            view.peer_capabilities,
             peer,
             local_mtu,
         );
@@ -925,8 +1011,9 @@ fn runtime_state_summary_lines(
     validated_peers: usize,
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
+    packet_plane: &PacketPlaneSnapshot,
 ) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         "daemon state: running".to_owned(),
         format!("configured peers: {configured_peers}"),
         format!("validated peers: {validated_peers}"),
@@ -1004,6 +1091,14 @@ fn runtime_state_summary_lines(
             "packet_stream_fallback_limit_per_peer {}",
             packet_in_flight.limit_per_peer
         ),
+    ];
+    extend_runtime_path_summary_lines(&mut lines, snapshot);
+    extend_runtime_packet_plane_summary_lines(&mut lines, packet_plane);
+    lines
+}
+
+fn extend_runtime_path_summary_lines(lines: &mut Vec<String>, snapshot: &RuntimeSnapshot) {
+    lines.extend([
         format!(
             "peers_with_supported_path {}",
             snapshot.path.peers_with_supported_path
@@ -1025,7 +1120,20 @@ fn runtime_state_summary_lines(
             snapshot.path.healthy_direct_tcp_stream_paths
         ),
         format!("healthy_relay_paths {}", snapshot.path.healthy_relay_paths),
-    ]
+    ]);
+}
+
+fn extend_runtime_packet_plane_summary_lines(
+    lines: &mut Vec<String>,
+    packet_plane: &PacketPlaneSnapshot,
+) {
+    lines.push(format!(
+        "packet_plane_listeners {}",
+        packet_plane.listeners.len()
+    ));
+    for listener in &packet_plane.listeners {
+        lines.push(format!("packet_plane_listener {listener}"));
+    }
 }
 
 fn extend_runtime_peer_state_lines(
@@ -1154,6 +1262,24 @@ fn log_startup_status(startup: crate::runtime::p2p::StartupStatus) {
     }
     if startup.relay_server_enabled {
         log_runtime_event(LogLevel::Info, "relay_server_enabled", &[]);
+    }
+}
+
+fn log_packet_plane_status(packet_plane: PacketPlaneSnapshot) {
+    if packet_plane.listeners.is_empty() {
+        return;
+    }
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_listening",
+        &[("count", &packet_plane.listeners.len().to_string())],
+    );
+    for listener in packet_plane.listeners {
+        log_runtime_event(
+            LogLevel::Info,
+            "packet_plane_listener",
+            &[("address", &listener.to_string())],
+        );
     }
 }
 
@@ -3393,6 +3519,7 @@ pub enum RunnerError {
     Forward(ForwardError),
     Tun(TunRuntimeError),
     ControlSocket(io::Error),
+    PacketPlane(io::Error),
     PacketResponseDropped,
     ControlResponseDropped,
     ServiceResponseDropped,
@@ -3430,7 +3557,10 @@ impl From<io::Error> for RunnerError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::Ipv4Addr};
+    use std::{
+        collections::HashSet,
+        net::{Ipv4Addr, SocketAddr},
+    };
 
     use libp2p::{
         core::{Endpoint, transport::PortUse},
@@ -3554,7 +3684,7 @@ mod tests {
 
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::Shutdown { respond_to },
-            RuntimeControlContext {
+            &RuntimeControlContext {
                 forwarder: &forwarder,
                 paths: &paths,
                 peer_capabilities: &peer_capabilities,
@@ -3563,6 +3693,7 @@ mod tests {
                 queue: crate::queue::QueueStats::default(),
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
+                packet_plane: PacketPlaneSnapshot::default(),
             },
         );
 
@@ -3665,13 +3796,33 @@ mod tests {
             "peer path mtu: {remote_overlay} circuit_relay healthy true estimated_mtu 1000 effective_mtu 1000"
         )));
 
-        let capability_lines =
-            runtime_capability_lines(&forwarder, &peer_capabilities, &local_capabilities);
+        let packet_plane = PacketPlaneSnapshot {
+            listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
+        };
+        let capability_lines = runtime_capability_lines(
+            &forwarder,
+            &peer_capabilities,
+            &local_capabilities,
+            &packet_plane,
+        );
         assert!(capability_lines.contains(&"local capability advertised routes: 3".to_owned()));
         assert!(capability_lines.contains(&"validated peers: 1".to_owned()));
         assert!(capability_lines.contains(&format!(
             "remote capability preferred path: {remote_overlay} direct_quic_stream"
         )));
+    }
+
+    #[test]
+    fn local_capability_lines_report_packet_plane_listeners() {
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let packet_plane = PacketPlaneSnapshot {
+            listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
+        };
+
+        let lines = local_capability_lines(&local_capabilities, &packet_plane);
+
+        assert!(lines.contains(&"packet plane listeners: 1".to_owned()));
+        assert!(lines.contains(&"packet plane listener: 127.0.0.1:51820".to_owned()));
     }
 
     #[test]
@@ -3695,21 +3846,25 @@ mod tests {
         metrics.record_dcutr_result(false);
         metrics.record_autonat_probe_scheduled();
         metrics.record_autonat_status(AutoNatReachability::Public);
+        let packet_plane = PacketPlaneSnapshot {
+            listeners: vec!["127.0.0.1:51820".parse::<SocketAddr>().expect("listener")],
+        };
 
-        let lines = runtime_state_lines(
-            &forwarder,
-            &paths,
-            &peer_capabilities,
-            &metrics,
-            crate::queue::QueueStats::default(),
-            runtime_path_stats(&forwarder, &paths, &peer_capabilities),
-            PacketInFlightStats {
+        let lines = runtime_state_lines(RuntimeStateView {
+            forwarder: &forwarder,
+            paths: &paths,
+            peer_capabilities: &peer_capabilities,
+            metrics: &metrics,
+            queue: crate::queue::QueueStats::default(),
+            path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+            packet_in_flight: PacketInFlightStats {
                 packets: 2,
                 peers: 1,
                 shards: 2,
                 limit_per_peer: 256,
             },
-        );
+            packet_plane: &packet_plane,
+        });
 
         assert!(lines.contains(&"daemon state: running".to_owned()));
         assert!(lines.contains(&"configured peers: 1".to_owned()));
@@ -3735,6 +3890,8 @@ mod tests {
         assert!(lines.contains(&"packet_stream_fallback_in_flight_peers 1".to_owned()));
         assert!(lines.contains(&"packet_stream_fallback_in_flight_shards 2".to_owned()));
         assert!(lines.contains(&"packet_stream_fallback_limit_per_peer 256".to_owned()));
+        assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
+        assert!(lines.contains(&"packet_plane_listener 127.0.0.1:51820".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
                 "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"

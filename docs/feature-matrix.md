@@ -17,7 +17,7 @@ path.
 
 | Area | Status | Current evidence | Verification |
 | --- | --- | --- | --- |
-| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs` and `src/runtime/control.rs` also expose owned packet-plane listener config and direct endpoint candidates for the future UDP/QUIC data plane. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::control::tests::local_capabilities_can_advertise_owned_packet_endpoints` |
+| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs`, `src/runtime/control.rs`, and `src/runtime/packet_plane.rs` expose owned packet-plane listener config, bind configured UDP listeners, and advertise direct endpoint candidates for the future UDP/QUIC data plane. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::packet_plane::tests::binds_configured_udp_listeners` |
 | Native QUIC datagrams | blocked | `src/runtime/runner.rs` advertises local QUIC datagrams as unsupported because the locked `libp2p-quic`/`Swarm` surface does not expose an application datagram sender/receiver. Datagrams are modelled as a preferred path kind, but packets are not falsely reported as datagram-sent. | `nix develop -c cargo test runtime::runner::tests::local_packet_data_plane_is_identity_keyed_stream_fallback_only` |
 | Stream fallback | operational | The fallback uses identity-keyed request-response streams, per-peer send windows, and flow shards so same-shard packets stay queued while unrelated shards can drain. | `nix develop -c cargo test runtime::runner::tests::drain_outbound_queue_gates_stream_fallback_by_flow_shard` |
 | Queueing and backpressure | operational | `src/queue.rs` enforces packet count, byte count, packet age, per-peer fairness, expired drops, and blocked-peer retention. Runtime metrics expose queue drops and blocked reasons. | `nix develop -c cargo test queue::tests` |
@@ -42,9 +42,9 @@ path.
 1. Native QUIC datagrams are not operational through the current libp2p
    dependency surface. Closing this requires a lower-level transport integration,
    a dependency upgrade that exposes application datagrams, or a different
-   datagram-capable substrate. Owned packet-plane listener configuration and
-   endpoint capability advertisement exist, but there is not yet a UDP/QUIC
-   packet listener, authenticated packet session handshake, or encrypted packet
+   datagram-capable substrate. Owned packet-plane listener configuration,
+   listener binding, and endpoint capability advertisement exist, but there is
+   not yet an authenticated packet session handshake or encrypted packet
    sender/receiver.
 2. MTU handling deliberately rejects oversized packets, writes local
    packet-too-big feedback where possible, and provides Linux route MSS hints,

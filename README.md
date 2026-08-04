@@ -67,7 +67,10 @@ datagrams are currently supported. Configs can also declare owned packet-plane
 UDP bind addresses under `network.packet_plane.listen` and externally reachable
 direct packet endpoints under `network.packet_plane.external_endpoints`; the
 external endpoints are advertised as packet endpoint candidates in the
-capability exchange. The current local capability advertises the node's built-in
+capability exchange. The daemon binds the configured packet-plane UDP listeners
+during startup, keeps those sockets alive for the future owned data plane, logs
+the bound listener addresses, and exposes them through daemon status, state, and
+capability views. The current local capability advertises the node's built-in
 IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
 datagrams as unsupported, so peers do not negotiate an unreliable data path
 before one is implemented. Outbound queue draining respects the
@@ -79,7 +82,9 @@ length, matching membership tag when a key is configured, known preferred path,
 coherent datagram support, non-zero effective MTU, and no route prefixes outside
 their configured ownership. Packet endpoint candidates must parse as socket
 addresses; they are candidates for the owned packet data plane, not membership
-or route authority.
+or route authority. The listener lifecycle is intentionally separate from packet
+session handshakes and encrypted packet forwarding, which remain future
+packet-plane work.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the
