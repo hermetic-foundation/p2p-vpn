@@ -265,6 +265,12 @@ enum Command {
         timeout_seconds: u64,
         #[arg(long, default_value_t = 8)]
         max_candidates: usize,
+        #[arg(long)]
+        check_candidates: bool,
+        #[arg(long)]
+        require_dcutr_success: bool,
+        #[arg(long, default_value_t = 45)]
+        candidate_timeout_seconds: u64,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -556,14 +562,20 @@ async fn main() -> Result<(), String> {
             ipfs_bootstrap_peers,
             timeout_seconds,
             max_candidates,
+            check_candidates,
+            require_dcutr_success,
+            candidate_timeout_seconds,
         } => {
-            Box::pin(relay_scan(
-                config.as_deref(),
+            Box::pin(relay_scan(RelayScanArgs {
+                config_path: config,
                 bootstrap_peers,
                 ipfs_bootstrap_peers,
                 timeout_seconds,
                 max_candidates,
-            ))
+                check_candidates,
+                require_dcutr_success,
+                candidate_timeout_seconds,
+            }))
             .await
         }
         Command::InviteExport {
@@ -739,6 +751,18 @@ struct InviteImportArgs {
     local_routes: Vec<LocalRouteArg>,
     peer_name: Option<String>,
     force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RelayScanArgs {
+    config_path: Option<PathBuf>,
+    bootstrap_peers: Vec<EndpointArg>,
+    ipfs_bootstrap_peers: bool,
+    timeout_seconds: u64,
+    max_candidates: usize,
+    check_candidates: bool,
+    require_dcutr_success: bool,
+    candidate_timeout_seconds: u64,
 }
 
 impl FromStr for EndpointArg {
@@ -2091,17 +2115,15 @@ async fn relay_check(
     }
 }
 
-async fn relay_scan(
-    config_path: Option<&Path>,
-    bootstrap_peers: Vec<EndpointArg>,
-    ipfs_bootstrap_peers: bool,
-    timeout_seconds: u64,
-    max_candidates: usize,
-) -> Result<(), String> {
-    if max_candidates == 0 {
+async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
+    if args.max_candidates == 0 {
         return Err("--max-candidates must be greater than zero".to_owned());
     }
-    let config = relay_scan_config(config_path, bootstrap_peers, ipfs_bootstrap_peers)?;
+    let config = relay_scan_config(
+        args.config_path.as_deref(),
+        args.bootstrap_peers,
+        args.ipfs_bootstrap_peers,
+    )?;
     if config.network.bootstrap_peers.is_empty() {
         return Err(
             "relay-scan needs at least one bootstrap peer; pass --config, --bootstrap-peer, or --ipfs-bootstrap-peers"
@@ -2110,22 +2132,61 @@ async fn relay_scan(
     }
     let report = Box::pin(scan_public_relay_candidates(
         &config,
-        Duration::from_secs(timeout_seconds.max(1)),
-        max_candidates,
+        Duration::from_secs(args.timeout_seconds.max(1)),
+        args.max_candidates,
     ))
     .await
     .map_err(|error| format!("public relay scan failed to start: {error:?}"))?;
-    let succeeded = report.succeeded();
+    let scan_succeeded = report.succeeded();
 
     for line in report.lines() {
         println!("{line}");
     }
 
-    if succeeded {
+    if !scan_succeeded {
+        return Err("public relay scan did not discover a relay-hop candidate".to_owned());
+    }
+
+    if !args.check_candidates {
+        return Ok(());
+    }
+
+    let candidates = relay_scan_candidate_multiaddrs(&report)?;
+    let mode = if args.require_dcutr_success {
+        PublicRelayProbeMode::DcutrSuccess
+    } else {
+        PublicRelayProbeMode::RelayedPeerCircuit
+    };
+    let probe = check_public_relay_candidates(
+        &candidates,
+        mode,
+        Duration::from_secs(args.candidate_timeout_seconds.max(1)),
+    )
+    .await;
+    let probe_succeeded = probe.succeeded();
+
+    for line in probe.lines() {
+        println!("public relay scan validation: {line}");
+    }
+
+    if probe_succeeded {
         Ok(())
     } else {
-        Err("public relay scan did not discover a relay-hop candidate".to_owned())
+        Err("public relay scan did not validate a usable candidate".to_owned())
     }
+}
+
+fn relay_scan_candidate_multiaddrs(
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
+) -> Result<Vec<libp2p::Multiaddr>, String> {
+    let raw = report
+        .candidates
+        .iter()
+        .map(|candidate| candidate.address.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    parse_public_relay_addresses(&raw)
+        .map_err(|error| format!("failed to parse scanned relay candidates: {error}"))
 }
 
 fn relay_scan_config(
@@ -3837,6 +3898,10 @@ mod tests {
             "60",
             "--max-candidates",
             "4",
+            "--check-candidates",
+            "--require-dcutr-success",
+            "--candidate-timeout-seconds",
+            "15",
         ])
         .expect("cli");
 
@@ -3846,6 +3911,9 @@ mod tests {
             ipfs_bootstrap_peers,
             timeout_seconds,
             max_candidates,
+            check_candidates,
+            require_dcutr_success,
+            candidate_timeout_seconds,
         } = cli.command
         else {
             panic!("expected relay-scan command");
@@ -3856,6 +3924,9 @@ mod tests {
         assert!(ipfs_bootstrap_peers);
         assert_eq!(timeout_seconds, 60);
         assert_eq!(max_candidates, 4);
+        assert!(check_candidates);
+        assert!(require_dcutr_success);
+        assert_eq!(candidate_timeout_seconds, 15);
     }
 
     #[test]
@@ -3870,6 +3941,37 @@ mod tests {
         );
         assert!(!config.network.discovery.mdns);
         assert!(!config.network.discovery.kademlia);
+    }
+
+    #[test]
+    fn relay_scan_candidate_multiaddrs_parse_report_candidates() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+            .parse()
+            .expect("peer id");
+        let report = p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
+            scanned_bootstrap_peers: 1,
+            connected_bootstrap_peers: 1,
+            identified_bootstrap_peers: 1,
+            relay_capable_peers: 1,
+            dial_failures: 0,
+            candidates: vec![
+                p2p_vpn::runtime::bootstrap_check::PublicRelayScanCandidate {
+                    peer_id: peer,
+                    address:
+                        "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                            .to_owned(),
+                },
+            ],
+            peer_results: Vec::new(),
+        };
+
+        let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].to_string(),
+            "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+        );
     }
 
     #[test]

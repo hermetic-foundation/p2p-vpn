@@ -66,13 +66,22 @@ bootstrap peers for peers that advertise the circuit-relay v2 hop protocol:
 nix develop -c cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
 
 nix develop -c cargo run -- relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --candidate-timeout-seconds 45 \
+  --timeout-seconds 30
+
+nix develop -c cargo run -- relay-scan \
   --bootstrap-peer PEER_ID=/dnsaddr/bootstrap.example.net/p2p/PEER_ID \
   --timeout-seconds 30
 ```
 
 `relay-scan` reports direct `/p2p/RELAY` candidate multiaddrs. Treat these as
 candidate hints only; the peer can advertise relay-hop support and still reject
-reservations because of load, policy, or resource limits.
+reservations because of load, policy, or resource limits. With
+`--check-candidates`, the command immediately runs the same reservation and
+relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
+the candidate must also prove public-relay-assisted hole punching.
 
 Then run the live relay smokes with a known-good relay or the scanned candidate
 set. The preferred rootless operator command is:

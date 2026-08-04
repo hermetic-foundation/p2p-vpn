@@ -63,7 +63,10 @@ path.
    AutoNAT status results, DCUtR relay readiness, configured relayed peer circuit
    dialing, and observed DCUtR success events. `relay-scan` can discover
    relay-hop candidate hints from configured, explicit, or bundled public IPFS
-   bootstrap peers. A recorded 2026-08-04 public scan found two public IPFS
+   bootstrap peers, and `relay-scan --check-candidates` can immediately test
+   scanned candidates with the same reservation/circuit/DCUtR proof path as
+   `relay-check`.
+   A recorded 2026-08-04 public scan found two public IPFS
    bootstrap peers advertising relay-hop support, but `relay-check` timed out
    waiting for reservations on the tested IPv4 TCP/QUIC candidates. Ignored live
    smokes can validate a supplied public relay and DCUtR path with `relay-check`

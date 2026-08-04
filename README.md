@@ -805,6 +805,12 @@ local test suite:
 ```sh
 cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
 
+cargo run -- relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --candidate-timeout-seconds 45 \
+  --timeout-seconds 30
+
 cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --timeout-seconds 45
@@ -822,8 +828,11 @@ Use `--config p2p-vpn.json` to scan the config's bootstrap peers, repeat
 `--bootstrap-peer PEER_ID=MULTIADDR` to scan explicit peers, or pass
 `--ipfs-bootstrap-peers` to scan the bundled public IPFS bootstrap set. A
 discovered candidate is only a hint that the peer advertises relay-hop support;
-run `relay-check` against the printed candidate before using it for a VPN
-reservation or DCUtR path.
+run `relay-check` against the printed candidate, or pass `--check-candidates`
+to validate scanned candidates immediately, before using it for a VPN
+reservation or DCUtR path. Add `--require-dcutr-success` with
+`--check-candidates` when the scan should only pass after a successful
+public-relay-assisted hole punch.
 
 `relay-check` is rootless. In its default mode it creates a temporary listener,
 reserves a circuit on the supplied relay, and dials that listener from a second
