@@ -758,6 +758,20 @@ fails unless every configured relayed peer circuit connects before the timeout.
 It does not add bootstrap or relay peers to VPN membership or grant route
 authority.
 
+Run the ignored live public relay smoke when you want to validate a specific
+shared relay outside the deterministic local test suite:
+
+```sh
+P2P_VPN_LIVE_RELAY_MULTIADDR=/dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_relayed_peer_circuit \
+  -- --ignored --exact --nocapture
+```
+
+The supplied relay multiaddr must be the relay's direct address with its
+`/p2p/RELAY` peer ID and without `/p2p-circuit`. The test creates a temporary
+listener, reserves a circuit on that relay, then uses `bootstrap-check` against a
+second temporary node to prove the relayed target can be dialed.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh

@@ -682,7 +682,7 @@ impl From<P2pBuildError> for BootstrapCheckError {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{env, time::Duration};
 
     use futures::StreamExt as _;
     use libp2p::{Multiaddr, PeerId as Libp2pPeerId, identity::Keypair, swarm::SwarmEvent};
@@ -897,6 +897,77 @@ mod tests {
         assert!(report.relayed_peer_results[0].outbound_circuit);
     }
 
+    #[tokio::test]
+    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDR for a reachable public libp2p relay"]
+    async fn bootstrap_check_can_probe_live_public_relayed_peer_circuit() {
+        let Ok(relay_address) = env::var("P2P_VPN_LIVE_RELAY_MULTIADDR") else {
+            eprintln!("skipping live public relay smoke: P2P_VPN_LIVE_RELAY_MULTIADDR is not set");
+            return;
+        };
+        let relay_address: Multiaddr = relay_address.parse().expect("live relay multiaddr");
+        let relay_peer = address_peer(&relay_address)
+            .expect("P2P_VPN_LIVE_RELAY_MULTIADDR must include /p2p/RELAY");
+        let relay_reservation = relay_address.clone().with(Protocol::P2pCircuit);
+        let discovery = relay_test_discovery();
+        let mut listener_node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation.clone()],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("listener node");
+        let listener_peer = listener_node.local_peer_id;
+        let relayed_target_address = relay_reservation.with(Protocol::P2p(listener_peer));
+
+        tokio::time::timeout(
+            Duration::from_secs(45),
+            wait_for_external_relay_reservation(
+                &mut listener_node,
+                relayed_target_address.clone(),
+                relay_peer,
+            ),
+        )
+        .await
+        .expect("live relay reservation timed out");
+
+        let _listener_task = tokio::spawn(async move {
+            loop {
+                let _ = listener_node.swarm.select_next_some().await;
+            }
+        });
+
+        let config = config_with_relayed_peer(listener_peer, &relayed_target_address);
+        let report = check_config_bootstrap(
+            &config,
+            Duration::from_secs(45),
+            BootstrapCheckThreshold::Any,
+            BootstrapCheckRequirements {
+                relay_reservations: false,
+                autonat_status: false,
+                dcutr_ready: false,
+                relayed_peer_circuits: true,
+            },
+        )
+        .await
+        .expect("bootstrap check");
+
+        assert!(report.succeeded(), "{report:?}");
+        assert_eq!(report.configured_relayed_peer_circuits, 1);
+        assert_eq!(report.connected_relayed_peer_circuits, 1);
+        assert!(report.relayed_peer_results[0].connected);
+    }
+
     #[test]
     fn bootstrap_check_lines_report_ipfs_compatible_thresholds() {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
@@ -1079,6 +1150,44 @@ mod tests {
                 return;
             }
         }
+    }
+
+    async fn wait_for_external_relay_reservation(
+        listener: &mut crate::runtime::p2p::P2pNode,
+        relayed_address: Multiaddr,
+        relay_peer: Libp2pPeerId,
+    ) {
+        let mut listen_addr_reported = false;
+        let mut reservation_accepted = false;
+
+        loop {
+            match listener.swarm.select_next_some().await {
+                SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                    relay::client::Event::ReservationReqAccepted {
+                        relay_peer_id,
+                        renewal,
+                        ..
+                    },
+                )) if relay_peer_id == relay_peer && !renewal => {
+                    reservation_accepted = true;
+                }
+                SwarmEvent::NewListenAddr { address, .. } if address == relayed_address => {
+                    listen_addr_reported = true;
+                }
+                _ => {}
+            }
+
+            if listen_addr_reported && reservation_accepted {
+                return;
+            }
+        }
+    }
+
+    fn address_peer(address: &Multiaddr) -> Option<Libp2pPeerId> {
+        address.iter().find_map(|protocol| match protocol {
+            Protocol::P2p(peer) => Some(peer),
+            _ => None,
+        })
     }
 
     fn relay_test_discovery() -> DiscoveryConfig {

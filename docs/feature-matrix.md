@@ -52,10 +52,12 @@ path.
 2. Public libp2p/IPFS infrastructure is supported as discovery and reachability
    assistance, and public bootstrap reachability can now be checked with a
    rootless diagnostic that also covers configured relay reservation acceptance,
-   AutoNAT status results, and DCUtR relay readiness. It still needs real
-   public-network smoke coverage against live public relay reservation and
-   DCUtR hole-punch completion. It is not, and should not become,
-   membership or route authority.
+   AutoNAT status results, DCUtR relay readiness, and configured relayed peer
+   circuit dialing. An ignored live smoke can validate a supplied public relay
+   with `P2P_VPN_LIVE_RELAY_MULTIADDR`, but the project still needs recorded
+   public-network smoke coverage against live public relay reservation and DCUtR
+   hole-punch completion. It is not, and should not become, membership or route
+   authority.
 3. Privileged namespace tests prove important operational flows on this host, but
    they still require a Linux kernel with user namespaces, network namespaces,
    veth, and `/dev/net/tun`.
