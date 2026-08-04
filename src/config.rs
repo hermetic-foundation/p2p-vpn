@@ -182,6 +182,11 @@ impl Config {
                 PacketPlaneValidationError::NoSessionTtl,
             ));
         }
+        if self.network.packet_plane.max_replay_windows_per_session == 0 {
+            return Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::NoReplayWindows,
+            ));
+        }
 
         Ok(())
     }
@@ -367,6 +372,8 @@ pub struct PacketPlaneConfig {
     pub external_endpoints: Vec<String>,
     #[serde(default = "default_packet_plane_session_ttl_seconds")]
     pub session_ttl_seconds: u64,
+    #[serde(default = "default_packet_plane_replay_windows_per_session")]
+    pub max_replay_windows_per_session: usize,
 }
 
 impl Default for PacketPlaneConfig {
@@ -375,6 +382,7 @@ impl Default for PacketPlaneConfig {
             listen: Vec::new(),
             external_endpoints: Vec::new(),
             session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+            max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(),
         }
     }
 }
@@ -383,6 +391,11 @@ impl PacketPlaneConfig {
     #[must_use]
     pub fn session_ttl(&self) -> Duration {
         Duration::from_secs(self.session_ttl_seconds.max(1))
+    }
+
+    #[must_use]
+    pub fn replay_window_limit(&self) -> usize {
+        self.max_replay_windows_per_session.max(1)
     }
 }
 
@@ -752,6 +765,7 @@ pub enum DiscoveryValidationError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketPlaneValidationError {
     NoSessionTtl,
+    NoReplayWindows,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -831,6 +845,11 @@ const fn default_true() -> bool {
 #[must_use]
 pub const fn default_packet_plane_session_ttl_seconds() -> u64 {
     10 * 60
+}
+
+#[must_use]
+pub const fn default_packet_plane_replay_windows_per_session() -> usize {
+    1024
 }
 
 fn default_discovery() -> DiscoveryConfig {
@@ -1827,6 +1846,8 @@ mod tests {
                     listen: vec!["0.0.0.0:51820".to_owned()],
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
                 },
             },
             interface: InterfaceConfig {
@@ -1852,7 +1873,7 @@ mod tests {
     }
 
     #[test]
-    fn packet_plane_config_defaults_session_ttl_for_existing_configs() {
+    fn packet_plane_config_defaults_session_ttl_and_replay_limit_for_existing_configs() {
         let decoded = serde_json::from_str::<PacketPlaneConfig>(
             r#"{"listen":["0.0.0.0:51820"],"external_endpoints":["203.0.113.10:51820"]}"#,
         )
@@ -1865,6 +1886,14 @@ mod tests {
         assert_eq!(
             decoded.session_ttl(),
             Duration::from_secs(default_packet_plane_session_ttl_seconds())
+        );
+        assert_eq!(
+            decoded.max_replay_windows_per_session,
+            default_packet_plane_replay_windows_per_session()
+        );
+        assert_eq!(
+            decoded.replay_window_limit(),
+            default_packet_plane_replay_windows_per_session()
         );
     }
 
@@ -1902,6 +1931,44 @@ mod tests {
             config.validate_runtime(),
             Err(ConfigError::PacketPlane(
                 PacketPlaneValidationError::NoSessionTtl
+            ))
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_zero_packet_plane_replay_windows() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    max_replay_windows_per_session: 0,
+                    ..PacketPlaneConfig::default()
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::NoReplayWindows
             ))
         ));
     }
@@ -2310,6 +2377,7 @@ mod tests {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                 session_ttl_seconds: 120,
+                max_replay_windows_per_session: 512,
             },
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
@@ -2393,6 +2461,7 @@ mod tests {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                 session_ttl_seconds: 120,
+                max_replay_windows_per_session: 512,
             }
         );
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);

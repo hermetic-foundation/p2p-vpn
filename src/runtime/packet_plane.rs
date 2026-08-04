@@ -30,7 +30,6 @@ const DATAGRAM_HEADER_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
 const MAX_UDP_DATAGRAM_LEN: usize = 65_535;
 const PACKET_PLANE_REPLAY_WINDOW_BITS: u64 = 64;
-const MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION: usize = 1024;
 pub const PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN: usize = 32;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -277,6 +276,7 @@ pub struct PacketPlaneSession {
     established_at: Instant,
     keys: PacketPlaneSessionKeys,
     replay_windows: HashMap<SessionId, PacketPlaneReplayWindow>,
+    max_replay_windows: usize,
 }
 
 impl PacketPlaneSession {
@@ -301,7 +301,7 @@ impl PacketPlaneSession {
         frame: &Frame,
         now: Instant,
     ) -> Result<(), PacketPlaneDatagramError> {
-        if self.replay_windows.len() >= MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
+        if self.replay_windows.len() >= self.max_replay_windows
             && !self.replay_windows.contains_key(&frame.header.session_id)
         {
             self.prune_oldest_replay_window();
@@ -630,11 +630,24 @@ impl PacketPlaneHandshake {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PacketPlaneRuntime {
     sockets: Vec<UdpSocket>,
     listeners: Vec<SocketAddr>,
     sessions: HashMap<PeerId, PacketPlaneSession>,
+    max_replay_windows_per_session: usize,
+}
+
+impl Default for PacketPlaneRuntime {
+    fn default() -> Self {
+        Self {
+            sockets: Vec::new(),
+            listeners: Vec::new(),
+            sessions: HashMap::new(),
+            max_replay_windows_per_session:
+                crate::config::default_packet_plane_replay_windows_per_session(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -950,14 +963,21 @@ impl<'a> HandshakeCursor<'a> {
 impl PacketPlaneRuntime {
     #[must_use]
     pub fn disabled() -> Self {
-        Self {
-            sockets: Vec::new(),
-            listeners: Vec::new(),
-            sessions: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub async fn bind(listen_addrs: Vec<SocketAddr>) -> Result<Self, io::Error> {
+        Self::bind_with_replay_window_limit(
+            listen_addrs,
+            crate::config::default_packet_plane_replay_windows_per_session(),
+        )
+        .await
+    }
+
+    pub async fn bind_with_replay_window_limit(
+        listen_addrs: Vec<SocketAddr>,
+        max_replay_windows_per_session: usize,
+    ) -> Result<Self, io::Error> {
         let mut sockets = Vec::with_capacity(listen_addrs.len());
         let mut listeners = Vec::with_capacity(listen_addrs.len());
 
@@ -971,6 +991,7 @@ impl PacketPlaneRuntime {
             sockets,
             listeners,
             sessions: HashMap::new(),
+            max_replay_windows_per_session: max_replay_windows_per_session.max(1),
         })
     }
 
@@ -1052,6 +1073,7 @@ impl PacketPlaneRuntime {
             established_at,
             keys,
             replay_windows: HashMap::new(),
+            max_replay_windows: self.max_replay_windows_per_session,
         };
         let snapshot = session.snapshot();
         self.sessions.insert(remote.peer, session);
@@ -2112,7 +2134,11 @@ mod tests {
     #[test]
     fn packet_plane_session_replay_windows_are_bounded_per_peer_session() {
         let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
-        let mut runtime = PacketPlaneRuntime::default();
+        let replay_window_limit = 4;
+        let mut runtime = PacketPlaneRuntime {
+            max_replay_windows_per_session: replay_window_limit,
+            ..PacketPlaneRuntime::default()
+        };
         runtime
             .establish_session(
                 PacketPlaneSessionRole::Initiator,
@@ -2127,7 +2153,7 @@ mod tests {
             .expect("registered session");
         let start = Instant::now();
 
-        for index in 0..MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION {
+        for index in 0..replay_window_limit {
             let session_id = u32::try_from(index + 1).expect("session index fits u32");
             let frame = Frame::packet(session_id, 0, vec![0x45; 20]).expect("frame");
             session
@@ -2138,10 +2164,7 @@ mod tests {
                 .expect("accepted datagram");
         }
 
-        assert_eq!(
-            session.replay_windows.len(),
-            MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
-        );
+        assert_eq!(session.replay_windows.len(), replay_window_limit);
 
         let refreshed = Frame::packet(1, 1, vec![0x45; 20]).expect("refreshed frame");
         session
@@ -2149,29 +2172,23 @@ mod tests {
                 &refreshed,
                 start
                     + Duration::from_millis(
-                        u64::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 1)
-                            .expect("window count fits u64"),
+                        u64::try_from(replay_window_limit + 1).expect("window count fits u64"),
                     ),
             )
             .expect("refreshed oldest entry");
-        let new_session_id =
-            u32::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 1).expect("fits u32");
+        let new_session_id = u32::try_from(replay_window_limit + 1).expect("fits u32");
         let new_frame = Frame::packet(new_session_id, 0, vec![0x45; 20]).expect("new frame");
         session
             .accept_datagram_at(
                 &new_frame,
                 start
                     + Duration::from_millis(
-                        u64::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 2)
-                            .expect("window count fits u64"),
+                        u64::try_from(replay_window_limit + 2).expect("window count fits u64"),
                     ),
             )
             .expect("accepted new window at capacity");
 
-        assert_eq!(
-            session.replay_windows.len(),
-            MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
-        );
+        assert_eq!(session.replay_windows.len(), replay_window_limit);
         assert!(session.replay_windows.contains_key(&1));
         assert!(!session.replay_windows.contains_key(&2));
         assert!(session.replay_windows.contains_key(&new_session_id));

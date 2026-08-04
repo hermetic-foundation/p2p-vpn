@@ -66,11 +66,13 @@ path, overlay network name, advertised route prefixes, and whether native QUIC
 datagrams are currently supported. Configs can also declare owned packet-plane
 UDP bind addresses under `network.packet_plane.listen`, externally reachable
 direct packet endpoints under `network.packet_plane.external_endpoints`, and
-the packet session lifetime under `network.packet_plane.session_ttl_seconds`; the
-external endpoints are advertised as packet endpoint candidates in the
-capability exchange. The daemon binds the configured packet-plane UDP listeners
-during startup, keeps those sockets alive for the future owned data plane, logs
-the bound listener addresses, and exposes them through daemon status, state, and
+the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
+`network.packet_plane.max_replay_windows_per_session` bounds the authenticated
+datagram replay state retained for each packet-plane peer session. The external
+endpoints are advertised as packet endpoint candidates in the capability
+exchange. The daemon binds the configured packet-plane UDP listeners during
+startup, keeps those sockets alive for the future owned data plane, logs the
+bound listener addresses, and exposes them through daemon status, state, and
 capability views. The current local capability advertises the node's built-in
 IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
 datagrams as unsupported, so peers do not negotiate an unreliable data path
@@ -764,9 +766,11 @@ firewall. Keep JSON configs that contain `network.private_key` or
 `network.membership_key` outside the Nix store, for example under
 `/etc/p2p-vpn`, with permissions managed by your deployment system. Those JSON
 configs can tune packet-plane expiry with
-`network.packet_plane.session_ttl_seconds`; generated configs default it to
-600 seconds. A two-node deployment skeleton is available as the `nixos-mesh`
-flake template in
+`network.packet_plane.session_ttl_seconds`, defaulting to 600 seconds, and
+packet-plane replay-state memory with
+`network.packet_plane.max_replay_windows_per_session`, defaulting to 1024.
+Both values must be nonzero. A two-node deployment skeleton is available as the
+`nixos-mesh` flake template in
 `examples/nixos-mesh`.
 
 The daemon handles Ctrl-C and systemd's SIGTERM as orderly shutdown requests.

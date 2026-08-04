@@ -224,9 +224,12 @@ where
         discovery: config.network.discovery.clone(),
     })?;
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
-    let packet_plane = PacketPlaneRuntime::bind(config.packet_plane_listen_addrs()?)
-        .await
-        .map_err(RunnerError::PacketPlane)?;
+    let packet_plane = PacketPlaneRuntime::bind_with_replay_window_limit(
+        config.packet_plane_listen_addrs()?,
+        config.network.packet_plane.replay_window_limit(),
+    )
+    .await
+    .map_err(RunnerError::PacketPlane)?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
     let previous_membership_tags = config.previous_membership_tags()?;

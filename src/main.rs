@@ -12,7 +12,7 @@ use p2p_vpn::{
     config::{
         Config, DiscoveryConfig, InitConfigTemplate, InitPeer, PacketPlaneConfig, QueueConfig,
         RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
-        default_packet_plane_session_ttl_seconds,
+        default_packet_plane_replay_windows_per_session, default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
     invite::{
@@ -95,6 +95,11 @@ enum Command {
             default_value_t = default_packet_plane_session_ttl_seconds()
         )]
         packet_session_ttl_seconds: u64,
+        #[arg(
+            long = "packet-replay-windows-per-session",
+            default_value_t = default_packet_plane_replay_windows_per_session()
+        )]
+        packet_replay_windows_per_session: usize,
         #[arg(long = "bootstrap-peer")]
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long)]
@@ -329,6 +334,7 @@ async fn main() -> Result<(), String> {
             packet_listen,
             packet_endpoints,
             packet_session_ttl_seconds,
+            packet_replay_windows_per_session,
             bootstrap_peers,
             ipfs_bootstrap_peers,
             peers,
@@ -377,6 +383,7 @@ async fn main() -> Result<(), String> {
                 listen: packet_listen,
                 external_endpoints: packet_endpoints,
                 session_ttl_seconds: packet_session_ttl_seconds,
+                max_replay_windows_per_session: packet_replay_windows_per_session,
             },
             bootstrap_peers,
             ipfs_bootstrap_peers,
@@ -2159,6 +2166,8 @@ mod tests {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2237,6 +2246,8 @@ mod tests {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2301,6 +2312,8 @@ mod tests {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2708,6 +2721,8 @@ mod tests {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
+                    max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
+                    ),
                 },
             },
             interface: p2p_vpn::config::InterfaceConfig {
@@ -2942,6 +2957,8 @@ mod tests {
             "203.0.113.10:51820",
             "--packet-session-ttl-seconds",
             "45",
+            "--packet-replay-windows-per-session",
+            "16",
         ])
         .expect("cli");
 
@@ -2949,6 +2966,7 @@ mod tests {
             packet_listen,
             packet_endpoints,
             packet_session_ttl_seconds,
+            packet_replay_windows_per_session,
             ..
         } = cli.command
         else {
@@ -2958,6 +2976,7 @@ mod tests {
         assert_eq!(packet_listen, vec!["0.0.0.0:51820"]);
         assert_eq!(packet_endpoints, vec!["203.0.113.10:51820"]);
         assert_eq!(packet_session_ttl_seconds, 45);
+        assert_eq!(packet_replay_windows_per_session, 16);
     }
 
     #[test]
