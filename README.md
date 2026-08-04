@@ -144,7 +144,11 @@ path-selection log event. If an established owned packet-plane datagram path
 fails with a send-side transport or session error, the daemon marks that path
 unhealthy, records `packet_plane_path_demotions`, emits a
 `packet_plane_path_demoted` log event, and lets the next drain pass choose the
-best remaining stream or relay path.
+best remaining stream or relay path. The same demotion schedules immediate
+recovery dials to the peer's configured and discovered addresses, including
+when a fallback libp2p connection is still up, and records
+`packet_plane_path_recovery_dial_attempts` and
+`packet_plane_path_recovery_dial_failures`.
 The drain decision is explicit: native QUIC datagram, stream fallback, or
 blocked with a reason. The locked libp2p-quic transport currently disables QUIC
 datagram receive buffers internally, so the daemon advertises datagrams as
@@ -678,8 +682,8 @@ fallback sends, attempted native QUIC datagram sends, datagram-unavailable queue
 stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, packet-plane path demotions, relay reservation/circuit
-counts, relay-server accept/deny/close/timeout counts, DCUtR success/failure
-counts, observed
+counts, packet-plane recovery dial attempts/failures, relay-server
+accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
 current public/private/unknown reachability gauges and status-change counters,
 service-plane request/response/status/rejection/failure counters, Kademlia

@@ -1680,6 +1680,60 @@ fn redial_selected_addresses(
     }
 }
 
+fn redial_packet_plane_recovery_addresses(
+    swarm: &mut Swarm<Behaviour>,
+    peer: Libp2pPeerId,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    metrics: &RuntimeMetrics,
+) {
+    let local_peer = *swarm.local_peer_id();
+    for (peer, address) in packet_plane_recovery_targets(
+        local_peer,
+        peer,
+        configured_peer_addresses,
+        discovered_peer_addresses,
+    ) {
+        metrics.record_packet_plane_path_recovery_dial_attempt();
+        let dial_address = peer_dial_address(peer, address);
+        if let Err(error) = swarm.dial(dial_address) {
+            metrics.record_packet_plane_path_recovery_dial_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "packet_plane_path_recovery_dial_failed",
+                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+            );
+        }
+    }
+}
+
+fn packet_plane_recovery_targets(
+    local_peer: Libp2pPeerId,
+    peer: Libp2pPeerId,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+) -> Vec<(Libp2pPeerId, Multiaddr)> {
+    if peer == local_peer {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut addresses = Vec::new();
+    for (candidate_peer, address) in configured_peer_addresses
+        .iter()
+        .chain(discovered_peer_addresses.iter())
+    {
+        if *candidate_peer != peer {
+            continue;
+        }
+        if !seen.insert((*candidate_peer, address.clone())) {
+            continue;
+        }
+        addresses.push((*candidate_peer, address.clone()));
+    }
+    addresses
+}
+
 fn pending_redial_targets(
     local_peer: Libp2pPeerId,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -1953,8 +2007,10 @@ async fn drain_outbound_queue(
             packet.peer(),
         ) {
             PacketTransportDecision::PacketPlaneDatagram { path } => {
-                send_dequeued_packet_plane_datagram(forwarder, &packet, peer_mtu, path, context)
-                    .await;
+                send_dequeued_packet_plane_datagram(
+                    swarm, forwarder, &packet, peer_mtu, path, context,
+                )
+                .await;
             }
             PacketTransportDecision::StreamFallback { path } => {
                 send_dequeued_stream_fallback(swarm, forwarder, &packet, peer_mtu, path, context);
@@ -2008,6 +2064,7 @@ async fn drain_outbound_queue(
 }
 
 async fn send_dequeued_packet_plane_datagram(
+    swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     packet: &crate::queue::Packet,
     peer_mtu: u16,
@@ -2026,13 +2083,22 @@ async fn send_dequeued_packet_plane_datagram(
                 context.metrics.record_outbound_quic_datagram();
             }
             Err(error) => {
-                maybe_demote_packet_plane_path(
+                if maybe_demote_packet_plane_path(
                     context.paths,
                     context.metrics,
                     packet.peer(),
                     path,
                     &error,
-                );
+                ) && let Some(peer) = forwarder.transport_peer_for_overlay(packet.peer())
+                {
+                    redial_packet_plane_recovery_addresses(
+                        swarm,
+                        peer,
+                        context.configured_peer_addresses,
+                        context.discovered_peer_addresses,
+                        context.metrics,
+                    );
+                }
                 context
                     .metrics
                     .record_outbound_drop(packet_plane_drop_reason(&error));
@@ -3797,9 +3863,9 @@ fn maybe_demote_packet_plane_path(
     peer: PeerId,
     path: PathKind,
     error: &PacketPlaneIoError,
-) {
+) -> bool {
     if !packet_plane_send_failure_demotes_path(error) {
-        return;
+        return false;
     }
 
     let change = paths.mark_unhealthy(peer, path);
@@ -3816,6 +3882,7 @@ fn maybe_demote_packet_plane_path(
             ("reason", packet_plane_io_error_name(error)),
         ],
     );
+    true
 }
 
 fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChange) {
@@ -5573,6 +5640,40 @@ mod tests {
                 skipped_connected: 0,
             }
         );
+    }
+
+    #[test]
+    fn packet_plane_recovery_targets_include_configured_and_discovered_peer_addresses() {
+        let local = peer_id();
+        let peer = peer_id();
+        let other = peer_id();
+        let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let discovered_address: Multiaddr =
+            "/ip4/127.0.0.1/udp/4002/quic-v1".parse().expect("address");
+        let other_address: Multiaddr = "/ip4/127.0.0.1/tcp/4003".parse().expect("address");
+
+        let targets = packet_plane_recovery_targets(
+            local,
+            peer,
+            &[(peer, configured_address.clone()), (other, other_address)],
+            &[
+                (peer, discovered_address.clone()),
+                (peer, configured_address.clone()),
+            ],
+        );
+
+        assert_eq!(
+            targets,
+            vec![(peer, configured_address), (peer, discovered_address)]
+        );
+    }
+
+    #[test]
+    fn packet_plane_recovery_targets_skip_local_peer() {
+        let local = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+
+        assert!(packet_plane_recovery_targets(local, local, &[(local, address)], &[]).is_empty());
     }
 
     #[test]
