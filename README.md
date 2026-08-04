@@ -530,6 +530,19 @@ whether the route came from explicit config or generated host-route ownership.
 With `--resolve`, it also shows the exact route owner selected by the current
 longest-prefix and metric ordering for the destination.
 
+Inspect packet MTU, route MSS hints, and path MTU estimates:
+
+```sh
+cargo run -- mtu --config p2p-vpn.json
+cargo run -- mtu --config p2p-vpn.json --live --timeout-seconds 10
+```
+
+`mtu` reports the configured interface MTU, the effective packet MTU after wire
+payload capping, the packet header length, every compiled route's Linux
+`advmss` hint, and configured direct/relay path MTU estimates. Live mode queries
+configured peers and reports each peer's advertised effective MTU, the local
+negotiated ceiling, preferred path, and estimated path MTU.
+
 List configured peers and their route/address inventory:
 
 ```sh

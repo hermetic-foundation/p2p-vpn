@@ -130,7 +130,8 @@ impl fmt::Display for IpCommand {
     }
 }
 
-fn route_advmss(prefix: IpCidr, mtu: u16) -> Option<u16> {
+#[must_use]
+pub fn route_advmss(prefix: IpCidr, mtu: u16) -> Option<u16> {
     let header_bytes = match prefix.address() {
         IpAddr::V4(_) => 40,
         IpAddr::V6(_) => 60,

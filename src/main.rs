@@ -25,7 +25,7 @@ use p2p_vpn::{
         remote::{RemotePeerStatus, query_peer_status},
         runner::{self, ShutdownReason},
         service::SERVICE_PROTOCOL,
-        tun::{TunAddresses, TunDevice, TunRuntimeConfig},
+        tun::{TunAddresses, TunDevice, TunRuntimeConfig, route_advmss},
     },
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -163,6 +163,14 @@ enum Command {
         config: PathBuf,
         #[arg(long)]
         resolve: Option<IpAddr>,
+    },
+    Mtu {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long)]
+        live: bool,
+        #[arg(long, default_value_t = 10)]
+        timeout_seconds: u64,
     },
     Metrics {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -392,6 +400,11 @@ async fn main() -> Result<(), String> {
         }),
         Command::Status { config } => status(&config),
         Command::Routes { config, resolve } => routes(&config, resolve),
+        Command::Mtu {
+            config,
+            live,
+            timeout_seconds,
+        } => Box::pin(mtu(&config, live, timeout_seconds)).await,
         Command::Metrics { config } => metrics(&config),
         Command::Peers {
             config,
@@ -1037,6 +1050,130 @@ fn route_owner_details(
         peer.name.clone().unwrap_or_else(|| "-".to_owned()),
         route_source(&peer.routes, route),
     )
+}
+
+async fn mtu(path: &PathBuf, live: bool, timeout_seconds: u64) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+
+    let lines = if live {
+        Box::pin(mtu_lines_live(
+            &config,
+            Duration::from_secs(timeout_seconds.max(1)),
+        ))
+        .await?
+    } else {
+        mtu_lines_configured(&config)?
+    };
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn mtu_lines_configured(config: &Config) -> Result<Vec<String>, String> {
+    let routes = config
+        .compile_routes()
+        .map_err(|error| format!("failed to compile routes: {error:?}"))?;
+    let effective_mtu = config.effective_packet_mtu();
+    let mut lines = vec![
+        format!("interface: {}", config.interface.name),
+        format!("configured mtu: {}", config.interface.mtu),
+        format!("effective packet mtu: {effective_mtu}"),
+        format!("packet header length: {HEADER_LEN}"),
+    ];
+
+    for route in routes.routes() {
+        let (owner_kind, owner_id, owner_name, source) = route_owner_details(config, *route);
+        lines.push(format!(
+            "route mtu: {} owner {} {} name {} metric {} {} mtu {} advmss {}",
+            route.prefix,
+            owner_kind,
+            owner_id,
+            owner_name,
+            route.metric,
+            source,
+            effective_mtu,
+            advmss_text(route.prefix, effective_mtu)
+        ));
+    }
+
+    push_configured_mtu_path_lines(&mut lines, config);
+
+    Ok(lines)
+}
+
+async fn mtu_lines_live(config: &Config, timeout: Duration) -> Result<Vec<String>, String> {
+    let mut lines = mtu_lines_configured(config)?;
+    let local_mtu = config.effective_packet_mtu();
+    for peer in &config.peers {
+        let peer_id = peer
+            .id
+            .parse::<libp2p::PeerId>()
+            .expect("mtu config is valid");
+        match Box::pin(query_peer_status(config, peer_id, timeout)).await {
+            Ok(status) => push_peer_live_mtu_lines(&mut lines, &status, local_mtu),
+            Err(error) => lines.push(format!(
+                "peer live mtu: {} unreachable error {error:?}",
+                peer.id
+            )),
+        }
+    }
+
+    Ok(lines)
+}
+
+fn push_configured_mtu_path_lines(lines: &mut Vec<String>, config: &Config) {
+    let effective_mtu = config.effective_packet_mtu();
+    for peer in &config.peers {
+        for address in &peer.addresses {
+            match path_kind_for_multiaddr(address) {
+                Ok(kind) => lines.push(format!(
+                    "path mtu candidate: {} {} estimated_mtu {} address {}",
+                    peer.id,
+                    path_name(kind),
+                    configured_path_mtu_estimate(kind, effective_mtu),
+                    address
+                )),
+                Err(error) => lines.push(format!(
+                    "path mtu candidate: {} invalid error {error}",
+                    peer.id
+                )),
+            }
+        }
+        if peer.addresses.is_empty() {
+            lines.push(format!(
+                "path mtu discovery: {} enabled {} initial_mtu {}",
+                peer.id,
+                config.network.discovery.mdns || config.network.discovery.kademlia,
+                effective_mtu
+            ));
+        }
+    }
+}
+
+fn push_peer_live_mtu_lines(lines: &mut Vec<String>, status: &RemotePeerStatus, local_mtu: u16) {
+    let preferred_path = PathKind::from_wire_name(&status.capabilities.preferred_path)
+        .unwrap_or(PathKind::DirectQuicStream);
+    let peer_mtu = status.service.effective_mtu.min(local_mtu);
+    let path_mtu = configured_path_mtu_estimate(preferred_path, peer_mtu);
+
+    lines.push(format!(
+        "peer live mtu: {} effective_mtu {} negotiated_mtu {} preferred_path {} path_mtu_estimate {}",
+        status.peer,
+        status.service.effective_mtu,
+        peer_mtu,
+        path_name(preferred_path),
+        path_mtu
+    ));
+}
+
+fn advmss_text(prefix: p2p_vpn::route::IpCidr, mtu: u16) -> String {
+    route_advmss(prefix, mtu).map_or_else(|| "none".to_owned(), |advmss| advmss.to_string())
 }
 
 fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
@@ -2105,6 +2242,99 @@ mod tests {
     }
 
     #[test]
+    fn mtu_lines_configured_report_route_mss_and_path_estimates() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local.peer_id.clone(),
+                private_key: Some(local.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![p2p_vpn::config::PeerConfig {
+                id: remote.peer_id.clone(),
+                name: Some("remote".to_owned()),
+                addresses: vec![
+                    "/ip4/127.0.0.1/tcp/4001".to_owned(),
+                    format!(
+                        "/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit/p2p/{}",
+                        relay.peer_id, remote.peer_id
+                    ),
+                ],
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: p2p_vpn::config::QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: p2p_vpn::config::ResourceConfig::default(),
+        };
+
+        let lines = mtu_lines_configured(&config).expect("mtu lines");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "effective packet mtu: 1280")
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "route mtu: 10.42.0.0/24 owner peer {} name remote metric 100 configured mtu 1280 advmss 1240",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "path mtu candidate: {} direct TCP stream estimated_mtu 1280 address /ip4/127.0.0.1/tcp/4001",
+                remote.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "path mtu candidate: {} circuit relay estimated_mtu 1200 address /ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit/p2p/{}",
+                remote.peer_id, relay.peer_id, remote.peer_id
+            )));
+    }
+
+    #[test]
+    fn peer_live_mtu_lines_report_negotiated_path_ceiling() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities =
+            p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1400);
+        capabilities.preferred_path = PathKind::CircuitRelay.wire_name().to_owned();
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1400),
+        };
+        let mut lines = Vec::new();
+
+        push_peer_live_mtu_lines(&mut lines, &status, 1280);
+
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "peer live mtu: {peer} effective_mtu 1400 negotiated_mtu 1280 preferred_path circuit relay path_mtu_estimate 1200"
+            )));
+    }
+
+    #[test]
     fn peer_status_lines_report_remote_capabilities() {
         let peer = libp2p::identity::Keypair::generate_ed25519()
             .public()
@@ -2635,6 +2865,33 @@ mod tests {
         } = cli.command
         else {
             panic!("expected paths command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert!(live);
+        assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_mtu_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "mtu",
+            "--config",
+            "node-a.json",
+            "--live",
+            "--timeout-seconds",
+            "3",
+        ])
+        .expect("cli");
+
+        let Command::Mtu {
+            config,
+            live,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected mtu command");
         };
 
         assert_eq!(config, PathBuf::from("node-a.json"));
