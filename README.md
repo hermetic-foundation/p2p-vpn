@@ -69,7 +69,7 @@ request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
 path, overlay network name, advertised route prefixes, whether native libp2p
 QUIC datagrams are currently supported, and whether the owned UDP packet plane
-or future owned QUIC packet plane is available. Configs can also declare owned
+or owned QUIC packet-plane backend is available. Configs can also declare owned
 packet-plane UDP bind addresses under `network.packet_plane.listen`, externally
 reachable direct packet endpoints under `network.packet_plane.external_endpoints`,
 and the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
@@ -88,17 +88,20 @@ a generated public endpoint from being shadowed by a local bind address when
 both are advertised. The current local capability advertises the node's built-in
 IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
 datagrams plus owned QUIC packet-plane datagrams as unsupported, so peers do not
-negotiate a QUIC datagram path before one is implemented. Outbound queue
-draining respects the peer's advertised effective MTU and drops oversized
-packets before sending them to the packet stream fallback. Capability requests
-from unconfigured peers are rejected, and configured peers are only accepted
-when they advertise the same overlay network name, compatible wire version,
-packet protocol, packet header length, matching membership tag when a key is
-configured, known preferred path, coherent datagram support, non-zero effective
-MTU, and no route prefixes outside their configured ownership. Packet endpoint
-candidates must parse as socket addresses or DNS-style `host:port` endpoints;
-they are candidates for the owned packet data plane, not membership or route
-authority. The packet-plane session primitive uses fixed binary
+negotiate a QUIC datagram path before daemon integration is implemented. The
+owned QUIC runtime primitive already carries the same authenticated packet-plane
+datagrams over Quinn QUIC DATAGRAM with explicit certificate trust, but the
+daemon does not advertise or select it yet. Outbound queue draining respects the
+peer's advertised effective MTU and drops oversized packets before sending them
+to the packet stream fallback. Capability requests from unconfigured peers are
+rejected, and configured peers are only accepted when they advertise the same
+overlay network name, compatible wire version, packet protocol, packet header
+length, matching membership tag when a key is configured, known preferred path,
+coherent datagram support, non-zero effective MTU, and no route prefixes outside
+their configured ownership. Packet endpoint candidates must parse as socket
+addresses or DNS-style `host:port` endpoints; they are candidates for the owned
+packet data plane, not membership or route authority. The packet-plane session
+primitive uses fixed binary
 hello/accept handshakes signed by the node's libp2p identity key and bound to
 the overlay network name, session id, nonce, MTU, endpoint, identity public key,
 and ephemeral X25519 public key. Verified handshakes can derive directional

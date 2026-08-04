@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt, io,
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -11,7 +12,9 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use libp2p::identity::PublicKey;
+use quinn::{ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig};
 use rand_core::OsRng;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use sha2_010::{Digest as _, Sha256 as HkdfSha256};
 use tokio::net::UdpSocket;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
@@ -656,6 +659,16 @@ pub struct PacketPlaneRuntime {
     max_replay_windows_per_session: usize,
 }
 
+#[derive(Debug)]
+pub struct PacketPlaneQuicRuntime {
+    endpoint: Endpoint,
+    local_addr: SocketAddr,
+    server_certificate: CertificateDer<'static>,
+    connections: HashMap<PeerId, Connection>,
+    sessions: HashMap<PeerId, PacketPlaneSession>,
+    max_replay_windows_per_session: usize,
+}
+
 impl Default for PacketPlaneRuntime {
     fn default() -> Self {
         Self {
@@ -666,6 +679,21 @@ impl Default for PacketPlaneRuntime {
                 crate::config::default_packet_plane_replay_windows_per_session(),
         }
     }
+}
+
+#[derive(Debug)]
+pub enum PacketPlaneQuicError {
+    Io(io::Error),
+    Certificate(rcgen::Error),
+    Rustls(rustls::Error),
+    ClientVerifier(rustls::client::VerifierBuilderError),
+    Connect(quinn::ConnectError),
+    Connection(quinn::ConnectionError),
+    EndpointClosed,
+    NoConnection { peer: PeerId },
+    SendDatagram(quinn::SendDatagramError),
+    Datagram(PacketPlaneDatagramError),
+    Session(PacketPlaneSessionError),
 }
 
 #[derive(Debug)]
@@ -1314,6 +1342,169 @@ impl PacketPlaneRuntime {
     }
 }
 
+impl PacketPlaneQuicRuntime {
+    pub fn bind(listen_addr: SocketAddr) -> Result<Self, PacketPlaneQuicError> {
+        let (server_config, server_certificate) = quic_server_config()?;
+        let endpoint = Endpoint::server(server_config, listen_addr)?;
+        let local_addr = endpoint.local_addr()?;
+        Ok(Self {
+            endpoint,
+            local_addr,
+            server_certificate,
+            connections: HashMap::new(),
+            sessions: HashMap::new(),
+            max_replay_windows_per_session:
+                crate::config::default_packet_plane_replay_windows_per_session(),
+        })
+    }
+
+    #[must_use]
+    pub const fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    #[must_use]
+    pub fn server_certificate(&self) -> CertificateDer<'static> {
+        self.server_certificate.clone()
+    }
+
+    pub async fn connect_peer(
+        &mut self,
+        peer: PeerId,
+        endpoint: SocketAddr,
+        trusted_certificate: CertificateDer<'static>,
+    ) -> Result<(), PacketPlaneQuicError> {
+        self.endpoint
+            .set_default_client_config(quic_client_config(trusted_certificate)?);
+        let connection = self
+            .endpoint
+            .connect(endpoint, "p2p-vpn-packet-plane")?
+            .await?;
+        self.connections.insert(peer, connection);
+        Ok(())
+    }
+
+    pub async fn accept_peer(&mut self, peer: PeerId) -> Result<(), PacketPlaneQuicError> {
+        let incoming = self
+            .endpoint
+            .accept()
+            .await
+            .ok_or(PacketPlaneQuicError::EndpointClosed)?;
+        let connection = incoming.await?;
+        self.connections.insert(peer, connection);
+        Ok(())
+    }
+
+    pub fn establish_session(
+        &mut self,
+        role: PacketPlaneSessionRole,
+        local_secret: &PacketPlaneEphemeralSecret,
+        local: &VerifiedPacketPlaneHandshake,
+        remote: &VerifiedPacketPlaneHandshake,
+    ) -> Result<PacketPlaneSessionSnapshot, PacketPlaneQuicError> {
+        if !self.connections.contains_key(&remote.peer) {
+            return Err(PacketPlaneQuicError::NoConnection { peer: remote.peer });
+        }
+        let keys = PacketPlaneSessionKeys::derive(role, local_secret, local, remote)?;
+        let session = PacketPlaneSession {
+            peer: remote.peer,
+            endpoint: remote.endpoint,
+            mtu: local.mtu.min(remote.mtu),
+            role,
+            local_session_id: local.session_id,
+            remote_session_id: remote.session_id,
+            established_at: Instant::now(),
+            keys,
+            replay_windows: HashMap::new(),
+            max_replay_windows: self.max_replay_windows_per_session,
+        };
+        let snapshot = session.snapshot();
+        self.sessions.insert(remote.peer, session);
+        Ok(snapshot)
+    }
+
+    pub fn send_frame_to_peer(
+        &self,
+        peer: PeerId,
+        frame: &Frame,
+    ) -> Result<usize, PacketPlaneQuicError> {
+        let session = self
+            .sessions
+            .get(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let connection = self
+            .connections
+            .get(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let payload_len = frame.payload.len();
+        if payload_len > usize::from(session.mtu) {
+            return Err(PacketPlaneQuicError::Datagram(
+                PacketPlaneDatagramError::PayloadTooLarge {
+                    actual: payload_len,
+                    max: usize::from(session.mtu),
+                },
+            ));
+        }
+        let datagram = session.keys.seal.seal_frame(frame)?;
+        let len = datagram.len();
+        connection.send_datagram(datagram.into())?;
+        Ok(len)
+    }
+
+    pub async fn recv_frame_from_peer(
+        &mut self,
+        peer: PeerId,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneQuicError> {
+        let session = self
+            .sessions
+            .get_mut(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let connection = self
+            .connections
+            .get(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let datagram = connection.read_datagram().await?;
+        let frame = session
+            .keys
+            .open
+            .open_frame(&datagram, usize::from(session.mtu))?;
+        session.accept_datagram(&frame)?;
+        Ok(PacketPlaneReceivedFrame {
+            frame,
+            peer: Some(peer),
+            remote_addr: connection.remote_address(),
+            local_addr: self.local_addr,
+        })
+    }
+}
+
+fn quic_server_config() -> Result<(ServerConfig, CertificateDer<'static>), PacketPlaneQuicError> {
+    let certificate = rcgen::generate_simple_self_signed(vec!["p2p-vpn-packet-plane".to_owned()])?;
+    let certificate_der = CertificateDer::from(certificate.cert);
+    let private_key = PrivatePkcs8KeyDer::from(certificate.key_pair.serialize_der());
+    let mut server_config =
+        ServerConfig::with_single_cert(vec![certificate_der.clone()], private_key.into())?;
+    server_config.transport_config(Arc::new(packet_plane_quic_transport_config()));
+    Ok((server_config, certificate_der))
+}
+
+fn quic_client_config(
+    trusted_certificate: CertificateDer<'static>,
+) -> Result<ClientConfig, PacketPlaneQuicError> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(trusted_certificate)?;
+    let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots))?;
+    client_config.transport_config(Arc::new(packet_plane_quic_transport_config()));
+    Ok(client_config)
+}
+
+fn packet_plane_quic_transport_config() -> TransportConfig {
+    let mut transport = TransportConfig::default();
+    transport.max_concurrent_uni_streams(0_u8.into());
+    transport.datagram_receive_buffer_size(Some(PACKET_PLANE_MAX_UDP_DATAGRAM_LEN * 4));
+    transport
+}
+
 impl From<io::Error> for PacketPlaneIoError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
@@ -1323,6 +1514,60 @@ impl From<io::Error> for PacketPlaneIoError {
 impl From<PacketPlaneDatagramError> for PacketPlaneIoError {
     fn from(error: PacketPlaneDatagramError) -> Self {
         Self::Datagram(error)
+    }
+}
+
+impl From<io::Error> for PacketPlaneQuicError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<rcgen::Error> for PacketPlaneQuicError {
+    fn from(error: rcgen::Error) -> Self {
+        Self::Certificate(error)
+    }
+}
+
+impl From<rustls::Error> for PacketPlaneQuicError {
+    fn from(error: rustls::Error) -> Self {
+        Self::Rustls(error)
+    }
+}
+
+impl From<rustls::client::VerifierBuilderError> for PacketPlaneQuicError {
+    fn from(error: rustls::client::VerifierBuilderError) -> Self {
+        Self::ClientVerifier(error)
+    }
+}
+
+impl From<quinn::ConnectError> for PacketPlaneQuicError {
+    fn from(error: quinn::ConnectError) -> Self {
+        Self::Connect(error)
+    }
+}
+
+impl From<quinn::ConnectionError> for PacketPlaneQuicError {
+    fn from(error: quinn::ConnectionError) -> Self {
+        Self::Connection(error)
+    }
+}
+
+impl From<quinn::SendDatagramError> for PacketPlaneQuicError {
+    fn from(error: quinn::SendDatagramError) -> Self {
+        Self::SendDatagram(error)
+    }
+}
+
+impl From<PacketPlaneDatagramError> for PacketPlaneQuicError {
+    fn from(error: PacketPlaneDatagramError) -> Self {
+        Self::Datagram(error)
+    }
+}
+
+impl From<PacketPlaneSessionError> for PacketPlaneQuicError {
+    fn from(error: PacketPlaneSessionError) -> Self {
+        Self::Session(error)
     }
 }
 
@@ -2037,6 +2282,63 @@ mod tests {
             .expect("sent frame");
         let inbound = timeout(
             Duration::from_secs(1),
+            receiver.recv_frame_from_peer(hello.peer),
+        )
+        .await
+        .expect("receive should not time out")
+        .expect("received frame");
+
+        assert!(sent > 0);
+        assert_eq!(inbound.peer, Some(hello.peer));
+        assert_eq!(inbound.frame, frame);
+        assert_eq!(inbound.remote_addr, sender_addr);
+        assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn quic_runtime_sends_encrypted_frame_to_registered_peer() {
+        let mut sender =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
+                .expect("sender bind");
+        let mut receiver =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver socket"))
+                .expect("receiver bind");
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+        let receiver_certificate = receiver.server_certificate();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+
+        let (connect, accept_connection) = tokio::join!(
+            sender.connect_peer(accept.peer, receiver_addr, receiver_certificate),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.expect("sender connection");
+        accept_connection.expect("receiver connection");
+
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+
+        let sent = sender
+            .send_frame_to_peer(accept.peer, &frame)
+            .expect("sent frame");
+        let inbound = timeout(
+            Duration::from_secs(2),
             receiver.recv_frame_from_peer(hello.peer),
         )
         .await
