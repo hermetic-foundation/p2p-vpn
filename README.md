@@ -723,6 +723,7 @@ Check configured bootstrap reachability without opening a TUN interface:
 ```sh
 cargo run -- bootstrap-check --config p2p-vpn.json --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-all --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-relay-reservations --timeout-seconds 30
 ```
 
 `bootstrap-check` builds the same libp2p host used by the daemon, starts the
@@ -734,8 +735,13 @@ temporarily unavailable. Use `--require-all` for private infrastructure where
 every configured bootstrap peer is expected to be reachable. The output reports
 the Kademlia protocol, whether it is IPFS-compatible, the success threshold,
 Kademlia startup state, AutoNAT probe-server count, per-peer connection state,
-and dial-failure counts. It does not add bootstrap peers to VPN membership or
-grant route authority.
+and dial-failure counts. When the config contains relay reservation listen
+addresses, the same command also reports configured relay reservations,
+accepted relay reservation events, relayed listen address readiness, and
+per-relay acceptance state. Use `--require-relay-reservations` to make the
+command fail unless every configured relay reservation is accepted and has a
+corresponding relayed listen address. It does not add bootstrap or relay peers
+to VPN membership or grant route authority.
 
 Inspect the runtime metric names and startup snapshot:
 

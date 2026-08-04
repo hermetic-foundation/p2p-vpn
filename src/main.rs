@@ -226,6 +226,8 @@ enum Command {
         timeout_seconds: u64,
         #[arg(long)]
         require_all: bool,
+        #[arg(long)]
+        require_relay_reservations: bool,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -470,7 +472,16 @@ async fn main() -> Result<(), String> {
             config,
             timeout_seconds,
             require_all,
-        } => Box::pin(bootstrap_check(&config, timeout_seconds, require_all)).await,
+            require_relay_reservations,
+        } => {
+            Box::pin(bootstrap_check(
+                &config,
+                timeout_seconds,
+                require_all,
+                require_relay_reservations,
+            ))
+            .await
+        }
         Command::InviteExport {
             config,
             output,
@@ -1891,6 +1902,7 @@ async fn bootstrap_check(
     path: &Path,
     timeout_seconds: u64,
     require_all: bool,
+    require_relay_reservations: bool,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     let threshold = if require_all {
@@ -1902,6 +1914,7 @@ async fn bootstrap_check(
         &config,
         Duration::from_secs(timeout_seconds.max(1)),
         threshold,
+        require_relay_reservations,
     ))
     .await
     .map_err(|error| format!("bootstrap check failed to start: {error:?}"))?;
