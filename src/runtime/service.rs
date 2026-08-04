@@ -6,6 +6,7 @@ use libp2p::{StreamProtocol, request_response};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    runtime::control::membership_tag_matches,
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -92,11 +93,16 @@ pub fn validate_status_request(
     request: &ServiceStatusRequest,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
 ) -> Option<ServiceRejectionReason> {
     if request.network_name != expected_network {
         return Some(ServiceRejectionReason::WrongNetwork);
     }
-    if request.membership_tag.as_deref() != expected_membership_tag {
+    if !membership_tag_matches(
+        request.membership_tag.as_deref(),
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
         return Some(ServiceRejectionReason::MembershipMismatch);
     }
 
@@ -108,11 +114,16 @@ pub fn validate_status_response(
     response: &ServiceStatusResponse,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
 ) -> Option<ServiceRejectionReason> {
     if response.network_name != expected_network {
         return Some(ServiceRejectionReason::WrongNetwork);
     }
-    if response.membership_tag.as_deref() != expected_membership_tag {
+    if !membership_tag_matches(
+        response.membership_tag.as_deref(),
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
         return Some(ServiceRejectionReason::MembershipMismatch);
     }
 
@@ -307,14 +318,14 @@ mod tests {
     fn status_request_validation_rejects_wrong_overlay_scope() {
         let mut request = ServiceStatusRequest::local("other", None, 1);
         assert_eq!(
-            validate_status_request(&request, "lab", None),
+            validate_status_request(&request, "lab", None, &[]),
             Some(ServiceRejectionReason::WrongNetwork)
         );
 
         request.network_name = "lab".to_owned();
         request.membership_tag = Some("wrong".to_owned());
         assert_eq!(
-            validate_status_request(&request, "lab", Some("expected")),
+            validate_status_request(&request, "lab", Some("expected"), &[]),
             Some(ServiceRejectionReason::MembershipMismatch)
         );
     }
@@ -323,15 +334,31 @@ mod tests {
     fn status_response_validation_rejects_wrong_overlay_scope() {
         let mut response = ServiceStatusResponse::local("other", None, 1, 1280);
         assert_eq!(
-            validate_status_response(&response, "lab", None),
+            validate_status_response(&response, "lab", None, &[]),
             Some(ServiceRejectionReason::WrongNetwork)
         );
 
         response.network_name = "lab".to_owned();
         response.membership_tag = Some("wrong".to_owned());
         assert_eq!(
-            validate_status_response(&response, "lab", Some("expected")),
+            validate_status_response(&response, "lab", Some("expected"), &[]),
             Some(ServiceRejectionReason::MembershipMismatch)
+        );
+    }
+
+    #[test]
+    fn status_validation_accepts_previous_membership_tag() {
+        let request = ServiceStatusRequest::local("lab", Some("previous".to_owned()), 1);
+        let response = ServiceStatusResponse::local("lab", Some("previous".to_owned()), 1, 1280);
+        let previous = [String::from("previous")];
+
+        assert_eq!(
+            validate_status_request(&request, "lab", Some("current"), &previous),
+            None
+        );
+        assert_eq!(
+            validate_status_response(&response, "lab", Some("current"), &previous),
+            None
         );
     }
 }

@@ -75,6 +75,8 @@ enum Command {
         private_key: Option<String>,
         #[arg(long)]
         membership_key: Option<String>,
+        #[arg(long = "previous-membership-tag")]
+        previous_membership_tags: Vec<String>,
         #[arg(long, default_value = "hs0")]
         interface: String,
         #[arg(long, default_value_t = 1_280)]
@@ -295,6 +297,7 @@ async fn main() -> Result<(), String> {
             network,
             private_key,
             membership_key,
+            previous_membership_tags,
             interface,
             mtu,
             listen_addresses,
@@ -338,6 +341,7 @@ async fn main() -> Result<(), String> {
             network,
             private_key,
             membership_key,
+            previous_membership_tags,
             interface,
             mtu,
             listen_addresses,
@@ -527,6 +531,7 @@ struct InitConfigArgs {
     network: String,
     private_key: Option<String>,
     membership_key: Option<String>,
+    previous_membership_tags: Vec<String>,
     interface: String,
     mtu: u16,
     listen_addresses: Vec<String>,
@@ -708,6 +713,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         relay: args.relay,
     }
     .into_config();
+    config.network.previous_membership_tags = args.previous_membership_tags;
     config.queue = args.queue;
     config.resources = args.resources;
     config
@@ -1932,6 +1938,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 0,
@@ -2004,6 +2011,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 50,
@@ -2065,6 +2073,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2138,6 +2147,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2253,6 +2263,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2355,6 +2366,7 @@ mod tests {
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 50,
@@ -2988,6 +3000,7 @@ mod tests {
             network: "lab".to_owned(),
             private_key: None,
             membership_key: None,
+            previous_membership_tags: Vec::new(),
             interface: "hs0".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
@@ -3037,6 +3050,7 @@ mod tests {
             network: "lab".to_owned(),
             private_key: None,
             membership_key: None,
+            previous_membership_tags: Vec::new(),
             interface: "hs0".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),
@@ -3083,6 +3097,42 @@ mod tests {
     }
 
     #[test]
+    fn init_config_writes_previous_membership_tags() {
+        let output = temp_config_path("p2p-vpn-init-config-previous-membership-tags");
+        let membership_key = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_owned();
+        let previous_tag = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned();
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: Some(membership_key),
+            previous_membership_tags: vec![previous_tag.clone()],
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
+            peers: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(config.network.previous_membership_tags, vec![previous_tag]);
+    }
+
+    #[test]
     fn init_config_writes_custom_queue_and_resource_limits() {
         let output = temp_config_path("p2p-vpn-init-config");
 
@@ -3091,6 +3141,7 @@ mod tests {
             network: "lab".to_owned(),
             private_key: None,
             membership_key: None,
+            previous_membership_tags: Vec::new(),
             interface: "hs0".to_owned(),
             mtu: 1280,
             listen_addresses: Vec::new(),

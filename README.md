@@ -35,7 +35,12 @@ packet source ownership is still checked separately against configured routes.
 An optional `network.membership_key` adds overlay-wide membership proof for
 configured peers. The base64 key is never sent on the wire; peers exchange a
 network-scoped SHA-256 membership tag in the control handshake and reject
-configured peers whose tag does not match.
+configured peers whose tag does not match. During a membership-key rotation,
+`network.previous_membership_tags` can list old 32-byte base64 tags that remain
+acceptable for inbound control and service-plane validation. Nodes still
+advertise only the current tag derived from `network.membership_key`; previous
+tags are an acceptance window, not an authority to originate routes or a value
+sent as the local identity.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
@@ -271,13 +276,17 @@ discovery settings, and route syntax before writing a config. The invite
 carries the current membership key so the imported node can join the same
 private overlay; treat invite files as sensitive. `--membership-epoch` and
 repeatable `--previous-membership-tag` metadata let operators label membership
-key rotations and distribute compatibility hints while importing nodes use the
-current invite key.
+key rotations and distribute compatibility hints. Imported configs preserve
+those previous tags, and the daemon and remote status query path accept peers
+using them while continuing to advertise the current invite key's tag.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Use the same `--membership-key` value on every node that should join
-the private overlay; it must decode to at least 32 bytes. Repeat
+the private overlay; it must decode to at least 32 bytes. During a staged key
+rotation, repeat `--previous-membership-tag BASE64_32_BYTE_TAG` on
+`init-config` or `invite-export` for old tags that should remain accepted until
+all nodes have moved to the current key. Repeat
 `--local-route CIDR[,METRIC]` for prefixes this node is allowed to originate
 and advertise. Repeat `--peer PEER_ID=MULTIADDR` for additional peer addresses,
 and repeat `--peer-route PEER_ID=CIDR[,METRIC]` for prefixes that peer is

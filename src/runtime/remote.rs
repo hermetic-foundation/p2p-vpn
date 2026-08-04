@@ -60,6 +60,7 @@ pub async fn query_peer_status(
     if !forwarder.is_configured_transport_peer(peer) {
         return Err(RemoteQueryError::UnconfiguredPeer(peer));
     }
+    let previous_membership_tags = config.previous_membership_tags()?;
 
     let local_capabilities = ControlCapabilities::local(
         &node.network_name,
@@ -108,6 +109,7 @@ pub async fn query_peer_status(
                         &local_capabilities,
                         &expected_network,
                         expected_membership_tag.as_deref(),
+                        &previous_membership_tags,
                         peer,
                         control_request,
                         event,
@@ -121,6 +123,7 @@ pub async fn query_peer_status(
                         &local_capabilities,
                         &expected_network,
                         expected_membership_tag.as_deref(),
+                        &previous_membership_tags,
                         peer,
                         service_request,
                         REMOTE_STATUS_NONCE,
@@ -171,6 +174,7 @@ fn handle_control_event(
     local_capabilities: &ControlCapabilities,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
     target_peer: Libp2pPeerId,
     expected_request: Option<OutboundRequestId>,
     event: request_response::Event<ControlRequest, ControlResponse>,
@@ -184,8 +188,13 @@ fn handle_control_event(
             },
             ..
         } => {
-            let response =
-                inbound_capability_response(forwarder, peer, request, local_capabilities);
+            let response = inbound_capability_response(
+                forwarder,
+                peer,
+                request,
+                local_capabilities,
+                previous_membership_tags,
+            );
             swarm
                 .behaviour_mut()
                 .control
@@ -202,9 +211,12 @@ fn handle_control_event(
             ..
         } if peer == target_peer && Some(request_id) == expected_request => match response {
             ControlResponse::CapabilitiesAccepted(remote) => {
-                if let Some(reason) =
-                    validate_capabilities(&remote, expected_network, expected_membership_tag)
-                {
+                if let Some(reason) = validate_capabilities(
+                    &remote,
+                    expected_network,
+                    expected_membership_tag,
+                    previous_membership_tags,
+                ) {
                     return Err(RemoteQueryError::RejectedCapabilities(reason));
                 }
                 if !forwarder.authorizes_advertised_routes(peer, &remote.advertised_routes) {
@@ -237,6 +249,7 @@ fn handle_service_event(
     local_capabilities: &ControlCapabilities,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
     target_peer: Libp2pPeerId,
     expected_request: Option<OutboundRequestId>,
     expected_nonce: u64,
@@ -251,7 +264,13 @@ fn handle_service_event(
             },
             ..
         } => {
-            let response = inbound_service_response(forwarder, peer, request, local_capabilities);
+            let response = inbound_service_response(
+                forwarder,
+                peer,
+                request,
+                local_capabilities,
+                previous_membership_tags,
+            );
             swarm
                 .behaviour_mut()
                 .service
@@ -268,9 +287,12 @@ fn handle_service_event(
             ..
         } if peer == target_peer && Some(request_id) == expected_request => match response {
             ServiceResponse::Status(remote) => {
-                if let Some(reason) =
-                    validate_status_response(&remote, expected_network, expected_membership_tag)
-                {
+                if let Some(reason) = validate_status_response(
+                    &remote,
+                    expected_network,
+                    expected_membership_tag,
+                    previous_membership_tags,
+                ) {
                     return Err(RemoteQueryError::RejectedServiceStatus(reason));
                 }
                 if remote.nonce != expected_nonce {
@@ -302,6 +324,7 @@ fn inbound_capability_response(
     peer: Libp2pPeerId,
     request: ControlRequest,
     local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
 ) -> ControlResponse {
     match request {
         ControlRequest::Capabilities(capabilities) => {
@@ -312,6 +335,7 @@ fn inbound_capability_response(
                 &capabilities,
                 &local_capabilities.network_name,
                 local_capabilities.membership_tag.as_deref(),
+                previous_membership_tags,
             ) {
                 return rejected_capabilities_response(reason);
             }
@@ -330,6 +354,7 @@ fn inbound_service_response(
     peer: Libp2pPeerId,
     request: ServiceRequest,
     local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
 ) -> ServiceResponse {
     match request {
         ServiceRequest::Status(request) => {
@@ -340,6 +365,7 @@ fn inbound_service_response(
                 &request,
                 &local_capabilities.network_name,
                 local_capabilities.membership_tag.as_deref(),
+                previous_membership_tags,
             ) {
                 return ServiceResponse::Rejected(reason);
             }
@@ -501,8 +527,13 @@ mod tests {
                         ..
                     },
                 )) => {
-                    let response =
-                        inbound_capability_response(&forwarder, peer, request, &local_capabilities);
+                    let response = inbound_capability_response(
+                        &forwarder,
+                        peer,
+                        request,
+                        &local_capabilities,
+                        &[],
+                    );
                     node.swarm
                         .behaviour_mut()
                         .control
@@ -519,8 +550,13 @@ mod tests {
                         ..
                     },
                 )) => {
-                    let response =
-                        inbound_service_response(&forwarder, peer, request, &local_capabilities);
+                    let response = inbound_service_response(
+                        &forwarder,
+                        peer,
+                        request,
+                        &local_capabilities,
+                        &[],
+                    );
                     node.swarm
                         .behaviour_mut()
                         .service
@@ -547,6 +583,7 @@ mod tests {
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),

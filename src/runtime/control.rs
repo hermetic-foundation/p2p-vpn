@@ -151,11 +151,16 @@ pub fn validate_capabilities(
     capabilities: &ControlCapabilities,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
 ) -> Option<ControlRejectionReason> {
     if capabilities.network_name != expected_network {
         return Some(ControlRejectionReason::WrongNetwork);
     }
-    if capabilities.membership_tag.as_deref() != expected_membership_tag {
+    if !membership_tag_matches(
+        capabilities.membership_tag.as_deref(),
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
         return Some(ControlRejectionReason::MembershipMismatch);
     }
     if capabilities.wire_version != WIRE_VERSION {
@@ -178,6 +183,25 @@ pub fn validate_capabilities(
     }
 
     None
+}
+
+#[must_use]
+pub fn membership_tag_matches(
+    actual: Option<&str>,
+    expected_current: Option<&str>,
+    previous_membership_tags: &[String],
+) -> bool {
+    match expected_current {
+        None => actual.is_none(),
+        Some(current) => {
+            actual == Some(current)
+                || actual.is_some_and(|actual| {
+                    previous_membership_tags
+                        .iter()
+                        .any(|previous| previous == actual)
+                })
+        }
+    }
 }
 
 #[must_use]
@@ -460,58 +484,58 @@ mod tests {
     #[test]
     fn capability_validation_rejects_incompatible_protocol_surfaces() {
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
-        assert_eq!(validate_capabilities(&capabilities, "lab", None), None);
+        assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
 
         assert_eq!(
-            validate_capabilities(&capabilities, "prod", None),
+            validate_capabilities(&capabilities, "prod", None, &[]),
             Some(ControlRejectionReason::WrongNetwork)
         );
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", Some("tag-a")),
+            validate_capabilities(&capabilities, "lab", Some("tag-a"), &[]),
             Some(ControlRejectionReason::MembershipMismatch)
         );
 
         capabilities.membership_tag = Some("tag-a".to_owned());
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", Some("tag-a")),
+            validate_capabilities(&capabilities, "lab", Some("tag-a"), &[]),
             None
         );
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", Some("tag-b")),
+            validate_capabilities(&capabilities, "lab", Some("tag-b"), &[]),
             Some(ControlRejectionReason::MembershipMismatch)
         );
         capabilities.membership_tag = None;
 
         capabilities.wire_version = WIRE_VERSION.saturating_add(1);
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedWireVersion)
         );
 
         capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities.packet_protocol = "/different/packet/1".to_owned();
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedPacketProtocol)
         );
 
         capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities.packet_header_len = HEADER_LEN + 1;
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedPacketHeaderLength)
         );
 
         capabilities = ControlCapabilities::local("lab", None, 0);
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::InvalidEffectiveMtu)
         );
 
         capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities.preferred_path = "not_a_path".to_owned();
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedPreferredPath)
         );
 
@@ -519,11 +543,26 @@ mod tests {
         capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
         capabilities.supports_quic_datagrams = false;
         assert_eq!(
-            validate_capabilities(&capabilities, "lab", None),
+            validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedPreferredPath)
         );
 
         capabilities.supports_quic_datagrams = true;
-        assert_eq!(validate_capabilities(&capabilities, "lab", None), None);
+        assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
+    }
+
+    #[test]
+    fn capability_validation_accepts_previous_membership_tag() {
+        let capabilities = ControlCapabilities::local("lab", Some("previous-tag".to_owned()), 1280);
+
+        assert_eq!(
+            validate_capabilities(
+                &capabilities,
+                "lab",
+                Some("current-tag"),
+                &[String::from("previous-tag")]
+            ),
+            None
+        );
     }
 }

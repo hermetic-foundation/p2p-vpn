@@ -180,11 +180,13 @@ where
     })?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
+    let previous_membership_tags = config.previous_membership_tags()?;
 
     Box::pin(run_node_until(
         node,
         forwarder,
         membership,
+        previous_membership_tags,
         device,
         config.effective_packet_mtu(),
         config.queue,
@@ -225,6 +227,7 @@ pub async fn run_node(
         node,
         forwarder,
         membership,
+        Vec::new(),
         device,
         options.mtu,
         options.queue,
@@ -250,6 +253,7 @@ pub async fn run_node_until<Shutdown>(
     mut node: P2pNode,
     mut forwarder: Forwarder,
     membership: OverlayMembership,
+    previous_membership_tags: Vec<String>,
     device: TunDevice,
     mtu: u16,
     queue_config: QueueConfig,
@@ -342,6 +346,7 @@ where
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
+                        previous_membership_tags: &previous_membership_tags,
                         discovery: &discovery,
                     },
                     event,
@@ -1700,7 +1705,28 @@ struct SwarmEventContext<'a> {
     inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
+    previous_membership_tags: &'a [String],
     discovery: &'a DiscoveryConfig,
+}
+
+#[derive(Clone, Copy)]
+struct MembershipValidationScope<'a> {
+    network: &'a str,
+    current_tag: Option<&'a str>,
+    previous_tags: &'a [String],
+}
+
+impl<'a> MembershipValidationScope<'a> {
+    fn from_capabilities(
+        capabilities: &'a ControlCapabilities,
+        previous_tags: &'a [String],
+    ) -> Self {
+        Self {
+            network: &capabilities.network_name,
+            current_tag: capabilities.membership_tag.as_deref(),
+            previous_tags,
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1893,8 +1919,10 @@ fn handle_control_event(
                 context.metrics,
                 peer,
                 response,
-                &context.local_capabilities.network_name,
-                context.local_capabilities.membership_tag.as_deref(),
+                MembershipValidationScope::from_capabilities(
+                    context.local_capabilities,
+                    context.previous_membership_tags,
+                ),
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -2055,6 +2083,7 @@ fn handle_service_event(
                 response,
                 &context.local_capabilities.network_name,
                 context.local_capabilities.membership_tag.as_deref(),
+                context.previous_membership_tags,
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -2087,6 +2116,7 @@ fn handle_control_request(
                 peer,
                 &capabilities,
                 context.local_capabilities,
+                context.previous_membership_tags,
             );
             match &response {
                 ControlResponse::CapabilitiesAccepted(_) => {
@@ -2131,6 +2161,7 @@ fn handle_service_request(
                 peer,
                 &request,
                 context.local_capabilities,
+                context.previous_membership_tags,
             );
             match &response {
                 ServiceResponse::Status(_) => context.metrics.record_service_status_accept(),
@@ -2157,13 +2188,17 @@ fn handle_service_response(
     response: ServiceResponse,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
 ) {
     metrics.record_service_response_received();
     match response {
         ServiceResponse::Status(status) => {
-            if let Some(reason) =
-                validate_status_response(&status, expected_network, expected_membership_tag)
-            {
+            if let Some(reason) = validate_status_response(
+                &status,
+                expected_network,
+                expected_membership_tag,
+                previous_membership_tags,
+            ) {
                 metrics.record_service_status_rejection(reason);
                 metrics.record_service_failure();
                 eprintln!("ignoring incompatible service status response from {peer}: {reason:?}");
@@ -2186,8 +2221,7 @@ fn handle_control_response(
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     response: ControlResponse,
-    expected_network: &str,
-    expected_membership_tag: Option<&str>,
+    validation: MembershipValidationScope<'_>,
 ) {
     metrics.record_control_response_received();
     match response {
@@ -2196,8 +2230,9 @@ fn handle_control_response(
                 forwarder,
                 peer,
                 &capabilities,
-                expected_network,
-                expected_membership_tag,
+                validation.network,
+                validation.current_tag,
+                validation.previous_tags,
             ) {
                 metrics.record_control_capability_rejection(reason);
                 metrics.record_control_failure();
@@ -2221,6 +2256,7 @@ fn capability_response_for_peer(
     peer: Libp2pPeerId,
     capabilities: &ControlCapabilities,
     local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
 ) -> ControlResponse {
     if !forwarder.is_configured_transport_peer(peer) {
         return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
@@ -2230,6 +2266,7 @@ fn capability_response_for_peer(
         capabilities,
         &local_capabilities.network_name,
         local_capabilities.membership_tag.as_deref(),
+        previous_membership_tags,
     ) {
         return rejected_capabilities_response(reason);
     }
@@ -2248,6 +2285,7 @@ fn service_status_response_for_peer(
     peer: Libp2pPeerId,
     request: &ServiceStatusRequest,
     local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
 ) -> ServiceResponse {
     if !forwarder.is_configured_transport_peer(peer) {
         return ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer);
@@ -2257,6 +2295,7 @@ fn service_status_response_for_peer(
         request,
         &local_capabilities.network_name,
         local_capabilities.membership_tag.as_deref(),
+        previous_membership_tags,
     ) {
         return ServiceResponse::Rejected(reason);
     }
@@ -2275,10 +2314,14 @@ fn validate_peer_capabilities(
     capabilities: &ControlCapabilities,
     expected_network: &str,
     expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
 ) -> Option<ControlRejectionReason> {
-    if let Some(reason) =
-        validate_capabilities(capabilities, expected_network, expected_membership_tag)
-    {
+    if let Some(reason) = validate_capabilities(
+        capabilities,
+        expected_network,
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
         return Some(reason);
     }
 
@@ -3224,6 +3267,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3300,6 +3344,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.10.0.0/24".to_owned(),
                     metric: 90,
@@ -3677,6 +3722,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3911,6 +3957,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4462,6 +4509,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4495,6 +4543,7 @@ mod tests {
                 remote,
                 &ControlCapabilities::local("lab", None, 1200),
                 &local_capabilities,
+                &[],
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
         );
@@ -4514,6 +4563,7 @@ mod tests {
                 remote,
                 &ServiceStatusRequest::local("lab", None, 42),
                 &local_capabilities,
+                &[],
             ),
             ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280))
         );
@@ -4535,6 +4585,7 @@ mod tests {
                 unconfigured,
                 &ServiceStatusRequest::local("lab", Some("expected".to_owned()), 1),
                 &local_capabilities,
+                &[],
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer)
         );
@@ -4544,6 +4595,7 @@ mod tests {
                 remote,
                 &ServiceStatusRequest::local("prod", Some("expected".to_owned()), 1),
                 &local_capabilities,
+                &[],
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork)
         );
@@ -4553,6 +4605,7 @@ mod tests {
                 remote,
                 &ServiceStatusRequest::local("lab", Some("wrong".to_owned()), 1),
                 &local_capabilities,
+                &[],
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::MembershipMismatch)
         );
@@ -4569,6 +4622,7 @@ mod tests {
             ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280)),
             "lab",
             None,
+            &[],
         );
         handle_service_response(
             &metrics,
@@ -4576,6 +4630,7 @@ mod tests {
             ServiceResponse::Status(ServiceStatusResponse::local("prod", None, 42, 1280)),
             "lab",
             None,
+            &[],
         );
         handle_service_response(
             &metrics,
@@ -4583,6 +4638,7 @@ mod tests {
             ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork),
             "lab",
             None,
+            &[],
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -4603,6 +4659,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4637,8 +4694,11 @@ mod tests {
             &metrics,
             remote,
             ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1200)),
-            "lab",
-            None,
+            MembershipValidationScope {
+                network: "lab",
+                current_tag: None,
+                previous_tags: &[],
+            },
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -4658,6 +4718,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4692,8 +4753,11 @@ mod tests {
             &metrics,
             remote,
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::WrongNetwork),
-            "lab",
-            None,
+            MembershipValidationScope {
+                network: "lab",
+                current_tag: None,
+                previous_tags: &[],
+            },
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -4715,6 +4779,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4749,8 +4814,11 @@ mod tests {
             &metrics,
             remote,
             ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("prod", None, 1200)),
-            "lab",
-            None,
+            MembershipValidationScope {
+                network: "lab",
+                current_tag: None,
+                previous_tags: &[],
+            },
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -4773,6 +4841,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4825,6 +4894,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4884,6 +4954,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4925,6 +4996,7 @@ mod tests {
                 remote,
                 &remote_capabilities,
                 &local_capabilities,
+                &[],
             ),
             ControlResponse::CapabilitiesAccepted(local_capabilities)
         );
@@ -4940,6 +5012,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -4974,6 +5047,7 @@ mod tests {
                 remote,
                 &remote_capabilities,
                 &ControlCapabilities::local("lab", None, 1280),
+                &[],
             ),
             ControlResponse::CapabilitiesRejected(
                 ControlRejectionReason::UnauthorizedRouteAdvertisement
@@ -4991,6 +5065,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5023,6 +5098,7 @@ mod tests {
                 remote,
                 &ControlCapabilities::local("prod", None, 1280),
                 &ControlCapabilities::local("lab", None, 1280),
+                &[],
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::WrongNetwork)
         );
@@ -5038,6 +5114,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5070,8 +5147,60 @@ mod tests {
                 remote,
                 &ControlCapabilities::local("lab", Some("remote-tag".to_owned()), 1280),
                 &ControlCapabilities::local("lab", Some("local-tag".to_owned()), 1280),
+                &[],
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::MembershipMismatch)
+        );
+    }
+
+    #[test]
+    fn capability_response_accepts_previous_membership_tag() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities =
+            ControlCapabilities::local("lab", Some("local-tag".to_owned()), 1280);
+
+        assert_eq!(
+            capability_response_for_peer(
+                &forwarder,
+                remote,
+                &ControlCapabilities::local("lab", Some("previous-tag".to_owned()), 1280),
+                &local_capabilities,
+                &[String::from("previous-tag")],
+            ),
+            ControlResponse::CapabilitiesAccepted(local_capabilities)
         );
     }
 
@@ -5086,6 +5215,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5118,6 +5248,7 @@ mod tests {
                 unconfigured,
                 &ControlCapabilities::local("lab", None, 1280),
                 &ControlCapabilities::local("lab", None, 1280),
+                &[],
             ),
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
         );
@@ -5133,6 +5264,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5167,6 +5299,7 @@ mod tests {
                 remote,
                 &capabilities,
                 &ControlCapabilities::local("lab", None, 1280),
+                &[],
             ),
             ControlResponse::CapabilitiesRejected(
                 ControlRejectionReason::UnsupportedPacketProtocol
@@ -5189,6 +5322,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5271,6 +5405,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5355,6 +5490,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5442,6 +5578,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5532,6 +5669,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -5772,6 +5910,7 @@ mod tests {
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),

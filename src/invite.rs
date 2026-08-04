@@ -190,6 +190,7 @@ pub fn import_invite_config_at(
             local_peer: options.identity.peer_id,
             private_key: Some(options.identity.private_key),
             membership_key: invite.payload.membership_key.clone(),
+            previous_membership_tags: invite.payload.previous_membership_tags.clone(),
             routes: options.local_routes,
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
@@ -512,6 +513,7 @@ mod tests {
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),
                 membership_key: Some(STANDARD.encode([7_u8; 32])),
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 100,
@@ -569,6 +571,10 @@ mod tests {
         assert_eq!(
             imported.network.membership_key,
             source.network.membership_key
+        );
+        assert_eq!(
+            imported.network.previous_membership_tags,
+            invite.payload.previous_membership_tags
         );
         assert_eq!(imported.network.bootstrap_peers.len(), 2);
         assert_eq!(imported.interface.name, "hs1");

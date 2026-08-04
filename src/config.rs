@@ -88,6 +88,7 @@ impl Config {
     pub fn validate_runtime(&self) -> Result<(), ConfigError> {
         self.identity()?;
         self.membership_key_bytes()?;
+        self.previous_membership_tags()?;
         self.compile_routes()?;
         self.validate_interface()?;
         self.validate_resources()?;
@@ -208,6 +209,20 @@ impl Config {
         Ok(Some(membership_tag(&self.network.name, &key)))
     }
 
+    pub fn previous_membership_tags(&self) -> Result<Vec<String>, ConfigError> {
+        if self.network.previous_membership_tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.network.membership_key.is_none() {
+            return Err(ConfigError::PreviousMembershipTagsWithoutMembershipKey);
+        }
+        for tag in &self.network.previous_membership_tags {
+            validate_membership_tag(tag)?;
+        }
+
+        Ok(self.network.previous_membership_tags.clone())
+    }
+
     pub fn listen_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
         parse_multiaddrs(&self.network.listen_addresses)
     }
@@ -252,6 +267,8 @@ pub struct NetworkConfig {
     pub private_key: Option<String>,
     #[serde(default)]
     pub membership_key: Option<String>,
+    #[serde(default)]
+    pub previous_membership_tags: Vec<String>,
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
     #[serde(default)]
@@ -530,6 +547,7 @@ impl InitConfigTemplate {
                 local_peer: self.identity.peer_id,
                 private_key: Some(self.identity.private_key),
                 membership_key: self.membership_key,
+                previous_membership_tags: Vec::new(),
                 routes: self.local_routes,
                 listen_addresses: self.listen_addresses,
                 external_addresses: self.external_addresses,
@@ -570,6 +588,8 @@ pub enum ConfigError {
     MissingPrivateKey,
     IdentityPeerMismatch { expected: String, actual: String },
     MembershipKey(MembershipKeyError),
+    PreviousMembershipTag(MembershipTagError),
+    PreviousMembershipTagsWithoutMembershipKey,
     PeerId(crate::PeerIdParseError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
@@ -612,6 +632,12 @@ pub enum RoutePrefixError {
     InvalidAddress(String),
     InvalidPrefix(String),
     InvalidPrefixLength(RouteError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MembershipTagError {
+    InvalidLength { actual: usize },
+    InvalidBase64(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -824,6 +850,21 @@ fn decode_membership_key(input: &str) -> Result<Vec<u8>, ConfigError> {
         }));
     }
     Ok(key)
+}
+
+fn validate_membership_tag(input: &str) -> Result<(), ConfigError> {
+    let tag = base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|_| {
+            ConfigError::PreviousMembershipTag(MembershipTagError::InvalidBase64(input.to_owned()))
+        })?;
+    if tag.len() != 32 {
+        return Err(ConfigError::PreviousMembershipTag(
+            MembershipTagError::InvalidLength { actual: tag.len() },
+        ));
+    }
+
+    Ok(())
 }
 
 #[must_use]
@@ -1041,6 +1082,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: Some(key),
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1083,6 +1125,90 @@ mod tests {
     }
 
     #[test]
+    fn previous_membership_tags_require_current_membership_key() {
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: vec![
+                    base64::engine::general_purpose::STANDARD.encode([9_u8; 32]),
+                ],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.previous_membership_tags(),
+            Err(ConfigError::PreviousMembershipTagsWithoutMembershipKey)
+        ));
+
+        config.network.membership_key =
+            Some(base64::engine::general_purpose::STANDARD.encode([7_u8; 32]));
+        assert_eq!(
+            config.previous_membership_tags().expect("previous tags"),
+            config.network.previous_membership_tags
+        );
+    }
+
+    #[test]
+    fn previous_membership_tags_reject_invalid_tag_encoding() {
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_owned(),
+                private_key: None,
+                membership_key: Some(base64::engine::general_purpose::STANDARD.encode([7_u8; 32])),
+                previous_membership_tags: vec!["not-base64".to_owned()],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.previous_membership_tags(),
+            Err(ConfigError::PreviousMembershipTag(
+                MembershipTagError::InvalidBase64(tag)
+            )) if tag == "not-base64"
+        ));
+
+        config.network.previous_membership_tags =
+            vec![base64::engine::general_purpose::STANDARD.encode([9_u8; 8])];
+        assert!(matches!(
+            config.previous_membership_tags(),
+            Err(ConfigError::PreviousMembershipTag(
+                MembershipTagError::InvalidLength { actual: 8 }
+            ))
+        ));
+    }
+
+    #[test]
     fn config_compiles_builtin_and_advertised_routes() {
         let config = Config {
             network: NetworkConfig {
@@ -1091,6 +1217,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 75,
@@ -1149,6 +1276,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/16".to_owned(),
                     metric: 50,
@@ -1194,6 +1322,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1236,6 +1365,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1270,6 +1400,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1311,6 +1442,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1360,6 +1492,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1404,6 +1537,7 @@ mod tests {
                     .to_owned(),
                 private_key: None,
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1462,6 +1596,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
@@ -1524,6 +1659,7 @@ mod tests {
                 local_peer: identity.peer_id,
                 private_key: Some(other.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: Vec::new(),
@@ -1555,6 +1691,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1586,6 +1723,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1629,6 +1767,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1681,6 +1820,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1779,6 +1919,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
                 external_addresses: Vec::new(),
@@ -1835,6 +1976,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1894,6 +2036,7 @@ mod tests {
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
                 membership_key: None,
+                previous_membership_tags: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
