@@ -17,7 +17,7 @@ path.
 
 | Area | Status | Current evidence | Verification |
 | --- | --- | --- | --- |
-| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs`, `src/runtime/control.rs`, and `src/runtime/packet_plane.rs` expose owned packet-plane listener config, bind configured UDP listeners, advertise direct endpoint candidates, and provide signed hello/accept handshakes for the future UDP/QUIC data plane. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::packet_plane::tests` |
+| Packet data plane | partial | `src/runtime/packet.rs`, `src/wire.rs`, and `src/runtime/runner.rs` implement a fixed binary packet frame over authenticated libp2p request-response streams. `src/config.rs`, `src/runtime/control.rs`, and `src/runtime/packet_plane.rs` expose owned packet-plane listener config, bind configured UDP listeners, advertise direct endpoint candidates, provide signed hello/accept handshakes with ephemeral X25519 keys, derive directional ChaCha20-Poly1305 packet keys, and seal/open encrypted datagram envelopes around the existing packet frame. `src/queue.rs` and `src/runtime/runner.rs` add bounded per-peer queues and flow-sharded stream fallback. | `nix develop -c cargo test`; focused: `nix develop -c cargo test runtime::packet_plane::tests` |
 | Native QUIC datagrams | blocked | `src/runtime/runner.rs` advertises local QUIC datagrams as unsupported because the locked `libp2p-quic`/`Swarm` surface does not expose an application datagram sender/receiver. Datagrams are modelled as a preferred path kind, but packets are not falsely reported as datagram-sent. | `nix develop -c cargo test runtime::runner::tests::local_packet_data_plane_is_identity_keyed_stream_fallback_only` |
 | Stream fallback | operational | The fallback uses identity-keyed request-response streams, per-peer send windows, and flow shards so same-shard packets stay queued while unrelated shards can drain. | `nix develop -c cargo test runtime::runner::tests::drain_outbound_queue_gates_stream_fallback_by_flow_shard` |
 | Queueing and backpressure | operational | `src/queue.rs` enforces packet count, byte count, packet age, per-peer fairness, expired drops, and blocked-peer retention. Runtime metrics expose queue drops and blocked reasons. | `nix develop -c cargo test queue::tests` |
@@ -43,8 +43,9 @@ path.
    dependency surface. Closing this requires a lower-level transport integration,
    a dependency upgrade that exposes application datagrams, or a different
    datagram-capable substrate. Owned packet-plane listener configuration,
-   listener binding, endpoint capability advertisement, and signed packet
-   session handshake primitives exist, but there is not yet an encrypted packet
+   listener binding, endpoint capability advertisement, signed packet session
+   handshakes, X25519 key agreement, and encrypted datagram frame primitives
+   exist, but there is not yet a daemon-integrated encrypted packet
    sender/receiver.
 2. MTU handling deliberately rejects oversized packets, writes local
    packet-too-big feedback where possible, and provides Linux route MSS hints,

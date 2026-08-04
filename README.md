@@ -84,9 +84,13 @@ their configured ownership. Packet endpoint candidates must parse as socket
 addresses; they are candidates for the owned packet data plane, not membership
 or route authority. The packet-plane session primitive uses fixed binary
 hello/accept handshakes signed by the node's libp2p identity key and bound to
-the overlay network name, session id, nonce, MTU, endpoint, and public key. The
-listener lifecycle and authenticated handshake are intentionally separate from
-encrypted packet forwarding, which remains future packet-plane work.
+the overlay network name, session id, nonce, MTU, endpoint, identity public key,
+and ephemeral X25519 public key. Verified handshakes can derive directional
+ChaCha20-Poly1305 keys and seal the existing packet frame inside an
+authenticated datagram envelope keyed by packet session id and sequence. The
+listener lifecycle and encrypted datagram primitive are intentionally separate
+from daemon-integrated packet forwarding, which remains future packet-plane
+work.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the

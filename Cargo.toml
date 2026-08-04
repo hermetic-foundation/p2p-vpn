@@ -16,11 +16,16 @@ missing_panics_doc = "allow"
 [dependencies]
 async-trait = "0.1.91"
 base64 = "0.23.0"
+chacha20poly1305 = "0.10.1"
 clap = { version = "4.6.5", features = ["derive"] }
 futures = "0.3.33"
+hkdf = "0.12.4"
 libp2p = { version = "0.56.0", features = ["tokio", "tcp", "quic", "dns", "noise", "yamux", "identify", "ping", "kad", "mdns", "relay", "dcutr", "autonat", "macros", "request-response"] }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+sha2_010 = { package = "sha2", version = "0.10.9" }
 tokio = { version = "1.53.1", features = ["full"] }
 tun = "0.8.14"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
