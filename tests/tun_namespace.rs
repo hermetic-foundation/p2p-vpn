@@ -427,6 +427,7 @@ fn run_relay_promotion_orchestrator() {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+    wait_for_packet_plane_datagrams(&temp_dir);
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -441,23 +442,24 @@ fn run_relay_promotion_orchestrator() {
         &responder_routes,
     );
     let relay_log = read_log(&temp_dir.join("node-relay.log"));
-    let node_a_log = read_log(&temp_dir.join("node-a.log"));
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
     assert!(
         relay_log.contains("CircuitReqAccepted"),
-        "relay did not accept a circuit\nrelay log:\n{relay_log}\nnode-a log:\n{node_a_log}\nnode-b log:\n{}",
-        read_log(&temp_dir.join("node-b.log"))
+        "relay did not accept a circuit\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     assert!(
-        node_a_log.contains("event=dcutr_enabled")
-            && node_a_log.contains("event=autonat_enabled")
-            && node_a_log.contains("event=path_promoted_to_direct")
-            && node_a_log.contains("previous_path=circuit_relay")
-            && node_a_log.contains("current_path=direct_tcp_stream")
-            && node_a_log.contains("event=dcutr_hole_punch_result")
-            && node_a_log.contains("success=true"),
-        "node A did not promote from relay to a direct path with NAT traversal enabled\nnode-a log:\n{node_a_log}\nnode-b log:\n{}\nrelay log:\n{relay_log}",
-        read_log(&temp_dir.join("node-b.log"))
+        initiator_log.contains("event=dcutr_enabled")
+            && initiator_log.contains("event=autonat_enabled")
+            && initiator_log.contains("event=path_promoted_to_direct")
+            && initiator_log.contains("previous_path=circuit_relay")
+            && initiator_log.contains("current_path=direct_tcp_stream")
+            && initiator_log.contains("event=dcutr_hole_punch_result")
+            && initiator_log.contains("success=true"),
+        "node A did not promote from relay to a direct path with NAT traversal enabled\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nrelay log:\n{relay_log}",
     );
+    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     let _ = fs::remove_dir_all(temp_dir);
 }
 
@@ -947,6 +949,12 @@ fn relay_promotion_overlay_config(
 ) -> Config {
     let mut config = relay_overlay_config(role, local, remote, relay);
     config.network.discovery = relay_promotion_test_discovery();
+    let packet_endpoint = match role {
+        "a" => "10.251.0.1:43201",
+        "b" => "10.251.0.2:43202",
+        other => panic!("unknown relay promotion node role {other}"),
+    };
+    enable_test_packet_plane(&mut config, packet_endpoint);
     config
 }
 

@@ -2940,6 +2940,7 @@ fn handle_control_response_event(
                 maybe_send_packet_plane_hello(
                     swarm,
                     forwarder,
+                    paths,
                     packet_plane,
                     packet_plane_negotiator,
                     identity,
@@ -3134,6 +3135,7 @@ enum PacketPlaneNegotiationError {
     Encode(PacketPlaneHandshakeError),
     Session(PacketPlaneSessionError),
     NoPendingHello,
+    NoDirectNegotiationPath,
 }
 
 impl PacketPlaneNegotiationError {
@@ -3149,6 +3151,7 @@ impl PacketPlaneNegotiationError {
             Self::Encode(error) => format!("encode: {error:?}"),
             Self::Session(error) => format!("session: {error:?}"),
             Self::NoPendingHello => "no_pending_hello".to_owned(),
+            Self::NoDirectNegotiationPath => "no_direct_negotiation_path".to_owned(),
         }
     }
 }
@@ -3157,6 +3160,7 @@ impl PacketPlaneNegotiationError {
 fn maybe_send_packet_plane_hello(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
+    paths: &PathSet,
     packet_plane: &PacketPlaneRuntime,
     negotiator: &mut PacketPlaneNegotiator,
     identity: &NodeIdentity,
@@ -3171,6 +3175,7 @@ fn maybe_send_packet_plane_hello(
         || !remote_capabilities.supports_quic_datagrams
         || remote_capabilities.packet_endpoint_candidates.is_empty()
         || !local_capabilities.supports_quic_datagrams
+        || !has_direct_packet_plane_negotiation_path(paths, remote_overlay)
         || packet_plane.has_session(remote_overlay)
         || negotiator.has_pending(remote_overlay)
         || local_overlay.as_bytes() > remote_overlay.as_bytes()
@@ -3209,6 +3214,12 @@ fn maybe_send_packet_plane_hello(
     }
 }
 
+fn has_direct_packet_plane_negotiation_path(paths: &PathSet, peer: PeerId) -> bool {
+    paths
+        .candidates_for(peer)
+        .any(|path| path.healthy && path.is_direct() && path.kind != PathKind::DirectQuicDatagram)
+}
+
 struct PacketPlaneAcceptContext<'a> {
     forwarder: &'a Forwarder,
     peer_capabilities: &'a PeerCapabilities,
@@ -3245,6 +3256,9 @@ fn accept_packet_plane_hello(
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
+    if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
+        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
+    }
     let remote_capabilities = context
         .peer_capabilities
         .get(remote_overlay)
@@ -3315,6 +3329,9 @@ fn complete_packet_plane_hello(
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
+    if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
+        return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
+    }
     let pending = context
         .negotiator
         .remove(remote_overlay)
@@ -3446,7 +3463,8 @@ const fn packet_plane_negotiation_rejection(
         | PacketPlaneNegotiationError::MissingRemoteEndpoint
         | PacketPlaneNegotiationError::Encode(_)
         | PacketPlaneNegotiationError::Session(_)
-        | PacketPlaneNegotiationError::NoPendingHello => {
+        | PacketPlaneNegotiationError::NoPendingHello
+        | PacketPlaneNegotiationError::NoDirectNegotiationPath => {
             ControlRejectionReason::UnsupportedPreferredPath
         }
     }
@@ -7513,6 +7531,26 @@ mod tests {
         negotiator.insert(responder_overlay, secret, verified_hello);
         let encoded_hello = hello.encode().expect("encoded hello");
 
+        let rejected_response = packet_plane_accept_response_for_peer(
+            PacketPlaneAcceptContext {
+                forwarder: &responder_forwarder,
+                peer_capabilities: &responder_peer_capabilities,
+                paths: &mut responder_paths,
+                metrics: &metrics,
+                packet_plane: &mut responder_packet_plane,
+                identity: &responder_identity,
+                local_capabilities: &responder_capabilities,
+            },
+            initiator_peer,
+            &encoded_hello,
+        );
+        assert_eq!(
+            rejected_response,
+            ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath)
+        );
+
+        responder_paths.record_established(initiator_overlay, PathKind::DirectTcpStream);
+        initiator_paths.record_established(responder_overlay, PathKind::DirectTcpStream);
         let response = packet_plane_accept_response_for_peer(
             PacketPlaneAcceptContext {
                 forwarder: &responder_forwarder,
@@ -7626,6 +7664,30 @@ mod tests {
                 best_path: Some(PathKind::DirectQuicDatagram)
             }
         );
+    }
+
+    #[test]
+    fn packet_plane_negotiation_waits_for_direct_transport_path() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        assert!(!has_direct_packet_plane_negotiation_path(
+            &paths,
+            remote_overlay
+        ));
+
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        assert!(!has_direct_packet_plane_negotiation_path(
+            &paths,
+            remote_overlay
+        ));
+
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        assert!(has_direct_packet_plane_negotiation_path(
+            &paths,
+            remote_overlay
+        ));
     }
 
     #[test]
