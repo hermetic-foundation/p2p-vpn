@@ -17,6 +17,9 @@ use p2p_vpn::{
         RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
     },
     identity::NodeIdentity,
+    invite::{
+        InviteExportOptions, InviteImportOptions, export_signed_invite_at, import_invite_config_at,
+    },
     runtime::{
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, build_node},
@@ -30,6 +33,7 @@ const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
+const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
 const RELAY_PROMOTION_TEST_NAME: &str = "tun_namespace_relay_overlay_promotes_to_direct_path";
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
@@ -62,6 +66,16 @@ fn tun_namespace_ping_crosses_relay_overlay() {
         Ok("orchestrator") => run_relay_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(RELAY_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_invite_import_crosses_relay_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_invite_relay_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(INVITE_RELAY_TEST_NAME),
     }
 }
 
@@ -356,6 +370,103 @@ fn run_relay_orchestrator() {
         "relay did not accept a circuit\nrelay log:\n{relay_log}\nnode-a log:\n{}\nnode-b log:\n{}",
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log"))
+    );
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+fn run_invite_relay_orchestrator() {
+    let identity_relay = NodeIdentity::generate_ed25519().expect("relay identity");
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-invite-relay-tun-e2e-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let start_relay = temp_dir.join("start-relay");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_a = invite_relay_overlay_config("a", &identity_a, &identity_b, &identity_relay);
+    let config_b = invite_relay_overlay_config("b", &identity_a, &identity_b, &identity_relay);
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+    write_child_config(&temp_dir, "a", &config_a);
+    write_child_config(&temp_dir, "b", &config_b);
+
+    let mut relay = spawn_node(
+        INVITE_RELAY_TEST_NAME,
+        "relay",
+        &identity_relay,
+        None,
+        None,
+        &temp_dir,
+        &start_relay,
+    );
+    let mut node_b = spawn_node(
+        INVITE_RELAY_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_b,
+    );
+    let mut node_a = spawn_node(
+        INVITE_RELAY_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_a,
+    );
+    wait_for_child_namespace(relay.id());
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_relay_underlay(relay.id(), node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+
+    fs::write(&start_relay, b"start").expect("write relay start file");
+    wait_for_file(&temp_dir.join("ready-relay"));
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    thread::sleep(Duration::from_secs(2));
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    thread::sleep(Duration::from_secs(1));
+
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    stop_child(&mut relay);
+    assert_ping_success(
+        "invite-imported relayed overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let relay_log = read_log(&temp_dir.join("node-relay.log"));
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
+    assert!(
+        relay_log.contains("CircuitReqAccepted"),
+        "relay did not accept a circuit for invite-imported config\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
+    );
+    assert!(
+        initiator_log.contains("control capabilities accepted"),
+        "invite-imported node did not exchange accepted capabilities\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     let _ = fs::remove_dir_all(temp_dir);
 }
@@ -790,29 +901,35 @@ fn run_node_child() {
         return;
     }
 
-    let remote = NodeIdentity {
-        peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
-        private_key: String::new(),
-    };
-    let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
-        .ok()
-        .map(|peer_id| NodeIdentity {
-            peer_id,
-            private_key: String::new(),
-        });
-    let config = if let Some(infra) = relay.as_ref() {
-        match role.as_str() {
-            "a" | "b" if is_dht_test_child() => dht_overlay_config(&role, &local, &remote, infra),
-            "a" | "b" if is_relay_promotion_test_child() => {
-                relay_promotion_overlay_config(&role, &local, &remote, infra)
-            }
-            "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
-            other => panic!("unknown node role {other}"),
-        }
-    } else if is_mdns_test_child() {
-        mdns_overlay_config(&role, &local, &remote)
+    let config = if is_invite_relay_test_child() {
+        read_child_config(&temp_dir, &role)
     } else {
-        direct_overlay_config(&role, &local, &remote)
+        let remote = NodeIdentity {
+            peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
+            private_key: String::new(),
+        };
+        let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
+            .ok()
+            .map(|peer_id| NodeIdentity {
+                peer_id,
+                private_key: String::new(),
+            });
+        if let Some(infra) = relay.as_ref() {
+            match role.as_str() {
+                "a" | "b" if is_dht_test_child() => {
+                    dht_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" if is_relay_promotion_test_child() => {
+                    relay_promotion_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
+                other => panic!("unknown node role {other}"),
+            }
+        } else if is_mdns_test_child() {
+            mdns_overlay_config(&role, &local, &remote)
+        } else {
+            direct_overlay_config(&role, &local, &remote)
+        }
     };
     let interface = config.interface.name.clone();
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
@@ -956,6 +1073,76 @@ fn relay_promotion_overlay_config(
     };
     enable_test_packet_plane(&mut config, packet_endpoint);
     config
+}
+
+fn invite_relay_overlay_config(
+    role: &str,
+    joining_node: &NodeIdentity,
+    source_node: &NodeIdentity,
+    relay: &NodeIdentity,
+) -> Config {
+    let relay_base = format!(
+        "/ip4/10.251.0.254/tcp/42200/p2p/{}/p2p-circuit",
+        relay.peer_id
+    );
+    let source_relayed_address = format!("{relay_base}/p2p/{}", source_node.peer_id);
+    let joining_relayed_address = format!("{relay_base}/p2p/{}", joining_node.peer_id);
+    let mut inviter_config = relay_overlay_config("b", source_node, joining_node, relay);
+    inviter_config.network.external_addresses = vec![source_relayed_address];
+    inviter_config.peers[0].addresses = vec![joining_relayed_address];
+    let mut invite_export_config = inviter_config.clone();
+    invite_export_config.network.listen_addresses = Vec::new();
+    let invite =
+        export_signed_invite_at(&invite_export_config, InviteExportOptions::default(), 1_000)
+            .expect("relay-assisted invite");
+
+    match role {
+        "a" => {
+            let mut config = import_invite_config_at(
+                &invite,
+                InviteImportOptions {
+                    identity: joining_node.clone(),
+                    interface_name: "hse2ea".to_owned(),
+                    mtu: 1280,
+                    local_routes: vec![RouteConfig {
+                        prefix: "10.41.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
+                    peer_name: Some("inviter".to_owned()),
+                },
+                1_000,
+            )
+            .expect("import relay-assisted invite");
+            assert!(!config.network.relay.reservations.is_empty());
+            config.network.listen_addresses = vec!["/ip4/10.251.0.1/tcp/42201".to_owned()];
+            config.network.relay.reservations = Vec::new();
+            config.validate_runtime().expect("invited runtime config");
+            config
+        }
+        "b" => {
+            inviter_config
+                .validate_runtime()
+                .expect("inviter runtime config");
+            inviter_config
+        }
+        other => panic!("unknown invite relay node role {other}"),
+    }
+}
+
+fn write_child_config(temp_dir: &Path, role: &str, config: &Config) {
+    let bytes = serde_json::to_vec(config).expect("serialize child config");
+    fs::write(child_config_path(temp_dir, role), bytes).expect("write child config");
+}
+
+fn read_child_config(temp_dir: &Path, role: &str) -> Config {
+    let bytes = fs::read(child_config_path(temp_dir, role)).expect("read child config");
+    let config = serde_json::from_slice::<Config>(&bytes).expect("parse child config");
+    config.validate_runtime().expect("valid child config");
+    config
+}
+
+fn child_config_path(temp_dir: &Path, role: &str) -> PathBuf {
+    temp_dir.join(format!("config-{role}.json"))
 }
 
 fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
@@ -1401,6 +1588,10 @@ fn is_mdns_test_child() -> bool {
 
 fn is_relay_promotion_test_child() -> bool {
     env::args().any(|argument| argument == RELAY_PROMOTION_TEST_NAME)
+}
+
+fn is_invite_relay_test_child() -> bool {
+    env::args().any(|argument| argument == INVITE_RELAY_TEST_NAME)
 }
 
 fn peer_config(

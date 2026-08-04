@@ -470,9 +470,10 @@ nix run .#tun-e2e
 ```
 
 The namespace suite covers direct static peer addresses, mDNS peer discovery,
-Kademlia/bootstrap peer discovery, circuit-relay fallback, and relay-to-direct
-promotion with DCUtR and AutoNAT enabled. To run only the NAT traversal and path
-promotion case:
+Kademlia/bootstrap peer discovery, circuit-relay fallback, signed-invite
+onboarding over a relayed inviter address, and relay-to-direct promotion with
+DCUtR and AutoNAT enabled. To run only the NAT traversal and path promotion
+case:
 
 ```sh
 nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
