@@ -47,6 +47,8 @@ pub struct ServiceStatusResponse {
     pub packet_header_len: usize,
     pub effective_mtu: u16,
     pub supports_quic_datagrams: bool,
+    #[serde(default)]
+    pub packet_plane_session_ttl_seconds: Option<u64>,
 }
 
 impl ServiceStatusResponse {
@@ -66,7 +68,14 @@ impl ServiceStatusResponse {
             packet_header_len: HEADER_LEN,
             effective_mtu,
             supports_quic_datagrams: false,
+            packet_plane_session_ttl_seconds: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_packet_plane_session_ttl_seconds(mut self, session_ttl_seconds: u64) -> Self {
+        self.packet_plane_session_ttl_seconds = Some(session_ttl_seconds);
+        self
     }
 }
 
@@ -298,6 +307,43 @@ mod tests {
             .expect("read");
 
         assert_eq!(decoded, response);
+    }
+
+    #[tokio::test]
+    async fn service_codec_round_trips_status_response_with_packet_plane_ttl() {
+        let mut codec = ServiceCodec;
+        let protocol = StreamProtocol::new(SERVICE_PROTOCOL);
+        let response = ServiceResponse::Status(
+            ServiceStatusResponse::local("lab", Some("member".to_owned()), 42, 1280)
+                .with_packet_plane_session_ttl_seconds(123),
+        );
+        let mut written = Cursor::new(Vec::new());
+
+        request_response::Codec::write_response(
+            &mut codec,
+            &protocol,
+            &mut written,
+            response.clone(),
+        )
+        .await
+        .expect("write");
+
+        written.set_position(0);
+        let decoded = request_response::Codec::read_response(&mut codec, &protocol, &mut written)
+            .await
+            .expect("read");
+
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn status_response_decodes_missing_packet_plane_ttl_as_unknown() {
+        let decoded = serde_json::from_str::<ServiceStatusResponse>(
+            r#"{"network_name":"lab","membership_tag":null,"nonce":42,"wire_version":1,"packet_protocol":"/p2p-vpn/packet/1","packet_header_len":25,"effective_mtu":1280,"supports_quic_datagrams":false}"#,
+        )
+        .expect("status response");
+
+        assert_eq!(decoded.packet_plane_session_ttl_seconds, None);
     }
 
     #[tokio::test]

@@ -432,6 +432,7 @@ where
                         identity: &node.identity,
                         packet_plane: &mut packet_plane,
                         packet_plane_negotiator: &mut packet_plane_negotiator,
+                        packet_plane_session_ttl,
                     },
                     event,
                 )?;
@@ -2492,6 +2493,7 @@ struct SwarmEventContext<'a> {
     identity: &'a NodeIdentity,
     packet_plane: &'a mut PacketPlaneRuntime,
     packet_plane_negotiator: &'a mut PacketPlaneNegotiator,
+    packet_plane_session_ttl: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -3145,6 +3147,7 @@ fn handle_service_request(
                 &request,
                 context.local_capabilities,
                 context.previous_membership_tags,
+                context.packet_plane_session_ttl,
             );
             match &response {
                 ServiceResponse::Status(_) => context.metrics.record_service_status_accept(),
@@ -3360,6 +3363,7 @@ fn service_status_response_for_peer(
     request: &ServiceStatusRequest,
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
+    packet_plane_session_ttl: Duration,
 ) -> ServiceResponse {
     if !forwarder.is_configured_transport_peer(peer) {
         return ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer);
@@ -3374,12 +3378,15 @@ fn service_status_response_for_peer(
         return ServiceResponse::Rejected(reason);
     }
 
-    ServiceResponse::Status(ServiceStatusResponse::local(
-        &local_capabilities.network_name,
-        local_capabilities.membership_tag.clone(),
-        request.nonce,
-        local_capabilities.effective_mtu,
-    ))
+    ServiceResponse::Status(
+        ServiceStatusResponse::local(
+            &local_capabilities.network_name,
+            local_capabilities.membership_tag.clone(),
+            request.nonce,
+            local_capabilities.effective_mtu,
+        )
+        .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs()),
+    )
 }
 
 fn validate_peer_capabilities(
@@ -6678,8 +6685,12 @@ mod tests {
                 &ServiceStatusRequest::local("lab", None, 42),
                 &local_capabilities,
                 &[],
+                Duration::from_secs(123),
             ),
-            ServiceResponse::Status(ServiceStatusResponse::local("lab", None, 42, 1280))
+            ServiceResponse::Status(
+                ServiceStatusResponse::local("lab", None, 42, 1280)
+                    .with_packet_plane_session_ttl_seconds(123)
+            )
         );
     }
 
@@ -6700,6 +6711,7 @@ mod tests {
                 &ServiceStatusRequest::local("lab", Some("expected".to_owned()), 1),
                 &local_capabilities,
                 &[],
+                Duration::from_secs(123),
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer)
         );
@@ -6710,6 +6722,7 @@ mod tests {
                 &ServiceStatusRequest::local("prod", Some("expected".to_owned()), 1),
                 &local_capabilities,
                 &[],
+                Duration::from_secs(123),
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork)
         );
@@ -6720,6 +6733,7 @@ mod tests {
                 &ServiceStatusRequest::local("lab", Some("wrong".to_owned()), 1),
                 &local_capabilities,
                 &[],
+                Duration::from_secs(123),
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::MembershipMismatch)
         );

@@ -129,6 +129,7 @@ pub async fn query_peer_status(
                         peer,
                         service_request,
                         REMOTE_STATUS_NONCE,
+                        config.network.packet_plane.session_ttl(),
                         event,
                         &mut service,
                     )?;
@@ -260,6 +261,7 @@ fn handle_service_event(
     target_peer: Libp2pPeerId,
     expected_request: Option<OutboundRequestId>,
     expected_nonce: u64,
+    packet_plane_session_ttl: Duration,
     event: request_response::Event<ServiceRequest, ServiceResponse>,
     service: &mut Option<ServiceStatusResponse>,
 ) -> Result<(), RemoteQueryError> {
@@ -277,6 +279,7 @@ fn handle_service_event(
                 request,
                 local_capabilities,
                 previous_membership_tags,
+                packet_plane_session_ttl,
             );
             swarm
                 .behaviour_mut()
@@ -365,6 +368,7 @@ fn inbound_service_response(
     request: ServiceRequest,
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
+    packet_plane_session_ttl: Duration,
 ) -> ServiceResponse {
     match request {
         ServiceRequest::Status(request) => {
@@ -379,12 +383,15 @@ fn inbound_service_response(
             ) {
                 return ServiceResponse::Rejected(reason);
             }
-            ServiceResponse::Status(ServiceStatusResponse::local(
-                &local_capabilities.network_name,
-                local_capabilities.membership_tag.clone(),
-                request.nonce,
-                local_capabilities.effective_mtu,
-            ))
+            ServiceResponse::Status(
+                ServiceStatusResponse::local(
+                    &local_capabilities.network_name,
+                    local_capabilities.membership_tag.clone(),
+                    request.nonce,
+                    local_capabilities.effective_mtu,
+                )
+                .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs()),
+            )
         }
     }
 }
@@ -453,7 +460,7 @@ mod tests {
             .peer_id
             .parse::<Libp2pPeerId>()
             .expect("listener peer id");
-        let listener_config = test_config(
+        let mut listener_config = test_config(
             listener_identity.clone(),
             vec![PeerConfig {
                 id: client_identity.peer_id.clone(),
@@ -462,6 +469,7 @@ mod tests {
                 routes: Vec::new(),
             }],
         );
+        listener_config.network.packet_plane.session_ttl_seconds = 123;
         let mut listener = build_node(&HostConfig {
             identity: listener_identity,
             network_name: listener_config.network.name.clone(),
@@ -512,6 +520,7 @@ mod tests {
         assert_eq!(status.capabilities.network_name, "lab");
         assert_eq!(status.service.network_name, "lab");
         assert_eq!(status.service.effective_mtu, 1280);
+        assert_eq!(status.service.packet_plane_session_ttl_seconds, Some(123));
         assert!(status.capabilities.advertised_routes.len() >= 2);
         assert_ne!(client_peer, listener_peer);
     }
@@ -521,6 +530,7 @@ mod tests {
         config: Config,
     ) -> Result<(), RemoteQueryError> {
         let forwarder = Forwarder::from_config(&config)?;
+        let packet_plane_session_ttl = config.network.packet_plane.session_ttl();
         let local_capabilities =
             ControlCapabilities::local(&node.network_name, None, config.effective_packet_mtu())
                 .with_advertised_routes(forwarder.local_advertised_routes());
@@ -566,6 +576,7 @@ mod tests {
                         request,
                         &local_capabilities,
                         &[],
+                        packet_plane_session_ttl,
                     );
                     node.swarm
                         .behaviour_mut()

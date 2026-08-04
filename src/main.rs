@@ -1423,6 +1423,11 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         status.peer, status.service.supports_quic_datagrams
     ));
     lines.push(format!(
+        "peer live packet plane session ttl seconds: {} {}",
+        status.peer,
+        optional_seconds(status.service.packet_plane_session_ttl_seconds)
+    ));
+    lines.push(format!(
         "peer live preferred path: {} {}",
         status.peer,
         path_name(
@@ -1900,6 +1905,10 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
             status.service.supports_quic_datagrams
         ),
         format!(
+            "packet plane session ttl seconds: {}",
+            optional_seconds(status.service.packet_plane_session_ttl_seconds)
+        ),
+        format!(
             "preferred path: {}",
             path_name(
                 PathKind::from_wire_name(&status.capabilities.preferred_path)
@@ -1920,6 +1929,10 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
     }
 
     lines
+}
+
+fn optional_seconds(value: Option<u64>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
 }
 
 async fn up(
@@ -2420,7 +2433,8 @@ mod tests {
         let status = RemotePeerStatus {
             peer,
             capabilities,
-            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200),
+            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+                .with_packet_plane_session_ttl_seconds(321),
         };
 
         let lines = peer_status_lines(&status);
@@ -2428,6 +2442,11 @@ mod tests {
         assert!(lines.iter().any(|line| line == &format!("peer: {peer}")));
         assert!(lines.iter().any(|line| line == "network: lab"));
         assert!(lines.iter().any(|line| line == "effective mtu: 1200"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "packet plane session ttl seconds: 321")
+        );
         assert!(
             lines
                 .iter()
@@ -2547,6 +2566,10 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == &format!("peer live mtu: {peer} 1200"))
+        );
+        assert!(
+            lines.iter().any(|line| line
+                == &format!("peer live packet plane session ttl seconds: {peer} unknown"))
         );
         assert!(lines.iter().any(|line| line
             == &format!("peer live preferred path: {peer} direct QUIC stream")));

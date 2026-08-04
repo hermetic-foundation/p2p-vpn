@@ -723,7 +723,9 @@ runtime. The target peer must already be present in `peers`; the response is
 accepted only when the remote advertises the expected network, membership tag,
 wire protocol, MTU shape, preferred path, and route ownership. The output shows
 the validated packet protocol, effective MTU, QUIC datagram support flag,
-preferred path, and advertised routes.
+packet-plane session TTL when the peer reports it, preferred path, and
+advertised routes. Older peers that do not report the TTL are shown as
+`unknown`.
 
 Run as a NixOS service:
 
