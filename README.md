@@ -840,9 +840,12 @@ temporary node through the relay. With `--require-dcutr-success`, it also gives
 both temporary nodes direct listen sockets and fails unless libp2p reports a
 successful DCUtR hole-punch event. Repeat `--relay-candidate` to try a small
 candidate set; the command stops after the first usable relay and prints
-candidate-level failures when none work. Each supplied relay multiaddr must be
-the relay's direct address with its `/p2p/RELAY` peer ID and without
-`/p2p-circuit`.
+candidate-level failures when none work. Failed candidates report whether relay
+reservation acceptance or relayed listen-address publication timed out; when the
+probe reaches the bootstrap-check phase, the failed candidate also includes the
+same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
+`bootstrap-check`. Each supplied relay multiaddr must be the relay's direct
+address with its `/p2p/RELAY` peer ID and without `/p2p-circuit`.
 
 The ignored tests run the same kind of probe from the test harness:
 

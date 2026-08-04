@@ -101,7 +101,11 @@ nix develop -c cargo run -- relay-check \
 
 The command tries candidates until one works, reports per-candidate failures,
 and requires direct relay multiaddrs with `/p2p/RELAY` but without
-`/p2p-circuit`.
+`/p2p-circuit`. Reservation setup failures identify whether relay reservation
+acceptance or relayed listen-address publication timed out. Failures after
+reservation setup include the same detailed bootstrap-check lines that
+successful candidates print, so failed relayed-circuit and DCUtR probes show
+which prerequisite was missing.
 
 The ignored test harness can run the same live checks:
 
@@ -140,3 +144,21 @@ relay service: all four candidates timed out waiting for relay reservation
 acceptance. That means the public Identify scan is operational, but public
 reservation and public-relay-assisted DCUtR evidence still require a relay that
 both advertises hop support and accepts reservations at the time of the smoke.
+
+Additional short validation on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --check-candidates --timeout-seconds 10 --candidate-timeout-seconds 3 --max-candidates 1
+public relay scan: ok
+public relay scan peers: 5
+public relay scan connected: 2
+public relay scan identified: 1
+public relay scan relay_capable: 1
+public relay candidates: 1
+public relay scan validation: public relay probe: failed
+public relay scan validation: public relay candidate: /ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ succeeded false error relay reservation timed out accepted false relayed_listen_address false
+```
+
+This confirms the validation path distinguishes a relay-hop advertisement from
+reservation readiness and reports which reservation prerequisites were not
+observed before timeout.

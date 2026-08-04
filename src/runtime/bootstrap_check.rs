@@ -297,6 +297,28 @@ pub struct PublicRelayCandidateReport {
 }
 
 #[derive(Debug)]
+struct PublicRelayProbeFailure {
+    message: String,
+    bootstrap: Option<BootstrapCheckReport>,
+}
+
+impl PublicRelayProbeFailure {
+    fn without_bootstrap(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            bootstrap: None,
+        }
+    }
+
+    fn with_bootstrap(message: impl Into<String>, bootstrap: BootstrapCheckReport) -> Self {
+        Self {
+            message: message.into(),
+            bootstrap: Some(bootstrap),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct PublicRelayScanReport {
     pub scanned_bootstrap_peers: usize,
     pub connected_bootstrap_peers: usize,
@@ -358,9 +380,7 @@ impl PublicRelayProbeReport {
                 candidate.succeeded,
                 candidate.error.as_deref().unwrap_or("none")
             ));
-            if candidate.succeeded
-                && let Some(report) = &candidate.bootstrap
-            {
+            if let Some(report) = &candidate.bootstrap {
                 for line in report.lines() {
                     lines.push(format!("public relay candidate detail: {line}"));
                 }
@@ -619,11 +639,11 @@ pub async fn check_public_relay_candidates(
                 error: None,
                 bootstrap: Some(report),
             },
-            Err(error) => PublicRelayCandidateReport {
+            Err(failure) => PublicRelayCandidateReport {
                 address: relay_address.to_string(),
                 succeeded: false,
-                error: Some(error),
-                bootstrap: None,
+                error: Some(failure.message),
+                bootstrap: failure.bootstrap,
             },
         };
         let succeeded = candidate.succeeded;
@@ -707,13 +727,15 @@ fn relayed_peer_results(
 async fn live_public_relayed_peer_circuit(
     relay_address: &Multiaddr,
     timeout: Duration,
-) -> Result<BootstrapCheckReport, String> {
-    let relay_peer = address_peer(relay_address)
-        .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+) -> Result<BootstrapCheckReport, PublicRelayProbeFailure> {
+    let relay_peer = address_peer(relay_address).ok_or_else(|| {
+        PublicRelayProbeFailure::without_bootstrap("live relay multiaddr must include /p2p/RELAY")
+    })?;
     let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
     let discovery = relay_probe_discovery();
     let mut listener_node = build_node(&HostConfig {
-        identity: NodeIdentity::generate_ed25519().map_err(|error| format!("{error:?}"))?,
+        identity: NodeIdentity::generate_ed25519()
+            .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?,
         network_name: "lab".to_owned(),
         membership_tag: None,
         mtu: 1280,
@@ -729,20 +751,18 @@ async fn live_public_relayed_peer_circuit(
         resources: ResourceConfig::default(),
         discovery: discovery.clone(),
     })
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
     let listener_peer = listener_node.local_peer_id;
     let relayed_target_address = relay_reservation.with(Protocol::P2p(listener_peer));
 
-    tokio::time::timeout(
+    wait_for_external_relay_reservation(
+        &mut listener_node,
+        relayed_target_address.clone(),
+        relay_peer,
         timeout,
-        wait_for_external_relay_reservation(
-            &mut listener_node,
-            relayed_target_address.clone(),
-            relay_peer,
-        ),
     )
     .await
-    .map_err(|_| "relay reservation timed out".to_owned())?;
+    .map_err(PublicRelayProbeFailure::without_bootstrap)?;
 
     let _listener_task = tokio::spawn(async move {
         loop {
@@ -750,7 +770,8 @@ async fn live_public_relayed_peer_circuit(
         }
     });
 
-    let config = relay_probe_config_with_relayed_peer(listener_peer, &relayed_target_address)?;
+    let config = relay_probe_config_with_relayed_peer(listener_peer, &relayed_target_address)
+        .map_err(PublicRelayProbeFailure::without_bootstrap)?;
     let report = check_config_bootstrap(
         &config,
         timeout,
@@ -764,25 +785,30 @@ async fn live_public_relayed_peer_circuit(
         },
     )
     .await
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
 
     if report.succeeded() {
         Ok(report)
     } else {
-        Err(format!("{report:?}"))
+        Err(PublicRelayProbeFailure::with_bootstrap(
+            "relayed peer circuit check did not meet success threshold",
+            report,
+        ))
     }
 }
 
 async fn live_public_dcutr_success(
     relay_address: &Multiaddr,
     timeout: Duration,
-) -> Result<BootstrapCheckReport, String> {
-    let relay_peer = address_peer(relay_address)
-        .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+) -> Result<BootstrapCheckReport, PublicRelayProbeFailure> {
+    let relay_peer = address_peer(relay_address).ok_or_else(|| {
+        PublicRelayProbeFailure::without_bootstrap("live relay multiaddr must include /p2p/RELAY")
+    })?;
     let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
     let discovery = dcutr_probe_discovery();
     let mut listener_node = build_node(&HostConfig {
-        identity: NodeIdentity::generate_ed25519().map_err(|error| format!("{error:?}"))?,
+        identity: NodeIdentity::generate_ed25519()
+            .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?,
         network_name: "lab".to_owned(),
         membership_tag: None,
         mtu: 1280,
@@ -798,20 +824,18 @@ async fn live_public_dcutr_success(
         resources: ResourceConfig::default(),
         discovery,
     })
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
     let listener_peer = listener_node.local_peer_id;
     let relayed_target_address = relay_reservation.with(Protocol::P2p(listener_peer));
 
-    tokio::time::timeout(
+    wait_for_external_relay_reservation(
+        &mut listener_node,
+        relayed_target_address.clone(),
+        relay_peer,
         timeout,
-        wait_for_external_relay_reservation(
-            &mut listener_node,
-            relayed_target_address.clone(),
-            relay_peer,
-        ),
     )
     .await
-    .map_err(|_| "relay reservation timed out".to_owned())?;
+    .map_err(PublicRelayProbeFailure::without_bootstrap)?;
 
     let _listener_task = tokio::spawn(async move {
         loop {
@@ -823,7 +847,8 @@ async fn live_public_dcutr_success(
         listener_peer,
         &relayed_target_address,
         dcutr_probe_discovery(),
-    )?;
+    )
+    .map_err(PublicRelayProbeFailure::without_bootstrap)?;
     config.network.listen_addresses = vec!["/ip4/0.0.0.0/tcp/0".to_owned()];
     let report = check_config_bootstrap(
         &config,
@@ -838,12 +863,15 @@ async fn live_public_dcutr_success(
         },
     )
     .await
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
 
     if report.succeeded() {
         Ok(report)
     } else {
-        Err(format!("{report:?}"))
+        Err(PublicRelayProbeFailure::with_bootstrap(
+            "dcutr success check did not meet success threshold",
+            report,
+        ))
     }
 }
 
@@ -851,12 +879,19 @@ async fn wait_for_external_relay_reservation(
     listener: &mut P2pNode,
     relayed_address: Multiaddr,
     relay_peer: Libp2pPeerId,
-) {
+    timeout: Duration,
+) -> Result<(), String> {
     let mut listen_addr_reported = false;
     let mut reservation_accepted = false;
+    let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
-    loop {
-        match listener.swarm.select_next_some().await {
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Ok(event) = tokio::time::timeout(remaining, listener.swarm.select_next_some()).await
+        else {
+            break;
+        };
+        match event {
             SwarmEvent::Behaviour(BehaviourEvent::Relay(
                 relay::client::Event::ReservationReqAccepted {
                     relay_peer_id,
@@ -873,9 +908,13 @@ async fn wait_for_external_relay_reservation(
         }
 
         if listen_addr_reported && reservation_accepted {
-            return;
+            return Ok(());
         }
     }
+
+    Err(format!(
+        "relay reservation timed out accepted {reservation_accepted} relayed_listen_address {listen_addr_reported}"
+    ))
 }
 
 fn address_peer(address: &Multiaddr) -> Option<Libp2pPeerId> {
@@ -1729,6 +1768,76 @@ mod tests {
             report
                 .lines()
                 .contains(&"public relay probe: ok".to_owned())
+        );
+    }
+
+    #[test]
+    fn public_relay_probe_lines_include_failed_candidate_bootstrap_detail() {
+        let relay = peer_id();
+        let report = PublicRelayProbeReport {
+            mode: PublicRelayProbeMode::DcutrSuccess,
+            candidates: vec![PublicRelayCandidateReport {
+                address: format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}"),
+                succeeded: false,
+                error: Some("dcutr success check did not meet success threshold".to_owned()),
+                bootstrap: Some(dcutr_success_report(true, 0, 0)),
+            }],
+        };
+
+        let lines = report.lines();
+
+        assert!(!report.succeeded());
+        assert!(lines.contains(&"public relay probe: failed".to_owned()));
+        assert!(lines.iter().any(|line| line
+            .contains("public relay candidate detail: bootstrap check: failed")));
+        assert!(lines.iter().any(|line| {
+            line.contains("public relay candidate detail: require dcutr success: true")
+        }));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("public relay candidate detail: dcutr successes: 0"))
+        );
+    }
+
+    #[tokio::test]
+    async fn external_relay_reservation_timeout_reports_missing_steps() {
+        let relay = peer_id();
+        let mut listener_node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: relay_test_discovery(),
+        })
+        .expect("listener node");
+        let relayed_address: Multiaddr =
+            format!("/memory/9/p2p/{relay}/p2p-circuit/p2p/{}", peer_id())
+                .parse()
+                .expect("relayed address");
+
+        let error = wait_for_external_relay_reservation(
+            &mut listener_node,
+            relayed_address,
+            relay,
+            Duration::from_millis(1),
+        )
+        .await
+        .expect_err("reservation should time out");
+
+        assert_eq!(
+            error,
+            "relay reservation timed out accepted false relayed_listen_address false"
         );
     }
 
