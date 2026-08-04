@@ -21,10 +21,10 @@ pub enum BootstrapCheckThreshold {
 #[derive(Debug)]
 pub struct BootstrapCheckReport {
     pub threshold: BootstrapCheckThreshold,
-    pub require_relay_reservations: bool,
-    pub require_autonat_status: bool,
+    pub requirements: BootstrapCheckRequirements,
     pub kademlia_protocol: String,
     pub ipfs_compatible: bool,
+    pub dcutr: BootstrapDcutrCheck,
     pub configured_bootstrap_peers: usize,
     pub connected_bootstrap_peers: usize,
     pub dial_failures: usize,
@@ -39,11 +39,24 @@ pub struct BootstrapCheckReport {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BootstrapCheckRequirements {
+    pub relay_reservations: bool,
+    pub autonat_status: bool,
+    pub dcutr_ready: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BootstrapAutoNatStatus {
     #[default]
     Unknown,
     Public,
     Private,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BootstrapDcutrCheck {
+    pub enabled: bool,
+    pub ready: bool,
 }
 
 #[derive(Debug, Default)]
@@ -64,17 +77,24 @@ impl BootstrapCheckReport {
                     self.connected_bootstrap_peers == self.configured_bootstrap_peers
                 }
             };
-        let relay_ok = !self.require_relay_reservations
-            || (self.configured_relay_reservations > 0
-                && self.accepted_relay_reservations == self.configured_relay_reservations
-                && self.relayed_listen_addresses >= self.configured_relay_reservations);
-        let autonat_ok = !self.require_autonat_status
+        let relay_ready = relay_reservations_ready(
+            self.configured_relay_reservations,
+            self.accepted_relay_reservations,
+            self.relayed_listen_addresses,
+        );
+        let relay_ok = !self.requirements.relay_reservations || relay_ready;
+        let autonat_ok = !self.requirements.autonat_status
             || (self.autonat_probe_servers_registered > 0 && self.autonat_status.is_observed());
+        let dcutr_ok = !self.requirements.dcutr_ready || self.dcutr.ready;
 
-        (has_bootstrap_work || self.require_relay_reservations || self.require_autonat_status)
+        (has_bootstrap_work
+            || self.requirements.relay_reservations
+            || self.requirements.autonat_status
+            || self.requirements.dcutr_ready)
             && bootstrap_ok
             && relay_ok
             && autonat_ok
+            && dcutr_ok
     }
 
     #[must_use]
@@ -87,11 +107,17 @@ impl BootstrapCheckReport {
             format!("success threshold: {}", self.threshold.as_str()),
             format!(
                 "require relay reservations: {}",
-                self.require_relay_reservations
+                self.requirements.relay_reservations
             ),
-            format!("require autonat status: {}", self.require_autonat_status),
+            format!(
+                "require autonat status: {}",
+                self.requirements.autonat_status
+            ),
+            format!("require dcutr ready: {}", self.requirements.dcutr_ready),
             format!("kademlia protocol: {}", self.kademlia_protocol),
             format!("ipfs compatible: {}", self.ipfs_compatible),
+            format!("dcutr enabled: {}", self.dcutr.enabled),
+            format!("dcutr ready: {}", self.dcutr.ready),
             format!(
                 "kademlia bootstrap started: {}",
                 self.kademlia.bootstrap_started
@@ -186,8 +212,7 @@ pub async fn check_config_bootstrap(
     config: &Config,
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
-    require_relay_reservations: bool,
-    require_autonat_status: bool,
+    requirements: BootstrapCheckRequirements,
 ) -> Result<BootstrapCheckReport, BootstrapCheckError> {
     config.validate_runtime()?;
     let mut node = build_node(&bootstrap_check_host_config(config)?)?;
@@ -199,17 +224,25 @@ pub async fn check_config_bootstrap(
         &relay_reservations,
         timeout,
         threshold,
-        require_relay_reservations,
-        require_autonat_status,
+        requirements,
     )
     .await;
+    let dcutr_ready = node.startup.dcutr_enabled
+        && relay_reservations_ready(
+            relay_reservations.len(),
+            poll.accepted_relay_reservations.len(),
+            poll.relayed_listen_addresses.len(),
+        );
 
     Ok(BootstrapCheckReport {
         threshold,
-        require_relay_reservations,
-        require_autonat_status,
+        requirements,
         kademlia_protocol: node.discovery.kademlia_protocol.clone(),
         ipfs_compatible: node.discovery.kademlia_protocol == "/ipfs/kad/1.0.0",
+        dcutr: BootstrapDcutrCheck {
+            enabled: node.startup.dcutr_enabled,
+            ready: dcutr_ready,
+        },
         configured_bootstrap_peers: bootstrap_peers.len(),
         connected_bootstrap_peers: poll.connected_bootstrap_peers.len(),
         dial_failures: poll.dial_failures.len(),
@@ -280,8 +313,7 @@ async fn poll_bootstrap_events(
     relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
-    require_relay_reservations: bool,
-    require_autonat_status: bool,
+    requirements: BootstrapCheckRequirements,
 ) -> BootstrapPollResult {
     let mut result = BootstrapPollResult {
         connected_bootstrap_peers: bootstrap_peers
@@ -296,11 +328,10 @@ async fn poll_bootstrap_events(
         threshold,
         configured_bootstrap_peers: bootstrap_peers.len(),
         connected_bootstrap_peers: result.connected_bootstrap_peers.len(),
-        require_relay_reservations,
+        requirements,
         configured_relay_reservations: relay_reservations.len(),
         accepted_relay_reservations: result.accepted_relay_reservations.len(),
         relayed_listen_addresses: result.relayed_listen_addresses.len(),
-        require_autonat_status,
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: result.autonat_status,
         now: Instant::now(),
@@ -374,11 +405,10 @@ struct PollingStatus {
     threshold: BootstrapCheckThreshold,
     configured_bootstrap_peers: usize,
     connected_bootstrap_peers: usize,
-    require_relay_reservations: bool,
+    requirements: BootstrapCheckRequirements,
     configured_relay_reservations: usize,
     accepted_relay_reservations: usize,
     relayed_listen_addresses: usize,
-    require_autonat_status: bool,
     autonat_probe_servers_registered: usize,
     autonat_status: BootstrapAutoNatStatus,
     now: Instant,
@@ -387,8 +417,9 @@ struct PollingStatus {
 
 fn should_continue_polling(status: PollingStatus) -> bool {
     if (status.configured_bootstrap_peers == 0
-        && !status.require_relay_reservations
-        && !status.require_autonat_status)
+        && !status.requirements.relay_reservations
+        && !status.requirements.autonat_status
+        && !status.requirements.dcutr_ready)
         || status.now >= status.deadline
     {
         return false;
@@ -401,15 +432,25 @@ fn should_continue_polling(status: PollingStatus) -> bool {
                 status.connected_bootstrap_peers < status.configured_bootstrap_peers
             }
         };
-    let relay_waiting = status.require_relay_reservations
+    let relay_waiting = (status.requirements.relay_reservations || status.requirements.dcutr_ready)
         && status.configured_relay_reservations > 0
         && (status.accepted_relay_reservations < status.configured_relay_reservations
             || status.relayed_listen_addresses < status.configured_relay_reservations);
-    let autonat_waiting = status.require_autonat_status
+    let autonat_waiting = status.requirements.autonat_status
         && status.autonat_probe_servers_registered > 0
         && !status.autonat_status.is_observed();
 
     bootstrap_waiting || relay_waiting || autonat_waiting
+}
+
+const fn relay_reservations_ready(
+    configured_relay_reservations: usize,
+    accepted_relay_reservations: usize,
+    relayed_listen_addresses: usize,
+) -> bool {
+    configured_relay_reservations > 0
+        && accepted_relay_reservations == configured_relay_reservations
+        && relayed_listen_addresses >= configured_relay_reservations
 }
 
 impl BootstrapAutoNatStatus {
@@ -503,8 +544,7 @@ mod tests {
             &config,
             Duration::from_secs(5),
             BootstrapCheckThreshold::Any,
-            false,
-            false,
+            BootstrapCheckRequirements::default(),
         )
         .await
         .expect("bootstrap check");
@@ -554,8 +594,11 @@ mod tests {
             &config,
             Duration::from_secs(5),
             BootstrapCheckThreshold::Any,
-            true,
-            false,
+            BootstrapCheckRequirements {
+                relay_reservations: true,
+                autonat_status: false,
+                dcutr_ready: true,
+            },
         )
         .await
         .expect("bootstrap check");
@@ -565,6 +608,8 @@ mod tests {
         assert_eq!(report.configured_relay_reservations, 1);
         assert_eq!(report.accepted_relay_reservations, 1);
         assert_eq!(report.relayed_listen_addresses, 1);
+        assert!(report.dcutr.enabled);
+        assert!(report.dcutr.ready);
         assert!(report.lines().contains(&"bootstrap check: ok".to_owned()));
     }
 
@@ -573,10 +618,17 @@ mod tests {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
         let report = BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::All,
-            require_relay_reservations: true,
-            require_autonat_status: true,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: true,
+                autonat_status: true,
+                dcutr_ready: true,
+            },
             kademlia_protocol: "/ipfs/kad/1.0.0".to_owned(),
             ipfs_compatible: true,
+            dcutr: BootstrapDcutrCheck {
+                enabled: true,
+                ready: false,
+            },
             configured_bootstrap_peers: 2,
             connected_bootstrap_peers: 1,
             dial_failures: 1,
@@ -611,7 +663,10 @@ mod tests {
         assert!(lines.contains(&"success threshold: all".to_owned()));
         assert!(lines.contains(&"require relay reservations: true".to_owned()));
         assert!(lines.contains(&"require autonat status: true".to_owned()));
+        assert!(lines.contains(&"require dcutr ready: true".to_owned()));
         assert!(lines.contains(&"ipfs compatible: true".to_owned()));
+        assert!(lines.contains(&"dcutr enabled: true".to_owned()));
+        assert!(lines.contains(&"dcutr ready: false".to_owned()));
         assert!(
             lines.contains(
                 &"relay reservations: 1 accepted 0 relayed_listen_addresses 0".to_owned()
@@ -628,6 +683,15 @@ mod tests {
         assert!(autonat_report(1, BootstrapAutoNatStatus::Public).succeeded());
         assert!(!autonat_report(1, BootstrapAutoNatStatus::Unknown).succeeded());
         assert!(!autonat_report(0, BootstrapAutoNatStatus::Private).succeeded());
+    }
+
+    #[test]
+    fn bootstrap_check_can_require_dcutr_ready_state() {
+        assert!(dcutr_report(true, 1, 1, 1).succeeded());
+        assert!(!dcutr_report(false, 1, 1, 1).succeeded());
+        assert!(!dcutr_report(true, 1, 0, 1).succeeded());
+        assert!(!dcutr_report(true, 1, 1, 0).succeeded());
+        assert!(!dcutr_report(true, 0, 0, 0).succeeded());
     }
 
     async fn next_listen_address(node: &mut crate::runtime::p2p::P2pNode) -> Multiaddr {
@@ -685,10 +749,17 @@ mod tests {
     ) -> BootstrapCheckReport {
         BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::Any,
-            require_relay_reservations: false,
-            require_autonat_status: true,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: false,
+                autonat_status: true,
+                dcutr_ready: false,
+            },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
+            dcutr: BootstrapDcutrCheck {
+                enabled: false,
+                ready: false,
+            },
             configured_bootstrap_peers: 0,
             connected_bootstrap_peers: 0,
             dial_failures: 0,
@@ -697,6 +768,44 @@ mod tests {
             relayed_listen_addresses: 0,
             autonat_probe_servers_registered,
             autonat_status,
+            kademlia: BootstrapKademliaCheck::default(),
+            peer_results: Vec::new(),
+            relay_results: Vec::new(),
+        }
+    }
+
+    fn dcutr_report(
+        dcutr_enabled: bool,
+        configured_relay_reservations: usize,
+        accepted_relay_reservations: usize,
+        relayed_listen_addresses: usize,
+    ) -> BootstrapCheckReport {
+        BootstrapCheckReport {
+            threshold: BootstrapCheckThreshold::Any,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: false,
+                autonat_status: false,
+                dcutr_ready: true,
+            },
+            kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
+            ipfs_compatible: false,
+            dcutr: BootstrapDcutrCheck {
+                enabled: dcutr_enabled,
+                ready: dcutr_enabled
+                    && relay_reservations_ready(
+                        configured_relay_reservations,
+                        accepted_relay_reservations,
+                        relayed_listen_addresses,
+                    ),
+            },
+            configured_bootstrap_peers: 0,
+            connected_bootstrap_peers: 0,
+            dial_failures: 0,
+            configured_relay_reservations,
+            accepted_relay_reservations,
+            relayed_listen_addresses,
+            autonat_probe_servers_registered: 0,
+            autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),

@@ -22,7 +22,9 @@ use p2p_vpn::{
     metrics::RuntimeMetrics,
     queue::QueueStats,
     runtime::{
-        bootstrap_check::{BootstrapCheckThreshold, check_config_bootstrap},
+        bootstrap_check::{
+            BootstrapCheckRequirements, BootstrapCheckThreshold, check_config_bootstrap,
+        },
         forward::session_id_for_peer,
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
         remote::{RemotePeerStatus, query_peer_status},
@@ -230,6 +232,8 @@ enum Command {
         require_relay_reservations: bool,
         #[arg(long)]
         require_autonat_status: bool,
+        #[arg(long)]
+        require_dcutr_ready: bool,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -476,13 +480,22 @@ async fn main() -> Result<(), String> {
             require_all,
             require_relay_reservations,
             require_autonat_status,
+            require_dcutr_ready,
         } => {
+            let threshold = if require_all {
+                BootstrapCheckThreshold::All
+            } else {
+                BootstrapCheckThreshold::Any
+            };
             Box::pin(bootstrap_check(
                 &config,
                 timeout_seconds,
-                require_all,
-                require_relay_reservations,
-                require_autonat_status,
+                threshold,
+                BootstrapCheckRequirements {
+                    relay_reservations: require_relay_reservations,
+                    autonat_status: require_autonat_status,
+                    dcutr_ready: require_dcutr_ready,
+                },
             ))
             .await
         }
@@ -1905,22 +1918,15 @@ async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result
 async fn bootstrap_check(
     path: &Path,
     timeout_seconds: u64,
-    require_all: bool,
-    require_relay_reservations: bool,
-    require_autonat_status: bool,
+    threshold: BootstrapCheckThreshold,
+    requirements: BootstrapCheckRequirements,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
-    let threshold = if require_all {
-        BootstrapCheckThreshold::All
-    } else {
-        BootstrapCheckThreshold::Any
-    };
     let report = Box::pin(check_config_bootstrap(
         &config,
         Duration::from_secs(timeout_seconds.max(1)),
         threshold,
-        require_relay_reservations,
-        require_autonat_status,
+        requirements,
     ))
     .await
     .map_err(|error| format!("bootstrap check failed to start: {error:?}"))?;

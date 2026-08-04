@@ -725,6 +725,7 @@ cargo run -- bootstrap-check --config p2p-vpn.json --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-all --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relay-reservations --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-autonat-status --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-ready --timeout-seconds 30
 ```
 
 `bootstrap-check` builds the same libp2p host used by the daemon, starts the
@@ -735,17 +736,20 @@ fits public IPFS bootstrap sets where individual public nodes can be
 temporarily unavailable. Use `--require-all` for private infrastructure where
 every configured bootstrap peer is expected to be reachable. The output reports
 the Kademlia protocol, whether it is IPFS-compatible, the success threshold,
-Kademlia startup state, AutoNAT probe-server count, observed AutoNAT status,
-per-peer connection state, and dial-failure counts. Use
-`--require-autonat-status` to make the command fail unless AutoNAT has registered
-at least one probe server and observed a non-unknown `public` or `private`
-status before the timeout. When the config contains relay reservation listen
-addresses, the same command also reports configured relay reservations, accepted
-relay reservation events, relayed listen address readiness, and per-relay
-acceptance state. Use `--require-relay-reservations` to make the command fail
-unless every configured relay reservation is accepted and has a corresponding
-relayed listen address. It does not add bootstrap or relay peers to VPN
-membership or grant route authority.
+DCUtR enablement/readiness, Kademlia startup state, AutoNAT probe-server count,
+observed AutoNAT status, per-peer connection state, and dial-failure counts.
+Use `--require-autonat-status` to make the command fail unless AutoNAT has
+registered at least one probe server and observed a non-unknown `public` or
+`private` status before the timeout. When the config contains relay reservation
+listen addresses, the same command also reports configured relay reservations,
+accepted relay reservation events, relayed listen address readiness, and
+per-relay acceptance state. Use `--require-relay-reservations` to make the
+command fail unless every configured relay reservation is accepted and has a
+corresponding relayed listen address. Use `--require-dcutr-ready` to fail unless
+DCUtR is enabled and the relay reservation prerequisites for DCUtR are usable;
+this is a rootless readiness check, not proof that a remote peer has completed a
+hole punch. It does not add bootstrap or relay peers to VPN membership or grant
+route authority.
 
 Inspect the runtime metric names and startup snapshot:
 
