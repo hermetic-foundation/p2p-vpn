@@ -5,9 +5,12 @@ Rust foundation for a Hyprspace-inspired peer-to-peer mesh VPN.
 The v2 design keeps libp2p as the identity, discovery, NAT traversal, and relay
 substrate while making the VPN data plane packet-oriented:
 
-- direct QUIC streams as the current preferred operational packet transport
-- native QUIC datagrams as the intended promotion path when the libp2p data
+- owned authenticated UDP packet-plane sessions as the current preferred
+  operational packet transport once peers have a direct libp2p path for
+  negotiation
+- native libp2p QUIC datagrams as a future promotion path when the libp2p data
   plane exposes a usable datagram handle
+- direct QUIC streams as the preferred libp2p stream fallback
 - framed libp2p streams as TCP and relay fallback
 - bounded per-peer packet queues with intentional drop policy
 - separate control, packet, and service protocol surfaces
@@ -64,8 +67,9 @@ separate protocol surface without overloading the packet data path.
 The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
-path, overlay network name, advertised route prefixes, and whether native QUIC
-datagrams are currently supported. Configs can also declare owned packet-plane
+path, overlay network name, advertised route prefixes, whether native libp2p
+QUIC datagrams are currently supported, and whether the owned UDP packet plane
+is available. Configs can also declare owned packet-plane
 UDP bind addresses under `network.packet_plane.listen`, externally reachable
 direct packet endpoints under `network.packet_plane.external_endpoints`, and
 the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
@@ -168,22 +172,24 @@ recovery dials to the peer's configured and discovered addresses, including
 when a fallback libp2p connection is still up, and records
 `packet_plane_path_recovery_dial_attempts` and
 `packet_plane_path_recovery_dial_failures`.
-The drain decision is explicit: native QUIC datagram, stream fallback, or
-blocked with a reason. The locked libp2p-quic transport currently disables QUIC
-datagram receive buffers internally, so the daemon advertises datagrams as
-unsupported and cannot expose a real application datagram sender or receiver
-through the libp2p `Swarm`. The operational data plane is therefore an
-identity-keyed stream fallback: each packet frame is sent over libp2p's
-authenticated request-response channel to the configured peer ID, and the
-receiver still applies the overlay allowlist, replay window, source-route
-ownership, and local-destination checks before writing to TUN. The runtime does
-not hand an unbounded burst of queued packets to request-response; each peer is
-limited by the configured packet stream send window and a small hash of the
-inner IP flow. Packets from a shard that already has an in-flight fallback
-stream stay queued, while other shards for that peer can continue draining. It
-also does not report a native datagram packet as sent unless a real
-datagram-capable local data plane exists; datagram-only paths remain blocked
-instead of silently degrading into fake success.
+The drain decision is explicit: owned UDP packet-plane datagram, libp2p stream
+fallback, or blocked with a reason. The locked libp2p-quic transport currently
+disables QUIC datagram receive buffers internally, so the daemon advertises
+native libp2p QUIC datagrams as unsupported and cannot expose a real application
+datagram sender or receiver through the libp2p `Swarm`. When peers have an
+established direct libp2p path, compatible packet-plane capabilities, and an
+authenticated UDP packet-plane session, packet frames are sent over the owned
+UDP session. Otherwise, the operational fallback is identity-keyed streams: each
+packet frame is sent over libp2p's authenticated request-response channel to the
+configured peer ID, and the receiver still applies the overlay allowlist, replay
+window, source-route ownership, and local-destination checks before writing to
+TUN. The runtime does not hand an unbounded burst of queued packets to
+request-response; each peer is limited by the configured packet stream send
+window and a small hash of the inner IP flow. Packets from a shard that already
+has an in-flight fallback stream stay queued, while other shards for that peer
+can continue draining. It also does not report a native libp2p datagram packet
+as sent unless a real native-datagram local data plane exists; datagram-only
+paths remain blocked instead of silently degrading into fake success.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames, giving operators liveness traffic that does not
 depend on user IP packets. When an owned packet-plane datagram session is the

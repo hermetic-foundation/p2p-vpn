@@ -399,6 +399,7 @@ fn inbound_service_response(
                     request.nonce,
                     local_capabilities.effective_mtu,
                 )
+                .with_packet_data_plane_capabilities(local_capabilities)
                 .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs())
                 .with_packet_plane_replay_windows_per_session(
                     packet_plane_replay_windows_per_session,

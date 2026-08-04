@@ -6,7 +6,7 @@ use libp2p::{StreamProtocol, request_response};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    runtime::control::membership_tag_matches,
+    runtime::control::{ControlCapabilities, membership_tag_matches},
     runtime::packet::PACKET_PROTOCOL,
     runtime::packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
     wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
@@ -55,6 +55,10 @@ pub struct ServiceStatusResponse {
     pub effective_mtu: u16,
     pub supports_quic_datagrams: bool,
     #[serde(default)]
+    pub supports_native_quic_datagrams: bool,
+    #[serde(default)]
+    pub supports_owned_udp_packet_plane: bool,
+    #[serde(default)]
     pub packet_plane_session_ttl_seconds: Option<u64>,
     #[serde(default)]
     pub packet_plane_replay_windows_per_session: Option<usize>,
@@ -80,9 +84,24 @@ impl ServiceStatusResponse {
             packet_plane_max_payload_len: Some(PACKET_PLANE_MAX_PAYLOAD_LEN),
             effective_mtu,
             supports_quic_datagrams: false,
+            supports_native_quic_datagrams: false,
+            supports_owned_udp_packet_plane: false,
             packet_plane_session_ttl_seconds: None,
             packet_plane_replay_windows_per_session: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_packet_data_plane_capabilities(
+        mut self,
+        capabilities: &ControlCapabilities,
+    ) -> Self {
+        self.supports_native_quic_datagrams = capabilities.supports_native_quic_datagrams;
+        self.supports_owned_udp_packet_plane = capabilities.supports_owned_udp_packet_plane;
+        self.supports_quic_datagrams = capabilities.supports_quic_datagrams
+            || capabilities.supports_native_quic_datagrams
+            || capabilities.supports_owned_udp_packet_plane;
+        self
     }
 
     #[must_use]
@@ -371,6 +390,25 @@ mod tests {
         assert_eq!(decoded.max_packet_payload_len, None);
         assert_eq!(decoded.packet_plane_datagram_overhead_len, None);
         assert_eq!(decoded.packet_plane_max_payload_len, None);
+        assert!(!decoded.supports_native_quic_datagrams);
+        assert!(!decoded.supports_owned_udp_packet_plane);
+    }
+
+    #[test]
+    fn status_response_inherits_packet_data_plane_capabilities() {
+        let native = ControlCapabilities::local("lab", None, 1280).with_native_quic_datagrams(true);
+        let status = ServiceStatusResponse::local("lab", None, 42, 1280)
+            .with_packet_data_plane_capabilities(&native);
+        assert!(status.supports_quic_datagrams);
+        assert!(status.supports_native_quic_datagrams);
+        assert!(!status.supports_owned_udp_packet_plane);
+
+        let owned = ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true);
+        let status = ServiceStatusResponse::local("lab", None, 42, 1280)
+            .with_packet_data_plane_capabilities(&owned);
+        assert!(status.supports_quic_datagrams);
+        assert!(!status.supports_native_quic_datagrams);
+        assert!(status.supports_owned_udp_packet_plane);
     }
 
     #[tokio::test]

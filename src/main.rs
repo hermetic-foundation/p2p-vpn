@@ -1573,6 +1573,14 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         status.peer, status.service.supports_quic_datagrams
     ));
     lines.push(format!(
+        "peer live native quic datagrams: {} {}",
+        status.peer, status.service.supports_native_quic_datagrams
+    ));
+    lines.push(format!(
+        "peer live owned udp packet plane: {} {}",
+        status.peer, status.service.supports_owned_udp_packet_plane
+    ));
+    lines.push(format!(
         "peer live packet plane session ttl seconds: {} {}",
         status.peer,
         optional_seconds(status.service.packet_plane_session_ttl_seconds)
@@ -1709,19 +1717,23 @@ async fn path_lines_live(config: &Config, timeout: Duration) -> Result<Vec<Strin
 fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
     let preferred_path = PathKind::from_wire_name(&status.capabilities.preferred_path)
         .unwrap_or(PathKind::DirectQuicStream);
-    let path_probe_ready =
-        !preferred_path.requires_quic_datagrams() || status.service.supports_quic_datagrams;
+    let packet_datagram_ready = status.service.supports_owned_udp_packet_plane
+        || status.service.supports_quic_datagrams
+        || status.service.supports_native_quic_datagrams;
+    let path_probe_ready = !preferred_path.requires_quic_datagrams() || packet_datagram_ready;
     let estimated_path_mtu =
         configured_path_mtu_estimate(preferred_path, status.service.effective_mtu);
 
     lines.push(format!(
-        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} path_probe_ready {}",
+        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} path_probe_ready {}",
         status.peer,
         path_name(preferred_path),
         preferred_path.default_score(),
         status.service.effective_mtu,
         estimated_path_mtu,
         status.service.supports_quic_datagrams,
+        status.service.supports_native_quic_datagrams,
+        status.service.supports_owned_udp_packet_plane,
         path_probe_ready
     ));
 }
@@ -1880,6 +1892,14 @@ fn push_capability_lines(
     lines.push(format!(
         "{prefix} supports quic datagrams: {}",
         capabilities.supports_quic_datagrams
+    ));
+    lines.push(format!(
+        "{prefix} supports native quic datagrams: {}",
+        capabilities.supports_native_quic_datagrams
+    ));
+    lines.push(format!(
+        "{prefix} supports owned udp packet plane: {}",
+        capabilities.supports_owned_udp_packet_plane
     ));
     lines.push(format!(
         "{prefix} packet endpoint candidates: {}",
@@ -2098,6 +2118,14 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
         format!(
             "supports quic datagrams: {}",
             status.service.supports_quic_datagrams
+        ),
+        format!(
+            "supports native quic datagrams: {}",
+            status.service.supports_native_quic_datagrams
+        ),
+        format!(
+            "supports owned udp packet plane: {}",
+            status.service.supports_owned_udp_packet_plane
         ),
         format!(
             "packet plane session ttl seconds: {}",
@@ -2930,7 +2958,7 @@ mod tests {
 
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false path_probe_ready false"
+                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false path_probe_ready false"
             )));
     }
 
@@ -3027,7 +3055,7 @@ mod tests {
             "10.42.0.0/24",
             100,
         )]);
-        capabilities.supports_quic_datagrams = true;
+        capabilities = capabilities.with_owned_udp_packet_plane(true);
         capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
         let mut lines = vec![format!("remote capability peer: {peer}")];
 
@@ -3052,6 +3080,16 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == "remote capability supports quic datagrams: true")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability supports native quic datagrams: false")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability supports owned udp packet plane: true")
         );
         assert!(
             lines
