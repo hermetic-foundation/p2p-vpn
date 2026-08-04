@@ -2282,11 +2282,13 @@ fn maybe_write_packet_too_big(
     let ForwardError::PacketTooLarge { max, .. } = error else {
         return;
     };
-    let Some(writer) = context.writer.as_deref_mut() else {
-        return;
-    };
     let mtu = u16::try_from(*max).unwrap_or(u16::MAX);
     let Some(notification) = packet_too_big(original, mtu) else {
+        context.metrics.record_outbound_packet_too_big_unparseable();
+        return;
+    };
+    let Some(writer) = context.writer.as_deref_mut() else {
+        context.metrics.record_outbound_packet_too_big_no_writer();
         return;
     };
     match writer.write_packet(&notification) {
@@ -2297,6 +2299,9 @@ fn maybe_write_packet_too_big(
                 .record_outbound_packet_too_big_notification();
         }
         Err(error) => {
+            context
+                .metrics
+                .record_outbound_packet_too_big_write_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "packet_too_big_write_failed",
@@ -6859,6 +6864,37 @@ mod tests {
     }
 
     #[test]
+    fn packet_too_big_feedback_records_no_writer_and_unparseable_outcomes() {
+        let metrics = RuntimeMetrics::default();
+        let mut paths = PathSet::new();
+        let peer_capabilities = PeerCapabilities::default();
+        let mut packet_in_flight = PacketInFlight::new(1);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+        let error = ForwardError::PacketTooLarge {
+            actual: 1_300,
+            max: 1_200,
+        };
+
+        maybe_write_packet_too_big(
+            &mut context,
+            &ipv4_packet(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2)),
+            &error,
+        );
+        maybe_write_packet_too_big(&mut context, b"not-an-ip-packet", &error);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_packet_too_big_notifications, 0);
+        assert_eq!(snapshot.outbound_packet_too_big_no_writer, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_unparseable, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_write_failures, 0);
+    }
+
+    #[test]
     fn capability_response_accepts_configured_compatible_peers() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
@@ -7866,6 +7902,7 @@ mod tests {
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_no_writer, 1);
         assert_eq!(snapshot.outbound_path_mtu_updates, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(
@@ -7967,6 +8004,7 @@ mod tests {
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_no_writer, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
     }
 

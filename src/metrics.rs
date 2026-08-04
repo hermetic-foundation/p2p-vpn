@@ -74,6 +74,9 @@ pub struct RuntimeMetrics {
     outbound_drop_queue_expired_packets: AtomicU64,
     outbound_drop_unauthorized_source_packets: AtomicU64,
     outbound_packet_too_big_notifications: AtomicU64,
+    outbound_packet_too_big_no_writer: AtomicU64,
+    outbound_packet_too_big_unparseable: AtomicU64,
+    outbound_packet_too_big_write_failures: AtomicU64,
     inbound_drop_malformed_packets: AtomicU64,
     inbound_drop_packet_too_large_packets: AtomicU64,
     inbound_drop_replay_packets: AtomicU64,
@@ -288,6 +291,21 @@ impl RuntimeMetrics {
 
     pub fn record_outbound_packet_too_big_notification(&self) {
         self.outbound_packet_too_big_notifications
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_packet_too_big_no_writer(&self) {
+        self.outbound_packet_too_big_no_writer
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_packet_too_big_unparseable(&self) {
+        self.outbound_packet_too_big_unparseable
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_outbound_packet_too_big_write_failure(&self) {
+        self.outbound_packet_too_big_write_failures
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -820,6 +838,15 @@ impl RuntimeMetrics {
         snapshot.outbound_packet_too_big_notifications = self
             .outbound_packet_too_big_notifications
             .load(Ordering::Relaxed);
+        snapshot.outbound_packet_too_big_no_writer = self
+            .outbound_packet_too_big_no_writer
+            .load(Ordering::Relaxed);
+        snapshot.outbound_packet_too_big_unparseable = self
+            .outbound_packet_too_big_unparseable
+            .load(Ordering::Relaxed);
+        snapshot.outbound_packet_too_big_write_failures = self
+            .outbound_packet_too_big_write_failures
+            .load(Ordering::Relaxed);
         snapshot.inbound_drop_malformed_packets =
             self.inbound_drop_malformed_packets.load(Ordering::Relaxed);
         snapshot.inbound_drop_packet_too_large_packets = self
@@ -1111,6 +1138,9 @@ pub struct RuntimeSnapshot {
     pub outbound_drop_queue_expired_packets: u64,
     pub outbound_drop_unauthorized_source_packets: u64,
     pub outbound_packet_too_big_notifications: u64,
+    pub outbound_packet_too_big_no_writer: u64,
+    pub outbound_packet_too_big_unparseable: u64,
+    pub outbound_packet_too_big_write_failures: u64,
     pub inbound_drop_malformed_packets: u64,
     pub inbound_drop_packet_too_large_packets: u64,
     pub inbound_drop_replay_packets: u64,
@@ -1261,6 +1291,18 @@ impl RuntimeSnapshot {
             format!(
                 "outbound_packet_too_big_notifications {}",
                 self.outbound_packet_too_big_notifications
+            ),
+            format!(
+                "outbound_packet_too_big_no_writer {}",
+                self.outbound_packet_too_big_no_writer
+            ),
+            format!(
+                "outbound_packet_too_big_unparseable {}",
+                self.outbound_packet_too_big_unparseable
+            ),
+            format!(
+                "outbound_packet_too_big_write_failures {}",
+                self.outbound_packet_too_big_write_failures
             ),
             format!("inbound_accepted_packets {}", self.inbound_accepted_packets),
             format!(
@@ -1787,6 +1829,9 @@ mod tests {
         metrics.record_outbound_queue_expired(2);
         metrics.record_outbound_drop(PacketDropReason::UnauthorizedSource);
         metrics.record_outbound_packet_too_big_notification();
+        metrics.record_outbound_packet_too_big_no_writer();
+        metrics.record_outbound_packet_too_big_unparseable();
+        metrics.record_outbound_packet_too_big_write_failure();
         metrics.record_inbound_drop(PacketDropReason::MalformedPacket);
         metrics.record_inbound_drop(PacketDropReason::PacketTooLarge);
         metrics.record_inbound_drop(PacketDropReason::Replay);
@@ -1945,6 +1990,9 @@ mod tests {
         assert_eq!(snapshot.outbound_drop_queue_expired_packets, 2);
         assert_eq!(snapshot.outbound_drop_unauthorized_source_packets, 1);
         assert_eq!(snapshot.outbound_packet_too_big_notifications, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_no_writer, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_unparseable, 1);
+        assert_eq!(snapshot.outbound_packet_too_big_write_failures, 1);
         assert_eq!(snapshot.inbound_drop_malformed_packets, 1);
         assert_eq!(snapshot.inbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.inbound_drop_replay_packets, 1);
@@ -2012,6 +2060,9 @@ mod tests {
         assert_metric_line(snapshot, "outbound_drop_queue_expired_packets 2");
         assert_metric_line(snapshot, "outbound_drop_unauthorized_source_packets 1");
         assert_metric_line(snapshot, "outbound_packet_too_big_notifications 1");
+        assert_metric_line(snapshot, "outbound_packet_too_big_no_writer 1");
+        assert_metric_line(snapshot, "outbound_packet_too_big_unparseable 1");
+        assert_metric_line(snapshot, "outbound_packet_too_big_write_failures 1");
         assert_metric_line(snapshot, "inbound_drop_malformed_packets 1");
         assert_metric_line(snapshot, "inbound_drop_packet_too_large_packets 1");
         assert_metric_line(snapshot, "inbound_drop_replay_packets 1");

@@ -194,7 +194,10 @@ an oversized packet is dropped predictably instead of being pushed onto a path
 that is known to be smaller. When the original packet is IPv4 or IPv6, the
 daemon also writes a local ICMP fragmentation-needed or ICMPv6 packet-too-big
 message back to TUN and increments
-`outbound_packet_too_big_notifications`.
+`outbound_packet_too_big_notifications`. If feedback cannot be emitted, metrics
+distinguish no local writer (`outbound_packet_too_big_no_writer`), unparseable
+original packets (`outbound_packet_too_big_unparseable`), and write failures
+(`outbound_packet_too_big_write_failures`).
 Until native datagram sending is implemented, datagram-only paths do not release
 packets into the stream fallback; they increment
 `outbound_quic_datagram_unavailable_packets` while they remain queued. Packets
@@ -698,8 +701,9 @@ acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/ACK/failure counters, path-MTU update and probe-confirmation
-counters, packet-plane session expiry counters, inbound and outbound packet drop
-reasons including packet-plane receive rejection counters by stable reason
+counters, packet-too-big notification/skipped/failed counters, packet-plane
+session expiry counters, inbound and outbound packet drop reasons including
+packet-plane receive rejection counters by stable reason
 (`unknown_endpoint`, `decrypt`, `replayed_datagram`, `payload_too_large`, and
 the other packet-plane datagram parser/session failures), rate-limited inbound
 frames, expired outbound queue packets, stream fallback sends, attempted native
