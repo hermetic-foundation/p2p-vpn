@@ -410,6 +410,7 @@ where
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
     let mut packet_plane_negotiator = PacketPlaneNegotiator::default();
+    let mut relay_readiness = RelayReadiness::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
@@ -536,6 +537,8 @@ where
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
+                        relay_readiness: &mut relay_readiness,
+                        configured_peer_addresses: &node.configured_peer_addresses,
                         discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
@@ -2048,6 +2051,107 @@ fn redial_known_addresses(
     }
 }
 
+#[derive(Debug, Default)]
+struct RelayReadiness {
+    accepted_reservations: HashSet<Libp2pPeerId>,
+    relayed_listen_addresses: HashSet<Libp2pPeerId>,
+    attempted_ready_dials: HashSet<(Libp2pPeerId, Libp2pPeerId, Multiaddr)>,
+}
+
+impl RelayReadiness {
+    fn record_reservation_accepted(&mut self, relay: Libp2pPeerId) {
+        self.accepted_reservations.insert(relay);
+    }
+
+    fn record_relay_listen_address(&mut self, relay: Libp2pPeerId) {
+        self.relayed_listen_addresses.insert(relay);
+    }
+
+    fn relay_ready(&self, relay: Libp2pPeerId) -> bool {
+        self.accepted_reservations.contains(&relay)
+            && self.relayed_listen_addresses.contains(&relay)
+    }
+
+    fn should_attempt_ready_dial(
+        &mut self,
+        relay: Libp2pPeerId,
+        peer: Libp2pPeerId,
+        address: &Multiaddr,
+    ) -> bool {
+        self.attempted_ready_dials
+            .insert((relay, peer, address.clone()))
+    }
+}
+
+fn dial_relay_ready_configured_peers(
+    swarm: &mut Swarm<Behaviour>,
+    relay_readiness: &mut RelayReadiness,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    metrics: &RuntimeMetrics,
+    relay: Libp2pPeerId,
+) {
+    if !relay_readiness.relay_ready(relay) {
+        return;
+    }
+
+    for (peer, address) in relay_ready_configured_peer_targets(
+        *swarm.local_peer_id(),
+        relay,
+        configured_peer_addresses,
+        |peer| swarm.is_connected(peer),
+    ) {
+        if !relay_readiness.should_attempt_ready_dial(relay, peer, &address) {
+            continue;
+        }
+        metrics.record_redial_attempt();
+        let dial_address = peer_dial_address(peer, address.clone());
+        log_runtime_event(
+            LogLevel::Info,
+            "relay_ready_peer_dial",
+            &[
+                ("relay", &relay.to_string()),
+                ("peer", &peer.to_string()),
+                ("address", &dial_address.to_string()),
+            ],
+        );
+        if let Err(error) = swarm.dial(dial_address) {
+            metrics.record_redial_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "relay_ready_peer_dial_failed",
+                &[
+                    ("relay", &relay.to_string()),
+                    ("peer", &peer.to_string()),
+                    ("error", &error.to_string()),
+                ],
+            );
+        }
+    }
+}
+
+fn relay_ready_configured_peer_targets(
+    local_peer: Libp2pPeerId,
+    relay: Libp2pPeerId,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
+) -> Vec<(Libp2pPeerId, Multiaddr)> {
+    let mut seen = HashSet::new();
+    let mut addresses = Vec::new();
+    for (peer, address) in configured_peer_addresses {
+        if *peer == local_peer || is_connected(peer) {
+            continue;
+        }
+        if relayed_address_relay_peer(address) != Some(relay) {
+            continue;
+        }
+        if !seen.insert((*peer, address.clone())) {
+            continue;
+        }
+        addresses.push((*peer, address.clone()));
+    }
+    addresses
+}
+
 fn redial_selected_addresses(
     swarm: &mut Swarm<Behaviour>,
     selected_peers: &HashSet<Libp2pPeerId>,
@@ -2938,6 +3042,8 @@ struct SwarmEventContext<'a> {
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
+    relay_readiness: &'a mut RelayReadiness,
+    configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
@@ -2990,14 +3096,15 @@ async fn handle_swarm_event(
             handle_service_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(event) => {
-            handle_behaviour_event(
-                swarm,
-                context.forwarder,
-                context.discovered_peer_addresses,
-                context.metrics,
-                context.discovery,
-                event,
-            );
+            let mut behaviour_context = BehaviourEventContext {
+                forwarder: context.forwarder,
+                relay_readiness: context.relay_readiness,
+                configured_peer_addresses: context.configured_peer_addresses,
+                discovered_peer_addresses: context.discovered_peer_addresses,
+                metrics: context.metrics,
+                discovery: context.discovery,
+            };
+            handle_behaviour_event(swarm, &mut behaviour_context, event);
         }
         SwarmEvent::ConnectionEstablished {
             peer_id,
@@ -3121,6 +3228,26 @@ async fn handle_swarm_event(
                 "external_address_expired",
                 &[("address", &address.to_string())],
             );
+        }
+        SwarmEvent::NewListenAddr { address, .. } => {
+            if let Some(relay) = relayed_address_relay_peer(&address) {
+                context.relay_readiness.record_relay_listen_address(relay);
+                dial_relay_ready_configured_peers(
+                    swarm,
+                    context.relay_readiness,
+                    context.configured_peer_addresses,
+                    context.metrics,
+                    relay,
+                );
+                log_runtime_event(
+                    LogLevel::Info,
+                    "relay_listen_address_ready",
+                    &[
+                        ("relay", &relay.to_string()),
+                        ("address", &address.to_string()),
+                    ],
+                );
+            }
         }
         _ => {}
     }
@@ -4883,32 +5010,38 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
     }
 }
 
+struct BehaviourEventContext<'a> {
+    forwarder: &'a Forwarder,
+    relay_readiness: &'a mut RelayReadiness,
+    configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
+    metrics: &'a RuntimeMetrics,
+    discovery: &'a DiscoveryConfig,
+}
+
 fn handle_behaviour_event(
     swarm: &mut Swarm<Behaviour>,
-    forwarder: &Forwarder,
-    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
-    metrics: &RuntimeMetrics,
-    discovery: &DiscoveryConfig,
+    context: &mut BehaviourEventContext<'_>,
     event: BehaviourEvent,
 ) {
     match event {
-        BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if discovery.mdns => {
+        BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
                 learn_peer_address(
                     swarm,
-                    forwarder,
-                    discovered_peer_addresses,
-                    metrics,
+                    context.forwarder,
+                    context.discovered_peer_addresses,
+                    context.metrics,
                     peer,
                     address,
-                    discovery,
+                    context.discovery,
                 );
             }
         }
-        BehaviourEvent::Mdns(mdns::Event::Expired(peers)) if discovery.mdns => {
+        BehaviourEvent::Mdns(mdns::Event::Expired(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
-                discovered_peer_addresses.remove(peer, &address);
-                if discovery.kademlia {
+                context.discovered_peer_addresses.remove(peer, &address);
+                if context.discovery.kademlia {
                     swarm.behaviour_mut().kad.remove_address(&peer, &address);
                 }
             }
@@ -4918,31 +5051,37 @@ fn handle_behaviour_event(
             for address in info.listen_addrs {
                 learn_peer_address(
                     swarm,
-                    forwarder,
-                    discovered_peer_addresses,
-                    metrics,
+                    context.forwarder,
+                    context.discovered_peer_addresses,
+                    context.metrics,
                     peer_id,
                     address,
-                    discovery,
+                    context.discovery,
                 );
             }
-            if discovery.autonat && observed_addr.iter().next().is_some() {
-                schedule_autonat_probe(swarm, metrics, &observed_addr);
+            if context.discovery.autonat && observed_addr.iter().next().is_some() {
+                schedule_autonat_probe(swarm, context.metrics, &observed_addr);
             }
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
             eprintln!("identify with {peer_id} failed: {error}");
         }
-        BehaviourEvent::Kad(event) if discovery.kademlia => {
-            handle_kademlia_event(swarm, forwarder, metrics, event);
+        BehaviourEvent::Kad(event) if context.discovery.kademlia => {
+            handle_kademlia_event(swarm, context.forwarder, context.metrics, event);
         }
-        BehaviourEvent::Relay(event) => handle_relay_event(metrics, &event),
-        BehaviourEvent::RelayServer(event) => handle_relay_server_event(metrics, &event),
+        BehaviourEvent::Relay(event) => handle_relay_event(
+            swarm,
+            context.relay_readiness,
+            context.configured_peer_addresses,
+            context.metrics,
+            &event,
+        ),
+        BehaviourEvent::RelayServer(event) => handle_relay_server_event(context.metrics, &event),
         BehaviourEvent::Dcutr(dcutr::Event {
             remote_peer_id,
             result,
-        }) if discovery.dcutr => {
-            metrics.record_dcutr_result(result.is_ok());
+        }) if context.discovery.dcutr => {
+            context.metrics.record_dcutr_result(result.is_ok());
             log_runtime_event(
                 if result.is_ok() {
                     LogLevel::Info
@@ -4957,8 +5096,8 @@ fn handle_behaviour_event(
                 ],
             );
         }
-        BehaviourEvent::Autonat(event) if discovery.autonat => {
-            handle_autonat_event(swarm, metrics, event);
+        BehaviourEvent::Autonat(event) if context.discovery.autonat => {
+            handle_autonat_event(swarm, context.metrics, event);
         }
         _ => {}
     }
@@ -5127,7 +5266,30 @@ fn handle_relay_server_event(metrics: &RuntimeMetrics, event: &relay::Event) {
     }
 }
 
-fn handle_relay_event(metrics: &RuntimeMetrics, event: &relay::client::Event) {
+fn handle_relay_event(
+    swarm: &mut Swarm<Behaviour>,
+    relay_readiness: &mut RelayReadiness,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    metrics: &RuntimeMetrics,
+    event: &relay::client::Event,
+) {
+    let accepted_relay = record_relay_client_event(metrics, event);
+    if let Some(relay_peer_id) = accepted_relay {
+        relay_readiness.record_reservation_accepted(relay_peer_id);
+        dial_relay_ready_configured_peers(
+            swarm,
+            relay_readiness,
+            configured_peer_addresses,
+            metrics,
+            relay_peer_id,
+        );
+    }
+}
+
+fn record_relay_client_event(
+    metrics: &RuntimeMetrics,
+    event: &relay::client::Event,
+) -> Option<Libp2pPeerId> {
     match event {
         relay::client::Event::ReservationReqAccepted {
             relay_peer_id,
@@ -5136,14 +5298,17 @@ fn handle_relay_event(metrics: &RuntimeMetrics, event: &relay::client::Event) {
         } => {
             metrics.record_relay_reservation_accepted();
             eprintln!("relay reservation accepted by {relay_peer_id} renewal={renewal}");
+            Some(*relay_peer_id)
         }
         relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
             metrics.record_relay_outbound_circuit_established();
             eprintln!("outbound relay circuit established via {relay_peer_id}");
+            None
         }
         relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
             metrics.record_relay_inbound_circuit_established();
             eprintln!("inbound relay circuit established from {src_peer_id}");
+            None
         }
     }
 }
@@ -5243,6 +5408,20 @@ fn discovered_address_target(address: &Multiaddr) -> Option<Libp2pPeerId> {
     } else {
         direct_target
     }
+}
+
+fn relayed_address_relay_peer(address: &Multiaddr) -> Option<Libp2pPeerId> {
+    let mut relay_peer = None;
+
+    for protocol in address {
+        match protocol {
+            Protocol::P2pCircuit => return relay_peer,
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn print_metrics(
@@ -7047,6 +7226,83 @@ mod tests {
                 skipped_connected: 0,
             }
         );
+    }
+
+    #[test]
+    fn relayed_address_relay_peer_extracts_relay_before_circuit() {
+        let relay = peer_id();
+        let peer = peer_id();
+        let direct: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("direct address");
+        let relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+
+        assert_eq!(relayed_address_relay_peer(&direct), None);
+        assert_eq!(relayed_address_relay_peer(&relayed), Some(relay));
+    }
+
+    #[test]
+    fn relay_ready_configured_peer_targets_select_matching_relayed_peers() {
+        let local = peer_id();
+        let relay = peer_id();
+        let other_relay = peer_id();
+        let peer = peer_id();
+        let connected = peer_id();
+        let direct_peer = peer_id();
+        let relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+        let connected_relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{connected}")
+                .parse()
+                .expect("connected relayed address");
+        let other_relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4002/p2p/{other_relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("other relayed address");
+        let direct: Multiaddr = format!("/ip4/127.0.0.1/tcp/4003/p2p/{direct_peer}")
+            .parse()
+            .expect("direct address");
+
+        let targets = relay_ready_configured_peer_targets(
+            local,
+            relay,
+            &[
+                (peer, relayed.clone()),
+                (peer, relayed.clone()),
+                (connected, connected_relayed),
+                (peer, other_relayed),
+                (direct_peer, direct),
+            ],
+            |candidate| *candidate == connected,
+        );
+
+        assert_eq!(targets, vec![(peer, relayed)]);
+    }
+
+    #[test]
+    fn relay_readiness_requires_reservation_and_relayed_listen_address() {
+        let relay = peer_id();
+        let peer = peer_id();
+        let address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+        let mut readiness = RelayReadiness::default();
+
+        readiness.record_reservation_accepted(relay);
+
+        assert!(!readiness.relay_ready(relay));
+
+        readiness.record_relay_listen_address(relay);
+
+        assert!(readiness.relay_ready(relay));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
     }
 
     #[test]
@@ -10688,7 +10944,7 @@ mod tests {
         let relay_peer_id = peer_id();
         let src_peer_id = peer_id();
 
-        handle_relay_event(
+        record_relay_client_event(
             &metrics,
             &relay::client::Event::ReservationReqAccepted {
                 relay_peer_id,
@@ -10696,14 +10952,14 @@ mod tests {
                 limit: None,
             },
         );
-        handle_relay_event(
+        record_relay_client_event(
             &metrics,
             &relay::client::Event::OutboundCircuitEstablished {
                 relay_peer_id,
                 limit: None,
             },
         );
-        handle_relay_event(
+        record_relay_client_event(
             &metrics,
             &relay::client::Event::InboundCircuitEstablished {
                 src_peer_id,
