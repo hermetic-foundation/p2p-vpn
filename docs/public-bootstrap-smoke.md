@@ -126,14 +126,15 @@ nix develop -c cargo run -- relay-check \
 
 The command tries candidates until one works, reports per-candidate failures,
 and requires direct relay multiaddrs with `/p2p/RELAY` but without
-`/p2p-circuit`. Reservation setup failures identify whether relay reservation
-acceptance or relayed listen-address publication timed out. Failures after
-reservation setup include the same detailed bootstrap-check lines that
-successful candidates print, so failed relayed-circuit and DCUtR probes show
-which prerequisite was missing. DCUtR failures also include the last libp2p
-hole-punch error as `dcutr last_error`, which distinguishes cases such as no
-direct connection, rejected relay prerequisites, or direct handshake timeouts.
-Successful candidates also print a
+`/p2p-circuit`. Reservation setup failures identify whether the probe connected
+directly to the relay, whether relay reservation acceptance or relayed
+listen-address publication timed out, and the last direct relay dial error when
+one was observed. Failures after reservation setup include the same detailed
+bootstrap-check lines that successful candidates print, so failed
+relayed-circuit and DCUtR probes show which prerequisite was missing. DCUtR
+failures also include the last libp2p hole-punch error as `dcutr last_error`,
+which distinguishes cases such as no direct connection, rejected relay
+prerequisites, or direct handshake timeouts. Successful candidates also print a
 `public relay candidate config:` line with the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
 address to feed into `init-config`. Use `--write-config PATH` to write that

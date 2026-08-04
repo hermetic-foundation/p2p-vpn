@@ -516,6 +516,10 @@ pub async fn check_config_bootstrap(
             poll.accepted_relay_reservations.len(),
             relays_with_listen_addresses(&relay_reservations, &poll.relayed_listen_addresses),
         );
+    let dcutr_last_error = poll
+        .dcutr_last_error
+        .clone()
+        .or_else(|| dcutr_direct_dial_last_error(requirements, &poll));
 
     Ok(BootstrapCheckReport {
         threshold,
@@ -527,7 +531,7 @@ pub async fn check_config_bootstrap(
             ready: dcutr_ready,
             successes: poll.dcutr_successes,
             failures: poll.dcutr_failures,
-            last_error: poll.dcutr_last_error.clone(),
+            last_error: dcutr_last_error,
         },
         configured_bootstrap_peers: bootstrap_peers.len(),
         connected_bootstrap_peers: poll.connected_bootstrap_peers.len(),
@@ -922,6 +926,8 @@ async fn wait_for_external_relay_reservation(
 ) -> Result<(), String> {
     let mut listen_addr_reported = false;
     let mut reservation_accepted = false;
+    let mut connected = listener.swarm.is_connected(&relay_peer);
+    let mut last_error = None;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
     while Instant::now() < deadline {
@@ -931,6 +937,16 @@ async fn wait_for_external_relay_reservation(
             break;
         };
         match event {
+            SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == relay_peer => {
+                connected = true;
+            }
+            SwarmEvent::OutgoingConnectionError {
+                peer_id: Some(peer_id),
+                error,
+                ..
+            } if peer_id == relay_peer => {
+                last_error = Some(format!("{error:?}"));
+            }
             SwarmEvent::Behaviour(BehaviourEvent::Relay(
                 relay::client::Event::ReservationReqAccepted {
                     relay_peer_id,
@@ -951,8 +967,9 @@ async fn wait_for_external_relay_reservation(
         }
     }
 
+    let last_error = last_error.as_deref().unwrap_or("none");
     Err(format!(
-        "relay reservation timed out accepted {reservation_accepted} relayed_listen_address {listen_addr_reported}"
+        "relay reservation timed out connected {connected} accepted {reservation_accepted} relayed_listen_address {listen_addr_reported} last_error {last_error}"
     ))
 }
 
@@ -1096,6 +1113,21 @@ async fn poll_bootstrap_events(
     }
 
     result
+}
+
+fn dcutr_direct_dial_last_error(
+    requirements: BootstrapCheckRequirements,
+    poll: &BootstrapPollResult,
+) -> Option<String> {
+    if !requirements.dcutr_success || poll.dcutr_last_error.is_some() {
+        return None;
+    }
+
+    poll.relayed_peer_dial_failures
+        .iter()
+        .rev()
+        .find(|(peer, _)| poll.connected_relayed_peers.contains(peer))
+        .map(|(_, error)| format!("direct_dial: {error}"))
 }
 
 async fn poll_public_relay_scan_events(
@@ -1987,7 +2019,7 @@ mod tests {
 
         assert_eq!(
             error,
-            "relay reservation timed out accepted false relayed_listen_address false"
+            "relay reservation timed out connected false accepted false relayed_listen_address false last_error none"
         );
     }
 
@@ -2369,6 +2401,28 @@ mod tests {
             !dcutr_success_report(true, 0, 1, Some("NoDirectConnection".to_owned())).succeeded()
         );
         assert!(!dcutr_success_report(false, 1, 0, None).succeeded());
+    }
+
+    #[test]
+    fn dcutr_last_error_can_derive_from_connected_peer_direct_dial_failure() {
+        let connected_peer = peer_id();
+        let other_peer = peer_id();
+        let mut poll = BootstrapPollResult::default();
+        poll.connected_relayed_peers.insert(connected_peer);
+        poll.relayed_peer_dial_failures
+            .push((other_peer, "ignored".to_owned()));
+        poll.relayed_peer_dial_failures
+            .push((connected_peer, "HandshakeTimedOut".to_owned()));
+
+        let error = dcutr_direct_dial_last_error(
+            BootstrapCheckRequirements {
+                dcutr_success: true,
+                ..BootstrapCheckRequirements::default()
+            },
+            &poll,
+        );
+
+        assert_eq!(error.as_deref(), Some("direct_dial: HandshakeTimedOut"));
     }
 
     #[test]
