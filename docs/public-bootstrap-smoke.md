@@ -101,8 +101,10 @@ relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
 the candidate must also prove public-relay-assisted hole punching. Validation
 tries scanned candidates round-robin by relay peer, so a scan with many
 addresses for one relay still tests other relays before cycling through that
-peer's alternate addresses. Hosts without a usable IPv6 route skip IPv6-only
-relay candidates during validation and print each skip with
+peer's alternate addresses. Within each relay peer, validation tries
+QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
+spend early attempts on transports more likely to hole punch. Hosts without a
+usable IPv6 route skip IPv6-only relay candidates during validation and print each skip with
 `reason ipv6_unreachable`, while still showing the candidate in the scan output.
 Use `--max-validation-candidates N` to bound each validation pass after host
 reachability filtering; this is especially useful with `--require-dcutr-success`

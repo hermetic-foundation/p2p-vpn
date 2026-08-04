@@ -853,8 +853,11 @@ candidate, or pass `--check-candidates` to validate scanned candidates
 immediately, before using it for a VPN reservation or DCUtR path. Validation
 tries scanned candidates round-robin by relay peer, so a candidate set with
 many addresses for one relay still gives other relays an early chance before
-cycling through alternate addresses. Validation skips IPv6-only relay
-candidates when the local host has no usable IPv6 route and prints each skip as
+cycling through alternate addresses. Within each relay peer, validation tries
+QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
+spend early attempts on the transports most likely to support hole punching.
+Validation skips IPv6-only relay candidates when the local host has no usable
+IPv6 route and prints each skip as
 `public relay scan validation skipped: ... reason ipv6_unreachable`. Use
 `--max-validation-candidates N` to bound a validation pass after host
 reachability filtering; this is useful for public DCUtR searches where each
@@ -917,9 +920,10 @@ and fails unless `bootstrap-check` observes a successful DCUtR hole-punch event.
 
 Recorded public bootstrap smoke evidence is kept in
 `docs/public-bootstrap-smoke.md`. The current recorded run proves public
-IPFS-compatible bootstrap connectivity and AutoNAT observation, but public relay
-reservation and public-relay-assisted DCUtR proof still require a known circuit
-relay v2 endpoint that accepts reservations for the test.
+IPFS-compatible bootstrap connectivity, AutoNAT observation, public relay
+reservation, and relayed circuit dialing. Public-relay-assisted DCUtR proof
+still requires a suitable relay plus NAT topology that completes a hole punch
+for the test.
 
 Inspect the runtime metric names and startup snapshot:
 

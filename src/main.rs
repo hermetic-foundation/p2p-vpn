@@ -2510,6 +2510,9 @@ fn round_robin_candidates_by_peer(
             grouped.push((peer, vec![address]));
         }
     }
+    for (_, addresses) in &mut grouped {
+        addresses.sort_by_key(relay_candidate_validation_rank);
+    }
 
     let mut ordered = Vec::new();
     loop {
@@ -2526,6 +2529,15 @@ fn round_robin_candidates_by_peer(
         }
     }
     ordered
+}
+
+fn relay_candidate_validation_rank(candidate: &libp2p::Multiaddr) -> u8 {
+    u8::from(!candidate.iter().any(|protocol| {
+        matches!(
+            protocol,
+            libp2p::multiaddr::Protocol::Quic | libp2p::multiaddr::Protocol::QuicV1
+        )
+    }))
 }
 
 fn relay_scan_config(
@@ -4401,7 +4413,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_scan_candidate_multiaddrs_round_robin_distinct_peers() {
+    fn relay_scan_candidate_multiaddrs_prioritize_quic_with_peer_round_robin() {
         let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
         let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
         let peer_c = "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb";
@@ -4424,12 +4436,32 @@ mod tests {
         assert_eq!(
             ordered,
             vec![
-                addresses[0].clone(),
-                addresses[2].clone(),
-                addresses[3].clone(),
                 addresses[1].clone(),
                 addresses[4].clone(),
+                addresses[3].clone(),
+                addresses[0].clone(),
+                addresses[2].clone(),
             ]
+        );
+    }
+
+    #[test]
+    fn relay_candidate_validation_rank_prefers_quic_addresses() {
+        assert_eq!(
+            relay_candidate_validation_rank(
+                &"/ip4/203.0.113.10/udp/4001/quic-v1/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                    .parse()
+                    .expect("quic candidate")
+            ),
+            0
+        );
+        assert_eq!(
+            relay_candidate_validation_rank(
+                &"/ip4/203.0.113.10/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                    .parse()
+                    .expect("tcp candidate")
+            ),
+            1
         );
     }
 
@@ -4525,6 +4557,28 @@ mod tests {
                 format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer}"),
                 format!("/ip4/203.0.113.11/tcp/4001/p2p/{peer}"),
             ]
+        );
+    }
+
+    #[test]
+    fn relay_scan_validation_limit_keeps_quic_priority_order() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let addresses = [
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer_a}"),
+            format!("/ip4/203.0.113.10/udp/4001/quic-v1/p2p/{peer_a}"),
+            format!("/ip4/203.0.113.20/tcp/4001/p2p/{peer_b}"),
+        ];
+        let refs = addresses.iter().map(String::as_str).collect::<Vec<_>>();
+        let report = relay_scan_report_with_candidates(&refs);
+        let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
+
+        let (kept, limit) = limit_relay_scan_validation_candidates(candidates, Some(2));
+
+        assert_eq!(limit, Some(RelayScanValidationLimit { kept: 2, total: 3 }));
+        assert_eq!(
+            kept.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![addresses[1].clone(), addresses[2].clone()]
         );
     }
 
