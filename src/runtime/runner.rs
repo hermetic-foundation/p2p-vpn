@@ -200,6 +200,7 @@ where
 pub enum ShutdownReason {
     Interrupt,
     Terminate,
+    ControlSocket,
 }
 
 impl ShutdownReason {
@@ -208,6 +209,7 @@ impl ShutdownReason {
         match self {
             Self::Interrupt => "interrupt",
             Self::Terminate => "terminate",
+            Self::ControlSocket => "control_socket",
         }
     }
 }
@@ -389,7 +391,7 @@ where
                     .recv()
                     .await
             }, if control_rx.is_some() => {
-                handle_runtime_control_request(
+                if let Some(reason) = handle_runtime_control_request(
                     request,
                     &forwarder,
                     &paths,
@@ -397,7 +399,19 @@ where
                     &metrics,
                     queues.total_stats(),
                     runtime_path_stats(&forwarder, &paths, &peer_capabilities),
-                );
+                ) {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "runtime_shutdown",
+                        &[("reason", reason.as_str())],
+                    );
+                    print_metrics(
+                        &metrics,
+                        queues.total_stats(),
+                        runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                    );
+                    return Ok(());
+                }
             }
             () = async {
                 timers.metrics
@@ -490,13 +504,14 @@ fn handle_runtime_control_request(
     metrics: &RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
-) {
+) -> Option<ShutdownReason> {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
             let lines = runtime_status_lines(metrics, queue, path_stats);
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
+            None
         }
         RuntimeControlRequest::State { respond_to } => {
             let lines = runtime_state_lines(
@@ -510,6 +525,16 @@ fn handle_runtime_control_request(
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
             }
+            None
+        }
+        RuntimeControlRequest::Shutdown { respond_to } => {
+            if respond_to
+                .send(vec!["shutdown accepted".to_owned()])
+                .is_err()
+            {
+                eprintln!("control socket shutdown response receiver dropped");
+            }
+            Some(ShutdownReason::ControlSocket)
         }
     }
 }
@@ -2970,6 +2995,35 @@ mod tests {
     fn shutdown_reason_has_stable_log_values() {
         assert_eq!(ShutdownReason::Interrupt.as_str(), "interrupt");
         assert_eq!(ShutdownReason::Terminate.as_str(), "terminate");
+        assert_eq!(ShutdownReason::ControlSocket.as_str(), "control_socket");
+    }
+
+    #[test]
+    fn runtime_control_shutdown_acknowledges_and_requests_stop() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let paths = PathSet::new();
+        let peer_capabilities = PeerCapabilities::default();
+        let metrics = RuntimeMetrics::default();
+        let (respond_to, mut response) = tokio::sync::oneshot::channel();
+
+        let reason = handle_runtime_control_request(
+            RuntimeControlRequest::Shutdown { respond_to },
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &metrics,
+            crate::queue::QueueStats::default(),
+            crate::path::PathRuntimeStats::default(),
+        );
+
+        assert_eq!(reason, Some(ShutdownReason::ControlSocket));
+        assert_eq!(
+            response.try_recv().expect("shutdown response"),
+            vec!["shutdown accepted".to_owned()]
+        );
     }
 
     #[test]

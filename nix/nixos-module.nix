@@ -56,8 +56,8 @@ let
           default = "/run/p2p-vpn-${name}/control.sock";
           example = "/run/p2p-vpn/${name}.sock";
           description = ''
-            Unix socket path for read-only daemon status queries. Set to null
-            to disable the local control socket.
+            Unix socket path for local daemon status, state, and orderly
+            shutdown requests. Set to null to disable the local control socket.
           '';
         };
 

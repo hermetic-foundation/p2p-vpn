@@ -11,6 +11,7 @@ use tokio::{
 
 const STATUS_REQUEST: &[u8] = b"status\n";
 const STATE_REQUEST: &[u8] = b"state\n";
+const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const MAX_REQUEST_LEN: usize = 64;
 const MAX_RESPONSE_LEN: usize = 256 * 1024;
 const REQUEST_CHANNEL: usize = 16;
@@ -21,6 +22,9 @@ pub enum RuntimeControlRequest {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     State {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Shutdown {
         respond_to: oneshot::Sender<Vec<String>>,
     },
 }
@@ -89,6 +93,7 @@ async fn handle_connection(
     let request = match request.as_slice() {
         STATUS_REQUEST => RequestKind::Status,
         STATE_REQUEST => RequestKind::State,
+        SHUTDOWN_REQUEST => RequestKind::Shutdown,
         _ => {
             stream.write_all(b"error unsupported request\n").await?;
             return Ok(());
@@ -111,6 +116,13 @@ async fn handle_connection(
                     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
                 })?;
         }
+        RequestKind::Shutdown => {
+            tx.send(RuntimeControlRequest::Shutdown { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
     }
     let lines = response
         .await
@@ -125,6 +137,7 @@ async fn handle_connection(
 enum RequestKind {
     Status,
     State,
+    Shutdown,
 }
 
 async fn read_bounded_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
@@ -168,6 +181,13 @@ pub async fn query_state(
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
     query_lines(path, timeout, STATE_REQUEST).await
+}
+
+pub async fn query_shutdown(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, SHUTDOWN_REQUEST).await
 }
 
 async fn query_lines(
@@ -307,6 +327,33 @@ mod tests {
                 "configured peers: 1".to_owned()
             ]
         );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_serves_shutdown_request() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-control-{}-{}.sock",
+            std::process::id(),
+            "shutdown"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::Shutdown { respond_to }) = rx.recv().await else {
+                panic!("expected shutdown request");
+            };
+            respond_to
+                .send(vec!["shutdown accepted".to_owned()])
+                .expect("shutdown response accepted");
+        });
+
+        let lines = query_shutdown(&path, std::time::Duration::from_secs(1))
+            .await
+            .expect("query");
+
+        assert_eq!(lines, vec!["shutdown accepted".to_owned()]);
         responder.await.expect("responder");
         drop(socket);
     }
