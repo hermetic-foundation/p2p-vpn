@@ -698,10 +698,12 @@ acceptance and rejection counters by reason, packet counters, queue occupancy,
 oldest queued packet age in milliseconds, total queue drops, queue expiry drops,
 inbound accepted IP packets, accepted keepalive and path-probe frames, outbound
 path-probe send/ACK/failure counters, path-MTU update and probe-confirmation
-counters, packet-plane session expiry counters, inbound and outbound packet drop reasons
-including rate-limited inbound frames and expired outbound queue packets, stream
-fallback sends, attempted native QUIC datagram sends, datagram-unavailable queue
-stalls, direct versus
+counters, packet-plane session expiry counters, inbound and outbound packet drop
+reasons including packet-plane receive rejection counters by stable reason
+(`unknown_endpoint`, `decrypt`, `replayed_datagram`, `payload_too_large`, and
+the other packet-plane datagram parser/session failures), rate-limited inbound
+frames, expired outbound queue packets, stream fallback sends, attempted native
+QUIC datagram sends, datagram-unavailable queue stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, packet-plane path demotions, relay reservation/circuit
 counts, packet-plane recovery dial attempts/failures, relay-server

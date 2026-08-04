@@ -24,7 +24,10 @@ use crate::{
     PathKind, PeerId, SessionId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
     identity::NodeIdentity,
-    metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics, RuntimeSnapshot},
+    metrics::{
+        AutoNatReachability, PacketDropReason, PacketPlaneDropReason, RuntimeMetrics,
+        RuntimeSnapshot,
+    },
     path::{PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
     route::RouteError,
@@ -3068,6 +3071,7 @@ fn handle_packet_plane_receive_error(metrics: &RuntimeMetrics, error: &PacketPla
         );
     } else {
         metrics.record_inbound_drop(packet_plane_inbound_drop_reason(error));
+        metrics.record_packet_plane_inbound_drop(packet_plane_inbound_metric_reason(error));
         log_runtime_event(
             LogLevel::Warn,
             "packet_plane_rejected",
@@ -4632,6 +4636,64 @@ fn packet_plane_inbound_drop_reason(error: &PacketPlaneIoError) -> PacketDropRea
         PacketPlaneIoError::Datagram(_) => PacketDropReason::MalformedPacket,
         PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
             PacketDropReason::MalformedPacket
+        }
+    }
+}
+
+fn packet_plane_inbound_metric_reason(error: &PacketPlaneIoError) -> PacketPlaneDropReason {
+    match error {
+        PacketPlaneIoError::NoListener { .. } => PacketPlaneDropReason::NoListener,
+        PacketPlaneIoError::NoSession { .. } => PacketPlaneDropReason::NoSession,
+        PacketPlaneIoError::NoSessions => PacketPlaneDropReason::NoSessions,
+        PacketPlaneIoError::UnknownEndpoint { .. } => PacketPlaneDropReason::UnknownEndpoint,
+        PacketPlaneIoError::UnexpectedEndpoint { .. } => PacketPlaneDropReason::UnexpectedEndpoint,
+        PacketPlaneIoError::Io(_) => PacketPlaneDropReason::IoError,
+        PacketPlaneIoError::Datagram(error) => packet_plane_datagram_metric_reason(error),
+    }
+}
+
+fn packet_plane_datagram_metric_reason(
+    error: &crate::runtime::packet_plane::PacketPlaneDatagramError,
+) -> PacketPlaneDropReason {
+    match error {
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Encrypt => {
+            PacketPlaneDropReason::Encrypt
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Decrypt => {
+            PacketPlaneDropReason::Decrypt
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::InvalidMagic => {
+            PacketPlaneDropReason::InvalidMagic
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Truncated { .. } => {
+            PacketPlaneDropReason::Truncated
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::UnsupportedVersion(_) => {
+            PacketPlaneDropReason::UnsupportedVersion
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::CiphertextTooLarge { .. } => {
+            PacketPlaneDropReason::CiphertextTooLarge
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. } => {
+            PacketPlaneDropReason::PayloadTooLarge
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::FrameDecode(_) => {
+            PacketPlaneDropReason::FrameDecode
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::FrameLengthMismatch { .. } => {
+            PacketPlaneDropReason::FrameLengthMismatch
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::HeaderMismatch { .. } => {
+            PacketPlaneDropReason::HeaderMismatch
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::ReplayedDatagram { .. } => {
+            PacketPlaneDropReason::ReplayedDatagram
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+            ..
+        } => PacketPlaneDropReason::DatagramOutsideReplayWindow,
+        crate::runtime::packet_plane::PacketPlaneDatagramError::TrailingBytes { .. } => {
+            PacketPlaneDropReason::TrailingBytes
         }
     }
 }
@@ -6568,6 +6630,10 @@ mod tests {
             PacketDropReason::UnauthorizedPeer
         );
         assert_eq!(
+            packet_plane_inbound_metric_reason(&unknown_endpoint),
+            PacketPlaneDropReason::UnknownEndpoint
+        );
+        assert_eq!(
             packet_plane_io_error_name(&unknown_endpoint),
             "unknown_endpoint"
         );
@@ -6575,15 +6641,27 @@ mod tests {
             packet_plane_inbound_drop_reason(&oversized),
             PacketDropReason::PacketTooLarge
         );
+        assert_eq!(
+            packet_plane_inbound_metric_reason(&oversized),
+            PacketPlaneDropReason::PayloadTooLarge
+        );
         assert_eq!(packet_plane_io_error_name(&oversized), "payload_too_large");
         assert_eq!(
             packet_plane_inbound_drop_reason(&decrypt),
             PacketDropReason::MalformedPacket
         );
+        assert_eq!(
+            packet_plane_inbound_metric_reason(&decrypt),
+            PacketPlaneDropReason::Decrypt
+        );
         assert_eq!(packet_plane_io_error_name(&decrypt), "decrypt");
         assert_eq!(
             packet_plane_inbound_drop_reason(&replay),
             PacketDropReason::Replay
+        );
+        assert_eq!(
+            packet_plane_inbound_metric_reason(&replay),
+            PacketPlaneDropReason::ReplayedDatagram
         );
         assert_eq!(packet_plane_io_error_name(&replay), "replayed_datagram");
     }

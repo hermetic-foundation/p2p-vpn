@@ -24,6 +24,29 @@ pub enum PacketDropReason {
     RateLimited,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PacketPlaneDropReason {
+    NoListener,
+    NoSession,
+    NoSessions,
+    UnknownEndpoint,
+    UnexpectedEndpoint,
+    IoError,
+    Encrypt,
+    Decrypt,
+    InvalidMagic,
+    Truncated,
+    UnsupportedVersion,
+    CiphertextTooLarge,
+    PayloadTooLarge,
+    FrameDecode,
+    FrameLengthMismatch,
+    HeaderMismatch,
+    ReplayedDatagram,
+    DatagramOutsideReplayWindow,
+    TrailingBytes,
+}
+
 #[derive(Debug, Default)]
 pub struct RuntimeMetrics {
     tun_read_packets: AtomicU64,
@@ -59,6 +82,26 @@ pub struct RuntimeMetrics {
     inbound_drop_unauthorized_destination_packets: AtomicU64,
     inbound_drop_unexpected_payload_packets: AtomicU64,
     inbound_drop_rate_limited_packets: AtomicU64,
+    packet_plane_inbound_dropped_datagrams: AtomicU64,
+    packet_plane_inbound_drop_no_listener_datagrams: AtomicU64,
+    packet_plane_inbound_drop_no_session_datagrams: AtomicU64,
+    packet_plane_inbound_drop_no_sessions_datagrams: AtomicU64,
+    packet_plane_inbound_drop_unknown_endpoint_datagrams: AtomicU64,
+    packet_plane_inbound_drop_unexpected_endpoint_datagrams: AtomicU64,
+    packet_plane_inbound_drop_io_error_datagrams: AtomicU64,
+    packet_plane_inbound_drop_encrypt_datagrams: AtomicU64,
+    packet_plane_inbound_drop_decrypt_datagrams: AtomicU64,
+    packet_plane_inbound_drop_invalid_magic_datagrams: AtomicU64,
+    packet_plane_inbound_drop_truncated_datagrams: AtomicU64,
+    packet_plane_inbound_drop_unsupported_version_datagrams: AtomicU64,
+    packet_plane_inbound_drop_ciphertext_too_large_datagrams: AtomicU64,
+    packet_plane_inbound_drop_payload_too_large_datagrams: AtomicU64,
+    packet_plane_inbound_drop_frame_decode_datagrams: AtomicU64,
+    packet_plane_inbound_drop_frame_length_mismatch_datagrams: AtomicU64,
+    packet_plane_inbound_drop_header_mismatch_datagrams: AtomicU64,
+    packet_plane_inbound_drop_replayed_datagrams: AtomicU64,
+    packet_plane_inbound_drop_outside_replay_window_datagrams: AtomicU64,
+    packet_plane_inbound_drop_trailing_bytes_datagrams: AtomicU64,
     outbound_failures: AtomicU64,
     inbound_failures: AtomicU64,
     direct_connections_established: AtomicU64,
@@ -273,6 +316,70 @@ impl RuntimeMetrics {
                 .fetch_add(1, Ordering::Relaxed),
             PacketDropReason::RateLimited => self
                 .inbound_drop_rate_limited_packets
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    pub fn record_packet_plane_inbound_drop(&self, reason: PacketPlaneDropReason) {
+        self.packet_plane_inbound_dropped_datagrams
+            .fetch_add(1, Ordering::Relaxed);
+        match reason {
+            PacketPlaneDropReason::NoListener => self
+                .packet_plane_inbound_drop_no_listener_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::NoSession => self
+                .packet_plane_inbound_drop_no_session_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::NoSessions => self
+                .packet_plane_inbound_drop_no_sessions_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::UnknownEndpoint => self
+                .packet_plane_inbound_drop_unknown_endpoint_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::UnexpectedEndpoint => self
+                .packet_plane_inbound_drop_unexpected_endpoint_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::IoError => self
+                .packet_plane_inbound_drop_io_error_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::Encrypt => self
+                .packet_plane_inbound_drop_encrypt_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::Decrypt => self
+                .packet_plane_inbound_drop_decrypt_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::InvalidMagic => self
+                .packet_plane_inbound_drop_invalid_magic_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::Truncated => self
+                .packet_plane_inbound_drop_truncated_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::UnsupportedVersion => self
+                .packet_plane_inbound_drop_unsupported_version_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::CiphertextTooLarge => self
+                .packet_plane_inbound_drop_ciphertext_too_large_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::PayloadTooLarge => self
+                .packet_plane_inbound_drop_payload_too_large_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::FrameDecode => self
+                .packet_plane_inbound_drop_frame_decode_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::FrameLengthMismatch => self
+                .packet_plane_inbound_drop_frame_length_mismatch_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::HeaderMismatch => self
+                .packet_plane_inbound_drop_header_mismatch_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::ReplayedDatagram => self
+                .packet_plane_inbound_drop_replayed_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::DatagramOutsideReplayWindow => self
+                .packet_plane_inbound_drop_outside_replay_window_datagrams
+                .fetch_add(1, Ordering::Relaxed),
+            PacketPlaneDropReason::TrailingBytes => self
+                .packet_plane_inbound_drop_trailing_bytes_datagrams
                 .fetch_add(1, Ordering::Relaxed),
         };
     }
@@ -729,6 +836,70 @@ impl RuntimeMetrics {
         snapshot.inbound_drop_rate_limited_packets = self
             .inbound_drop_rate_limited_packets
             .load(Ordering::Relaxed);
+        self.fill_packet_plane_drop_snapshot(snapshot);
+    }
+
+    fn fill_packet_plane_drop_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
+        snapshot.packet_plane_inbound_dropped_datagrams = self
+            .packet_plane_inbound_dropped_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_no_listener_datagrams = self
+            .packet_plane_inbound_drop_no_listener_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_no_session_datagrams = self
+            .packet_plane_inbound_drop_no_session_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_no_sessions_datagrams = self
+            .packet_plane_inbound_drop_no_sessions_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_unknown_endpoint_datagrams = self
+            .packet_plane_inbound_drop_unknown_endpoint_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_unexpected_endpoint_datagrams = self
+            .packet_plane_inbound_drop_unexpected_endpoint_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_io_error_datagrams = self
+            .packet_plane_inbound_drop_io_error_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_encrypt_datagrams = self
+            .packet_plane_inbound_drop_encrypt_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_decrypt_datagrams = self
+            .packet_plane_inbound_drop_decrypt_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_invalid_magic_datagrams = self
+            .packet_plane_inbound_drop_invalid_magic_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_truncated_datagrams = self
+            .packet_plane_inbound_drop_truncated_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_unsupported_version_datagrams = self
+            .packet_plane_inbound_drop_unsupported_version_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_ciphertext_too_large_datagrams = self
+            .packet_plane_inbound_drop_ciphertext_too_large_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_payload_too_large_datagrams = self
+            .packet_plane_inbound_drop_payload_too_large_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_frame_decode_datagrams = self
+            .packet_plane_inbound_drop_frame_decode_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_frame_length_mismatch_datagrams = self
+            .packet_plane_inbound_drop_frame_length_mismatch_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_header_mismatch_datagrams = self
+            .packet_plane_inbound_drop_header_mismatch_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_replayed_datagrams = self
+            .packet_plane_inbound_drop_replayed_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_outside_replay_window_datagrams = self
+            .packet_plane_inbound_drop_outside_replay_window_datagrams
+            .load(Ordering::Relaxed);
+        snapshot.packet_plane_inbound_drop_trailing_bytes_datagrams = self
+            .packet_plane_inbound_drop_trailing_bytes_datagrams
+            .load(Ordering::Relaxed);
     }
 
     fn fill_transport_snapshot(&self, snapshot: &mut RuntimeSnapshot) {
@@ -940,6 +1111,26 @@ pub struct RuntimeSnapshot {
     pub inbound_drop_unauthorized_destination_packets: u64,
     pub inbound_drop_unexpected_payload_packets: u64,
     pub inbound_drop_rate_limited_packets: u64,
+    pub packet_plane_inbound_dropped_datagrams: u64,
+    pub packet_plane_inbound_drop_no_listener_datagrams: u64,
+    pub packet_plane_inbound_drop_no_session_datagrams: u64,
+    pub packet_plane_inbound_drop_no_sessions_datagrams: u64,
+    pub packet_plane_inbound_drop_unknown_endpoint_datagrams: u64,
+    pub packet_plane_inbound_drop_unexpected_endpoint_datagrams: u64,
+    pub packet_plane_inbound_drop_io_error_datagrams: u64,
+    pub packet_plane_inbound_drop_encrypt_datagrams: u64,
+    pub packet_plane_inbound_drop_decrypt_datagrams: u64,
+    pub packet_plane_inbound_drop_invalid_magic_datagrams: u64,
+    pub packet_plane_inbound_drop_truncated_datagrams: u64,
+    pub packet_plane_inbound_drop_unsupported_version_datagrams: u64,
+    pub packet_plane_inbound_drop_ciphertext_too_large_datagrams: u64,
+    pub packet_plane_inbound_drop_payload_too_large_datagrams: u64,
+    pub packet_plane_inbound_drop_frame_decode_datagrams: u64,
+    pub packet_plane_inbound_drop_frame_length_mismatch_datagrams: u64,
+    pub packet_plane_inbound_drop_header_mismatch_datagrams: u64,
+    pub packet_plane_inbound_drop_replayed_datagrams: u64,
+    pub packet_plane_inbound_drop_outside_replay_window_datagrams: u64,
+    pub packet_plane_inbound_drop_trailing_bytes_datagrams: u64,
     pub outbound_failures: u64,
     pub inbound_failures: u64,
     pub direct_connections_established: u64,
@@ -1460,6 +1651,92 @@ impl RuntimeSnapshot {
                 self.inbound_drop_rate_limited_packets
             ),
         ]);
+        self.extend_packet_plane_drop_lines(lines);
+    }
+
+    fn extend_packet_plane_drop_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
+            format!(
+                "packet_plane_inbound_dropped_datagrams {}",
+                self.packet_plane_inbound_dropped_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_no_listener_datagrams {}",
+                self.packet_plane_inbound_drop_no_listener_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_no_session_datagrams {}",
+                self.packet_plane_inbound_drop_no_session_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_no_sessions_datagrams {}",
+                self.packet_plane_inbound_drop_no_sessions_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_unknown_endpoint_datagrams {}",
+                self.packet_plane_inbound_drop_unknown_endpoint_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_unexpected_endpoint_datagrams {}",
+                self.packet_plane_inbound_drop_unexpected_endpoint_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_io_error_datagrams {}",
+                self.packet_plane_inbound_drop_io_error_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_encrypt_datagrams {}",
+                self.packet_plane_inbound_drop_encrypt_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_decrypt_datagrams {}",
+                self.packet_plane_inbound_drop_decrypt_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_invalid_magic_datagrams {}",
+                self.packet_plane_inbound_drop_invalid_magic_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_truncated_datagrams {}",
+                self.packet_plane_inbound_drop_truncated_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_unsupported_version_datagrams {}",
+                self.packet_plane_inbound_drop_unsupported_version_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_ciphertext_too_large_datagrams {}",
+                self.packet_plane_inbound_drop_ciphertext_too_large_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_payload_too_large_datagrams {}",
+                self.packet_plane_inbound_drop_payload_too_large_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_frame_decode_datagrams {}",
+                self.packet_plane_inbound_drop_frame_decode_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_frame_length_mismatch_datagrams {}",
+                self.packet_plane_inbound_drop_frame_length_mismatch_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_header_mismatch_datagrams {}",
+                self.packet_plane_inbound_drop_header_mismatch_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_replayed_datagrams {}",
+                self.packet_plane_inbound_drop_replayed_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_outside_replay_window_datagrams {}",
+                self.packet_plane_inbound_drop_outside_replay_window_datagrams
+            ),
+            format!(
+                "packet_plane_inbound_drop_trailing_bytes_datagrams {}",
+                self.packet_plane_inbound_drop_trailing_bytes_datagrams
+            ),
+        ]);
     }
 }
 
@@ -1505,6 +1782,29 @@ mod tests {
         metrics.record_inbound_drop(PacketDropReason::UnauthorizedDestination);
         metrics.record_inbound_drop(PacketDropReason::UnexpectedPayload);
         metrics.record_inbound_drop(PacketDropReason::RateLimited);
+        for reason in [
+            PacketPlaneDropReason::NoListener,
+            PacketPlaneDropReason::NoSession,
+            PacketPlaneDropReason::NoSessions,
+            PacketPlaneDropReason::UnknownEndpoint,
+            PacketPlaneDropReason::UnexpectedEndpoint,
+            PacketPlaneDropReason::IoError,
+            PacketPlaneDropReason::Encrypt,
+            PacketPlaneDropReason::Decrypt,
+            PacketPlaneDropReason::InvalidMagic,
+            PacketPlaneDropReason::Truncated,
+            PacketPlaneDropReason::UnsupportedVersion,
+            PacketPlaneDropReason::CiphertextTooLarge,
+            PacketPlaneDropReason::PayloadTooLarge,
+            PacketPlaneDropReason::FrameDecode,
+            PacketPlaneDropReason::FrameLengthMismatch,
+            PacketPlaneDropReason::HeaderMismatch,
+            PacketPlaneDropReason::ReplayedDatagram,
+            PacketPlaneDropReason::DatagramOutsideReplayWindow,
+            PacketPlaneDropReason::TrailingBytes,
+        ] {
+            metrics.record_packet_plane_inbound_drop(reason);
+        }
         metrics.record_outbound_failure();
         metrics.record_inbound_failure();
     }
@@ -1639,6 +1939,56 @@ mod tests {
         assert_eq!(snapshot.inbound_drop_unauthorized_destination_packets, 1);
         assert_eq!(snapshot.inbound_drop_unexpected_payload_packets, 1);
         assert_eq!(snapshot.inbound_drop_rate_limited_packets, 1);
+        assert_eq!(snapshot.packet_plane_inbound_dropped_datagrams, 19);
+        assert_eq!(snapshot.packet_plane_inbound_drop_no_listener_datagrams, 1);
+        assert_eq!(snapshot.packet_plane_inbound_drop_no_session_datagrams, 1);
+        assert_eq!(snapshot.packet_plane_inbound_drop_no_sessions_datagrams, 1);
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_unknown_endpoint_datagrams,
+            1
+        );
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_unexpected_endpoint_datagrams,
+            1
+        );
+        assert_eq!(snapshot.packet_plane_inbound_drop_io_error_datagrams, 1);
+        assert_eq!(snapshot.packet_plane_inbound_drop_encrypt_datagrams, 1);
+        assert_eq!(snapshot.packet_plane_inbound_drop_decrypt_datagrams, 1);
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_invalid_magic_datagrams,
+            1
+        );
+        assert_eq!(snapshot.packet_plane_inbound_drop_truncated_datagrams, 1);
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_unsupported_version_datagrams,
+            1
+        );
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_ciphertext_too_large_datagrams,
+            1
+        );
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_payload_too_large_datagrams,
+            1
+        );
+        assert_eq!(snapshot.packet_plane_inbound_drop_frame_decode_datagrams, 1);
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_frame_length_mismatch_datagrams,
+            1
+        );
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_header_mismatch_datagrams,
+            1
+        );
+        assert_eq!(snapshot.packet_plane_inbound_drop_replayed_datagrams, 1);
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_outside_replay_window_datagrams,
+            1
+        );
+        assert_eq!(
+            snapshot.packet_plane_inbound_drop_trailing_bytes_datagrams,
+            1
+        );
     }
 
     fn assert_packet_drop_lines(snapshot: &RuntimeSnapshot) {
@@ -1656,6 +2006,65 @@ mod tests {
         assert_metric_line(snapshot, "inbound_drop_unauthorized_destination_packets 1");
         assert_metric_line(snapshot, "inbound_drop_unexpected_payload_packets 1");
         assert_metric_line(snapshot, "inbound_drop_rate_limited_packets 1");
+        assert_metric_line(snapshot, "packet_plane_inbound_dropped_datagrams 19");
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_no_listener_datagrams 1",
+        );
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_no_session_datagrams 1");
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_no_sessions_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_unknown_endpoint_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_unexpected_endpoint_datagrams 1",
+        );
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_io_error_datagrams 1");
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_encrypt_datagrams 1");
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_decrypt_datagrams 1");
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_invalid_magic_datagrams 1",
+        );
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_truncated_datagrams 1");
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_unsupported_version_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_ciphertext_too_large_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_payload_too_large_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_frame_decode_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_frame_length_mismatch_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_header_mismatch_datagrams 1",
+        );
+        assert_metric_line(snapshot, "packet_plane_inbound_drop_replayed_datagrams 1");
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_outside_replay_window_datagrams 1",
+        );
+        assert_metric_line(
+            snapshot,
+            "packet_plane_inbound_drop_trailing_bytes_datagrams 1",
+        );
     }
 
     #[test]
