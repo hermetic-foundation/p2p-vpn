@@ -100,9 +100,10 @@
           nativeBuildInputs = [ pkgs.gnutar ];
         } ''
           release_dir="$TMPDIR/p2p-vpn-0.1.0-${system}"
-          mkdir -p "$release_dir/bin" "$release_dir/examples" "$release_dir/nix"
+          mkdir -p "$release_dir/bin" "$release_dir/docs" "$release_dir/examples" "$release_dir/nix"
           cp ${package}/bin/p2p-vpn "$release_dir/bin/"
           cp ${./README.md} "$release_dir/README.md"
+          cp ${./docs/feature-matrix.md} "$release_dir/docs/feature-matrix.md"
           cp ${./flake.nix} "$release_dir/flake.nix"
           cp ${./flake.lock} "$release_dir/flake.lock"
           cp ${./Cargo.toml} "$release_dir/Cargo.toml"

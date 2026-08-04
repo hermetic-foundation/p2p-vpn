@@ -368,9 +368,15 @@ tar -tzf result
 ```
 
 The archive contains the packaged `p2p-vpn` binary, README, flake lock, NixOS
-module, and the `nixos-mesh` deployment template. Release builds should also run
-`nix flake check` so the binary package, release archive, formatter, clippy
-check, and NixOS module evaluation are all verified before publishing.
+module, the feature matrix, and the `nixos-mesh` deployment template. Release
+builds should also run `nix flake check` so the binary package, release archive,
+formatter, clippy check, and NixOS module evaluation are all verified before
+publishing.
+
+The current feature-completeness audit lives in
+[`docs/feature-matrix.md`](docs/feature-matrix.md). It links each major
+Hyprspace-style requirement to implementation evidence, verification commands,
+and known remaining gaps.
 
 Run the Linux TUN end-to-end smoke test on hosts that allow unprivileged user
 and network namespaces:
