@@ -58,3 +58,20 @@ observation from an unprivileged process. It does not prove public relay
 reservation acceptance, relayed peer circuit dialing, or public-relay-assisted
 DCUtR hole punching; those require a known public circuit-relay v2 endpoint that
 accepts reservations for the test.
+
+To record the remaining relay evidence, run the ignored live relay smokes with a
+known-good relay or a candidate set:
+
+```sh
+P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B' \
+  nix develop -c cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_relayed_peer_circuit \
+  -- --ignored --exact --nocapture
+
+P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B' \
+  nix develop -c cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_dcutr_success \
+  -- --ignored --exact --nocapture
+```
+
+`P2P_VPN_LIVE_RELAY_MULTIADDRS` accepts comma, semicolon, or newline-separated
+direct relay multiaddrs. `P2P_VPN_LIVE_RELAY_MULTIADDR` remains supported for a
+single relay.

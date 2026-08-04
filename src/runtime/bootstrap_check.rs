@@ -747,6 +747,9 @@ mod tests {
         runtime::p2p::{HostConfig, build_node},
     };
 
+    const LIVE_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
+    const LIVE_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
+
     #[tokio::test]
     async fn bootstrap_check_connects_to_configured_bootstrap_peer() {
         let mut bootstrap = build_node(&HostConfig {
@@ -950,16 +953,72 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDR for a reachable public libp2p relay"]
+    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDRS or P2P_VPN_LIVE_RELAY_MULTIADDR for a reachable public libp2p relay"]
     async fn bootstrap_check_can_probe_live_public_relayed_peer_circuit() {
-        let Ok(relay_address) = env::var("P2P_VPN_LIVE_RELAY_MULTIADDR") else {
-            eprintln!("skipping live public relay smoke: P2P_VPN_LIVE_RELAY_MULTIADDR is not set");
+        let relay_addresses = live_relay_addresses();
+        if relay_addresses.is_empty() {
+            eprintln!(
+                "skipping live public relay smoke: P2P_VPN_LIVE_RELAY_MULTIADDRS and P2P_VPN_LIVE_RELAY_MULTIADDR are not set"
+            );
             return;
-        };
-        let relay_address: Multiaddr = relay_address.parse().expect("live relay multiaddr");
-        let relay_peer = address_peer(&relay_address)
-            .expect("P2P_VPN_LIVE_RELAY_MULTIADDR must include /p2p/RELAY");
-        let relay_reservation = relay_address.clone().with(Protocol::P2pCircuit);
+        }
+
+        let mut failures = Vec::new();
+        for relay_address in relay_addresses {
+            match Box::pin(live_public_relayed_peer_circuit(&relay_address)).await {
+                Ok(report) => {
+                    assert_eq!(report.configured_relayed_peer_circuits, 1);
+                    assert_eq!(report.connected_relayed_peer_circuits, 1);
+                    assert!(report.relayed_peer_results[0].connected);
+                    eprintln!("live public relay circuit smoke passed through {relay_address}");
+                    return;
+                }
+                Err(error) => failures.push(format!("{relay_address}: {error}")),
+            }
+        }
+
+        panic!(
+            "no live public relay candidate completed relayed peer circuit smoke:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDRS or P2P_VPN_LIVE_RELAY_MULTIADDR and a network path where DCUtR can complete"]
+    async fn bootstrap_check_can_probe_live_public_dcutr_success() {
+        let relay_addresses = live_relay_addresses();
+        if relay_addresses.is_empty() {
+            eprintln!(
+                "skipping live public DCUtR smoke: P2P_VPN_LIVE_RELAY_MULTIADDRS and P2P_VPN_LIVE_RELAY_MULTIADDR are not set"
+            );
+            return;
+        }
+
+        let mut failures = Vec::new();
+        for relay_address in relay_addresses {
+            match Box::pin(live_public_dcutr_success(&relay_address)).await {
+                Ok(report) => {
+                    assert_eq!(report.connected_relayed_peer_circuits, 1);
+                    assert!(report.dcutr.successes > 0, "{report:?}");
+                    eprintln!("live public DCUtR smoke passed through {relay_address}");
+                    return;
+                }
+                Err(error) => failures.push(format!("{relay_address}: {error}")),
+            }
+        }
+
+        panic!(
+            "no live public relay candidate completed DCUtR smoke:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    async fn live_public_relayed_peer_circuit(
+        relay_address: &Multiaddr,
+    ) -> Result<BootstrapCheckReport, String> {
+        let relay_peer = address_peer(relay_address)
+            .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+        let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
         let discovery = relay_test_discovery();
         let mut listener_node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
@@ -991,7 +1050,7 @@ mod tests {
             ),
         )
         .await
-        .expect("live relay reservation timed out");
+        .map_err(|_| "relay reservation timed out".to_owned())?;
 
         let _listener_task = tokio::spawn(async move {
             loop {
@@ -1013,25 +1072,21 @@ mod tests {
             },
         )
         .await
-        .expect("bootstrap check");
+        .map_err(|error| format!("{error:?}"))?;
 
-        assert!(report.succeeded(), "{report:?}");
-        assert_eq!(report.configured_relayed_peer_circuits, 1);
-        assert_eq!(report.connected_relayed_peer_circuits, 1);
-        assert!(report.relayed_peer_results[0].connected);
+        if report.succeeded() {
+            Ok(report)
+        } else {
+            Err(format!("{report:?}"))
+        }
     }
 
-    #[tokio::test]
-    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDR and a network path where DCUtR can complete"]
-    async fn bootstrap_check_can_probe_live_public_dcutr_success() {
-        let Ok(relay_address) = env::var("P2P_VPN_LIVE_RELAY_MULTIADDR") else {
-            eprintln!("skipping live public DCUtR smoke: P2P_VPN_LIVE_RELAY_MULTIADDR is not set");
-            return;
-        };
-        let relay_address: Multiaddr = relay_address.parse().expect("live relay multiaddr");
-        let relay_peer = address_peer(&relay_address)
-            .expect("P2P_VPN_LIVE_RELAY_MULTIADDR must include /p2p/RELAY");
-        let relay_reservation = relay_address.clone().with(Protocol::P2pCircuit);
+    async fn live_public_dcutr_success(
+        relay_address: &Multiaddr,
+    ) -> Result<BootstrapCheckReport, String> {
+        let relay_peer = address_peer(relay_address)
+            .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+        let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
         let discovery = dcutr_smoke_discovery();
         let mut listener_node = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
@@ -1050,7 +1105,7 @@ mod tests {
             resources: ResourceConfig::default(),
             discovery: discovery.clone(),
         })
-        .expect("listener node");
+        .map_err(|error| format!("{error:?}"))?;
         let listener_peer = listener_node.local_peer_id;
         let relayed_target_address = relay_reservation.with(Protocol::P2p(listener_peer));
 
@@ -1063,7 +1118,7 @@ mod tests {
             ),
         )
         .await
-        .expect("live relay reservation timed out");
+        .map_err(|_| "relay reservation timed out".to_owned())?;
 
         let _listener_task = tokio::spawn(async move {
             loop {
@@ -1090,11 +1145,13 @@ mod tests {
             },
         )
         .await
-        .expect("bootstrap check");
+        .map_err(|error| format!("{error:?}"))?;
 
-        assert!(report.succeeded(), "{report:?}");
-        assert_eq!(report.connected_relayed_peer_circuits, 1);
-        assert!(report.dcutr.successes > 0, "{report:?}");
+        if report.succeeded() {
+            Ok(report)
+        } else {
+            Err(format!("{report:?}"))
+        }
     }
 
     #[test]
@@ -1189,6 +1246,26 @@ mod tests {
                 .any(|line| line.contains("relayed peer circuit:")
                     && line.contains("connected false")
                     && line.contains("dial_failures 1"))
+        );
+    }
+
+    #[test]
+    fn live_relay_candidate_parser_accepts_multiple_addresses() {
+        let relay_a = peer_id();
+        let relay_b = peer_id();
+        let raw = format!(
+            "/dns4/relay-a.example.net/tcp/4001/p2p/{relay_a},\n/ip4/203.0.113.10/tcp/4001/p2p/{relay_b}"
+        );
+
+        let relays = parse_live_relay_addresses(&raw).expect("relay candidates");
+
+        assert_eq!(relays.len(), 2);
+        assert_eq!(address_peer(&relays[0]), Some(relay_a));
+        assert_eq!(address_peer(&relays[1]), Some(relay_b));
+        assert!(
+            parse_live_relay_addresses("/dns4/relay.example.net/tcp/4001")
+                .expect_err("missing peer id should fail")
+                .contains("missing /p2p/RELAY")
         );
     }
 
@@ -1331,6 +1408,35 @@ mod tests {
             Protocol::P2p(peer) => Some(peer),
             _ => None,
         })
+    }
+
+    fn live_relay_addresses() -> Vec<Multiaddr> {
+        let raw = env::var(LIVE_RELAY_MULTIADDRS_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| env::var(LIVE_RELAY_MULTIADDR_ENV).ok());
+        let Some(raw) = raw else {
+            return Vec::new();
+        };
+
+        parse_live_relay_addresses(&raw)
+            .expect("live relay multiaddr candidates must parse and include /p2p/RELAY")
+    }
+
+    fn parse_live_relay_addresses(raw: &str) -> Result<Vec<Multiaddr>, String> {
+        raw.split([',', ';', '\n'])
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty())
+            .map(|candidate| {
+                let address = candidate
+                    .parse::<Multiaddr>()
+                    .map_err(|error| format!("{candidate}: {error}"))?;
+                if address_peer(&address).is_none() {
+                    return Err(format!("{candidate}: missing /p2p/RELAY"));
+                }
+                Ok(address)
+            })
+            .collect()
     }
 
     fn relay_test_discovery() -> DiscoveryConfig {
