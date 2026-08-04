@@ -654,7 +654,9 @@ where
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     packet_plane: packet_plane.snapshot(),
-                    packet_plane_quic: packet_plane_quic_snapshot.clone(),
+                    packet_plane_quic: current_packet_plane_quic_snapshot(
+                        packet_plane_quic.as_ref(),
+                    ),
                     packet_plane_session_ttl,
                     packet_plane_replay_windows_per_session,
                 };
@@ -1824,6 +1826,15 @@ fn log_packet_plane_quic_status(packet_plane_quic: &PacketPlaneQuicSnapshot) {
             ),
         ],
     );
+}
+
+fn current_packet_plane_quic_snapshot(
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+) -> PacketPlaneQuicSnapshot {
+    packet_plane_quic.map_or_else(
+        PacketPlaneQuicRuntime::disabled_snapshot,
+        PacketPlaneQuicRuntime::snapshot,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6105,6 +6116,46 @@ mod tests {
             .expect("receiver QUIC packet-plane session");
     }
 
+    #[tokio::test]
+    async fn current_packet_plane_quic_snapshot_reports_runtime_sessions() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let mut local = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("local quic"))
+            .expect("local quic");
+        let mut remote = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("remote quic"))
+            .expect("remote quic");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_quic_sessions(
+            &mut local,
+            &mut remote,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1_200,
+        )
+        .await;
+        let remote_overlay = remote_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("remote overlay");
+
+        let snapshot = current_packet_plane_quic_snapshot(Some(&local));
+
+        assert_eq!(snapshot.listener, Some(local.local_addr()));
+        assert!(snapshot.certificate_der.is_some());
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].peer, remote_overlay);
+        assert_eq!(snapshot.sessions[0].mtu, 1_200);
+        assert_eq!(snapshot.sessions[0].role, PacketPlaneSessionRole::Initiator);
+        assert_eq!(
+            current_packet_plane_quic_snapshot(None),
+            PacketPlaneQuicRuntime::disabled_snapshot()
+        );
+    }
+
     #[test]
     fn shutdown_reason_has_stable_log_values() {
         assert_eq!(ShutdownReason::Interrupt.as_str(), "interrupt");
@@ -6321,7 +6372,14 @@ mod tests {
         let packet_plane_quic = PacketPlaneQuicSnapshot {
             listener: Some("127.0.0.1:51821".parse().expect("quic listener")),
             certificate_der: Some(vec![0x30, 0x01]),
-            sessions: Vec::new(),
+            sessions: vec![PacketPlaneSessionSnapshot {
+                peer: PeerId::from_bytes([8; 32]),
+                endpoint: "127.0.0.1:51822".parse().expect("quic endpoint"),
+                mtu: 1180,
+                role: PacketPlaneSessionRole::Initiator,
+                local_session_id: 17,
+                remote_session_id: 19,
+            }],
         };
         let lines = runtime_status_lines(
             &RuntimeMetrics::default(),
@@ -6338,9 +6396,13 @@ mod tests {
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
         assert!(lines.contains(&"packet_plane_sessions 0".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_listeners 1".to_owned()));
-        assert!(lines.contains(&"packet_plane_quic_sessions 0".to_owned()));
+        assert!(lines.contains(&"packet_plane_quic_sessions 1".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_certificate_bytes 2".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_listener 127.0.0.1:51821".to_owned()));
+        assert!(lines.contains(&format!(
+            "packet_plane_quic_session {} endpoint 127.0.0.1:51822 mtu 1180 role initiator local_session 17 remote_session 19",
+            PeerId::from_bytes([8; 32])
+        )));
     }
 
     #[test]
