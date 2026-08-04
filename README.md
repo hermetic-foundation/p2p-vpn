@@ -279,7 +279,8 @@ effective packet MTU is capped by the fixed wire header's `u16` payload length
 field and the packet-plane UDP envelope's safe payload ceiling, then used
 consistently by the TUN setup and packet forwarder. Runtime validation rejects a
 zero interface MTU. The `status` and `up` commands print both configured and
-effective MTU values. The daemon does not fragment overlay packets; it rejects
+effective MTU values, and `mtu`/`daemon-mtu` report the overlay fragmentation
+policy explicitly. The daemon does not fragment overlay packets; it rejects
 oversized packets, emits packet-too-big feedback where possible, lowers the
 selected path's MTU estimate when an oversized outbound packet proves a smaller
 negotiated ceiling, and relies on route MSS hints or the local stack to retry
@@ -839,7 +840,9 @@ cargo run -- up --config p2p-vpn.json --dry-run
 Remote route commands include the effective overlay MTU and, where the MTU is
 large enough, a Linux `advmss` hint derived from the IP family. This avoids
 silent oversized TCP segments on routed overlay prefixes without adding
-fragmentation inside the p2p-vpn packet protocol.
+fragmentation inside the p2p-vpn packet protocol. The same invariant is exposed
+as `overlay fragmentation: disabled` in configured, live-peer, and daemon MTU
+output.
 
 Attempt to create the TUN device and install routes:
 

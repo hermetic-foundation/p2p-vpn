@@ -22,7 +22,7 @@ use rand_core::{OsRng, RngCore as _};
 use tokio::sync::mpsc;
 
 use crate::{
-    PathKind, PeerId, SessionId,
+    OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
     identity::NodeIdentity,
     metrics::{
@@ -961,6 +961,7 @@ fn runtime_mtu_lines(
     let mut peers = sorted_configured_peers(forwarder);
     let mut lines = vec![
         format!("local effective packet mtu: {local_mtu}"),
+        OVERLAY_FRAGMENTATION_POLICY_LINE.to_owned(),
         format!("peers: {}", peers.len()),
     ];
 
@@ -5452,6 +5453,18 @@ mod tests {
         assert!(capability_lines.contains(&format!(
             "remote capability preferred path: {remote_overlay} direct_quic_stream"
         )));
+    }
+
+    #[test]
+    fn runtime_mtu_lines_report_overlay_fragmentation_policy() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let forwarder = Forwarder::from_config(&config_with_peer(&local_identity, peer_id()))
+            .expect("forwarder");
+
+        let mtu_lines =
+            runtime_mtu_lines(&forwarder, &PathSet::new(), &PeerCapabilities::default());
+
+        assert!(mtu_lines.contains(&OVERLAY_FRAGMENTATION_POLICY_LINE.to_owned()));
     }
 
     #[test]

@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 pub type Sequence = u64;
 pub type SessionId = u32;
 
+pub const OVERLAY_FRAGMENTATION_POLICY_LINE: &str = "overlay fragmentation: disabled";
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PeerId([u8; 32]);
 

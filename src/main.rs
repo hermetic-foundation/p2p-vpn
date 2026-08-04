@@ -8,7 +8,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use p2p_vpn::{
-    PathKind,
+    OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
         Config, DiscoveryConfig, InitConfigTemplate, InitPeer, PacketPlaneConfig, QueueConfig,
         RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
@@ -1207,6 +1207,7 @@ fn mtu_lines_configured(config: &Config) -> Result<Vec<String>, String> {
         format!("packet header length: {HEADER_LEN}"),
         format!("packet plane datagram overhead length: {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"),
         format!("packet plane max payload length: {PACKET_PLANE_MAX_PAYLOAD_LEN}"),
+        OVERLAY_FRAGMENTATION_POLICY_LINE.to_owned(),
     ];
 
     for route in routes.routes() {
@@ -1294,6 +1295,10 @@ fn push_peer_live_mtu_lines(lines: &mut Vec<String>, status: &RemotePeerStatus, 
         optional_usize(status.service.max_packet_payload_len),
         optional_usize(status.service.packet_plane_max_payload_len),
         optional_usize(status.service.packet_plane_datagram_overhead_len)
+    ));
+    lines.push(format!(
+        "peer live fragmentation: {} overlay disabled",
+        status.peer
     ));
 }
 
@@ -2517,6 +2522,11 @@ mod tests {
             )));
         assert!(lines.iter().any(|line| line
             == &format!("packet plane max payload length: {PACKET_PLANE_MAX_PAYLOAD_LEN}")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == OVERLAY_FRAGMENTATION_POLICY_LINE)
+        );
         assert!(lines.iter().any(|line| line
             == &format!(
                 "route mtu: 10.42.0.0/24 owner peer {} name remote metric 100 configured mtu 1280 advmss 1240",
@@ -2555,6 +2565,11 @@ mod tests {
             == &format!(
                 "peer live mtu: {peer} effective_mtu 1400 negotiated_mtu 1280 preferred_path circuit relay path_mtu_estimate 1200 wire_max_payload {MAX_PAYLOAD_LEN} packet_plane_max_payload {PACKET_PLANE_MAX_PAYLOAD_LEN} packet_plane_overhead {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"
             )));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live fragmentation: {peer} overlay disabled"))
+        );
     }
 
     #[test]
