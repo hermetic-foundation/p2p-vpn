@@ -222,7 +222,7 @@ fn start_configured_kademlia(
     let rendezvous_key = config
         .discovery
         .kademlia
-        .then(|| kademlia_rendezvous_key(&config.network_name));
+        .then(|| kademlia_rendezvous_key(&config.network_name, config.membership_tag.as_deref()));
     let startup = start_kademlia(
         swarm,
         rendezvous_key.as_ref(),
@@ -356,8 +356,12 @@ fn start_kademlia(
 }
 
 #[must_use]
-pub fn kademlia_rendezvous_key(network_name: &str) -> kad::RecordKey {
-    kad::RecordKey::new(&format!("/p2p-vpn/{network_name}/providers/1"))
+pub fn kademlia_rendezvous_key(network_name: &str, membership_tag: Option<&str>) -> kad::RecordKey {
+    let key = membership_tag.map_or_else(
+        || format!("/p2p-vpn/{network_name}/providers/1"),
+        |membership_tag| format!("/p2p-vpn/{network_name}/members/{membership_tag}/providers/1"),
+    );
+    kad::RecordKey::new(&key)
 }
 
 fn kademlia_stream_protocol(protocol: &str) -> Result<libp2p::StreamProtocol, P2pBuildError> {
@@ -570,6 +574,36 @@ mod tests {
         assert_eq!(node.discovery.kademlia_protocol, "/ipfs/kad/1.0.0");
         assert!(node.startup.kademlia.rendezvous_advertise_started);
         assert!(node.startup.kademlia.rendezvous_lookup_started);
+    }
+
+    #[tokio::test]
+    async fn build_node_scopes_kademlia_rendezvous_to_membership_tag() {
+        let membership_tag = "membership-tag".to_owned();
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: Some(membership_tag.clone()),
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node should build");
+
+        assert_eq!(
+            node.kademlia_rendezvous_key
+                .expect("rendezvous key")
+                .to_vec(),
+            kademlia_rendezvous_key("lab", Some(&membership_tag)).to_vec()
+        );
     }
 
     #[tokio::test]
@@ -906,14 +940,32 @@ mod tests {
     }
 
     #[test]
-    fn kademlia_rendezvous_key_is_scoped_to_network_name() {
+    fn kademlia_rendezvous_key_is_scoped_to_network_name_without_membership() {
         assert_eq!(
-            kademlia_rendezvous_key("lab").to_vec(),
+            kademlia_rendezvous_key("lab", None).to_vec(),
             b"/p2p-vpn/lab/providers/1".to_vec()
         );
         assert_ne!(
-            kademlia_rendezvous_key("lab").to_vec(),
-            kademlia_rendezvous_key("prod").to_vec()
+            kademlia_rendezvous_key("lab", None).to_vec(),
+            kademlia_rendezvous_key("prod", None).to_vec()
+        );
+    }
+
+    #[test]
+    fn kademlia_rendezvous_key_is_scoped_to_membership_tag_when_available() {
+        let tag = "tag";
+
+        assert_eq!(
+            kademlia_rendezvous_key("lab", Some(tag)).to_vec(),
+            b"/p2p-vpn/lab/members/tag/providers/1".to_vec()
+        );
+        assert_ne!(
+            kademlia_rendezvous_key("lab", Some(tag)).to_vec(),
+            kademlia_rendezvous_key("lab", Some("other")).to_vec()
+        );
+        assert_ne!(
+            kademlia_rendezvous_key("lab", Some(tag)).to_vec(),
+            kademlia_rendezvous_key("lab", None).to_vec()
         );
     }
 

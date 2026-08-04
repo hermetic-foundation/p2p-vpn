@@ -548,10 +548,14 @@ host kernel that permits user namespaces, network namespaces, veth setup, and
 `bootstrap_peers` are dialed and added to the configured Kademlia routing table
 when Kademlia discovery is enabled. TCP and QUIC startup dials support DNS
 multiaddrs, including `/dns4`, `/dns6`, `/dns`, and `/dnsaddr`. Kademlia nodes
-query the network provider key for other configured peers. Nodes with
-`discovery.kademlia_provider_advertisement` enabled also advertise themselves
-under that key; disable it on public/bootstrap infrastructure that should help
-route discovery without claiming to be an overlay VPN endpoint.
+query a provider key for other configured peers. Overlays without
+`network.membership_key` use a network-name provider key for compatibility.
+When `network.membership_key` is configured, the provider key is scoped by the
+derived membership tag so public/IPFS-compatible DHT nodes can assist discovery
+without exposing the overlay under a network-name-only rendezvous key. Nodes
+with `discovery.kademlia_provider_advertisement` enabled also advertise
+themselves under that key; disable it on public/bootstrap infrastructure that
+should help route discovery without claiming to be an overlay VPN endpoint.
 `network.routes` are local route-ownership claims. The node advertises them in
 the control handshake and accepts outbound TUN packets sourced from those
 prefixes; other peers must configure matching `peer.routes` entries for this
