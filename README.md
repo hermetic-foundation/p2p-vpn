@@ -743,10 +743,11 @@ registered at least one probe server and observed a non-unknown `public` or
 `private` status before the timeout. When the config contains relay reservation
 listen addresses, the same command also reports configured relay reservations,
 accepted relay reservation events, relayed listen address readiness, and
-per-relay acceptance state. Use `--require-relay-reservations` to make the
-command fail unless every configured relay reservation is accepted and has a
-corresponding relayed listen address. Use `--require-dcutr-ready` to fail unless
-DCUtR is enabled and the relay reservation prerequisites for DCUtR are usable;
+per-relay acceptance/listen-address state. Use `--require-relay-reservations` to
+make the command fail unless every configured relay reservation is accepted and
+that same relay has a corresponding relayed listen address. Use
+`--require-dcutr-ready` to fail unless DCUtR is enabled and the relay
+reservation prerequisites for DCUtR are usable on each configured relay;
 this is a rootless readiness check, not proof that a remote peer has completed a
 hole punch. It does not add bootstrap or relay peers to VPN membership or grant
 route authority.

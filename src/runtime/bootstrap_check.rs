@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -80,7 +80,7 @@ impl BootstrapCheckReport {
         let relay_ready = relay_reservations_ready(
             self.configured_relay_reservations,
             self.accepted_relay_reservations,
-            self.relayed_listen_addresses,
+            self.relays_with_listen_addresses(),
         );
         let relay_ok = !self.requirements.relay_reservations || relay_ready;
         let autonat_ok = !self.requirements.autonat_status
@@ -160,12 +160,19 @@ impl BootstrapCheckReport {
 
         for relay in &self.relay_results {
             lines.push(format!(
-                "relay reservation: {} accepted {} address {}",
-                relay.relay_peer_id, relay.accepted, relay.address
+                "relay reservation: {} accepted {} relayed_listen_address {} address {}",
+                relay.relay_peer_id, relay.accepted, relay.relayed_listen_address, relay.address
             ));
         }
 
         lines
+    }
+
+    fn relays_with_listen_addresses(&self) -> usize {
+        self.relay_results
+            .iter()
+            .filter(|relay| relay.relayed_listen_address)
+            .count()
     }
 }
 
@@ -206,6 +213,7 @@ pub struct RelayReservationCheck {
     pub relay_peer_id: Libp2pPeerId,
     pub address: String,
     pub accepted: bool,
+    pub relayed_listen_address: bool,
 }
 
 pub async fn check_config_bootstrap(
@@ -231,7 +239,7 @@ pub async fn check_config_bootstrap(
         && relay_reservations_ready(
             relay_reservations.len(),
             poll.accepted_relay_reservations.len(),
-            poll.relayed_listen_addresses.len(),
+            relays_with_listen_addresses(&relay_reservations, &poll.relayed_listen_addresses),
         );
 
     Ok(BootstrapCheckReport {
@@ -282,6 +290,7 @@ pub async fn check_config_bootstrap(
                 relay_peer_id,
                 address: address.to_string(),
                 accepted: poll.accepted_relay_reservations.contains(&relay_peer_id),
+                relayed_listen_address: poll.relayed_listen_addresses.contains_key(&relay_peer_id),
             })
             .collect(),
     })
@@ -378,8 +387,14 @@ fn record_bootstrap_event(
         {
             result.accepted_relay_reservations.insert(relay_peer_id);
         }
-        SwarmEvent::NewListenAddr { address, .. } if is_relayed_address(&address) => {
-            result.relayed_listen_addresses.insert(address);
+        SwarmEvent::NewListenAddr { address, .. } => {
+            if let Some(relay_peer) = relay_peer_from_relayed_address(&address)
+                && relay_reservations
+                    .iter()
+                    .any(|(peer, _)| *peer == relay_peer)
+            {
+                result.relayed_listen_addresses.insert(relay_peer, address);
+            }
         }
         SwarmEvent::Behaviour(BehaviourEvent::Autonat(autonat::Event::StatusChanged {
             new,
@@ -396,7 +411,7 @@ struct BootstrapPollResult {
     connected_bootstrap_peers: HashSet<Libp2pPeerId>,
     dial_failures: Vec<(Libp2pPeerId, String)>,
     accepted_relay_reservations: HashSet<Libp2pPeerId>,
-    relayed_listen_addresses: HashSet<libp2p::Multiaddr>,
+    relayed_listen_addresses: HashMap<Libp2pPeerId, libp2p::Multiaddr>,
     autonat_status: BootstrapAutoNatStatus,
 }
 
@@ -446,11 +461,21 @@ fn should_continue_polling(status: PollingStatus) -> bool {
 const fn relay_reservations_ready(
     configured_relay_reservations: usize,
     accepted_relay_reservations: usize,
-    relayed_listen_addresses: usize,
+    relays_with_listen_addresses: usize,
 ) -> bool {
     configured_relay_reservations > 0
         && accepted_relay_reservations == configured_relay_reservations
-        && relayed_listen_addresses >= configured_relay_reservations
+        && relays_with_listen_addresses == configured_relay_reservations
+}
+
+fn relays_with_listen_addresses(
+    relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    relayed_listen_addresses: &HashMap<Libp2pPeerId, libp2p::Multiaddr>,
+) -> usize {
+    relay_reservations
+        .iter()
+        .filter(|(relay, _)| relayed_listen_addresses.contains_key(relay))
+        .count()
 }
 
 impl BootstrapAutoNatStatus {
@@ -463,10 +488,16 @@ impl BootstrapAutoNatStatus {
     }
 }
 
-fn is_relayed_address(address: &libp2p::Multiaddr) -> bool {
-    address
-        .iter()
-        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+fn relay_peer_from_relayed_address(address: &libp2p::Multiaddr) -> Option<Libp2pPeerId> {
+    let mut relay_peer = None;
+    for protocol in address {
+        match protocol {
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            Protocol::P2pCircuit => return relay_peer,
+            _ => {}
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -653,6 +684,7 @@ mod tests {
                 relay_peer_id: peer,
                 address: "/dns4/relay.example.net/tcp/4001".to_owned(),
                 accepted: false,
+                relayed_listen_address: false,
             }],
         };
 
@@ -674,6 +706,11 @@ mod tests {
         );
         assert!(lines.contains(&"autonat probe servers registered: 2".to_owned()));
         assert!(lines.contains(&"autonat status: private".to_owned()));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("accepted false relayed_listen_address false"))
+        );
         assert!(lines.iter().any(|line| line.contains("last_error none")));
     }
 
@@ -692,6 +729,30 @@ mod tests {
         assert!(!dcutr_report(true, 1, 0, 1).succeeded());
         assert!(!dcutr_report(true, 1, 1, 0).succeeded());
         assert!(!dcutr_report(true, 0, 0, 0).succeeded());
+    }
+
+    #[test]
+    fn relay_readiness_requires_each_relay_to_have_listen_address() {
+        let relay_a = peer_id();
+        let relay_b = peer_id();
+        let report = relay_report(vec![
+            RelayReservationCheck {
+                relay_peer_id: relay_a,
+                address: format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_a}/p2p-circuit"),
+                accepted: true,
+                relayed_listen_address: true,
+            },
+            RelayReservationCheck {
+                relay_peer_id: relay_b,
+                address: format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay_b}/p2p-circuit"),
+                accepted: true,
+                relayed_listen_address: false,
+            },
+        ]);
+
+        assert_eq!(report.accepted_relay_reservations, 2);
+        assert_eq!(report.relayed_listen_addresses, 2);
+        assert!(!report.succeeded());
     }
 
     async fn next_listen_address(node: &mut crate::runtime::p2p::P2pNode) -> Multiaddr {
@@ -774,12 +835,51 @@ mod tests {
         }
     }
 
+    fn relay_report(relay_results: Vec<RelayReservationCheck>) -> BootstrapCheckReport {
+        let configured_relay_reservations = relay_results.len();
+        let accepted_relay_reservations =
+            relay_results.iter().filter(|relay| relay.accepted).count();
+        BootstrapCheckReport {
+            threshold: BootstrapCheckThreshold::Any,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: true,
+                autonat_status: false,
+                dcutr_ready: false,
+            },
+            kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
+            ipfs_compatible: false,
+            dcutr: BootstrapDcutrCheck::default(),
+            configured_bootstrap_peers: 0,
+            connected_bootstrap_peers: 0,
+            dial_failures: 0,
+            configured_relay_reservations,
+            accepted_relay_reservations,
+            relayed_listen_addresses: configured_relay_reservations,
+            autonat_probe_servers_registered: 0,
+            autonat_status: BootstrapAutoNatStatus::Unknown,
+            kademlia: BootstrapKademliaCheck::default(),
+            peer_results: Vec::new(),
+            relay_results,
+        }
+    }
+
     fn dcutr_report(
         dcutr_enabled: bool,
         configured_relay_reservations: usize,
         accepted_relay_reservations: usize,
         relayed_listen_addresses: usize,
     ) -> BootstrapCheckReport {
+        let relay_results: Vec<_> = (0..configured_relay_reservations)
+            .map(|index| {
+                let relay_peer_id = peer_id();
+                RelayReservationCheck {
+                    relay_peer_id,
+                    address: format!("/memory/{}/p2p/{relay_peer_id}/p2p-circuit", index + 10),
+                    accepted: index < accepted_relay_reservations,
+                    relayed_listen_address: index < relayed_listen_addresses,
+                }
+            })
+            .collect();
         BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::Any,
             requirements: BootstrapCheckRequirements {
@@ -808,7 +908,7 @@ mod tests {
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
             peer_results: Vec::new(),
-            relay_results: Vec::new(),
+            relay_results,
         }
     }
 }
