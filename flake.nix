@@ -27,6 +27,13 @@
         lib = nixpkgs.lib;
         rust = pkgs.rustc;
         cargo = pkgs.cargo;
+        package = pkgs.rustPlatform.buildRustPackage {
+          pname = "p2p-vpn";
+          version = "0.1.0";
+          src = self;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -49,13 +56,24 @@
         };
       in
       {
-        packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "p2p-vpn";
-          version = "0.1.0";
-          src = self;
-          cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
-        };
+        packages.default = package;
+
+        packages.releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
+          nativeBuildInputs = [ pkgs.gnutar ];
+        } ''
+          release_dir="$TMPDIR/p2p-vpn-0.1.0-${system}"
+          mkdir -p "$release_dir/bin" "$release_dir/examples" "$release_dir/nix"
+          cp ${package}/bin/p2p-vpn "$release_dir/bin/"
+          cp ${./README.md} "$release_dir/README.md"
+          cp ${./flake.nix} "$release_dir/flake.nix"
+          cp ${./flake.lock} "$release_dir/flake.lock"
+          cp ${./Cargo.toml} "$release_dir/Cargo.toml"
+          cp -R ${./examples/nixos-mesh} "$release_dir/examples/nixos-mesh"
+          cp ${./nix/nixos-module.nix} "$release_dir/nix/nixos-module.nix"
+          tar --sort=name --mtime="UTC 1970-01-01" \
+            --owner=0 --group=0 --numeric-owner \
+            -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
+        '';
 
         apps.default = {
           type = "app";
@@ -66,7 +84,8 @@
         };
 
         checks = {
-          package = self.packages.${system}.default;
+          package = package;
+          releaseArchive = self.packages.${system}.releaseArchive;
           clippy = pkgs.rustPlatform.buildRustPackage {
             pname = "p2p-vpn-clippy";
             version = "0.1.0";

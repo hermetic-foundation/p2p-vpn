@@ -328,6 +328,32 @@ nix build .#default
 `nix flake check` builds and tests the package, checks formatting, and runs
 clippy with warnings denied.
 
+Build or run the packaged CLI with Nix:
+
+```sh
+nix build .#default
+nix run . -- status --config p2p-vpn.json
+```
+
+Install the CLI into a user profile from a checked-out tree or a Git URL:
+
+```sh
+nix profile install .#default
+nix profile install github:hermetic-foundation/p2p-vpn#default
+```
+
+Build a reproducible release archive for the current system:
+
+```sh
+nix build .#releaseArchive
+tar -tzf result
+```
+
+The archive contains the packaged `p2p-vpn` binary, README, flake lock, NixOS
+module, and the `nixos-mesh` deployment template. Release builds should also run
+`nix flake check` so the binary package, release archive, formatter, clippy
+check, and NixOS module evaluation are all verified before publishing.
+
 Run the Linux TUN end-to-end smoke test on hosts that allow unprivileged user
 and network namespaces:
 
