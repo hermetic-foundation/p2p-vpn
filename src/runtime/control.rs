@@ -34,6 +34,7 @@ impl ControlRoute {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ControlCapabilities {
     pub network_name: String,
@@ -51,6 +52,8 @@ pub struct ControlCapabilities {
     pub supports_native_quic_datagrams: bool,
     #[serde(default)]
     pub supports_owned_udp_packet_plane: bool,
+    #[serde(default)]
+    pub supports_owned_quic_packet_plane: bool,
     #[serde(default)]
     pub packet_endpoint_candidates: Vec<String>,
 }
@@ -71,6 +74,7 @@ impl ControlCapabilities {
             supports_quic_datagrams: false,
             supports_native_quic_datagrams: false,
             supports_owned_udp_packet_plane: false,
+            supports_owned_quic_packet_plane: false,
             packet_endpoint_candidates: Vec::new(),
         }
     }
@@ -90,14 +94,27 @@ impl ControlCapabilities {
     #[must_use]
     pub const fn with_owned_udp_packet_plane(mut self, supported: bool) -> Self {
         self.supports_owned_udp_packet_plane = supported;
-        self.supports_quic_datagrams = self.supports_native_quic_datagrams || supported;
+        self.supports_quic_datagrams = self.supports_native_quic_datagrams
+            || self.supports_owned_quic_packet_plane
+            || supported;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_owned_quic_packet_plane(mut self, supported: bool) -> Self {
+        self.supports_owned_quic_packet_plane = supported;
+        self.supports_quic_datagrams = self.supports_native_quic_datagrams
+            || self.supports_owned_udp_packet_plane
+            || supported;
         self
     }
 
     #[must_use]
     pub const fn with_native_quic_datagrams(mut self, supported: bool) -> Self {
         self.supports_native_quic_datagrams = supported;
-        self.supports_quic_datagrams = supported || self.supports_owned_udp_packet_plane;
+        self.supports_quic_datagrams = supported
+            || self.supports_owned_udp_packet_plane
+            || self.supports_owned_quic_packet_plane;
         self
     }
 
@@ -106,6 +123,7 @@ impl ControlCapabilities {
         self.supports_quic_datagrams
             || self.supports_native_quic_datagrams
             || self.supports_owned_udp_packet_plane
+            || self.supports_owned_quic_packet_plane
     }
 }
 
@@ -187,6 +205,13 @@ impl PeerCapabilities {
         self.peers
             .get(&peer)
             .is_some_and(|capabilities| capabilities.supports_owned_udp_packet_plane)
+    }
+
+    #[must_use]
+    pub fn supports_owned_quic_packet_plane_for(&self, peer: PeerId) -> bool {
+        self.peers
+            .get(&peer)
+            .is_some_and(|capabilities| capabilities.supports_owned_quic_packet_plane)
     }
 
     #[must_use]
@@ -551,6 +576,7 @@ mod tests {
         assert!(!capabilities.supports_quic_datagrams);
         assert!(!capabilities.supports_native_quic_datagrams);
         assert!(!capabilities.supports_owned_udp_packet_plane);
+        assert!(!capabilities.supports_owned_quic_packet_plane);
         assert!(capabilities.packet_endpoint_candidates.is_empty());
     }
 
@@ -560,11 +586,20 @@ mod tests {
         assert!(owned.supports_quic_datagrams);
         assert!(!owned.supports_native_quic_datagrams);
         assert!(owned.supports_owned_udp_packet_plane);
+        assert!(!owned.supports_owned_quic_packet_plane);
+
+        let owned_quic =
+            ControlCapabilities::local("lab", None, 1420).with_owned_quic_packet_plane(true);
+        assert!(owned_quic.supports_quic_datagrams);
+        assert!(!owned_quic.supports_native_quic_datagrams);
+        assert!(!owned_quic.supports_owned_udp_packet_plane);
+        assert!(owned_quic.supports_owned_quic_packet_plane);
 
         let native = ControlCapabilities::local("lab", None, 1420).with_native_quic_datagrams(true);
         assert!(native.supports_quic_datagrams);
         assert!(native.supports_native_quic_datagrams);
         assert!(!native.supports_owned_udp_packet_plane);
+        assert!(!native.supports_owned_quic_packet_plane);
     }
 
     #[test]
@@ -601,6 +636,7 @@ mod tests {
         assert!(!capabilities.supports_quic_datagrams_for(peer));
         assert!(!capabilities.supports_native_quic_datagrams_for(peer));
         assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
+        assert!(!capabilities.supports_owned_quic_packet_plane_for(peer));
         assert!(!capabilities.supports_datagram_packet_path_for(peer));
 
         let mut peer_capabilities = ControlCapabilities::local("lab", None, 1280);
@@ -610,6 +646,7 @@ mod tests {
         assert!(capabilities.supports_quic_datagrams_for(peer));
         assert!(!capabilities.supports_native_quic_datagrams_for(peer));
         assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
+        assert!(!capabilities.supports_owned_quic_packet_plane_for(peer));
         assert!(capabilities.supports_datagram_packet_path_for(peer));
 
         capabilities.record(
@@ -620,6 +657,18 @@ mod tests {
         assert!(capabilities.supports_quic_datagrams_for(peer));
         assert!(!capabilities.supports_native_quic_datagrams_for(peer));
         assert!(capabilities.supports_owned_udp_packet_plane_for(peer));
+        assert!(!capabilities.supports_owned_quic_packet_plane_for(peer));
+        assert!(capabilities.supports_datagram_packet_path_for(peer));
+
+        capabilities.record(
+            peer,
+            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true),
+        );
+
+        assert!(capabilities.supports_quic_datagrams_for(peer));
+        assert!(!capabilities.supports_native_quic_datagrams_for(peer));
+        assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
+        assert!(capabilities.supports_owned_quic_packet_plane_for(peer));
         assert!(capabilities.supports_datagram_packet_path_for(peer));
 
         capabilities.record(
@@ -630,6 +679,7 @@ mod tests {
         assert!(capabilities.supports_quic_datagrams_for(peer));
         assert!(capabilities.supports_native_quic_datagrams_for(peer));
         assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
+        assert!(!capabilities.supports_owned_quic_packet_plane_for(peer));
         assert!(capabilities.supports_datagram_packet_path_for(peer));
     }
 

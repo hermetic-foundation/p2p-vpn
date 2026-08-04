@@ -75,6 +75,7 @@ const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
 struct LocalPacketDataPlane {
     native_quic_datagrams: bool,
     owned_udp_packet_plane: bool,
+    owned_quic_packet_plane: bool,
 }
 
 impl LocalPacketDataPlane {
@@ -86,6 +87,7 @@ impl LocalPacketDataPlane {
         Self {
             native_quic_datagrams: false,
             owned_udp_packet_plane: false,
+            owned_quic_packet_plane: false,
         }
     }
 }
@@ -374,10 +376,11 @@ where
             .with_advertised_routes(forwarder.local_advertised_routes());
     let owned_udp_packet_plane = packet_plane.primary_listener().is_some()
         && !local_capabilities.packet_endpoint_candidates.is_empty();
-    let native_quic_datagrams = local_packet_data_plane().native_quic_datagrams;
+    let local_data_plane = local_packet_data_plane();
     local_capabilities = local_capabilities
-        .with_native_quic_datagrams(native_quic_datagrams)
-        .with_owned_udp_packet_plane(owned_udp_packet_plane);
+        .with_native_quic_datagrams(local_data_plane.native_quic_datagrams)
+        .with_owned_udp_packet_plane(owned_udp_packet_plane)
+        .with_owned_quic_packet_plane(local_data_plane.owned_quic_packet_plane);
     timers.prime().await;
     let discovery = node.discovery.clone();
     let (_control_socket, mut control_rx) = match control_socket {
@@ -864,12 +867,13 @@ fn runtime_peer_lines(
             .count();
 
         lines.push(format!(
-            "peer: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} healthy_paths {healthy_paths} selected_path {}",
+            "peer: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} healthy_paths {healthy_paths} selected_path {}",
             peer_capabilities.contains(peer),
             peer_capabilities.effective_mtu_for(peer, local_mtu),
             support.quic_datagrams,
             peer_capabilities.supports_native_quic_datagrams_for(peer),
             peer_capabilities.supports_owned_udp_packet_plane_for(peer),
+            peer_capabilities.supports_owned_quic_packet_plane_for(peer),
             selected_path.map_or("none", |path| path.kind.wire_name()),
         ));
     }
@@ -1065,6 +1069,10 @@ fn local_capability_lines(
             local_capabilities.supports_owned_udp_packet_plane
         ),
         format!(
+            "local capability supports owned quic packet plane: {}",
+            local_capabilities.supports_owned_quic_packet_plane
+        ),
+        format!(
             "local capability packet endpoint candidates: {}",
             local_capabilities.packet_endpoint_candidates.len()
         ),
@@ -1148,6 +1156,18 @@ fn extend_remote_capability_lines(
     lines.push(format!(
         "remote capability supports quic datagrams: {peer} {}",
         capabilities.supports_quic_datagrams
+    ));
+    lines.push(format!(
+        "remote capability supports native quic datagrams: {peer} {}",
+        capabilities.supports_native_quic_datagrams
+    ));
+    lines.push(format!(
+        "remote capability supports owned udp packet plane: {peer} {}",
+        capabilities.supports_owned_udp_packet_plane
+    ));
+    lines.push(format!(
+        "remote capability supports owned quic packet plane: {peer} {}",
+        capabilities.supports_owned_quic_packet_plane
     ));
     extend_remote_packet_endpoint_lines(lines, peer, capabilities);
     lines.push(format!(
@@ -1469,12 +1489,13 @@ fn extend_runtime_peer_state_lines(
         .count();
 
     lines.push(format!(
-        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
         peer_capabilities.contains(peer),
         peer_capabilities.effective_mtu_for(peer, local_mtu),
         support.quic_datagrams,
         peer_capabilities.supports_native_quic_datagrams_for(peer),
         peer_capabilities.supports_owned_udp_packet_plane_for(peer),
+        peer_capabilities.supports_owned_quic_packet_plane_for(peer),
         selected_path.map_or("none", |path| path.kind.wire_name()),
         selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
         selected_path.map_or_else(
@@ -5426,7 +5447,7 @@ mod tests {
         assert!(peer_lines.contains(&"peers: 1".to_owned()));
         assert!(peer_lines.iter().any(|line| {
             line == &format!(
-                "peer: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false healthy_paths 2 selected_path direct_tcp_stream"
+                "peer: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false healthy_paths 2 selected_path direct_tcp_stream"
             )
         }));
 
@@ -5623,7 +5644,7 @@ mod tests {
         )));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
+                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
             )
         }));
         assert!(lines.iter().any(|line| {
@@ -9200,6 +9221,7 @@ mod tests {
         );
         assert!(!local_data_plane.native_quic_datagrams);
         assert!(!local_data_plane.owned_udp_packet_plane);
+        assert!(!local_data_plane.owned_quic_packet_plane);
     }
 
     #[tokio::test]

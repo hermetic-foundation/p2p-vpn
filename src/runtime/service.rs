@@ -37,6 +37,7 @@ impl ServiceStatusRequest {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ServiceStatusResponse {
     pub network_name: String,
@@ -58,6 +59,8 @@ pub struct ServiceStatusResponse {
     pub supports_native_quic_datagrams: bool,
     #[serde(default)]
     pub supports_owned_udp_packet_plane: bool,
+    #[serde(default)]
+    pub supports_owned_quic_packet_plane: bool,
     #[serde(default)]
     pub packet_plane_session_ttl_seconds: Option<u64>,
     #[serde(default)]
@@ -86,6 +89,7 @@ impl ServiceStatusResponse {
             supports_quic_datagrams: false,
             supports_native_quic_datagrams: false,
             supports_owned_udp_packet_plane: false,
+            supports_owned_quic_packet_plane: false,
             packet_plane_session_ttl_seconds: None,
             packet_plane_replay_windows_per_session: None,
         }
@@ -98,9 +102,11 @@ impl ServiceStatusResponse {
     ) -> Self {
         self.supports_native_quic_datagrams = capabilities.supports_native_quic_datagrams;
         self.supports_owned_udp_packet_plane = capabilities.supports_owned_udp_packet_plane;
+        self.supports_owned_quic_packet_plane = capabilities.supports_owned_quic_packet_plane;
         self.supports_quic_datagrams = capabilities.supports_quic_datagrams
             || capabilities.supports_native_quic_datagrams
-            || capabilities.supports_owned_udp_packet_plane;
+            || capabilities.supports_owned_udp_packet_plane
+            || capabilities.supports_owned_quic_packet_plane;
         self
     }
 
@@ -392,6 +398,7 @@ mod tests {
         assert_eq!(decoded.packet_plane_max_payload_len, None);
         assert!(!decoded.supports_native_quic_datagrams);
         assert!(!decoded.supports_owned_udp_packet_plane);
+        assert!(!decoded.supports_owned_quic_packet_plane);
     }
 
     #[test]
@@ -409,6 +416,16 @@ mod tests {
         assert!(status.supports_quic_datagrams);
         assert!(!status.supports_native_quic_datagrams);
         assert!(status.supports_owned_udp_packet_plane);
+        assert!(!status.supports_owned_quic_packet_plane);
+
+        let owned_quic =
+            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true);
+        let status = ServiceStatusResponse::local("lab", None, 42, 1280)
+            .with_packet_data_plane_capabilities(&owned_quic);
+        assert!(status.supports_quic_datagrams);
+        assert!(!status.supports_native_quic_datagrams);
+        assert!(!status.supports_owned_udp_packet_plane);
+        assert!(status.supports_owned_quic_packet_plane);
     }
 
     #[tokio::test]
