@@ -228,6 +228,10 @@ pub enum PacketPlaneIoError {
     NoSession {
         peer: PeerId,
     },
+    NoSessions,
+    UnknownEndpoint {
+        actual: SocketAddr,
+    },
     UnexpectedEndpoint {
         peer: PeerId,
         expected: SocketAddr,
@@ -883,6 +887,11 @@ impl PacketPlaneRuntime {
         self.sessions.get(&peer).map(|session| session.mtu)
     }
 
+    #[must_use]
+    pub fn can_receive(&self) -> bool {
+        !self.sockets.is_empty() && !self.sessions.is_empty()
+    }
+
     pub fn establish_session(
         &mut self,
         role: PacketPlaneSessionRole,
@@ -1033,6 +1042,49 @@ impl PacketPlaneRuntime {
         Ok(PacketPlaneReceivedFrame {
             frame,
             peer: Some(peer),
+            remote_addr,
+            local_addr: socket.local_addr()?,
+        })
+    }
+
+    pub async fn recv_frame_from_session(
+        &self,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
+        self.recv_frame_from_session_on(0).await
+    }
+
+    pub async fn recv_frame_from_session_on(
+        &self,
+        listener_index: usize,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
+        if self.sessions.is_empty() {
+            return Err(PacketPlaneIoError::NoSessions);
+        }
+        let socket = self
+            .sockets
+            .get(listener_index)
+            .ok_or(PacketPlaneIoError::NoListener {
+                index: listener_index,
+            })?;
+        let mut datagram = vec![0; MAX_UDP_DATAGRAM_LEN];
+        let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
+        let Some(session) = self
+            .sessions
+            .values()
+            .find(|session| session.endpoint == remote_addr)
+        else {
+            return Err(PacketPlaneIoError::UnknownEndpoint {
+                actual: remote_addr,
+            });
+        };
+        datagram.truncate(len);
+        let frame = session
+            .keys
+            .open
+            .open_frame(&datagram, usize::from(session.mtu))?;
+        Ok(PacketPlaneReceivedFrame {
+            frame,
+            peer: Some(session.peer),
             remote_addr,
             local_addr: socket.local_addr()?,
         })
@@ -1699,6 +1751,51 @@ mod tests {
         .expect("received frame");
 
         assert!(sent > 0);
+        assert_eq!(inbound.peer, Some(hello.peer));
+        assert_eq!(inbound.frame, frame);
+        assert_eq!(inbound.remote_addr, sender_addr);
+        assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn udp_runtime_receives_frame_from_registered_session_endpoint() {
+        let mut sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("sender bind");
+        let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("receiver bind");
+        let sender_addr = sender.snapshot().listeners[0];
+        let receiver_addr = receiver.snapshot().listeners[0];
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+
+        sender
+            .send_frame_to_peer(accept.peer, &frame)
+            .await
+            .expect("sent frame");
+        let inbound = timeout(Duration::from_secs(1), receiver.recv_frame_from_session())
+            .await
+            .expect("receive should not time out")
+            .expect("received frame");
+
         assert_eq!(inbound.peer, Some(hello.peer));
         assert_eq!(inbound.frame, frame);
         assert_eq!(inbound.remote_addr, sender_addr);

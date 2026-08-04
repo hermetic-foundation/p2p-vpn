@@ -93,8 +93,10 @@ listeners and keeps a per-peer session registry with endpoint, MTU, role, and
 local/remote packet session ids visible through daemon state and capability
 views. Outbound queue draining can prefer an established packet-plane datagram
 session over stream fallback when peer capabilities and path selection allow it.
-Automatic packet-plane session negotiation and the daemon inbound UDP receive
-loop remain future packet-plane work.
+The daemon also accepts inbound UDP frames from established packet-plane
+sessions through the same route authorization, replay protection, rate limiting,
+and TUN write path as stream packets. Automatic packet-plane session negotiation
+remains future packet-plane work.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the

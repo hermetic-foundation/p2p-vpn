@@ -37,7 +37,8 @@ use crate::{
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
         packet_plane::{
-            PacketPlaneIoError, PacketPlaneRuntime, PacketPlaneSessionRole, PacketPlaneSnapshot,
+            PacketPlaneIoError, PacketPlaneReceivedFrame, PacketPlaneRuntime,
+            PacketPlaneSessionRole, PacketPlaneSnapshot,
         },
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
@@ -386,6 +387,20 @@ where
                     metrics: &metrics,
                 })
                 .await;
+            }
+            received = packet_plane.recv_frame_from_session(), if packet_plane.can_receive() => {
+                match received {
+                    Ok(received) => {
+                        let mut packet_plane_context = PacketPlaneInboundContext {
+                            forwarder: &mut forwarder,
+                            writer: &mut writer,
+                            inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
+                            metrics: &metrics,
+                        };
+                        handle_packet_plane_received(&mut packet_plane_context, &received)?;
+                    }
+                    Err(error) => handle_packet_plane_receive_error(&metrics, &error),
+                }
             }
             _ = timers.redial.tick() => {
                 handle_redial_tick(&mut node, &mut queue_runtime.discovered_peer_addresses, &metrics);
@@ -2539,6 +2554,106 @@ fn handle_packet_request(
     }
 }
 
+struct PacketPlaneInboundContext<'a> {
+    forwarder: &'a mut Forwarder,
+    writer: &'a mut TunWriter,
+    inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
+    metrics: &'a RuntimeMetrics,
+}
+
+fn handle_packet_plane_received(
+    context: &mut PacketPlaneInboundContext<'_>,
+    received: &PacketPlaneReceivedFrame,
+) -> Result<(), RunnerError> {
+    let Some(overlay_peer) = received.peer else {
+        context
+            .metrics
+            .record_inbound_drop(PacketDropReason::UnauthorizedPeer);
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_rejected",
+            &[("reason", "missing_peer")],
+        );
+        return Ok(());
+    };
+    let Some(transport_peer) = context.forwarder.transport_peer_for_overlay(overlay_peer) else {
+        context
+            .metrics
+            .record_inbound_drop(PacketDropReason::UnauthorizedPeer);
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_rejected",
+            &[
+                ("peer", &overlay_peer.to_string()),
+                ("reason", "unknown_overlay_peer"),
+            ],
+        );
+        return Ok(());
+    };
+    if !context
+        .inbound_packet_rate_limiters
+        .allow(transport_peer, Instant::now())
+    {
+        context
+            .metrics
+            .record_inbound_drop(PacketDropReason::RateLimited);
+        audit_packet_rate_limit_rejection(
+            transport_peer,
+            &received.frame,
+            context.inbound_packet_rate_limiters.limit_per_second(),
+        );
+        return Ok(());
+    }
+
+    let result = match received.frame.header.payload_type {
+        PayloadType::IpPacket => match context
+            .forwarder
+            .accept_inbound_packet(transport_peer, &received.frame)
+        {
+            Ok(packet) => {
+                context.writer.write_packet(packet)?;
+                context.metrics.record_tun_write(packet.len());
+                context.metrics.record_inbound_accepted();
+                Ok(())
+            }
+            Err(error) => Err(error),
+        },
+        PayloadType::Keepalive => context
+            .forwarder
+            .accept_inbound_control_frame(transport_peer, &received.frame, PayloadType::Keepalive)
+            .map(|()| context.metrics.record_inbound_keepalive_accepted()),
+        PayloadType::PathProbe => context
+            .forwarder
+            .accept_inbound_control_frame(transport_peer, &received.frame, PayloadType::PathProbe)
+            .map(|()| context.metrics.record_inbound_path_probe_accepted()),
+    };
+
+    if let Err(error) = result {
+        let drop_reason = inbound_drop_reason(&error);
+        context.metrics.record_inbound_drop(drop_reason);
+        audit_packet_request_rejection(transport_peer, &received.frame, &error);
+    }
+    Ok(())
+}
+
+fn handle_packet_plane_receive_error(metrics: &RuntimeMetrics, error: &PacketPlaneIoError) {
+    if let PacketPlaneIoError::Io(error) = error {
+        metrics.record_inbound_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_receive_failed",
+            &[("error", &format!("{error:?}"))],
+        );
+    } else {
+        metrics.record_inbound_drop(packet_plane_inbound_drop_reason(error));
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_rejected",
+            &[("reason", packet_plane_io_error_name(error))],
+        );
+    }
+}
+
 fn handle_service_event(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
@@ -3443,7 +3558,9 @@ fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
 
 fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
     match error {
-        PacketPlaneIoError::NoSession { .. } => PacketDropReason::NoTransportPeer,
+        PacketPlaneIoError::NoSession { .. }
+        | PacketPlaneIoError::NoSessions
+        | PacketPlaneIoError::UnknownEndpoint { .. } => PacketDropReason::NoTransportPeer,
         PacketPlaneIoError::Datagram(
             crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
         ) => PacketDropReason::PacketTooLarge,
@@ -3452,6 +3569,22 @@ fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
         }
         PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
             PacketDropReason::NoTransportPeer
+        }
+    }
+}
+
+fn packet_plane_inbound_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
+    match error {
+        PacketPlaneIoError::NoSession { .. }
+        | PacketPlaneIoError::NoSessions
+        | PacketPlaneIoError::UnknownEndpoint { .. }
+        | PacketPlaneIoError::UnexpectedEndpoint { .. } => PacketDropReason::UnauthorizedPeer,
+        PacketPlaneIoError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
+        ) => PacketDropReason::PacketTooLarge,
+        PacketPlaneIoError::Datagram(_) => PacketDropReason::MalformedPacket,
+        PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
+            PacketDropReason::MalformedPacket
         }
     }
 }
@@ -3591,6 +3724,48 @@ fn packet_rejection_error_name(error: &ForwardError) -> &'static str {
         ForwardError::NoTransportPeer(_) => "no_transport_peer",
         ForwardError::Config(_) => "configuration_error",
         ForwardError::Enqueue(EnqueueError::QueueFull { .. }) => "queue_full",
+    }
+}
+
+fn packet_plane_io_error_name(error: &PacketPlaneIoError) -> &'static str {
+    match error {
+        PacketPlaneIoError::NoListener { .. } => "no_listener",
+        PacketPlaneIoError::NoSession { .. } => "no_session",
+        PacketPlaneIoError::NoSessions => "no_sessions",
+        PacketPlaneIoError::UnknownEndpoint { .. } => "unknown_endpoint",
+        PacketPlaneIoError::UnexpectedEndpoint { .. } => "unexpected_endpoint",
+        PacketPlaneIoError::Io(_) => "io_error",
+        PacketPlaneIoError::Datagram(error) => packet_plane_datagram_error_name(error),
+    }
+}
+
+fn packet_plane_datagram_error_name(
+    error: &crate::runtime::packet_plane::PacketPlaneDatagramError,
+) -> &'static str {
+    match error {
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Encrypt => "encrypt",
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Decrypt => "decrypt",
+        crate::runtime::packet_plane::PacketPlaneDatagramError::InvalidMagic => "invalid_magic",
+        crate::runtime::packet_plane::PacketPlaneDatagramError::Truncated { .. } => "truncated",
+        crate::runtime::packet_plane::PacketPlaneDatagramError::UnsupportedVersion(_) => {
+            "unsupported_version"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::CiphertextTooLarge { .. } => {
+            "ciphertext_too_large"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. } => {
+            "payload_too_large"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::FrameDecode(_) => "frame_decode",
+        crate::runtime::packet_plane::PacketPlaneDatagramError::FrameLengthMismatch { .. } => {
+            "frame_length_mismatch"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::HeaderMismatch { .. } => {
+            "header_mismatch"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::TrailingBytes { .. } => {
+            "trailing_bytes"
+        }
     }
 }
 
@@ -5163,6 +5338,39 @@ mod tests {
             packet_rejection_drop_reason(PacketRejectionReason::RateLimited),
             PacketDropReason::RateLimited
         );
+    }
+
+    #[test]
+    fn packet_plane_receive_errors_map_to_stable_drop_reasons_and_names() {
+        use crate::runtime::packet_plane::PacketPlaneDatagramError;
+
+        let unknown_endpoint = PacketPlaneIoError::UnknownEndpoint {
+            actual: "127.0.0.1:51820".parse().expect("endpoint"),
+        };
+        let oversized = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::PayloadTooLarge {
+            actual: 1_300,
+            max: 1_280,
+        });
+        let decrypt = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::Decrypt);
+
+        assert_eq!(
+            packet_plane_inbound_drop_reason(&unknown_endpoint),
+            PacketDropReason::UnauthorizedPeer
+        );
+        assert_eq!(
+            packet_plane_io_error_name(&unknown_endpoint),
+            "unknown_endpoint"
+        );
+        assert_eq!(
+            packet_plane_inbound_drop_reason(&oversized),
+            PacketDropReason::PacketTooLarge
+        );
+        assert_eq!(packet_plane_io_error_name(&oversized), "payload_too_large");
+        assert_eq!(
+            packet_plane_inbound_drop_reason(&decrypt),
+            PacketDropReason::MalformedPacket
+        );
+        assert_eq!(packet_plane_io_error_name(&decrypt), "decrypt");
     }
 
     #[test]
