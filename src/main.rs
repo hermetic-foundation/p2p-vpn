@@ -113,6 +113,8 @@ enum Command {
         peer_routes: Vec<PeerRouteArg>,
         #[arg(long = "relay-reservation")]
         relay_reservations: Vec<String>,
+        #[arg(long = "relay-peer")]
+        relay_peers: Vec<EndpointArg>,
         #[arg(long)]
         relay_server: bool,
         #[arg(long, default_value_t = 128)]
@@ -342,6 +344,7 @@ async fn main() -> Result<(), String> {
             local_routes,
             peer_routes,
             relay_reservations,
+            relay_peers,
             relay_server,
             relay_max_reservations,
             relay_max_reservations_per_peer,
@@ -387,6 +390,7 @@ async fn main() -> Result<(), String> {
                 max_replay_windows_per_session: packet_replay_windows_per_session,
             },
             bootstrap_peers,
+            relay_peers,
             ipfs_bootstrap_peers,
             peers,
             local_routes,
@@ -587,6 +591,7 @@ struct InitConfigArgs {
     external_addresses: Vec<String>,
     packet_plane: PacketPlaneConfig,
     bootstrap_peers: Vec<EndpointArg>,
+    relay_peers: Vec<EndpointArg>,
     ipfs_bootstrap_peers: bool,
     peers: Vec<EndpointArg>,
     local_routes: Vec<LocalRouteArg>,
@@ -718,10 +723,11 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
     if let Some(peer) = args
         .bootstrap_peers
         .iter()
+        .chain(args.relay_peers.iter())
         .find(|peer| peer.address.is_none())
     {
         return Err(format!(
-            "bootstrap peer {} must include an address as PEER_ID=MULTIADDR",
+            "bootstrap and relay infrastructure peer {} must include an address as PEER_ID=MULTIADDR",
             peer.id
         ));
     }
@@ -743,7 +749,14 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         None => NodeIdentity::generate_ed25519()
             .map_err(|error| format!("failed to generate key: {error:?}"))?,
     };
-    let bootstrap_peers = init_bootstrap_peers(args.bootstrap_peers, args.ipfs_bootstrap_peers);
+    let relay_reservations = init_relay_reservations(&args.relay_peers)?;
+    let bootstrap_peers = init_bootstrap_peers(
+        args.bootstrap_peers,
+        args.relay_peers,
+        args.ipfs_bootstrap_peers,
+    );
+    let mut relay = args.relay;
+    relay.reservations.extend(relay_reservations);
     let mut config = InitConfigTemplate {
         identity,
         network_name: args.network,
@@ -761,7 +774,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         bootstrap_peers,
         peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
-        relay: args.relay,
+        relay,
     }
     .into_config();
     config.network.previous_membership_tags = args.previous_membership_tags;
@@ -888,7 +901,21 @@ fn init_peers(addresses: Vec<EndpointArg>, routes: Vec<PeerRouteArg>) -> Vec<Ini
         .collect()
 }
 
-fn init_bootstrap_peers(mut peers: Vec<EndpointArg>, include_ipfs_defaults: bool) -> Vec<InitPeer> {
+fn init_bootstrap_peers(
+    mut peers: Vec<EndpointArg>,
+    relay_peers: Vec<EndpointArg>,
+    include_ipfs_defaults: bool,
+) -> Vec<InitPeer> {
+    for relay in relay_peers {
+        if peers
+            .iter()
+            .any(|peer| peer.id == relay.id && peer.address == relay.address)
+        {
+            continue;
+        }
+        peers.push(relay);
+    }
+
     if include_ipfs_defaults {
         for (id, address) in IPFS_BOOTSTRAP_PEERS {
             if peers
@@ -905,6 +932,60 @@ fn init_bootstrap_peers(mut peers: Vec<EndpointArg>, include_ipfs_defaults: bool
     }
 
     peers.into_iter().map(EndpointArg::into).collect()
+}
+
+fn init_relay_reservations(relays: &[EndpointArg]) -> Result<Vec<String>, String> {
+    relays
+        .iter()
+        .map(relay_reservation_address)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn relay_reservation_address(relay: &EndpointArg) -> Result<String, String> {
+    let peer = relay
+        .id
+        .parse::<libp2p::PeerId>()
+        .map_err(|error| format!("relay peer id {} is invalid: {error}", relay.id))?;
+    let Some(address) = &relay.address else {
+        return Err(format!(
+            "relay peer {} must include an address as PEER_ID=MULTIADDR",
+            relay.id
+        ));
+    };
+    let mut address = address
+        .parse::<libp2p::Multiaddr>()
+        .map_err(|error| format!("relay peer address for {} is invalid: {error:?}", relay.id))?;
+
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return Err(format!(
+            "relay peer {} address must be the relay's direct address, without /p2p-circuit",
+            relay.id
+        ));
+    }
+
+    match relay_peer_target(&address) {
+        Some(actual) if actual == peer => {}
+        Some(actual) => {
+            return Err(format!(
+                "relay peer address target {actual} does not match {}",
+                relay.id
+            ));
+        }
+        None => address.push(libp2p::multiaddr::Protocol::P2p(peer)),
+    }
+    address.push(libp2p::multiaddr::Protocol::P2pCircuit);
+
+    Ok(address.to_string())
+}
+
+fn relay_peer_target(address: &libp2p::Multiaddr) -> Option<libp2p::PeerId> {
+    address.iter().find_map(|protocol| match protocol {
+        libp2p::multiaddr::Protocol::P2p(peer) => Some(peer),
+        _ => None,
+    })
 }
 
 fn status(path: &PathBuf) -> Result<(), String> {
@@ -3009,6 +3090,29 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_relay_peer_argument() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "init-config",
+            "--relay-peer",
+            "12D3KooWRelay=/ip4/127.0.0.1/tcp/4002",
+        ])
+        .expect("cli");
+
+        let Command::InitConfig { relay_peers, .. } = cli.command else {
+            panic!("expected init-config command");
+        };
+
+        assert_eq!(
+            relay_peers,
+            vec![EndpointArg {
+                id: "12D3KooWRelay".to_owned(),
+                address: Some("/ip4/127.0.0.1/tcp/4002".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
     fn cli_parses_packet_plane_arguments() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -3491,6 +3595,7 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
             ipfs_bootstrap_peers: true,
             peers: Vec::new(),
             local_routes: Vec::new(),
@@ -3514,6 +3619,7 @@ mod tests {
                 id: IPFS_BOOTSTRAP_PEERS[0].0.to_owned(),
                 address: Some(IPFS_BOOTSTRAP_PEERS[0].1.to_owned()),
             }],
+            Vec::new(),
             true,
         );
 
@@ -3542,6 +3648,7 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
             ipfs_bootstrap_peers: true,
             peers: Vec::new(),
             local_routes: Vec::new(),
@@ -3584,6 +3691,88 @@ mod tests {
     }
 
     #[test]
+    fn relay_peer_shortcut_builds_reservation_and_bootstrap_infrastructure() {
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_arg = EndpointArg {
+            id: relay.peer_id.clone(),
+            address: Some("/ip4/127.0.0.1/tcp/4002".to_owned()),
+        };
+
+        assert_eq!(
+            relay_reservation_address(&relay_arg).expect("relay reservation"),
+            format!("/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit", relay.peer_id)
+        );
+
+        let bootstrap_peers = init_bootstrap_peers(Vec::new(), vec![relay_arg.clone()], false);
+        assert_eq!(
+            bootstrap_peers,
+            vec![InitPeer {
+                id: relay.peer_id.clone(),
+                address: Some("/ip4/127.0.0.1/tcp/4002".to_owned()),
+                routes: Vec::new(),
+            }]
+        );
+
+        let reservations = init_relay_reservations(&[relay_arg]).expect("relay reservations");
+        assert_eq!(
+            reservations,
+            vec![format!(
+                "/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit",
+                relay.peer_id
+            )]
+        );
+    }
+
+    #[test]
+    fn init_config_writes_runtime_valid_relay_peer_shortcut() {
+        let output = temp_config_path("p2p-vpn-relay-peer-config");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            relay_peers: vec![EndpointArg {
+                id: relay.peer_id.clone(),
+                address: Some("/ip4/127.0.0.1/tcp/4002".to_owned()),
+            }],
+            ipfs_bootstrap_peers: false,
+            peers: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(config.peers.len(), 0);
+        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(config.network.bootstrap_peers[0].id, relay.peer_id);
+        assert_eq!(
+            config.network.relay.reservations,
+            vec![format!(
+                "/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit",
+                relay.peer_id
+            )]
+        );
+    }
+
+    #[test]
     fn init_config_writes_previous_membership_tags() {
         let output = temp_config_path("p2p-vpn-init-config-previous-membership-tags");
         let membership_key = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_owned();
@@ -3600,6 +3789,7 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
             ipfs_bootstrap_peers: false,
             peers: Vec::new(),
             local_routes: Vec::new(),
@@ -3635,6 +3825,7 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
             ipfs_bootstrap_peers: false,
             peers: Vec::new(),
             local_routes: Vec::new(),

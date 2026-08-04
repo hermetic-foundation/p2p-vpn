@@ -225,7 +225,11 @@ instead, so relay reservations and relay connections can come up before the node
 attempts the relayed peer circuit.
 Relay peers named by configured reservation addresses are also kept as
 infrastructure redial targets, so relay fallback can recover even when the
-relay is not a packet-routing VPN peer.
+relay is not a packet-routing VPN peer. Generated configs can use
+`--relay-peer PEER_ID=MULTIADDR` as a shortcut for shared or public relay
+infrastructure: it adds the relay as a Kademlia/bootstrap/AutoNAT reachability
+peer and creates the matching `/p2p-circuit` reservation address, but it does
+not add the relay to the VPN peer list or grant route authority.
 Discovered addresses that include an explicit `/p2p/<peer>` target are rejected
 when that target does not match the configured peer being learned, including
 relayed target addresses after `/p2p-circuit`.
@@ -374,6 +378,13 @@ define the VPN overlay. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
 Repeat `--external-address MULTIADDR` for stable public or DNS addresses that
 libp2p should advertise to peers in addition to observed addresses learned
 through identify and confirmed through AutoNAT. Use
+`--relay-peer PEER_ID=MULTIADDR` for a shared or public circuit-relay node that
+should be used as reachability infrastructure; the address should be the
+relay's direct address, without `/p2p-circuit`. The generated config also adds
+that relay as a bootstrap/AutoNAT probe peer so reservation setup can recover
+after restart or transient network loss. Repeat `--relay-reservation MULTIADDR`
+when you already have the exact relay reservation listen address.
+Use
 `--disable-mdns`, `--disable-kademlia`, `--disable-dcutr`, or
 `--disable-autonat` to omit optional discovery and NAT traversal behaviours from
 the generated config. `--disable-kademlia` also disables provider
