@@ -873,6 +873,16 @@ impl PacketPlaneRuntime {
         self.sessions.get(&peer)
     }
 
+    #[must_use]
+    pub fn has_session(&self, peer: PeerId) -> bool {
+        self.sessions.contains_key(&peer)
+    }
+
+    #[must_use]
+    pub fn session_mtu_for(&self, peer: PeerId) -> Option<u16> {
+        self.sessions.get(&peer).map(|session| session.mtu)
+    }
+
     pub fn establish_session(
         &mut self,
         role: PacketPlaneSessionRole,

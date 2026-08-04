@@ -162,6 +162,20 @@ impl Forwarder {
         packet: &Packet,
         peer_mtu: u16,
     ) -> Result<request_response::OutboundRequestId, ForwardError> {
+        let peer = self
+            .peers
+            .get(&packet.peer())
+            .ok_or(ForwardError::NoTransportPeer(packet.peer()))?;
+        let frame = self.queued_packet_frame_with_mtu(packet, peer_mtu)?;
+
+        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+    }
+
+    pub fn queued_packet_frame_with_mtu(
+        &self,
+        packet: &Packet,
+        peer_mtu: u16,
+    ) -> Result<Frame, ForwardError> {
         let max = self.mtu.min(usize::from(peer_mtu));
         if packet.payload().len() > max {
             return Err(ForwardError::PacketTooLarge {
@@ -170,13 +184,7 @@ impl Forwarder {
             });
         }
 
-        let peer = self
-            .peers
-            .get(&packet.peer())
-            .ok_or(ForwardError::NoTransportPeer(packet.peer()))?;
-        let frame = self.packet_frame(packet)?;
-
-        Ok(swarm.behaviour_mut().packet.send_request(peer, frame))
+        self.packet_frame(packet)
     }
 
     #[must_use]

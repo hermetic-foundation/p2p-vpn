@@ -36,7 +36,9 @@ use crate::{
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
-        packet_plane::{PacketPlaneRuntime, PacketPlaneSessionRole, PacketPlaneSnapshot},
+        packet_plane::{
+            PacketPlaneIoError, PacketPlaneRuntime, PacketPlaneSessionRole, PacketPlaneSnapshot,
+        },
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
@@ -348,8 +350,10 @@ where
                     peer_capabilities: &peer_capabilities,
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
+                    packet_plane: &packet_plane,
                     metrics: &metrics,
-                });
+                })
+                .await;
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(
@@ -378,8 +382,10 @@ where
                     peer_capabilities: &peer_capabilities,
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
+                    packet_plane: &packet_plane,
                     metrics: &metrics,
-                });
+                })
+                .await;
             }
             _ = timers.redial.tick() => {
                 handle_redial_tick(&mut node, &mut queue_runtime.discovered_peer_addresses, &metrics);
@@ -521,7 +527,7 @@ fn send_path_probes(
             continue;
         }
 
-        let peer_mtu = selected_path_mtu(paths, peer_capabilities, peer, local_mtu);
+        let peer_mtu = selected_path_mtu(paths, peer_capabilities, None, peer, local_mtu);
         match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD) {
             Ok(_) => metrics.record_outbound_path_probe_sent(),
             Err(error) => {
@@ -1719,10 +1725,11 @@ struct RuntimeOutboundDrain<'a> {
     peer_capabilities: &'a PeerCapabilities,
     queue_runtime: &'a mut QueueRuntimeState,
     writer: &'a mut TunWriter,
+    packet_plane: &'a PacketPlaneRuntime,
     metrics: &'a RuntimeMetrics,
 }
 
-fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
+async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
     let RuntimeOutboundDrain {
         node,
         forwarder,
@@ -1731,6 +1738,7 @@ fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         peer_capabilities,
         queue_runtime,
         writer,
+        packet_plane,
         metrics,
     } = drain;
     let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
@@ -1743,12 +1751,13 @@ fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         discovered_peer_addresses: &discovered_addresses,
         packet_in_flight: &mut queue_runtime.packet_in_flight,
         writer: Some(writer),
+        packet_plane: Some(packet_plane),
         metrics,
     };
-    drain_outbound_queue(&mut node.swarm, forwarder, queues, &mut context);
+    drain_outbound_queue(&mut node.swarm, forwarder, queues, &mut context).await;
 }
 
-fn drain_outbound_queue(
+async fn drain_outbound_queue(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     queues: &mut PeerQueues,
@@ -1757,30 +1766,32 @@ fn drain_outbound_queue(
     expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready_packet(|peer, packet| {
         context.packet_in_flight.can_send_packet(packet)
-            && packet_transport_decision(context.paths, context.peer_capabilities, peer).can_send()
+            && packet_transport_decision(
+                context.paths,
+                context.peer_capabilities,
+                context.packet_plane,
+                peer,
+            )
+            .can_send()
     }) {
         let peer_mtu = selected_path_mtu(
             context.paths,
             context.peer_capabilities,
+            context.packet_plane,
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
-        match packet_transport_decision(context.paths, context.peer_capabilities, packet.peer()) {
+        match packet_transport_decision(
+            context.paths,
+            context.peer_capabilities,
+            context.packet_plane,
+            packet.peer(),
+        ) {
+            PacketTransportDecision::PacketPlaneDatagram { .. } => {
+                send_dequeued_packet_plane_datagram(forwarder, &packet, peer_mtu, context).await;
+            }
             PacketTransportDecision::StreamFallback { .. } => {
-                match forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
-                    Ok(request_id) => {
-                        context.packet_in_flight.record(&packet, request_id);
-                        context.metrics.record_outbound_sent();
-                        context.metrics.record_outbound_stream_fallback();
-                    }
-                    Err(error) => {
-                        maybe_write_packet_too_big(context, packet.payload(), &error);
-                        context
-                            .metrics
-                            .record_outbound_drop(outbound_drop_reason(&error));
-                        eprintln!("dropping queued outbound packet: {error:?}");
-                    }
-                }
+                send_dequeued_stream_fallback(swarm, forwarder, &packet, peer_mtu, context);
             }
             PacketTransportDecision::Blocked { reason, .. } => {
                 if reason == PacketTransportBlockReason::LocalQuicDatagramsUnavailable {
@@ -1793,8 +1804,12 @@ fn drain_outbound_queue(
         let mut blocked_by_window = false;
         let mut blocked_by_path = false;
         for peer in queues.queued_peers() {
-            let decision =
-                packet_transport_decision(context.paths, context.peer_capabilities, peer);
+            let decision = packet_transport_decision(
+                context.paths,
+                context.peer_capabilities,
+                context.packet_plane,
+                peer,
+            );
             if decision.can_send()
                 && !queues.peer_has_ready_packet(peer, |packet| {
                     context.packet_in_flight.can_send_packet(packet)
@@ -1826,6 +1841,63 @@ fn drain_outbound_queue(
     }
 }
 
+async fn send_dequeued_packet_plane_datagram(
+    forwarder: &Forwarder,
+    packet: &crate::queue::Packet,
+    peer_mtu: u16,
+    context: &mut QueueDrainContext<'_>,
+) {
+    match forwarder.queued_packet_frame_with_mtu(packet, peer_mtu) {
+        Ok(frame) => match context
+            .packet_plane
+            .expect("packet-plane decision requires runtime")
+            .send_frame_to_peer(packet.peer(), &frame)
+            .await
+        {
+            Ok(_) => {
+                context.metrics.record_outbound_sent();
+                context.metrics.record_outbound_quic_datagram();
+            }
+            Err(error) => {
+                context
+                    .metrics
+                    .record_outbound_drop(packet_plane_drop_reason(&error));
+                eprintln!("dropping queued packet-plane outbound packet: {error:?}");
+            }
+        },
+        Err(error) => {
+            maybe_write_packet_too_big(context, packet.payload(), &error);
+            context
+                .metrics
+                .record_outbound_drop(outbound_drop_reason(&error));
+            eprintln!("dropping queued packet-plane outbound packet: {error:?}");
+        }
+    }
+}
+
+fn send_dequeued_stream_fallback(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    packet: &crate::queue::Packet,
+    peer_mtu: u16,
+    context: &mut QueueDrainContext<'_>,
+) {
+    match forwarder.send_queued_packet_with_mtu(swarm, packet, peer_mtu) {
+        Ok(request_id) => {
+            context.packet_in_flight.record(packet, request_id);
+            context.metrics.record_outbound_sent();
+            context.metrics.record_outbound_stream_fallback();
+        }
+        Err(error) => {
+            maybe_write_packet_too_big(context, packet.payload(), &error);
+            context
+                .metrics
+                .record_outbound_drop(outbound_drop_reason(&error));
+            eprintln!("dropping queued outbound packet: {error:?}");
+        }
+    }
+}
+
 struct QueueDrainContext<'a> {
     paths: &'a PathSet,
     peer_capabilities: &'a PeerCapabilities,
@@ -1835,6 +1907,7 @@ struct QueueDrainContext<'a> {
     discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     packet_in_flight: &'a mut PacketInFlight,
     writer: Option<&'a mut TunWriter>,
+    packet_plane: Option<&'a PacketPlaneRuntime>,
     metrics: &'a RuntimeMetrics,
 }
 
@@ -2018,6 +2091,9 @@ fn dial_blocked_queue_peers(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PacketTransportDecision {
+    PacketPlaneDatagram {
+        path: PathKind,
+    },
     StreamFallback {
         path: PathKind,
     },
@@ -2029,7 +2105,10 @@ enum PacketTransportDecision {
 
 impl PacketTransportDecision {
     const fn can_send(self) -> bool {
-        matches!(self, Self::StreamFallback { .. })
+        matches!(
+            self,
+            Self::PacketPlaneDatagram { .. } | Self::StreamFallback { .. }
+        )
     }
 }
 
@@ -2043,6 +2122,7 @@ enum PacketTransportBlockReason {
 fn packet_transport_decision(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
     peer: PeerId,
 ) -> PacketTransportDecision {
     if !peer_capabilities.contains(peer) {
@@ -2052,15 +2132,21 @@ fn packet_transport_decision(
         };
     }
 
-    let support = packet_transport_support(peer_capabilities, peer);
+    let local_datagrams = packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer));
+    let support =
+        packet_transport_support_with_local_datagrams(peer_capabilities, peer, local_datagrams);
     if let Some(path) = paths.best_supported_for(peer, support) {
-        return PacketTransportDecision::StreamFallback { path: path.kind };
+        return if path.kind.requires_quic_datagrams() {
+            PacketTransportDecision::PacketPlaneDatagram { path: path.kind }
+        } else {
+            PacketTransportDecision::StreamFallback { path: path.kind }
+        };
     }
 
     let best_path = paths.best_for(peer).map(|path| path.kind);
     let reason = if best_path.is_some_and(PathKind::requires_quic_datagrams)
         && peer_capabilities.supports_quic_datagrams_for(peer)
-        && !local_packet_data_plane().quic_datagrams
+        && !local_datagrams
     {
         PacketTransportBlockReason::LocalQuicDatagramsUnavailable
     } else {
@@ -2073,9 +2159,20 @@ fn packet_transport_support(
     peer_capabilities: &PeerCapabilities,
     peer: PeerId,
 ) -> PathTransportSupport {
+    packet_transport_support_with_local_datagrams(
+        peer_capabilities,
+        peer,
+        local_packet_data_plane().quic_datagrams,
+    )
+}
+
+fn packet_transport_support_with_local_datagrams(
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+    local_datagrams: bool,
+) -> PathTransportSupport {
     PathTransportSupport {
-        quic_datagrams: local_packet_data_plane().quic_datagrams
-            && peer_capabilities.supports_quic_datagrams_for(peer),
+        quic_datagrams: local_datagrams && peer_capabilities.supports_quic_datagrams_for(peer),
     }
 }
 
@@ -3285,13 +3382,22 @@ fn runtime_path_stats(
 fn selected_path_mtu(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
     peer: PeerId,
     local_mtu: u16,
 ) -> u16 {
     let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
-    paths
-        .best_supported_for(peer, packet_transport_support(peer_capabilities, peer))
-        .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu))
+    let support = packet_transport_support_with_local_datagrams(
+        peer_capabilities,
+        peer,
+        packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer)),
+    );
+    let path_mtu = paths
+        .best_supported_for(peer, support)
+        .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu));
+    packet_plane
+        .and_then(|packet_plane| packet_plane.session_mtu_for(peer))
+        .map_or(path_mtu, |session_mtu| path_mtu.min(session_mtu))
 }
 
 const fn initial_path_mtu(kind: PathKind, local_mtu: u16) -> u16 {
@@ -3331,6 +3437,21 @@ fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
         }
         ForwardError::Enqueue(crate::queue::EnqueueError::QueueFull { .. }) => {
             PacketDropReason::QueueFull
+        }
+    }
+}
+
+fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
+    match error {
+        PacketPlaneIoError::NoSession { .. } => PacketDropReason::NoTransportPeer,
+        PacketPlaneIoError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
+        ) => PacketDropReason::PacketTooLarge,
+        PacketPlaneIoError::Datagram(_) | PacketPlaneIoError::UnexpectedEndpoint { .. } => {
+            PacketDropReason::MalformedPacket
+        }
+        PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
+            PacketDropReason::NoTransportPeer
         }
     }
 }
@@ -3604,6 +3725,7 @@ mod tests {
         core::{Endpoint, transport::PortUse},
         identity::Keypair,
     };
+    use tokio::time::{Duration as TokioDuration, timeout};
 
     use crate::{
         config::{
@@ -3612,7 +3734,10 @@ mod tests {
         },
         route::builtin_ipv4,
         runtime::control::ControlRoute,
-        runtime::packet_plane::PacketPlaneSessionSnapshot,
+        runtime::packet_plane::{
+            PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeKind,
+            PacketPlaneHandshakeParams, PacketPlaneSessionSnapshot,
+        },
     };
 
     use super::*;
@@ -3660,8 +3785,15 @@ mod tests {
             discovered_peer_addresses: &[],
             packet_in_flight,
             writer: None,
+            packet_plane: None,
             metrics,
         }
+    }
+
+    fn test_packet_plane_secret(byte: u8) -> PacketPlaneEphemeralSecret {
+        PacketPlaneEphemeralSecret::from_bytes(
+            [byte; crate::runtime::packet_plane::PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN],
+        )
     }
 
     fn config_with_peer(
@@ -3700,6 +3832,66 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    fn establish_test_packet_plane_sessions(
+        sender: &mut PacketPlaneRuntime,
+        receiver: &mut PacketPlaneRuntime,
+        sender_identity: &crate::identity::NodeIdentity,
+        receiver_identity: &crate::identity::NodeIdentity,
+        sender_secret: &PacketPlaneEphemeralSecret,
+        receiver_secret: &PacketPlaneEphemeralSecret,
+        mtu: u16,
+    ) {
+        let sender_addr = sender.snapshot().listeners[0];
+        let receiver_addr = receiver.snapshot().listeners[0];
+        let hello = PacketPlaneHandshake::signed(
+            PacketPlaneHandshakeKind::Hello,
+            sender_identity,
+            PacketPlaneHandshakeParams {
+                network_name: "lab".to_owned(),
+                session_id: 11,
+                nonce: 101,
+                mtu,
+                ephemeral_public_key: sender_secret.public_key(),
+                endpoint: sender_addr,
+            },
+        )
+        .expect("signed hello")
+        .verify("lab", None)
+        .expect("verified hello");
+        let accept = PacketPlaneHandshake::signed(
+            PacketPlaneHandshakeKind::Accept,
+            receiver_identity,
+            PacketPlaneHandshakeParams {
+                network_name: "lab".to_owned(),
+                session_id: 13,
+                nonce: 103,
+                mtu,
+                ephemeral_public_key: receiver_secret.public_key(),
+                endpoint: receiver_addr,
+            },
+        )
+        .expect("signed accept")
+        .verify("lab", None)
+        .expect("verified accept");
+
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                sender_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender packet-plane session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                receiver_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver packet-plane session");
     }
 
     #[test]
@@ -5883,7 +6075,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -5968,7 +6160,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -6057,7 +6249,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -6148,7 +6340,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 1);
@@ -6256,7 +6448,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 2);
@@ -6353,7 +6545,7 @@ mod tests {
         let mut context =
             queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -6361,6 +6553,180 @@ mod tests {
         assert_eq!(snapshot.outbound_quic_datagram_unavailable_packets, 1);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn drain_outbound_queue_prefers_established_packet_plane_datagram_path() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        );
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet.clone())
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.supports_quic_datagrams = true;
+        peer_capabilities.record(remote_overlay, capabilities);
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        context.packet_plane = Some(&sender_packet_plane);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+        let inbound = timeout(
+            TokioDuration::from_secs(1),
+            receiver_packet_plane.recv_frame_from_peer(local_overlay),
+        )
+        .await
+        .expect("packet-plane receive should not time out")
+        .expect("packet-plane receive");
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 0);
+        assert_eq!(inbound.peer, Some(local_overlay));
+        assert_eq!(inbound.frame.payload, packet);
+    }
+
+    #[tokio::test]
+    async fn selected_path_mtu_respects_packet_plane_session_mtu() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1_000,
+        );
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(
+            remote_overlay,
+            PathKind::DirectQuicDatagram,
+            Some(1_200),
+        );
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
+        capabilities.supports_quic_datagrams = true;
+        peer_capabilities.record(remote_overlay, capabilities);
+
+        assert_eq!(
+            selected_path_mtu(
+                &paths,
+                &peer_capabilities,
+                Some(&sender_packet_plane),
+                remote_overlay,
+                1_280,
+            ),
+            1_000
+        );
     }
 
     #[test]
@@ -6376,7 +6742,7 @@ mod tests {
         );
 
         assert_eq!(
-            packet_transport_decision(&paths, &peer_capabilities, remote_overlay),
+            packet_transport_decision(&paths, &peer_capabilities, None, remote_overlay),
             PacketTransportDecision::StreamFallback {
                 path: PathKind::DirectQuicStream
             }
@@ -6395,7 +6761,7 @@ mod tests {
         peer_capabilities.record(remote_overlay, capabilities);
 
         assert_eq!(
-            packet_transport_decision(&paths, &peer_capabilities, remote_overlay),
+            packet_transport_decision(&paths, &peer_capabilities, None, remote_overlay),
             PacketTransportDecision::Blocked {
                 reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
                 best_path: Some(PathKind::DirectQuicDatagram)
