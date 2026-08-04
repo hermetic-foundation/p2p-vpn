@@ -387,6 +387,10 @@ reachability infrastructure only: they can help route Kademlia queries, AutoNAT
 probes, and relay/DCUtR setup, but configured peer IDs and route ownership still
 define the VPN overlay. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
 `/dnsaddr`, are resolved by the libp2p transport for startup dials and redials.
+Use `bootstrap-check` before starting the TUN daemon when you need a rootless
+smoke test that the configured bootstrap peers are reachable through libp2p; the
+binary enables libp2p RSA peer identity decoding so the legacy public IPFS
+bootstrap peer IDs can be dialed.
 Repeat `--external-address MULTIADDR` for stable public or DNS addresses that
 libp2p should advertise to peers in addition to observed addresses learned
 through identify and confirmed through AutoNAT. Use
@@ -713,6 +717,25 @@ header length, effective MTU, preferred packet path, QUIC datagram support, and
 advertised routes. Live mode queries every configured peer and prints the same
 validated remote fields, reporting unreachable peers without aborting the whole
 inspection run.
+
+Check configured bootstrap reachability without opening a TUN interface:
+
+```sh
+cargo run -- bootstrap-check --config p2p-vpn.json --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-all --timeout-seconds 30
+```
+
+`bootstrap-check` builds the same libp2p host used by the daemon, starts the
+configured bootstrap dials, Kademlia bootstrap, rendezvous lookup/advertise, and
+AutoNAT probe-server registration, then waits for bootstrap peer connections.
+By default the check succeeds when any configured bootstrap peer connects, which
+fits public IPFS bootstrap sets where individual public nodes can be
+temporarily unavailable. Use `--require-all` for private infrastructure where
+every configured bootstrap peer is expected to be reachable. The output reports
+the Kademlia protocol, whether it is IPFS-compatible, the success threshold,
+Kademlia startup state, AutoNAT probe-server count, per-peer connection state,
+and dial-failure counts. It does not add bootstrap peers to VPN membership or
+grant route authority.
 
 Inspect the runtime metric names and startup snapshot:
 

@@ -1,3 +1,4 @@
+pub mod bootstrap_check;
 pub mod control;
 pub mod control_socket;
 pub mod forward;

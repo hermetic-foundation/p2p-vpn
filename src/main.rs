@@ -22,6 +22,7 @@ use p2p_vpn::{
     metrics::RuntimeMetrics,
     queue::QueueStats,
     runtime::{
+        bootstrap_check::{BootstrapCheckThreshold, check_config_bootstrap},
         forward::session_id_for_peer,
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
         remote::{RemotePeerStatus, query_peer_status},
@@ -217,6 +218,14 @@ enum Command {
         live: bool,
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
+    },
+    BootstrapCheck {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long, default_value_t = 30)]
+        timeout_seconds: u64,
+        #[arg(long)]
+        require_all: bool,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -457,6 +466,11 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(capabilities(&config, live, timeout_seconds)).await,
+        Command::BootstrapCheck {
+            config,
+            timeout_seconds,
+            require_all,
+        } => Box::pin(bootstrap_check(&config, timeout_seconds, require_all)).await,
         Command::InviteExport {
             config,
             output,
@@ -1871,6 +1885,37 @@ async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result
     }
 
     Ok(())
+}
+
+async fn bootstrap_check(
+    path: &Path,
+    timeout_seconds: u64,
+    require_all: bool,
+) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let threshold = if require_all {
+        BootstrapCheckThreshold::All
+    } else {
+        BootstrapCheckThreshold::Any
+    };
+    let report = Box::pin(check_config_bootstrap(
+        &config,
+        Duration::from_secs(timeout_seconds.max(1)),
+        threshold,
+    ))
+    .await
+    .map_err(|error| format!("bootstrap check failed to start: {error:?}"))?;
+    let succeeded = report.succeeded();
+
+    for line in report.lines() {
+        println!("{line}");
+    }
+
+    if succeeded {
+        Ok(())
+    } else {
+        Err("bootstrap check did not meet success threshold".to_owned())
+    }
 }
 
 async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
