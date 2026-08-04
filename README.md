@@ -122,9 +122,11 @@ identity-keyed stream fallback: each packet frame is sent over libp2p's
 authenticated request-response channel to the configured peer ID, and the
 receiver still applies the overlay allowlist, replay window, source-route
 ownership, and local-destination checks before writing to TUN. The runtime does
-not report a native datagram packet as sent unless a real datagram-capable local
-data plane exists; datagram-only paths remain blocked instead of silently
-degrading into fake success.
+not hand an unbounded burst of queued packets to request-response; each peer is
+limited by the configured packet stream send window and remaining packets stay
+in the bounded per-peer queue. It also does not report a native datagram packet
+as sent unless a real datagram-capable local data plane exists; datagram-only
+paths remain blocked instead of silently degrading into fake success.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames over the packet protocol, giving operators liveness
 traffic that does not depend on user IP packets.
@@ -566,7 +568,8 @@ refresh counts, unauthorized connection drops, configured peer redial counters,
 accepted/dialed/rejected/expired discovered-address counters, asynchronous
 outgoing connection error counts, healthy path counts by transport kind,
 configured peers with and without a currently supported packet path, and
-queue-drain stalls caused by peers having no currently supported packet path.
+queue-drain stalls caused by peers having no currently supported packet path or
+a full packet stream send window.
 Those counters are intended to show whether a deployment is
 exchanging capabilities, checking service status, probing and advertising
 observed public addresses, refreshing DHT discovery, rejecting bad discovered

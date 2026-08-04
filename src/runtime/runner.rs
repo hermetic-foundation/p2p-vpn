@@ -269,7 +269,7 @@ where
     );
     let mut paths = PathSet::new();
     let mut peer_capabilities = PeerCapabilities::default();
-    let mut discovered_peer_addresses = DiscoveredPeerAddresses::default();
+    let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
@@ -324,7 +324,7 @@ where
                     metrics.record_outbound_drop(outbound_drop_reason(&error));
                     eprintln!("dropping outbound packet: {error:?}");
                 }
-                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &discovered_peer_addresses, &metrics);
+                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &mut queue_runtime, &metrics);
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(
@@ -335,7 +335,8 @@ where
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
-                        discovered_peer_addresses: &mut discovered_peer_addresses,
+                        discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
+                        packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         metrics: &metrics,
                         local_capabilities: &local_capabilities,
@@ -343,10 +344,10 @@ where
                     },
                     event,
                 )?;
-                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &discovered_peer_addresses, &metrics);
+                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &mut queue_runtime, &metrics);
             }
             _ = timers.redial.tick() => {
-                handle_redial_tick(&mut node, &mut discovered_peer_addresses, &metrics);
+                handle_redial_tick(&mut node, &mut queue_runtime.discovered_peer_addresses, &metrics);
             }
             () = async {
                 timers.kademlia_refresh
@@ -586,6 +587,14 @@ fn runtime_state_lines(
         format!(
             "inbound_path_probes_accepted {}",
             snapshot.inbound_path_probes_accepted
+        ),
+        format!(
+            "outbound_queue_blocked_no_supported_path_events {}",
+            snapshot.outbound_queue_blocked_no_supported_path_events
+        ),
+        format!(
+            "outbound_queue_blocked_packet_window_events {}",
+            snapshot.outbound_queue_blocked_packet_window_events
         ),
         format!(
             "peers_with_supported_path {}",
@@ -1150,35 +1159,33 @@ fn drain_runtime_outbound_queue(
     queues: &mut PeerQueues,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
-    discovered_peer_addresses: &DiscoveredPeerAddresses,
+    queue_runtime: &mut QueueRuntimeState,
     metrics: &RuntimeMetrics,
 ) {
-    let discovered_addresses = discovered_peer_addresses.as_vec();
-    drain_outbound_queue(
-        &mut node.swarm,
-        forwarder,
-        queues,
-        &QueueDrainContext {
-            paths,
-            peer_capabilities,
-            bootstrap_addresses: &node.bootstrap_peer_addresses,
-            relay_addresses: &node.relay_peer_addresses,
-            configured_peer_addresses: &node.configured_peer_addresses,
-            discovered_peer_addresses: &discovered_addresses,
-            metrics,
-        },
-    );
+    let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
+    let mut context = QueueDrainContext {
+        paths,
+        peer_capabilities,
+        bootstrap_addresses: &node.bootstrap_peer_addresses,
+        relay_addresses: &node.relay_peer_addresses,
+        configured_peer_addresses: &node.configured_peer_addresses,
+        discovered_peer_addresses: &discovered_addresses,
+        packet_in_flight: &mut queue_runtime.packet_in_flight,
+        metrics,
+    };
+    drain_outbound_queue(&mut node.swarm, forwarder, queues, &mut context);
 }
 
 fn drain_outbound_queue(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     queues: &mut PeerQueues,
-    context: &QueueDrainContext<'_>,
+    context: &mut QueueDrainContext<'_>,
 ) {
     expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready(|peer| {
-        packet_transport_decision(context.paths, context.peer_capabilities, peer).can_send()
+        context.packet_in_flight.can_send(peer)
+            && packet_transport_decision(context.paths, context.peer_capabilities, peer).can_send()
     }) {
         let peer_mtu = selected_path_mtu(
             context.paths,
@@ -1188,15 +1195,18 @@ fn drain_outbound_queue(
         );
         match packet_transport_decision(context.paths, context.peer_capabilities, packet.peer()) {
             PacketTransportDecision::StreamFallback { .. } => {
-                if let Err(error) = forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu)
-                {
-                    context
-                        .metrics
-                        .record_outbound_drop(outbound_drop_reason(&error));
-                    eprintln!("dropping queued outbound packet: {error:?}");
-                } else {
-                    context.metrics.record_outbound_sent();
-                    context.metrics.record_outbound_stream_fallback();
+                match forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
+                    Ok(request_id) => {
+                        context.packet_in_flight.record(packet.peer(), request_id);
+                        context.metrics.record_outbound_sent();
+                        context.metrics.record_outbound_stream_fallback();
+                    }
+                    Err(error) => {
+                        context
+                            .metrics
+                            .record_outbound_drop(outbound_drop_reason(&error));
+                        eprintln!("dropping queued outbound packet: {error:?}");
+                    }
                 }
             }
             PacketTransportDecision::Blocked { reason, .. } => {
@@ -1207,19 +1217,35 @@ fn drain_outbound_queue(
         }
     }
     if queues.total_stats().queued_packets > 0 {
+        let mut blocked_by_window = false;
+        let mut blocked_by_path = false;
         for peer in queues.queued_peers() {
+            let decision =
+                packet_transport_decision(context.paths, context.peer_capabilities, peer);
+            if decision.can_send() && !context.packet_in_flight.can_send(peer) {
+                blocked_by_window = true;
+                continue;
+            }
+            blocked_by_path = true;
             if let PacketTransportDecision::Blocked {
                 reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
                 ..
-            } = packet_transport_decision(context.paths, context.peer_capabilities, peer)
+            } = decision
             {
                 context.metrics.record_outbound_quic_datagram_unavailable();
             }
         }
-        context
-            .metrics
-            .record_outbound_queue_blocked_no_supported_path();
-        dial_blocked_queue_peers(swarm, forwarder, queues, context);
+        if blocked_by_window {
+            context
+                .metrics
+                .record_outbound_queue_blocked_packet_window();
+        }
+        if blocked_by_path {
+            context
+                .metrics
+                .record_outbound_queue_blocked_no_supported_path();
+            dial_blocked_queue_peers(swarm, forwarder, queues, context);
+        }
     }
 }
 
@@ -1230,7 +1256,65 @@ struct QueueDrainContext<'a> {
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    packet_in_flight: &'a mut PacketInFlight,
     metrics: &'a RuntimeMetrics,
+}
+
+#[derive(Debug)]
+struct QueueRuntimeState {
+    discovered_peer_addresses: DiscoveredPeerAddresses,
+    packet_in_flight: PacketInFlight,
+}
+
+impl QueueRuntimeState {
+    fn new(packet_in_flight_limit_per_peer: usize) -> Self {
+        Self {
+            discovered_peer_addresses: DiscoveredPeerAddresses::default(),
+            packet_in_flight: PacketInFlight::new(packet_in_flight_limit_per_peer),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PacketInFlight {
+    limit_per_peer: usize,
+    requests: HashMap<request_response::OutboundRequestId, PeerId>,
+    peers: HashMap<PeerId, usize>,
+}
+
+impl PacketInFlight {
+    fn new(limit_per_peer: usize) -> Self {
+        Self {
+            limit_per_peer: limit_per_peer.max(1),
+            requests: HashMap::new(),
+            peers: HashMap::new(),
+        }
+    }
+
+    fn can_send(&self, peer: PeerId) -> bool {
+        self.peers.get(&peer).copied().unwrap_or(0) < self.limit_per_peer
+    }
+
+    fn record(&mut self, peer: PeerId, request_id: request_response::OutboundRequestId) {
+        self.requests.insert(request_id, peer);
+        *self.peers.entry(peer).or_default() += 1;
+    }
+
+    fn complete(&mut self, request_id: request_response::OutboundRequestId) -> Option<PeerId> {
+        let peer = self.requests.remove(&request_id)?;
+        if let Some(count) = self.peers.get_mut(&peer) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.peers.remove(&peer);
+            }
+        }
+        Some(peer)
+    }
+
+    #[cfg(test)]
+    fn in_flight_for(&self, peer: PeerId) -> usize {
+        self.peers.get(&peer).copied().unwrap_or(0)
+    }
 }
 
 fn dial_blocked_queue_peers(
@@ -1328,6 +1412,7 @@ struct SwarmEventContext<'a> {
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
+    packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a ControlCapabilities,
@@ -1557,19 +1642,32 @@ fn handle_packet_event(
         } => handle_packet_request(swarm, context, peer, &request, channel)?,
         request_response::Event::Message {
             peer,
-            message: Message::Response { response, .. },
+            message:
+                Message::Response {
+                    request_id,
+                    response,
+                },
             ..
-        } => match response {
-            PacketResponse::Accepted => {}
-            PacketResponse::Rejected(reason) => {
-                context.metrics.record_outbound_failure();
-                context
-                    .metrics
-                    .record_outbound_drop(packet_rejection_drop_reason(reason));
-                audit_packet_response_rejection(peer, reason);
+        } => {
+            context.packet_in_flight.complete(request_id);
+            match response {
+                PacketResponse::Accepted => {}
+                PacketResponse::Rejected(reason) => {
+                    context.metrics.record_outbound_failure();
+                    context
+                        .metrics
+                        .record_outbound_drop(packet_rejection_drop_reason(reason));
+                    audit_packet_response_rejection(peer, reason);
+                }
             }
-        },
-        request_response::Event::OutboundFailure { peer, error, .. } => {
+        }
+        request_response::Event::OutboundFailure {
+            peer,
+            request_id,
+            error,
+            ..
+        } => {
+            context.packet_in_flight.complete(request_id);
             context.metrics.record_outbound_failure();
             eprintln!("packet request to {peer} failed: {error}");
         }
@@ -2817,6 +2915,7 @@ mod tests {
     fn queue_drain_context<'a>(
         paths: &'a PathSet,
         peer_capabilities: &'a PeerCapabilities,
+        packet_in_flight: &'a mut PacketInFlight,
         metrics: &'a RuntimeMetrics,
     ) -> QueueDrainContext<'a> {
         QueueDrainContext {
@@ -2826,6 +2925,7 @@ mod tests {
             relay_addresses: &[],
             configured_peer_addresses: &[],
             discovered_peer_addresses: &[],
+            packet_in_flight,
             metrics,
         }
     }
@@ -2921,6 +3021,8 @@ mod tests {
         assert!(lines.contains(&"autonat_status_changes_to_public 1".to_owned()));
         assert!(lines.contains(&"autonat_status_changes_to_private 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
+        assert!(lines.contains(&"outbound_queue_blocked_no_supported_path_events 0".to_owned()));
+        assert!(lines.contains(&"outbound_queue_blocked_packet_window_events 0".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
                 "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
@@ -4738,13 +4840,11 @@ mod tests {
         paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         let peer_capabilities = PeerCapabilities::default();
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(
-            &mut node.swarm,
-            &forwarder,
-            &mut queues,
-            &queue_drain_context(&paths, &peer_capabilities, &metrics),
-        );
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -4823,13 +4923,11 @@ mod tests {
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 19));
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(
-            &mut node.swarm,
-            &forwarder,
-            &mut queues,
-            &queue_drain_context(&paths, &peer_capabilities, &metrics),
-        );
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -4912,13 +5010,11 @@ mod tests {
             ControlCapabilities::local("lab", None, 1280),
         );
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(
-            &mut node.swarm,
-            &forwarder,
-            &mut queues,
-            &queue_drain_context(&paths, &peer_capabilities, &metrics),
-        );
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);
@@ -4926,6 +5022,96 @@ mod tests {
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_respects_packet_in_flight_window() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        for _ in 0..2 {
+            forwarder
+                .enqueue_tun_packet(
+                    &mut queues,
+                    ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+                )
+                .expect("queued");
+        }
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(1);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 0);
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
+        assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
     }
 
     #[tokio::test]
@@ -5000,13 +5186,11 @@ mod tests {
         capabilities.supports_quic_datagrams = true;
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
 
-        drain_outbound_queue(
-            &mut node.swarm,
-            &forwarder,
-            &mut queues,
-            &queue_drain_context(&paths, &peer_capabilities, &metrics),
-        );
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
 
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 0);

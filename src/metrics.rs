@@ -127,6 +127,7 @@ pub struct RuntimeMetrics {
     discovered_addresses_rejected: AtomicU64,
     discovered_addresses_expired: AtomicU64,
     outbound_queue_blocked_no_supported_path_events: AtomicU64,
+    outbound_queue_blocked_packet_window_events: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -574,6 +575,11 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_outbound_queue_blocked_packet_window(&self) {
+        self.outbound_queue_blocked_packet_window_events
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn snapshot(&self, queue: QueueStats) -> RuntimeSnapshot {
         self.snapshot_with_paths(queue, PathRuntimeStats::default())
@@ -826,6 +832,9 @@ impl RuntimeMetrics {
         snapshot.outbound_queue_blocked_no_supported_path_events = self
             .outbound_queue_blocked_no_supported_path_events
             .load(Ordering::Relaxed);
+        snapshot.outbound_queue_blocked_packet_window_events = self
+            .outbound_queue_blocked_packet_window_events
+            .load(Ordering::Relaxed);
     }
 }
 
@@ -932,6 +941,7 @@ pub struct RuntimeSnapshot {
     pub discovered_addresses_rejected: u64,
     pub discovered_addresses_expired: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
+    pub outbound_queue_blocked_packet_window_events: u64,
     pub queue: QueueStats,
     pub path: PathRuntimeStats,
 }
@@ -1235,6 +1245,10 @@ impl RuntimeSnapshot {
                 "outbound_queue_blocked_no_supported_path_events {}",
                 self.outbound_queue_blocked_no_supported_path_events
             ),
+            format!(
+                "outbound_queue_blocked_packet_window_events {}",
+                self.outbound_queue_blocked_packet_window_events
+            ),
         ]);
     }
 
@@ -1463,6 +1477,7 @@ mod tests {
         metrics.record_discovered_address_rejected();
         metrics.record_discovered_address_expired(2);
         metrics.record_outbound_queue_blocked_no_supported_path();
+        metrics.record_outbound_queue_blocked_packet_window();
     }
 
     fn populated_queue_stats() -> QueueStats {
@@ -1610,6 +1625,7 @@ mod tests {
         assert_eq!(snapshot.discovered_addresses_rejected, 1);
         assert_eq!(snapshot.discovered_addresses_expired, 2);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
         assert_eq!(snapshot.path.healthy_direct_quic_datagram_paths, 1);
         assert_eq!(snapshot.path.healthy_direct_quic_stream_paths, 2);
         assert_eq!(snapshot.path.healthy_direct_tcp_stream_paths, 3);
@@ -1719,6 +1735,7 @@ mod tests {
             &snapshot,
             "outbound_queue_blocked_no_supported_path_events 1",
         );
+        assert_metric_line(&snapshot, "outbound_queue_blocked_packet_window_events 1");
         assert_metric_line(&snapshot, "path_healthy_direct_quic_datagram_paths 1");
         assert_metric_line(&snapshot, "path_healthy_direct_quic_stream_paths 2");
         assert_metric_line(&snapshot, "path_healthy_direct_tcp_stream_paths 3");
