@@ -827,11 +827,12 @@ the same line-oriented metric names as `metrics`, but comes from the running
 daemon's current queue and path state instead of a startup snapshot.
 `daemon-state` reports the running daemon's configured peers, validated
 capability state, selected path, healthy direct and relay path counts, effective
-MTU, selected path MTU, per-candidate path MTU estimates, and path-probe, DCUtR,
-AutoNAT, and stream-fallback in-flight shard counters. The narrower `daemon-peers`, `daemon-routes`,
+MTU, selected path MTU, per-candidate path MTU estimates, configured
+packet-plane session TTL, and path-probe, DCUtR, AutoNAT, and stream-fallback
+in-flight shard counters. The narrower `daemon-peers`, `daemon-routes`,
 `daemon-paths`, `daemon-mtu`, and `daemon-capabilities` commands expose those
-live daemon views directly for
-scripts and operators that do not want to parse the full state dump.
+live daemon views directly for scripts and operators that do not want to parse
+the full state dump.
 `daemon-shutdown` asks the daemon to acknowledge the request, print the final
 metrics snapshot, remove the control socket, and exit through the same orderly
 shutdown path used for Ctrl-C and systemd SIGTERM.

@@ -533,6 +533,7 @@ where
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     packet_plane: packet_plane.snapshot(),
+                    packet_plane_session_ttl,
                 };
                 if let Some(reason) = handle_runtime_control_request(request, &control_context) {
                     log_runtime_event(
@@ -718,6 +719,7 @@ struct RuntimeControlContext<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     packet_plane: PacketPlaneSnapshot,
+    packet_plane_session_ttl: Duration,
 }
 
 fn handle_runtime_control_request(
@@ -731,6 +733,7 @@ fn handle_runtime_control_request(
                 context.queue,
                 context.path_stats,
                 &context.packet_plane,
+                context.packet_plane_session_ttl,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
@@ -747,6 +750,7 @@ fn handle_runtime_control_request(
                 path_stats: context.path_stats,
                 packet_in_flight: context.packet_in_flight,
                 packet_plane: &context.packet_plane,
+                packet_plane_session_ttl: context.packet_plane_session_ttl,
             });
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
@@ -1138,8 +1142,13 @@ fn runtime_status_lines(
     queue: crate::queue::QueueStats,
     path: crate::path::PathRuntimeStats,
     packet_plane: &PacketPlaneSnapshot,
+    packet_plane_session_ttl: Duration,
 ) -> Vec<String> {
     let mut lines = metrics.snapshot_with_paths(queue, path).lines();
+    lines.push(format!(
+        "packet_plane_session_ttl_seconds {}",
+        packet_plane_session_ttl.as_secs()
+    ));
     lines.push(format!(
         "packet_plane_listeners {}",
         packet_plane.listeners.len()
@@ -1161,6 +1170,7 @@ struct RuntimeStateView<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     packet_plane: &'a PacketPlaneSnapshot,
+    packet_plane_session_ttl: Duration,
 }
 
 fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
@@ -1180,6 +1190,7 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
         view.forwarder.replay_window_count(),
         view.packet_in_flight,
         view.packet_plane,
+        view.packet_plane_session_ttl,
     );
 
     let local_mtu = u16::try_from(view.forwarder.mtu()).unwrap_or(u16::MAX);
@@ -1204,12 +1215,17 @@ fn runtime_state_summary_lines(
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
     packet_plane: &PacketPlaneSnapshot,
+    packet_plane_session_ttl: Duration,
 ) -> Vec<String> {
     let mut lines = vec![
         "daemon state: running".to_owned(),
         format!("configured peers: {configured_peers}"),
         format!("validated peers: {validated_peers}"),
         format!("replay_windows {replay_windows}"),
+        format!(
+            "packet_plane_session_ttl_seconds {}",
+            packet_plane_session_ttl.as_secs()
+        ),
         format!(
             "outbound_stream_fallback_packets {}",
             snapshot.outbound_stream_fallback_packets
@@ -5079,6 +5095,7 @@ mod tests {
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
+                packet_plane_session_ttl: Duration::from_secs(42),
             },
         );
 
@@ -5225,6 +5242,25 @@ mod tests {
     }
 
     #[test]
+    fn runtime_status_lines_include_packet_plane_session_ttl() {
+        let packet_plane = PacketPlaneSnapshot {
+            listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
+            sessions: Vec::new(),
+        };
+        let lines = runtime_status_lines(
+            &RuntimeMetrics::default(),
+            crate::queue::QueueStats::default(),
+            crate::path::PathRuntimeStats::default(),
+            &packet_plane,
+            Duration::from_secs(75),
+        );
+
+        assert!(lines.contains(&"packet_plane_session_ttl_seconds 75".to_owned()));
+        assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
+        assert!(lines.contains(&"packet_plane_sessions 0".to_owned()));
+    }
+
+    #[test]
     fn runtime_state_lines_include_peer_capabilities_paths_and_probes() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
@@ -5273,12 +5309,14 @@ mod tests {
                 limit_per_peer: 256,
             },
             packet_plane: &packet_plane,
+            packet_plane_session_ttl: Duration::from_secs(90),
         });
 
         assert!(lines.contains(&"daemon state: running".to_owned()));
         assert!(lines.contains(&"configured peers: 1".to_owned()));
         assert!(lines.contains(&"validated peers: 1".to_owned()));
         assert!(lines.contains(&"replay_windows 0".to_owned()));
+        assert!(lines.contains(&"packet_plane_session_ttl_seconds 90".to_owned()));
         assert!(lines.contains(&"outbound_stream_fallback_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
