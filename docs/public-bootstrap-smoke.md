@@ -105,7 +105,10 @@ and requires direct relay multiaddrs with `/p2p/RELAY` but without
 acceptance or relayed listen-address publication timed out. Failures after
 reservation setup include the same detailed bootstrap-check lines that
 successful candidates print, so failed relayed-circuit and DCUtR probes show
-which prerequisite was missing.
+which prerequisite was missing. Successful candidates also print a
+`public relay candidate config:` line with the exact `--relay-peer
+PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
+address to feed into `init-config`.
 
 The ignored test harness can run the same live checks:
 

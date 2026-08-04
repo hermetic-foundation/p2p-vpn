@@ -380,6 +380,14 @@ impl PublicRelayProbeReport {
                 candidate.succeeded,
                 candidate.error.as_deref().unwrap_or("none")
             ));
+            if candidate.succeeded
+                && let Some(config) = public_relay_candidate_config_hint(&candidate.address)
+            {
+                lines.push(format!(
+                    "public relay candidate config: relay_peer {} relay_reservation {}",
+                    config.relay_peer_arg, config.relay_reservation
+                ));
+            }
             if let Some(report) = &candidate.bootstrap {
                 for line in report.lines() {
                     lines.push(format!("public relay candidate detail: {line}"));
@@ -389,6 +397,21 @@ impl PublicRelayProbeReport {
 
         lines
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PublicRelayCandidateConfigHint {
+    relay_peer_arg: String,
+    relay_reservation: String,
+}
+
+fn public_relay_candidate_config_hint(address: &str) -> Option<PublicRelayCandidateConfigHint> {
+    let address = address.parse::<Multiaddr>().ok()?;
+    let relay_peer = address_peer(&address)?;
+    Some(PublicRelayCandidateConfigHint {
+        relay_peer_arg: format!("{relay_peer}={address}"),
+        relay_reservation: address.with(Protocol::P2pCircuit).to_string(),
+    })
 }
 
 impl PublicRelayScanReport {
@@ -1798,6 +1821,46 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("public relay candidate detail: dcutr successes: 0"))
         );
+    }
+
+    #[test]
+    fn public_relay_probe_lines_include_successful_candidate_config_hint() {
+        let relay = peer_id();
+        let address = format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}");
+        let report = PublicRelayProbeReport {
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            candidates: vec![PublicRelayCandidateReport {
+                address: address.clone(),
+                succeeded: true,
+                error: None,
+                bootstrap: Some(relayed_peer_report(1, 1)),
+            }],
+        };
+
+        let lines = report.lines();
+
+        assert!(report.succeeded());
+        assert!(lines.contains(&format!(
+            "public relay candidate config: relay_peer {relay}={address} relay_reservation {address}/p2p-circuit"
+        )));
+    }
+
+    #[test]
+    fn public_relay_candidate_config_hint_requires_direct_peer_address() {
+        let relay = peer_id();
+        let address = format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}");
+
+        let hint = public_relay_candidate_config_hint(&address).expect("config hint");
+
+        assert_eq!(
+            hint,
+            PublicRelayCandidateConfigHint {
+                relay_peer_arg: format!("{relay}={address}"),
+                relay_reservation: format!("{address}/p2p-circuit"),
+            }
+        );
+        assert!(public_relay_candidate_config_hint("/ip4/203.0.113.10/tcp/4001").is_none());
+        assert!(public_relay_candidate_config_hint("not a multiaddr").is_none());
     }
 
     #[tokio::test]
