@@ -240,8 +240,9 @@ field and is used consistently by the TUN setup and packet forwarder. Runtime
 validation rejects a zero interface MTU. The `status` and `up` commands print
 both configured and effective MTU values. The daemon does not fragment overlay
 packets; it rejects oversized packets, emits packet-too-big feedback where
-possible, and relies on route MSS hints or the local stack to retry smaller
-traffic.
+possible, lowers the selected path's MTU estimate when an oversized outbound
+packet proves a smaller negotiated ceiling, and relies on route MSS hints or the
+local stack to retry smaller traffic.
 
 ## Development
 

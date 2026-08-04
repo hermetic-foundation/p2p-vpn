@@ -398,7 +398,7 @@ where
                     node: &mut node,
                     forwarder: &forwarder,
                     queues: &mut queues,
-                    paths: &paths,
+                    paths: &mut paths,
                     peer_capabilities: &peer_capabilities,
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
@@ -433,7 +433,7 @@ where
                     node: &mut node,
                     forwarder: &forwarder,
                     queues: &mut queues,
-                    paths: &paths,
+                    paths: &mut paths,
                     peer_capabilities: &peer_capabilities,
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
@@ -1129,6 +1129,10 @@ fn runtime_state_summary_lines(
             "path_fallbacks_to_relay {}",
             snapshot.path_fallbacks_to_relay
         ),
+        format!(
+            "outbound_path_mtu_updates {}",
+            snapshot.outbound_path_mtu_updates
+        ),
         format!("dcutr_successes {}", snapshot.dcutr_successes),
         format!("dcutr_failures {}", snapshot.dcutr_failures),
         format!(
@@ -1790,7 +1794,7 @@ struct RuntimeOutboundDrain<'a> {
     node: &'a mut P2pNode,
     forwarder: &'a Forwarder,
     queues: &'a mut PeerQueues,
-    paths: &'a PathSet,
+    paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
     queue_runtime: &'a mut QueueRuntimeState,
     writer: &'a mut TunWriter,
@@ -1856,11 +1860,12 @@ async fn drain_outbound_queue(
             context.packet_plane,
             packet.peer(),
         ) {
-            PacketTransportDecision::PacketPlaneDatagram { .. } => {
-                send_dequeued_packet_plane_datagram(forwarder, &packet, peer_mtu, context).await;
+            PacketTransportDecision::PacketPlaneDatagram { path } => {
+                send_dequeued_packet_plane_datagram(forwarder, &packet, peer_mtu, path, context)
+                    .await;
             }
-            PacketTransportDecision::StreamFallback { .. } => {
-                send_dequeued_stream_fallback(swarm, forwarder, &packet, peer_mtu, context);
+            PacketTransportDecision::StreamFallback { path } => {
+                send_dequeued_stream_fallback(swarm, forwarder, &packet, peer_mtu, path, context);
             }
             PacketTransportDecision::Blocked { reason, .. } => {
                 if reason == PacketTransportBlockReason::LocalQuicDatagramsUnavailable {
@@ -1914,6 +1919,7 @@ async fn send_dequeued_packet_plane_datagram(
     forwarder: &Forwarder,
     packet: &crate::queue::Packet,
     peer_mtu: u16,
+    path: PathKind,
     context: &mut QueueDrainContext<'_>,
 ) {
     match forwarder.queued_packet_frame_with_mtu(packet, peer_mtu) {
@@ -1935,6 +1941,7 @@ async fn send_dequeued_packet_plane_datagram(
             }
         },
         Err(error) => {
+            maybe_learn_path_mtu(context, packet.peer(), path, &error);
             maybe_write_packet_too_big(context, packet.payload(), &error);
             context
                 .metrics
@@ -1949,6 +1956,7 @@ fn send_dequeued_stream_fallback(
     forwarder: &Forwarder,
     packet: &crate::queue::Packet,
     peer_mtu: u16,
+    path: PathKind,
     context: &mut QueueDrainContext<'_>,
 ) {
     match forwarder.send_queued_packet_with_mtu(swarm, packet, peer_mtu) {
@@ -1958,6 +1966,7 @@ fn send_dequeued_stream_fallback(
             context.metrics.record_outbound_stream_fallback();
         }
         Err(error) => {
+            maybe_learn_path_mtu(context, packet.peer(), path, &error);
             maybe_write_packet_too_big(context, packet.payload(), &error);
             context
                 .metrics
@@ -1968,7 +1977,7 @@ fn send_dequeued_stream_fallback(
 }
 
 struct QueueDrainContext<'a> {
-    paths: &'a PathSet,
+    paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
     bootstrap_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
@@ -1978,6 +1987,30 @@ struct QueueDrainContext<'a> {
     writer: Option<&'a mut TunWriter>,
     packet_plane: Option<&'a PacketPlaneRuntime>,
     metrics: &'a RuntimeMetrics,
+}
+
+fn maybe_learn_path_mtu(
+    context: &mut QueueDrainContext<'_>,
+    peer: PeerId,
+    path: PathKind,
+    error: &ForwardError,
+) {
+    let ForwardError::PacketTooLarge { max, .. } = error else {
+        return;
+    };
+    let mtu = u16::try_from(*max).unwrap_or(u16::MAX);
+    if context.paths.lower_path_mtu(peer, path, mtu) {
+        context.metrics.record_outbound_path_mtu_update();
+        log_runtime_event(
+            LogLevel::Info,
+            "path_mtu_updated",
+            &[
+                ("peer", &peer.to_string()),
+                ("path", path.wire_name()),
+                ("mtu", &mtu.to_string()),
+            ],
+        );
+    }
 }
 
 fn maybe_write_packet_too_big(
@@ -4476,7 +4509,7 @@ mod tests {
     }
 
     fn queue_drain_context<'a>(
-        paths: &'a PathSet,
+        paths: &'a mut PathSet,
         peer_capabilities: &'a PeerCapabilities,
         packet_in_flight: &'a mut PacketInFlight,
         metrics: &'a RuntimeMetrics,
@@ -6810,8 +6843,12 @@ mod tests {
         let peer_capabilities = PeerCapabilities::default();
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -6895,8 +6932,12 @@ mod tests {
         peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 19));
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -6905,7 +6946,15 @@ mod tests {
         assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+        assert_eq!(snapshot.outbound_path_mtu_updates, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .expect("selected path")
+                .estimated_mtu,
+            Some(19)
+        );
     }
 
     #[tokio::test]
@@ -6984,8 +7033,12 @@ mod tests {
         );
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -7075,8 +7128,12 @@ mod tests {
         );
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(1);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -7183,8 +7240,12 @@ mod tests {
         );
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -7280,8 +7341,12 @@ mod tests {
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
@@ -7391,8 +7456,12 @@ mod tests {
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
         let mut packet_in_flight = PacketInFlight::new(256);
-        let mut context =
-            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
         context.packet_plane = Some(&sender_packet_plane);
 
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;

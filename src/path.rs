@@ -230,6 +230,21 @@ impl PathSet {
         self.selection_change(peer, previous)
     }
 
+    pub fn lower_path_mtu(&mut self, peer: PeerId, kind: PathKind, mtu: u16) -> bool {
+        let Some(candidate) = self.candidates.iter_mut().find(|candidate| {
+            candidate.peer == peer && candidate.kind == kind && candidate.healthy
+        }) else {
+            return false;
+        };
+
+        if candidate.estimated_mtu.is_none_or(|current| mtu < current) {
+            candidate.estimated_mtu = Some(mtu);
+            return true;
+        }
+
+        false
+    }
+
     fn selection_change(
         &self,
         peer: PeerId,
@@ -472,6 +487,26 @@ mod tests {
             paths.best_for(peer(1)).map(|path| path.estimated_mtu),
             Some(Some(1180))
         );
+    }
+
+    #[test]
+    fn path_mtu_learning_only_lowers_healthy_paths() {
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(peer(1), PathKind::DirectTcpStream, Some(1200));
+
+        assert!(paths.lower_path_mtu(peer(1), PathKind::DirectTcpStream, 1180));
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.estimated_mtu),
+            Some(Some(1180))
+        );
+        assert!(!paths.lower_path_mtu(peer(1), PathKind::DirectTcpStream, 1190));
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.estimated_mtu),
+            Some(Some(1180))
+        );
+
+        paths.record_closed(peer(1), PathKind::DirectTcpStream);
+        assert!(!paths.lower_path_mtu(peer(1), PathKind::DirectTcpStream, 1100));
     }
 
     #[test]
