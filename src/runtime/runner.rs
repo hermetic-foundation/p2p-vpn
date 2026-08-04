@@ -558,6 +558,23 @@ fn runtime_state_lines(
             "path_fallbacks_to_relay {}",
             snapshot.path_fallbacks_to_relay
         ),
+        format!("dcutr_successes {}", snapshot.dcutr_successes),
+        format!("dcutr_failures {}", snapshot.dcutr_failures),
+        format!(
+            "autonat_probes_scheduled {}",
+            snapshot.autonat_probes_scheduled
+        ),
+        format!("autonat_status_unknown {}", snapshot.autonat_status_unknown),
+        format!("autonat_status_public {}", snapshot.autonat_status_public),
+        format!("autonat_status_private {}", snapshot.autonat_status_private),
+        format!(
+            "autonat_status_changes_to_public {}",
+            snapshot.autonat_status_changes_to_public
+        ),
+        format!(
+            "autonat_status_changes_to_private {}",
+            snapshot.autonat_status_changes_to_private
+        ),
         format!(
             "outbound_path_probes_sent {}",
             snapshot.outbound_path_probes_sent
@@ -2139,7 +2156,19 @@ fn handle_behaviour_event(
             result,
         }) if discovery.dcutr => {
             metrics.record_dcutr_result(result.is_ok());
-            eprintln!("dcutr hole-punch result with {remote_peer_id}: {result:?}");
+            log_runtime_event(
+                if result.is_ok() {
+                    LogLevel::Info
+                } else {
+                    LogLevel::Warn
+                },
+                "dcutr_hole_punch_result",
+                &[
+                    ("peer", &remote_peer_id.to_string()),
+                    ("success", &result.is_ok().to_string()),
+                    ("result", &format!("{result:?}")),
+                ],
+            );
         }
         BehaviourEvent::Autonat(event) if discovery.autonat => {
             handle_autonat_event(swarm, metrics, event);
@@ -2173,13 +2202,29 @@ fn handle_autonat_event(
                 swarm.add_external_address(address.clone());
             }
             metrics.record_autonat_status(autonat_reachability(&new));
-            eprintln!("autonat status changed: {old:?} -> {new:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "autonat_status_changed",
+                &[
+                    ("old", &format!("{old:?}")),
+                    ("new", &format!("{new:?}")),
+                    ("reachability", autonat_reachability(&new).as_str()),
+                ],
+            );
         }
         autonat::Event::OutboundProbe(event) => {
-            eprintln!("autonat outbound probe: {event:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "autonat_outbound_probe",
+                &[("event", &format!("{event:?}"))],
+            );
         }
         autonat::Event::InboundProbe(event) => {
-            eprintln!("autonat inbound probe: {event:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "autonat_inbound_probe",
+                &[("event", &format!("{event:?}"))],
+            );
         }
     }
 }
@@ -2189,6 +2234,16 @@ fn autonat_reachability(status: &autonat::NatStatus) -> AutoNatReachability {
         autonat::NatStatus::Unknown => AutoNatReachability::Unknown,
         autonat::NatStatus::Public(_) => AutoNatReachability::Public,
         autonat::NatStatus::Private => AutoNatReachability::Private,
+    }
+}
+
+impl AutoNatReachability {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Public => "public",
+            Self::Private => "private",
+        }
     }
 }
 
@@ -2834,6 +2889,10 @@ mod tests {
         );
         let metrics = RuntimeMetrics::default();
         metrics.record_outbound_path_probe_sent();
+        metrics.record_dcutr_result(true);
+        metrics.record_dcutr_result(false);
+        metrics.record_autonat_probe_scheduled();
+        metrics.record_autonat_status(AutoNatReachability::Public);
 
         let lines = runtime_state_lines(
             &forwarder,
@@ -2853,6 +2912,14 @@ mod tests {
         assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
         assert!(lines.contains(&"path_promotions_to_direct 0".to_owned()));
         assert!(lines.contains(&"path_fallbacks_to_relay 0".to_owned()));
+        assert!(lines.contains(&"dcutr_successes 1".to_owned()));
+        assert!(lines.contains(&"dcutr_failures 1".to_owned()));
+        assert!(lines.contains(&"autonat_probes_scheduled 1".to_owned()));
+        assert!(lines.contains(&"autonat_status_unknown 0".to_owned()));
+        assert!(lines.contains(&"autonat_status_public 1".to_owned()));
+        assert!(lines.contains(&"autonat_status_private 0".to_owned()));
+        assert!(lines.contains(&"autonat_status_changes_to_public 1".to_owned()));
+        assert!(lines.contains(&"autonat_status_changes_to_private 0".to_owned()));
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(

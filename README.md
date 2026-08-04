@@ -682,7 +682,7 @@ but comes from the running daemon's current queue and path state instead of a
 startup snapshot. `daemon-state` reports the running daemon's configured peers,
 validated capability state, selected path, healthy direct and relay path counts,
 effective MTU, selected path MTU, per-candidate path MTU estimates, and
-path-probe counters.
+path-probe, DCUtR, and AutoNAT counters.
 NixOS instances enable this by default at
 `/run/p2p-vpn-<instance>/control.sock` through a `0750` runtime directory; set
 `services.p2p-vpn.instances.<name>.controlSocket = null` to disable it.
