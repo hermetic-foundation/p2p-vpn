@@ -418,8 +418,8 @@ mod tests {
         assert!(status.supports_owned_udp_packet_plane);
         assert!(!status.supports_owned_quic_packet_plane);
 
-        let owned_quic =
-            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true);
+        let owned_quic = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]);
         let status = ServiceStatusResponse::local("lab", None, 42, 1280)
             .with_packet_data_plane_capabilities(&owned_quic);
         assert!(status.supports_quic_datagrams);

@@ -5050,6 +5050,7 @@ fn control_rejection_name(reason: ControlRejectionReason) -> &'static str {
         ControlRejectionReason::UnauthorizedRouteAdvertisement => {
             "unauthorized_route_advertisement"
         }
+        ControlRejectionReason::InvalidOwnedQuicCertificate => "invalid_owned_quic_certificate",
     }
 }
 

@@ -1912,6 +1912,16 @@ fn push_capability_lines(
         capabilities.supports_owned_quic_packet_plane
     ));
     lines.push(format!(
+        "{prefix} owned quic packet plane certificate bytes: {}",
+        capabilities
+            .owned_quic_packet_plane_certificate_der
+            .as_ref()
+            .map_or_else(
+                || "none".to_owned(),
+                |certificate| certificate.len().to_string()
+            )
+    ));
+    lines.push(format!(
         "{prefix} packet endpoint candidates: {}",
         capabilities.packet_endpoint_candidates.len()
     ));
@@ -3110,6 +3120,9 @@ mod tests {
                 .iter()
                 .any(|line| line == "remote capability supports owned quic packet plane: false")
         );
+        assert!(lines.iter().any(
+            |line| line == "remote capability owned quic packet plane certificate bytes: none"
+        ));
         assert!(
             lines
                 .iter()

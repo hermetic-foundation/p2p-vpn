@@ -14,6 +14,7 @@ use crate::{
 
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
 const MAX_CONTROL_MESSAGE_LEN: usize = 4096;
+pub const MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN: usize = 2048;
 
 #[derive(Clone, Debug, Default)]
 pub struct ControlCodec;
@@ -55,6 +56,8 @@ pub struct ControlCapabilities {
     #[serde(default)]
     pub supports_owned_quic_packet_plane: bool,
     #[serde(default)]
+    pub owned_quic_packet_plane_certificate_der: Option<Vec<u8>>,
+    #[serde(default)]
     pub packet_endpoint_candidates: Vec<String>,
 }
 
@@ -75,6 +78,7 @@ impl ControlCapabilities {
             supports_native_quic_datagrams: false,
             supports_owned_udp_packet_plane: false,
             supports_owned_quic_packet_plane: false,
+            owned_quic_packet_plane_certificate_der: None,
             packet_endpoint_candidates: Vec::new(),
         }
     }
@@ -101,11 +105,22 @@ impl ControlCapabilities {
     }
 
     #[must_use]
-    pub const fn with_owned_quic_packet_plane(mut self, supported: bool) -> Self {
+    pub fn with_owned_quic_packet_plane(mut self, supported: bool) -> Self {
         self.supports_owned_quic_packet_plane = supported;
+        if !supported {
+            self.owned_quic_packet_plane_certificate_der = None;
+        }
         self.supports_quic_datagrams = self.supports_native_quic_datagrams
             || self.supports_owned_udp_packet_plane
             || supported;
+        self
+    }
+
+    #[must_use]
+    pub fn with_owned_quic_packet_plane_certificate(mut self, certificate_der: Vec<u8>) -> Self {
+        self.supports_owned_quic_packet_plane = true;
+        self.owned_quic_packet_plane_certificate_der = Some(certificate_der);
+        self.supports_quic_datagrams = true;
         self
     }
 
@@ -152,6 +167,7 @@ pub enum ControlRejectionReason {
     InvalidEffectiveMtu,
     UnsupportedPreferredPath,
     UnauthorizedRouteAdvertisement,
+    InvalidOwnedQuicCertificate,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -215,6 +231,15 @@ impl PeerCapabilities {
     }
 
     #[must_use]
+    pub fn owned_quic_packet_plane_certificate_for(&self, peer: PeerId) -> Option<&[u8]> {
+        self.peers.get(&peer).and_then(|capabilities| {
+            capabilities
+                .owned_quic_packet_plane_certificate_der
+                .as_deref()
+        })
+    }
+
+    #[must_use]
     pub fn supports_datagram_packet_path_for(&self, peer: PeerId) -> bool {
         self.peers
             .get(&peer)
@@ -273,6 +298,25 @@ pub fn validate_capabilities(
         .any(|endpoint| !validate_packet_plane_endpoint_candidate(endpoint))
     {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    }
+    if capabilities.supports_owned_quic_packet_plane {
+        let Some(certificate) = capabilities
+            .owned_quic_packet_plane_certificate_der
+            .as_deref()
+        else {
+            return Some(ControlRejectionReason::InvalidOwnedQuicCertificate);
+        };
+        if certificate.is_empty()
+            || certificate.len() > MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN
+        {
+            return Some(ControlRejectionReason::InvalidOwnedQuicCertificate);
+        }
+    } else if capabilities
+        .owned_quic_packet_plane_certificate_der
+        .as_deref()
+        .is_some_and(|certificate| !certificate.is_empty())
+    {
+        return Some(ControlRejectionReason::InvalidOwnedQuicCertificate);
     }
 
     None
@@ -577,6 +621,7 @@ mod tests {
         assert!(!capabilities.supports_native_quic_datagrams);
         assert!(!capabilities.supports_owned_udp_packet_plane);
         assert!(!capabilities.supports_owned_quic_packet_plane);
+        assert_eq!(capabilities.owned_quic_packet_plane_certificate_der, None);
         assert!(capabilities.packet_endpoint_candidates.is_empty());
     }
 
@@ -588,12 +633,18 @@ mod tests {
         assert!(owned.supports_owned_udp_packet_plane);
         assert!(!owned.supports_owned_quic_packet_plane);
 
-        let owned_quic =
-            ControlCapabilities::local("lab", None, 1420).with_owned_quic_packet_plane(true);
+        let owned_quic = ControlCapabilities::local("lab", None, 1420)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x82, 0x01, 0x01]);
         assert!(owned_quic.supports_quic_datagrams);
         assert!(!owned_quic.supports_native_quic_datagrams);
         assert!(!owned_quic.supports_owned_udp_packet_plane);
         assert!(owned_quic.supports_owned_quic_packet_plane);
+        assert_eq!(
+            owned_quic
+                .owned_quic_packet_plane_certificate_der
+                .as_deref(),
+            Some([0x30, 0x82, 0x01, 0x01].as_slice())
+        );
 
         let native = ControlCapabilities::local("lab", None, 1420).with_native_quic_datagrams(true);
         assert!(native.supports_quic_datagrams);
@@ -637,6 +688,10 @@ mod tests {
         assert!(!capabilities.supports_native_quic_datagrams_for(peer));
         assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
         assert!(!capabilities.supports_owned_quic_packet_plane_for(peer));
+        assert_eq!(
+            capabilities.owned_quic_packet_plane_certificate_for(peer),
+            None
+        );
         assert!(!capabilities.supports_datagram_packet_path_for(peer));
 
         let mut peer_capabilities = ControlCapabilities::local("lab", None, 1280);
@@ -662,13 +717,18 @@ mod tests {
 
         capabilities.record(
             peer,
-            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true),
+            ControlCapabilities::local("lab", None, 1280)
+                .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]),
         );
 
         assert!(capabilities.supports_quic_datagrams_for(peer));
         assert!(!capabilities.supports_native_quic_datagrams_for(peer));
         assert!(!capabilities.supports_owned_udp_packet_plane_for(peer));
         assert!(capabilities.supports_owned_quic_packet_plane_for(peer));
+        assert_eq!(
+            capabilities.owned_quic_packet_plane_certificate_for(peer),
+            Some([0x30, 0x01].as_slice())
+        );
         assert!(capabilities.supports_datagram_packet_path_for(peer));
 
         capabilities.record(
@@ -772,6 +832,40 @@ mod tests {
             validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::UnsupportedPreferredPath)
         );
+
+        capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]);
+        assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
+
+        capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true);
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidOwnedQuicCertificate)
+        );
+
+        capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_quic_packet_plane_certificate(Vec::new());
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidOwnedQuicCertificate)
+        );
+
+        capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane_certificate(
+                vec![0x30; MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN + 1],
+            );
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidOwnedQuicCertificate)
+        );
+
+        capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.owned_quic_packet_plane_certificate_der = Some(vec![0x30, 0x01]);
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidOwnedQuicCertificate)
+        );
     }
 
     #[test]
@@ -787,5 +881,18 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn capabilities_decode_legacy_json_without_owned_quic_certificate() {
+        let decoded: ControlCapabilities = serde_json::from_str(
+            r#"{"network_name":"lab","membership_tag":null,"advertised_routes":[],"wire_version":1,"packet_protocol":"/p2p-vpn/packet/1","packet_header_len":25,"effective_mtu":1280,"preferred_path":"direct_quic_stream","supports_quic_datagrams":false,"packet_endpoint_candidates":[]}"#,
+        )
+        .expect("capabilities");
+
+        assert!(!decoded.supports_native_quic_datagrams);
+        assert!(!decoded.supports_owned_udp_packet_plane);
+        assert!(!decoded.supports_owned_quic_packet_plane);
+        assert_eq!(decoded.owned_quic_packet_plane_certificate_der, None);
     }
 }

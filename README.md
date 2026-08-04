@@ -69,8 +69,11 @@ request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
 path, overlay network name, advertised route prefixes, whether native libp2p
 QUIC datagrams are currently supported, and whether the owned UDP packet plane
-or owned QUIC packet-plane backend is available. Configs can also declare owned
-packet-plane UDP bind addresses under `network.packet_plane.listen`, externally
+or owned QUIC packet-plane backend is available. Owned QUIC packet-plane support
+also carries a DER-encoded QUIC server certificate in the signed capability
+exchange so peers can pin the trust anchor before opening a direct Quinn
+connection. Configs can also declare owned packet-plane UDP bind addresses
+under `network.packet_plane.listen`, externally
 reachable direct packet endpoints under `network.packet_plane.external_endpoints`,
 and the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
 `network.packet_plane.max_replay_windows_per_session` bounds the authenticated
@@ -90,15 +93,17 @@ IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
 datagrams plus owned QUIC packet-plane datagrams as unsupported, so peers do not
 negotiate a QUIC datagram path before daemon integration is implemented. The
 owned QUIC runtime primitive already carries the same authenticated packet-plane
-datagrams over Quinn QUIC DATAGRAM with explicit certificate trust, but the
-daemon does not advertise or select it yet. Outbound queue draining respects the
+datagrams over Quinn QUIC DATAGRAM with explicit certificate trust, and the
+control capability schema now validates the advertised certificate material, but
+the daemon does not advertise or select it yet. Outbound queue draining respects the
 peer's advertised effective MTU and drops oversized packets before sending them
 to the packet stream fallback. Capability requests from unconfigured peers are
 rejected, and configured peers are only accepted when they advertise the same
 overlay network name, compatible wire version, packet protocol, packet header
 length, matching membership tag when a key is configured, known preferred path,
-coherent datagram support, non-zero effective MTU, and no route prefixes outside
-their configured ownership. Packet endpoint candidates must parse as socket
+coherent datagram support, valid owned-QUIC certificate material when owned QUIC
+is advertised, non-zero effective MTU, and no route prefixes outside their
+configured ownership. Packet endpoint candidates must parse as socket
 addresses or DNS-style `host:port` endpoints; they are candidates for the owned
 packet data plane, not membership or route authority. The packet-plane session
 primitive uses fixed binary
