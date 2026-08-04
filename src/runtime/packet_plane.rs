@@ -23,6 +23,7 @@ const HANDSHAKE_SIGNING_DOMAIN: &[u8] = b"p2p-vpn packet-plane handshake v1";
 const SESSION_KDF_DOMAIN: &[u8] = b"p2p-vpn packet-plane session keys v1";
 const DATAGRAM_HEADER_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
+const MAX_UDP_DATAGRAM_LEN: usize = 65_535;
 pub const PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN: usize = 32;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -208,6 +209,20 @@ pub enum PacketPlaneDatagramError {
     TrailingBytes {
         remaining: usize,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PacketPlaneReceivedFrame {
+    pub frame: Frame,
+    pub remote_addr: SocketAddr,
+    pub local_addr: SocketAddr,
+}
+
+#[derive(Debug)]
+pub enum PacketPlaneIoError {
+    NoListener { index: usize },
+    Io(io::Error),
+    Datagram(PacketPlaneDatagramError),
 }
 
 impl PacketPlaneSessionKeys {
@@ -787,11 +802,81 @@ impl PacketPlaneRuntime {
     pub fn listener_count(&self) -> usize {
         self.sockets.len()
     }
+
+    pub async fn send_frame_to(
+        &self,
+        endpoint: SocketAddr,
+        cipher: &PacketPlaneCipher,
+        frame: &Frame,
+    ) -> Result<usize, PacketPlaneIoError> {
+        self.send_frame_from(0, endpoint, cipher, frame).await
+    }
+
+    pub async fn send_frame_from(
+        &self,
+        listener_index: usize,
+        endpoint: SocketAddr,
+        cipher: &PacketPlaneCipher,
+        frame: &Frame,
+    ) -> Result<usize, PacketPlaneIoError> {
+        let socket = self
+            .sockets
+            .get(listener_index)
+            .ok_or(PacketPlaneIoError::NoListener {
+                index: listener_index,
+            })?;
+        let datagram = cipher.seal_frame(frame)?;
+        Ok(socket.send_to(&datagram, endpoint).await?)
+    }
+
+    pub async fn recv_frame(
+        &self,
+        cipher: &PacketPlaneCipher,
+        max_payload_len: usize,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
+        self.recv_frame_on(0, cipher, max_payload_len).await
+    }
+
+    pub async fn recv_frame_on(
+        &self,
+        listener_index: usize,
+        cipher: &PacketPlaneCipher,
+        max_payload_len: usize,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
+        let socket = self
+            .sockets
+            .get(listener_index)
+            .ok_or(PacketPlaneIoError::NoListener {
+                index: listener_index,
+            })?;
+        let mut datagram = vec![0; MAX_UDP_DATAGRAM_LEN];
+        let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
+        datagram.truncate(len);
+        let frame = cipher.open_frame(&datagram, max_payload_len)?;
+        Ok(PacketPlaneReceivedFrame {
+            frame,
+            remote_addr,
+            local_addr: socket.local_addr()?,
+        })
+    }
+}
+
+impl From<io::Error> for PacketPlaneIoError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<PacketPlaneDatagramError> for PacketPlaneIoError {
+    fn from(error: PacketPlaneDatagramError) -> Self {
+        Self::Datagram(error)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{Duration, timeout};
 
     fn test_secret(byte: u8) -> PacketPlaneEphemeralSecret {
         PacketPlaneEphemeralSecret::from_bytes([byte; PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN])
@@ -849,6 +934,25 @@ mod tests {
         .expect("verified accept");
 
         (initiator_secret, responder_secret, hello, accept)
+    }
+
+    fn session_key_pair() -> (PacketPlaneSessionKeys, PacketPlaneSessionKeys) {
+        let (initiator_secret, responder_secret, hello, accept) = verified_session_pair();
+        let initiator_keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Initiator,
+            &initiator_secret,
+            &hello,
+            &accept,
+        )
+        .expect("initiator keys");
+        let responder_keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Responder,
+            &responder_secret,
+            &accept,
+            &hello,
+        )
+        .expect("responder keys");
+        (initiator_keys, responder_keys)
     }
 
     #[test]
@@ -1197,5 +1301,85 @@ mod tests {
         assert_eq!(runtime.listener_count(), 1);
         assert_eq!(snapshot.listeners.len(), 1);
         assert!(snapshot.listeners[0].port() > 0);
+    }
+
+    #[tokio::test]
+    async fn udp_runtime_sends_encrypted_frame_between_bound_listeners() {
+        let sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("sender bind");
+        let receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("receiver bind");
+        let (initiator_keys, responder_keys) = session_key_pair();
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+        let receiver_addr = receiver.snapshot().listeners[0];
+        let sender_addr = sender.snapshot().listeners[0];
+
+        let sent = sender
+            .send_frame_to(receiver_addr, &initiator_keys.seal, &frame)
+            .await
+            .expect("sent frame");
+        let inbound = timeout(
+            Duration::from_secs(1),
+            receiver.recv_frame(&responder_keys.open, 1280),
+        )
+        .await
+        .expect("receive should not time out")
+        .expect("received frame");
+
+        assert!(sent > 0);
+        assert_eq!(inbound.frame, frame);
+        assert_eq!(inbound.remote_addr, sender_addr);
+        assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn udp_runtime_rejects_datagram_with_wrong_direction_key() {
+        let sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("sender bind");
+        let receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("receiver bind");
+        let (initiator_keys, _responder_keys) = session_key_pair();
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+        let receiver_addr = receiver.snapshot().listeners[0];
+
+        sender
+            .send_frame_to(receiver_addr, &initiator_keys.seal, &frame)
+            .await
+            .expect("sent frame");
+        let error = timeout(
+            Duration::from_secs(1),
+            receiver.recv_frame(&initiator_keys.open, 1280),
+        )
+        .await
+        .expect("receive should not time out")
+        .expect_err("wrong direction key should fail");
+
+        assert!(matches!(
+            error,
+            PacketPlaneIoError::Datagram(PacketPlaneDatagramError::Decrypt)
+        ));
+    }
+
+    #[tokio::test]
+    async fn udp_runtime_reports_missing_listener_for_send_and_receive() {
+        let runtime = PacketPlaneRuntime::disabled();
+        let (initiator_keys, _responder_keys) = session_key_pair();
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+        let endpoint = "127.0.0.1:51820".parse().expect("endpoint");
+
+        assert!(matches!(
+            runtime
+                .send_frame_to(endpoint, &initiator_keys.seal, &frame)
+                .await,
+            Err(PacketPlaneIoError::NoListener { index: 0 })
+        ));
+        assert!(matches!(
+            runtime.recv_frame(&initiator_keys.open, 1280).await,
+            Err(PacketPlaneIoError::NoListener { index: 0 })
+        ));
     }
 }
