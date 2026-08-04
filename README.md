@@ -838,11 +838,15 @@ waits for libp2p Identify responses, and prints direct relay candidate
 TCP/QUIC multiaddrs for peers that advertise the circuit-relay v2 hop protocol.
 Use `--config p2p-vpn.json` to scan the config's bootstrap peers, repeat
 `--bootstrap-peer PEER_ID=MULTIADDR` to scan explicit peers, or pass
-`--ipfs-bootstrap-peers` to scan the bundled public IPFS bootstrap set. A
-discovered candidate is only a hint that the peer advertises relay-hop support;
-run `relay-check` against the printed candidate, or pass `--check-candidates`
-to validate scanned candidates immediately, before using it for a VPN
-reservation or DCUtR path. Add `--require-dcutr-success` with
+`--ipfs-bootstrap-peers` to scan the bundled public IPFS bootstrap set and
+sample additional peers learned through the public `/ipfs/kad/1.0.0` routing
+table. Scan output reports both configured bootstrap peers and total scanned
+peers, plus how many routing-table peers were discovered. A discovered
+candidate is only a hint that the peer advertises relay-hop support and has a
+direct TCP/QUIC address this binary can dial; run `relay-check` against the
+printed candidate, or pass `--check-candidates` to validate scanned candidates
+immediately, before using it for a VPN reservation or DCUtR path. Add
+`--require-dcutr-success` with
 `--check-candidates` when the scan should only pass after a successful
 public-relay-assisted hole punch. Pass `--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that

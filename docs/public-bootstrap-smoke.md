@@ -83,9 +83,14 @@ nix develop -c cargo run -- relay-scan \
   --timeout-seconds 30
 ```
 
-`relay-scan` reports direct `/p2p/RELAY` candidate multiaddrs. Treat these as
-candidate hints only; the peer can advertise relay-hop support and still reject
-reservations because of load, policy, or resource limits. With
+`relay-scan` reports direct `/p2p/RELAY` candidate multiaddrs. With
+`--ipfs-bootstrap-peers`, it uses the bundled public IPFS bootstrap set and
+samples additional peers learned through the public `/ipfs/kad/1.0.0` routing
+table; scan output reports both configured bootstrap peers and total scanned
+peers, plus how many routing-table peers were discovered. Treat reported
+candidates as hints only; the peer can advertise relay-hop support and still
+reject reservations because of load, policy, or resource limits. The scanner
+filters out transport protocols this binary cannot dial. With
 `--check-candidates`, the command immediately runs the same reservation and
 relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
 the candidate must also prove public-relay-assisted hole punching. Add
@@ -184,3 +189,25 @@ public relay scan validation: public relay candidate: /ip4/104.131.131.82/tcp/40
 This confirms the validation path distinguishes a relay-hop advertisement from
 reservation readiness and reports which reservation prerequisites were not
 observed before timeout.
+
+Additional widened public Kademlia scan evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 45 --max-candidates 64
+public relay scan: ok
+public relay scan peers: 5
+public relay scan total_peers: 16
+public relay scan routing_peers: 11 dialed 0
+public relay scan connected: 5
+public relay scan identified: 13
+public relay scan relay_capable: 13
+public relay scan dial_failures: 3
+public relay candidates: 45
+```
+
+This confirms `relay-scan --ipfs-bootstrap-peers` now goes beyond the configured
+bootstrap peers and collects relay-hop candidates from peers learned through the
+public IPFS Kademlia routing table. A follow-up bounded validation run against
+twelve bootstrap-derived candidates still failed to prove usable public relay
+service: all twelve candidates timed out waiting for relay reservation
+acceptance.

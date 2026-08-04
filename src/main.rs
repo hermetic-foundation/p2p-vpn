@@ -2411,6 +2411,12 @@ fn relay_scan_config(
             })?
     };
 
+    if ipfs_bootstrap_peers {
+        config.network.discovery.kademlia = true;
+        IPFS_KADEMLIA_PROTOCOL.clone_into(&mut config.network.discovery.kademlia_protocol);
+        config.network.discovery.kademlia_provider_advertisement = false;
+    }
+
     for peer in init_bootstrap_peers(bootstrap_peers, Vec::new(), ipfs_bootstrap_peers) {
         let Some(address) = peer.address else {
             return Err(format!(
@@ -4163,7 +4169,12 @@ mod tests {
             IPFS_BOOTSTRAP_PEERS.len()
         );
         assert!(!config.network.discovery.mdns);
-        assert!(!config.network.discovery.kademlia);
+        assert!(config.network.discovery.kademlia);
+        assert_eq!(
+            config.network.discovery.kademlia_protocol,
+            IPFS_KADEMLIA_PROTOCOL
+        );
+        assert!(!config.network.discovery.kademlia_provider_advertisement);
     }
 
     #[test]
@@ -4231,8 +4242,11 @@ mod tests {
 
         p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
             scanned_bootstrap_peers: addresses.len(),
+            scanned_peers: addresses.len(),
+            discovered_routing_peers: 0,
+            dialed_routing_peers: 0,
             connected_bootstrap_peers: addresses.len(),
-            identified_bootstrap_peers: addresses.len(),
+            identified_peers: addresses.len(),
             relay_capable_peers: addresses.len(),
             dial_failures: 0,
             candidates,

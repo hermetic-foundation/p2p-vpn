@@ -5,7 +5,7 @@ use std::{
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, autonat, dcutr, identify, multiaddr::Protocol, relay,
+    Multiaddr, PeerId as Libp2pPeerId, autonat, dcutr, identify, kad, multiaddr::Protocol, relay,
     swarm::SwarmEvent,
 };
 
@@ -20,6 +20,7 @@ use crate::{
 
 pub const PUBLIC_RELAY_CANDIDATE_LIMIT: usize = 8;
 pub const PUBLIC_RELAY_SCAN_LIMIT: usize = 16;
+pub const PUBLIC_RELAY_SCAN_CANDIDATE_LIMIT: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BootstrapCheckThreshold {
@@ -321,8 +322,11 @@ impl PublicRelayProbeFailure {
 #[derive(Debug)]
 pub struct PublicRelayScanReport {
     pub scanned_bootstrap_peers: usize,
+    pub scanned_peers: usize,
+    pub discovered_routing_peers: usize,
+    pub dialed_routing_peers: usize,
     pub connected_bootstrap_peers: usize,
-    pub identified_bootstrap_peers: usize,
+    pub identified_peers: usize,
     pub relay_capable_peers: usize,
     pub dial_failures: usize,
     pub candidates: Vec<PublicRelayScanCandidate>,
@@ -428,14 +432,16 @@ impl PublicRelayScanReport {
                 if self.succeeded() { "ok" } else { "failed" }
             ),
             format!("public relay scan peers: {}", self.scanned_bootstrap_peers),
+            format!("public relay scan total_peers: {}", self.scanned_peers),
+            format!(
+                "public relay scan routing_peers: {} dialed {}",
+                self.discovered_routing_peers, self.dialed_routing_peers
+            ),
             format!(
                 "public relay scan connected: {}",
                 self.connected_bootstrap_peers
             ),
-            format!(
-                "public relay scan identified: {}",
-                self.identified_bootstrap_peers
-            ),
+            format!("public relay scan identified: {}", self.identified_peers),
             format!(
                 "public relay scan relay_capable: {}",
                 self.relay_capable_peers
@@ -550,7 +556,7 @@ pub async fn scan_public_relay_candidates(
         &mut node,
         &bootstrap_peers,
         timeout,
-        max_candidates.min(PUBLIC_RELAY_SCAN_LIMIT),
+        max_candidates.min(PUBLIC_RELAY_SCAN_CANDIDATE_LIMIT),
     )
     .await;
 
@@ -602,7 +608,8 @@ fn public_relay_scan_report(
             address: address.to_string(),
         })
         .collect();
-    let peer_results = bootstrap_peers
+    let peer_results = poll
+        .scan_peers
         .iter()
         .map(|(peer_id, address)| {
             let identify = poll.identified_peers.get(peer_id);
@@ -631,8 +638,11 @@ fn public_relay_scan_report(
 
     PublicRelayScanReport {
         scanned_bootstrap_peers: bootstrap_peers.len(),
+        scanned_peers: poll.scan_peers.len(),
+        discovered_routing_peers: poll.discovered_routing_peers,
+        dialed_routing_peers: poll.dialed_routing_peers,
         connected_bootstrap_peers: poll.connected_bootstrap_peers.len(),
-        identified_bootstrap_peers: poll.identified_peers.len(),
+        identified_peers: poll.identified_peers.len(),
         relay_capable_peers,
         dial_failures: poll.dial_failures.len(),
         candidates,
@@ -1089,6 +1099,7 @@ async fn poll_public_relay_scan_events(
     max_candidates: usize,
 ) -> PublicRelayScanPollResult {
     let mut result = PublicRelayScanPollResult {
+        scan_peers: bootstrap_peers.to_vec(),
         connected_bootstrap_peers: bootstrap_peers
             .iter()
             .filter_map(|(peer, _)| node.swarm.is_connected(peer).then_some(*peer))
@@ -1099,17 +1110,18 @@ async fn poll_public_relay_scan_events(
 
     while should_continue_public_relay_scan(
         bootstrap_peers.len(),
+        result.scan_peers.len(),
         result.identified_peers.len(),
         result.candidates.len(),
         max_candidates,
-        Instant::now(),
-        deadline,
+        node.discovery.kademlia,
+        Instant::now() < deadline,
     ) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let Ok(event) = tokio::time::timeout(remaining, node.swarm.select_next_some()).await else {
             break;
         };
-        record_public_relay_scan_event(event, bootstrap_peers, max_candidates, &mut result);
+        record_public_relay_scan_event(event, node, bootstrap_peers, max_candidates, &mut result);
     }
 
     result
@@ -1117,20 +1129,23 @@ async fn poll_public_relay_scan_events(
 
 fn should_continue_public_relay_scan(
     bootstrap_peers: usize,
+    scan_peers: usize,
     identified_peers: usize,
     candidates: usize,
     max_candidates: usize,
-    now: Instant,
-    deadline: Instant,
+    kademlia_enabled: bool,
+    within_deadline: bool,
 ) -> bool {
-    now < deadline
-        && bootstrap_peers > 0
-        && candidates < max_candidates
-        && identified_peers < bootstrap_peers
+    if !within_deadline || bootstrap_peers == 0 || candidates >= max_candidates {
+        return false;
+    }
+
+    identified_peers < scan_peers || (kademlia_enabled && scan_peers < PUBLIC_RELAY_SCAN_LIMIT)
 }
 
 fn record_public_relay_scan_event(
     event: SwarmEvent<BehaviourEvent>,
+    node: &mut P2pNode,
     bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
     max_candidates: usize,
     result: &mut PublicRelayScanPollResult,
@@ -1146,7 +1161,7 @@ fn record_public_relay_scan_event(
             error,
             ..
         } => {
-            if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
+            if scan_peers_include(&result.scan_peers, peer_id) {
                 result.dial_failures.push((peer_id, format!("{error:?}")));
             }
         }
@@ -1154,11 +1169,11 @@ fn record_public_relay_scan_event(
             peer_id,
             info,
             ..
-        })) if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) => {
+        })) if scan_peers_include(&result.scan_peers, peer_id) => {
             let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
             let candidate_count_before = result.candidates.len();
             if relay_hop {
-                for address in relay_scan_candidate_addresses(peer_id, &info, bootstrap_peers) {
+                for address in relay_scan_candidate_addresses(peer_id, &info, &result.scan_peers) {
                     if result.candidates.len() == max_candidates {
                         break;
                     }
@@ -1180,13 +1195,53 @@ fn record_public_relay_scan_event(
             peer_id,
             error,
             ..
-        })) if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) => {
+        })) if scan_peers_include(&result.scan_peers, peer_id) => {
             result
                 .dial_failures
                 .push((peer_id, format!("identify failed: {error}")));
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::RoutingUpdated {
+            peer,
+            addresses,
+            ..
+        })) => {
+            record_public_relay_routing_peer(peer, addresses.iter(), node, result);
+        }
         _ => {}
     }
+}
+
+fn record_public_relay_routing_peer<'a>(
+    peer: Libp2pPeerId,
+    mut addresses: impl Iterator<Item = &'a Multiaddr>,
+    node: &mut P2pNode,
+    result: &mut PublicRelayScanPollResult,
+) {
+    if peer == *node.swarm.local_peer_id()
+        || scan_peers_include(&result.scan_peers, peer)
+        || result.scan_peers.len() >= PUBLIC_RELAY_SCAN_LIMIT
+    {
+        return;
+    }
+
+    let Some(address) = addresses.find_map(|address| public_relay_candidate_address(peer, address))
+    else {
+        return;
+    };
+
+    result.discovered_routing_peers += 1;
+    result.scan_peers.push((peer, address.clone()));
+    if node.swarm.is_connected(&peer) {
+        return;
+    }
+    match node.swarm.dial(address.clone()) {
+        Ok(()) => result.dialed_routing_peers += 1,
+        Err(error) => result.dial_failures.push((peer, format!("{error:?}"))),
+    }
+}
+
+fn scan_peers_include(peers: &[(Libp2pPeerId, Multiaddr)], peer: Libp2pPeerId) -> bool {
+    peers.iter().any(|(candidate, _)| *candidate == peer)
 }
 
 fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
@@ -1241,7 +1296,17 @@ fn supports_public_relay_candidate_transport(address: &Multiaddr) -> bool {
             Protocol::Tcp(_) | Protocol::Quic | Protocol::QuicV1 => {
                 has_supported_transport = true;
             }
-            Protocol::WebRTC | Protocol::WebRTCDirect | Protocol::WebTransport => return false,
+            Protocol::Http
+            | Protocol::Https
+            | Protocol::P2pWebRtcDirect
+            | Protocol::P2pWebRtcStar
+            | Protocol::P2pWebSocketStar
+            | Protocol::Tls
+            | Protocol::WebRTC
+            | Protocol::WebRTCDirect
+            | Protocol::WebTransport
+            | Protocol::Ws(_)
+            | Protocol::Wss(_) => return false,
             _ => {}
         }
     }
@@ -1364,10 +1429,13 @@ struct BootstrapPollResult {
 
 #[derive(Debug, Default)]
 struct PublicRelayScanPollResult {
+    scan_peers: Vec<(Libp2pPeerId, Multiaddr)>,
     connected_bootstrap_peers: HashSet<Libp2pPeerId>,
     identified_peers: HashMap<Libp2pPeerId, PublicRelayIdentifyResult>,
     dial_failures: Vec<(Libp2pPeerId, String)>,
     candidates: Vec<(Libp2pPeerId, Multiaddr)>,
+    discovered_routing_peers: usize,
+    dialed_routing_peers: usize,
 }
 
 #[derive(Debug)]
@@ -1953,6 +2021,57 @@ mod tests {
         assert!(report.lines().contains(&"public relay scan: ok".to_owned()));
     }
 
+    #[test]
+    fn public_relay_scan_report_includes_kademlia_routing_peers() {
+        let bootstrap = peer_id();
+        let routing_relay = peer_id();
+        let bootstrap_address: Multiaddr = format!("/ip4/203.0.113.10/tcp/4001/p2p/{bootstrap}")
+            .parse()
+            .expect("bootstrap address");
+        let routing_address: Multiaddr = format!("/ip4/203.0.113.20/tcp/4001/p2p/{routing_relay}")
+            .parse()
+            .expect("routing address");
+        let bootstrap_peers = vec![(bootstrap, bootstrap_address.clone())];
+        let mut identified_peers = HashMap::new();
+        identified_peers.insert(
+            routing_relay,
+            PublicRelayIdentifyResult {
+                relay_hop: true,
+                candidate_addresses: 1,
+            },
+        );
+        let poll = PublicRelayScanPollResult {
+            scan_peers: vec![
+                (bootstrap, bootstrap_address),
+                (routing_relay, routing_address.clone()),
+            ],
+            connected_bootstrap_peers: HashSet::from([bootstrap]),
+            identified_peers,
+            dial_failures: Vec::new(),
+            candidates: vec![(routing_relay, routing_address.clone())],
+            discovered_routing_peers: 1,
+            dialed_routing_peers: 1,
+        };
+
+        let report = public_relay_scan_report(&bootstrap_peers, &poll);
+        let lines = report.lines();
+
+        assert!(report.succeeded());
+        assert_eq!(report.scanned_bootstrap_peers, 1);
+        assert_eq!(report.scanned_peers, 2);
+        assert_eq!(report.discovered_routing_peers, 1);
+        assert_eq!(report.dialed_routing_peers, 1);
+        assert_eq!(report.identified_peers, 1);
+        assert_eq!(report.relay_capable_peers, 1);
+        assert!(lines.contains(&"public relay scan total_peers: 2".to_owned()));
+        assert!(lines.contains(&"public relay scan routing_peers: 1 dialed 1".to_owned()));
+        assert!(lines.iter().any(|line| {
+            line.contains(&routing_relay.to_string())
+                && line.contains("relay_hop true")
+                && line.contains(&routing_address.to_string())
+        }));
+    }
+
     #[tokio::test]
     #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDRS or P2P_VPN_LIVE_RELAY_MULTIADDR for a reachable public libp2p relay"]
     async fn bootstrap_check_can_probe_live_public_relayed_peer_circuit() {
@@ -2179,6 +2298,15 @@ mod tests {
                 )
                 .parse()
                 .expect("webtransport address"),
+            )
+            .is_none()
+        );
+        assert!(
+            public_relay_candidate_address(
+                relay,
+                &format!("/dns/relay.example.net/tcp/443/wss/p2p/{relay}")
+                    .parse()
+                    .expect("wss address"),
             )
             .is_none()
         );
