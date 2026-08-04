@@ -93,7 +93,10 @@ reject reservations because of load, policy, or resource limits. The scanner
 filters out transport protocols this binary cannot dial. With
 `--check-candidates`, the command immediately runs the same reservation and
 relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
-the candidate must also prove public-relay-assisted hole punching. Add
+the candidate must also prove public-relay-assisted hole punching. Validation
+tries scanned candidates round-robin by relay peer, so a scan with many
+addresses for one relay still tests other relays before cycling through that
+peer's alternate addresses. Add
 `--write-config PATH` with `--check-candidates` to write a default
 relay-assisted config from the first validated scanned candidate. When the scan
 uses `--config p2p-vpn.json`, the output preserves that config's overlay
@@ -207,7 +210,41 @@ public relay candidates: 45
 
 This confirms `relay-scan --ipfs-bootstrap-peers` now goes beyond the configured
 bootstrap peers and collects relay-hop candidates from peers learned through the
-public IPFS Kademlia routing table. A follow-up bounded validation run against
-twelve bootstrap-derived candidates still failed to prove usable public relay
-service: all twelve candidates timed out waiting for relay reservation
-acceptance.
+public IPFS Kademlia routing table.
+
+Additional round-robin public relay validation evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --check-candidates --timeout-seconds 45 --candidate-timeout-seconds 6 --max-candidates 24
+public relay scan: ok
+public relay scan peers: 5
+public relay scan total_peers: 10
+public relay scan routing_peers: 5 dialed 0
+public relay candidates: 24
+public relay scan validation: public relay probe: ok
+public relay scan validation: public relay probe mode: relayed_peer_circuit
+public relay scan validation: public relay candidates: 6 succeeded 1
+public relay scan validation: public relay candidate: /ip4/158.69.208.229/udp/4001/quic-v1/p2p/12D3KooWHtzDJvs5ziiQ2o2JEWdxSV95mFxuvS2hk1wVDAWScXeE succeeded true error none
+public relay scan validation: public relay candidate detail: relayed peer circuits: 1 connected 1
+```
+
+This run proves public Kademlia-assisted relay discovery, public relay
+reservation acceptance, and relayed circuit dialing through a routing-table
+candidate. The same candidate also produced a runtime-valid relay-assisted
+config through `relay-check --write-config` and `status`:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-check --relay-candidate /ip4/158.69.208.229/udp/4001/quic-v1/p2p/12D3KooWHtzDJvs5ziiQ2o2JEWdxSV95mFxuvS2hk1wVDAWScXeE --write-config /tmp/p2p-vpn-public-relay-success.json --timeout-seconds 30
+public relay probe: ok
+public relay candidate: /ip4/158.69.208.229/udp/4001/quic-v1/p2p/12D3KooWHtzDJvs5ziiQ2o2JEWdxSV95mFxuvS2hk1wVDAWScXeE succeeded true error none
+wrote /tmp/p2p-vpn-public-relay-success.json
+
+$ nix develop -c cargo run --quiet -- status --config /tmp/p2p-vpn-public-relay-success.json
+bootstrap peers: 1
+relay reservations: 1
+```
+
+Public-relay-assisted DCUtR is still unproven from this host. A follow-up run
+against the same relay with `--require-dcutr-success --timeout-seconds 45`
+connected the relayed circuit but did not observe a successful hole punch; the
+direct QUIC attempt ended with `HandshakeTimedOut`.

@@ -2354,15 +2354,19 @@ fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
 fn relay_scan_candidate_multiaddrs(
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
 ) -> Result<Vec<libp2p::Multiaddr>, String> {
-    report
+    let parsed = report
         .candidates
         .iter()
         .map(|candidate| {
             parse_public_relay_addresses(&candidate.address)
                 .and_then(|mut addresses| {
-                    addresses
+                    let address = addresses
                         .pop()
-                        .ok_or_else(|| "empty scanned relay candidate".to_owned())
+                        .ok_or_else(|| "empty scanned relay candidate".to_owned())?;
+                    let peer = relay_peer_target(&address).ok_or_else(|| {
+                        format!("scanned relay candidate {address} is missing /p2p/RELAY")
+                    })?;
+                    Ok((peer, address))
                 })
                 .map_err(|error| {
                     format!(
@@ -2371,7 +2375,47 @@ fn relay_scan_candidate_multiaddrs(
                     )
                 })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(round_robin_candidates_by_peer(parsed))
+}
+
+fn round_robin_candidates_by_peer(
+    candidates: Vec<(libp2p::PeerId, libp2p::Multiaddr)>,
+) -> Vec<libp2p::Multiaddr> {
+    let mut grouped: Vec<(libp2p::PeerId, Vec<libp2p::Multiaddr>)> = Vec::new();
+    for (peer, address) in candidates {
+        if grouped
+            .iter()
+            .any(|(_, addresses)| addresses.contains(&address))
+        {
+            continue;
+        }
+        if let Some((_, addresses)) = grouped
+            .iter_mut()
+            .find(|(candidate_peer, _)| *candidate_peer == peer)
+        {
+            addresses.push(address);
+        } else {
+            grouped.push((peer, vec![address]));
+        }
+    }
+
+    let mut ordered = Vec::new();
+    loop {
+        let mut added = false;
+        for (_, addresses) in &mut grouped {
+            if addresses.is_empty() {
+                continue;
+            }
+            ordered.push(addresses.remove(0));
+            added = true;
+        }
+        if !added {
+            break;
+        }
+    }
+    ordered
 }
 
 fn relay_scan_config(
@@ -4217,6 +4261,39 @@ mod tests {
         let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
 
         assert_eq!(candidates.len(), addresses.len());
+    }
+
+    #[test]
+    fn relay_scan_candidate_multiaddrs_round_robin_distinct_peers() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let peer_c = "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb";
+        let addresses = [
+            format!("/dns4/relay-a.example.net/tcp/4001/p2p/{peer_a}"),
+            format!("/dns4/relay-a.example.net/udp/4001/quic-v1/p2p/{peer_a}"),
+            format!("/dns4/relay-b.example.net/tcp/4001/p2p/{peer_b}"),
+            format!("/dns4/relay-c.example.net/tcp/4001/p2p/{peer_c}"),
+            format!("/dns4/relay-b.example.net/udp/4001/quic-v1/p2p/{peer_b}"),
+        ];
+        let refs = addresses.iter().map(String::as_str).collect::<Vec<_>>();
+        let report = relay_scan_report_with_candidates(&refs);
+
+        let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
+        let ordered = candidates
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ordered,
+            vec![
+                addresses[0].clone(),
+                addresses[2].clone(),
+                addresses[3].clone(),
+                addresses[1].clone(),
+                addresses[4].clone(),
+            ]
+        );
     }
 
     fn relay_scan_report_with_candidates(

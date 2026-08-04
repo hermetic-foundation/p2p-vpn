@@ -845,8 +845,10 @@ peers, plus how many routing-table peers were discovered. A discovered
 candidate is only a hint that the peer advertises relay-hop support and has a
 direct TCP/QUIC address this binary can dial; run `relay-check` against the
 printed candidate, or pass `--check-candidates` to validate scanned candidates
-immediately, before using it for a VPN reservation or DCUtR path. Add
-`--require-dcutr-success` with
+immediately, before using it for a VPN reservation or DCUtR path. Validation
+tries scanned candidates round-robin by relay peer, so a candidate set with
+many addresses for one relay still gives other relays an early chance before
+cycling through alternate addresses. Add `--require-dcutr-success` with
 `--check-candidates` when the scan should only pass after a successful
 public-relay-assisted hole punch. Pass `--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that
