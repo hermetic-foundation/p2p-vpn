@@ -247,6 +247,7 @@ where
         control_socket,
         packet_plane,
         config.network.packet_plane.session_ttl(),
+        config.network.packet_plane.replay_window_limit(),
         shutdown,
     ))
     .await
@@ -290,6 +291,7 @@ pub async fn run_node(
         None,
         PacketPlaneRuntime::disabled(),
         options.packet_plane_session_ttl,
+        options.packet_plane_replay_windows_per_session,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -302,6 +304,7 @@ pub struct RuntimeNodeOptions {
     pub resources: ResourceConfig,
     pub metrics_interval: Option<Duration>,
     pub packet_plane_session_ttl: Duration,
+    pub packet_plane_replay_windows_per_session: usize,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -319,6 +322,7 @@ pub async fn run_node_until<Shutdown>(
     control_socket: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -436,6 +440,7 @@ where
                         packet_plane: &mut packet_plane,
                         packet_plane_negotiator: &mut packet_plane_negotiator,
                         packet_plane_session_ttl,
+                        packet_plane_replay_windows_per_session,
                     },
                     event,
                 )?;
@@ -538,6 +543,7 @@ where
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     packet_plane: packet_plane.snapshot(),
                     packet_plane_session_ttl,
+                    packet_plane_replay_windows_per_session,
                 };
                 if let Some(reason) = handle_runtime_control_request(request, &control_context) {
                     log_runtime_event(
@@ -724,6 +730,7 @@ struct RuntimeControlContext<'a> {
     packet_in_flight: PacketInFlightStats,
     packet_plane: PacketPlaneSnapshot,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 }
 
 fn handle_runtime_control_request(
@@ -738,6 +745,7 @@ fn handle_runtime_control_request(
                 context.path_stats,
                 &context.packet_plane,
                 context.packet_plane_session_ttl,
+                context.packet_plane_replay_windows_per_session,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
@@ -755,6 +763,8 @@ fn handle_runtime_control_request(
                 packet_in_flight: context.packet_in_flight,
                 packet_plane: &context.packet_plane,
                 packet_plane_session_ttl: context.packet_plane_session_ttl,
+                packet_plane_replay_windows_per_session: context
+                    .packet_plane_replay_windows_per_session,
             });
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
@@ -1147,11 +1157,15 @@ fn runtime_status_lines(
     path: crate::path::PathRuntimeStats,
     packet_plane: &PacketPlaneSnapshot,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 ) -> Vec<String> {
     let mut lines = metrics.snapshot_with_paths(queue, path).lines();
     lines.push(format!(
         "packet_plane_session_ttl_seconds {}",
         packet_plane_session_ttl.as_secs()
+    ));
+    lines.push(format!(
+        "packet_plane_replay_windows_per_session {packet_plane_replay_windows_per_session}"
     ));
     lines.push(format!(
         "packet_plane_listeners {}",
@@ -1175,6 +1189,7 @@ struct RuntimeStateView<'a> {
     packet_in_flight: PacketInFlightStats,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 }
 
 fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
@@ -1187,15 +1202,16 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
         .collect::<Vec<_>>();
     peers.sort_by_key(ToString::to_string);
 
-    let mut lines = runtime_state_summary_lines(
-        &snapshot,
-        peers.len(),
-        view.peer_capabilities.len(),
-        view.forwarder.replay_window_count(),
-        view.packet_in_flight,
-        view.packet_plane,
-        view.packet_plane_session_ttl,
-    );
+    let mut lines = runtime_state_summary_lines(RuntimeStateSummaryView {
+        snapshot: &snapshot,
+        configured_peers: peers.len(),
+        validated_peers: view.peer_capabilities.len(),
+        replay_windows: view.forwarder.replay_window_count(),
+        packet_in_flight: view.packet_in_flight,
+        packet_plane: view.packet_plane,
+        packet_plane_session_ttl: view.packet_plane_session_ttl,
+        packet_plane_replay_windows_per_session: view.packet_plane_replay_windows_per_session,
+    });
 
     let local_mtu = u16::try_from(view.forwarder.mtu()).unwrap_or(u16::MAX);
     for peer in peers {
@@ -1212,23 +1228,33 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
     lines
 }
 
-fn runtime_state_summary_lines(
-    snapshot: &RuntimeSnapshot,
+#[derive(Clone, Copy)]
+struct RuntimeStateSummaryView<'a> {
+    snapshot: &'a RuntimeSnapshot,
     configured_peers: usize,
     validated_peers: usize,
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
-    packet_plane: &PacketPlaneSnapshot,
+    packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_session_ttl: Duration,
-) -> Vec<String> {
+    packet_plane_replay_windows_per_session: usize,
+}
+
+fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String> {
+    let snapshot = view.snapshot;
+    let packet_in_flight = view.packet_in_flight;
     let mut lines = vec![
         "daemon state: running".to_owned(),
-        format!("configured peers: {configured_peers}"),
-        format!("validated peers: {validated_peers}"),
-        format!("replay_windows {replay_windows}"),
+        format!("configured peers: {}", view.configured_peers),
+        format!("validated peers: {}", view.validated_peers),
+        format!("replay_windows {}", view.replay_windows),
         format!(
             "packet_plane_session_ttl_seconds {}",
-            packet_plane_session_ttl.as_secs()
+            view.packet_plane_session_ttl.as_secs()
+        ),
+        format!(
+            "packet_plane_replay_windows_per_session {}",
+            view.packet_plane_replay_windows_per_session
         ),
         format!(
             "outbound_stream_fallback_packets {}",
@@ -1242,6 +1268,31 @@ fn runtime_state_summary_lines(
             "outbound_quic_datagram_unavailable_packets {}",
             snapshot.outbound_quic_datagram_unavailable_packets
         ),
+        format!(
+            "packet_stream_fallback_in_flight {}",
+            packet_in_flight.packets
+        ),
+        format!(
+            "packet_stream_fallback_in_flight_peers {}",
+            packet_in_flight.peers
+        ),
+        format!(
+            "packet_stream_fallback_in_flight_shards {}",
+            packet_in_flight.shards
+        ),
+        format!(
+            "packet_stream_fallback_limit_per_peer {}",
+            packet_in_flight.limit_per_peer
+        ),
+    ];
+    extend_runtime_discovery_summary_lines(&mut lines, snapshot);
+    extend_runtime_path_summary_lines(&mut lines, snapshot);
+    extend_runtime_packet_plane_summary_lines(&mut lines, view.packet_plane);
+    lines
+}
+
+fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &RuntimeSnapshot) {
+    lines.extend([
         format!(
             "path_promotions_to_direct {}",
             snapshot.path_promotions_to_direct
@@ -1299,26 +1350,7 @@ fn runtime_state_summary_lines(
             "outbound_queue_blocked_packet_window_events {}",
             snapshot.outbound_queue_blocked_packet_window_events
         ),
-        format!(
-            "packet_stream_fallback_in_flight {}",
-            packet_in_flight.packets
-        ),
-        format!(
-            "packet_stream_fallback_in_flight_peers {}",
-            packet_in_flight.peers
-        ),
-        format!(
-            "packet_stream_fallback_in_flight_shards {}",
-            packet_in_flight.shards
-        ),
-        format!(
-            "packet_stream_fallback_limit_per_peer {}",
-            packet_in_flight.limit_per_peer
-        ),
-    ];
-    extend_runtime_path_summary_lines(&mut lines, snapshot);
-    extend_runtime_packet_plane_summary_lines(&mut lines, packet_plane);
-    lines
+    ]);
 }
 
 fn extend_runtime_path_summary_lines(lines: &mut Vec<String>, snapshot: &RuntimeSnapshot) {
@@ -2497,6 +2529,7 @@ struct SwarmEventContext<'a> {
     packet_plane: &'a mut PacketPlaneRuntime,
     packet_plane_negotiator: &'a mut PacketPlaneNegotiator,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -3151,6 +3184,7 @@ fn handle_service_request(
                 context.local_capabilities,
                 context.previous_membership_tags,
                 context.packet_plane_session_ttl,
+                context.packet_plane_replay_windows_per_session,
             );
             match &response {
                 ServiceResponse::Status(_) => context.metrics.record_service_status_accept(),
@@ -3367,6 +3401,7 @@ fn service_status_response_for_peer(
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 ) -> ServiceResponse {
     if !forwarder.is_configured_transport_peer(peer) {
         return ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer);
@@ -3388,7 +3423,8 @@ fn service_status_response_for_peer(
             request.nonce,
             local_capabilities.effective_mtu,
         )
-        .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs()),
+        .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs())
+        .with_packet_plane_replay_windows_per_session(packet_plane_replay_windows_per_session),
     )
 }
 
@@ -5124,6 +5160,7 @@ mod tests {
                 packet_in_flight: PacketInFlightStats::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
                 packet_plane_session_ttl: Duration::from_secs(42),
+                packet_plane_replay_windows_per_session: 512,
             },
         );
 
@@ -5281,9 +5318,11 @@ mod tests {
             crate::path::PathRuntimeStats::default(),
             &packet_plane,
             Duration::from_secs(75),
+            512,
         );
 
         assert!(lines.contains(&"packet_plane_session_ttl_seconds 75".to_owned()));
+        assert!(lines.contains(&"packet_plane_replay_windows_per_session 512".to_owned()));
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
         assert!(lines.contains(&"packet_plane_sessions 0".to_owned()));
     }
@@ -5338,6 +5377,7 @@ mod tests {
             },
             packet_plane: &packet_plane,
             packet_plane_session_ttl: Duration::from_secs(90),
+            packet_plane_replay_windows_per_session: 256,
         });
 
         assert!(lines.contains(&"daemon state: running".to_owned()));
@@ -5345,6 +5385,7 @@ mod tests {
         assert!(lines.contains(&"validated peers: 1".to_owned()));
         assert!(lines.contains(&"replay_windows 0".to_owned()));
         assert!(lines.contains(&"packet_plane_session_ttl_seconds 90".to_owned()));
+        assert!(lines.contains(&"packet_plane_replay_windows_per_session 256".to_owned()));
         assert!(lines.contains(&"outbound_stream_fallback_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_packets 0".to_owned()));
         assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
@@ -6716,10 +6757,12 @@ mod tests {
                 &local_capabilities,
                 &[],
                 Duration::from_secs(123),
+                456,
             ),
             ServiceResponse::Status(
                 ServiceStatusResponse::local("lab", None, 42, 1280)
                     .with_packet_plane_session_ttl_seconds(123)
+                    .with_packet_plane_replay_windows_per_session(456)
             )
         );
     }
@@ -6742,6 +6785,7 @@ mod tests {
                 &local_capabilities,
                 &[],
                 Duration::from_secs(123),
+                456,
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::UnauthorizedPeer)
         );
@@ -6753,6 +6797,7 @@ mod tests {
                 &local_capabilities,
                 &[],
                 Duration::from_secs(123),
+                456,
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::WrongNetwork)
         );
@@ -6764,6 +6809,7 @@ mod tests {
                 &local_capabilities,
                 &[],
                 Duration::from_secs(123),
+                456,
             ),
             ServiceResponse::Rejected(ServiceRejectionReason::MembershipMismatch)
         );

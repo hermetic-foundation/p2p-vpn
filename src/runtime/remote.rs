@@ -38,24 +38,7 @@ pub async fn query_peer_status(
     peer: Libp2pPeerId,
     timeout: Duration,
 ) -> Result<RemotePeerStatus, RemoteQueryError> {
-    let identity = config.identity()?;
-    let mut node = build_node(&HostConfig {
-        identity,
-        network_name: config.network.name.clone(),
-        membership_tag: config.membership_tag()?,
-        mtu: config.effective_packet_mtu(),
-        max_concurrent_control_streams: config.resources.control_stream_limit(),
-        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
-        listen_addresses: config.listen_multiaddrs()?,
-        external_addresses: config.external_multiaddrs()?,
-        bootstrap_peers: config.bootstrap_multiaddrs()?,
-        known_peers: config.peer_multiaddrs()?,
-        relay_reservations: config.relay_reservation_multiaddrs()?,
-        relay_server: config.network.relay.server,
-        relay_resources: config.network.relay.resources,
-        resources: config.resources,
-        discovery: config.network.discovery.clone(),
-    })?;
+    let mut node = build_node(&remote_query_host_config(config)?)?;
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let forwarder = Forwarder::from_config(config)?;
     if !forwarder.is_configured_transport_peer(peer) {
@@ -72,6 +55,8 @@ pub async fn query_peer_status(
     .with_advertised_routes(forwarder.local_advertised_routes());
     let expected_network = local_capabilities.network_name.clone();
     let expected_membership_tag = local_capabilities.membership_tag.clone();
+    let packet_plane_session_ttl = config.network.packet_plane.session_ttl();
+    let packet_plane_replay_windows_per_session = config.network.packet_plane.replay_window_limit();
 
     let query = async move {
         let mut control_request = None;
@@ -129,7 +114,8 @@ pub async fn query_peer_status(
                         peer,
                         service_request,
                         REMOTE_STATUS_NONCE,
-                        config.network.packet_plane.session_ttl(),
+                        packet_plane_session_ttl,
+                        packet_plane_replay_windows_per_session,
                         event,
                         &mut service,
                     )?;
@@ -142,6 +128,26 @@ pub async fn query_peer_status(
     tokio::time::timeout(timeout, query)
         .await
         .map_err(|_| RemoteQueryError::TimedOut)?
+}
+
+fn remote_query_host_config(config: &Config) -> Result<HostConfig, RemoteQueryError> {
+    Ok(HostConfig {
+        identity: config.identity()?,
+        network_name: config.network.name.clone(),
+        membership_tag: config.membership_tag()?,
+        mtu: config.effective_packet_mtu(),
+        max_concurrent_control_streams: config.resources.control_stream_limit(),
+        max_concurrent_packet_streams: config.resources.packet_stream_limit(),
+        listen_addresses: config.listen_multiaddrs()?,
+        external_addresses: config.external_multiaddrs()?,
+        bootstrap_peers: config.bootstrap_multiaddrs()?,
+        known_peers: config.peer_multiaddrs()?,
+        relay_reservations: config.relay_reservation_multiaddrs()?,
+        relay_server: config.network.relay.server,
+        relay_resources: config.network.relay.resources,
+        resources: config.resources,
+        discovery: config.network.discovery.clone(),
+    })
 }
 
 fn send_capabilities_request(
@@ -262,6 +268,7 @@ fn handle_service_event(
     expected_request: Option<OutboundRequestId>,
     expected_nonce: u64,
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
     event: request_response::Event<ServiceRequest, ServiceResponse>,
     service: &mut Option<ServiceStatusResponse>,
 ) -> Result<(), RemoteQueryError> {
@@ -280,6 +287,7 @@ fn handle_service_event(
                 local_capabilities,
                 previous_membership_tags,
                 packet_plane_session_ttl,
+                packet_plane_replay_windows_per_session,
             );
             swarm
                 .behaviour_mut()
@@ -369,6 +377,7 @@ fn inbound_service_response(
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
     packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
 ) -> ServiceResponse {
     match request {
         ServiceRequest::Status(request) => {
@@ -390,7 +399,10 @@ fn inbound_service_response(
                     request.nonce,
                     local_capabilities.effective_mtu,
                 )
-                .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs()),
+                .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs())
+                .with_packet_plane_replay_windows_per_session(
+                    packet_plane_replay_windows_per_session,
+                ),
             )
         }
     }
@@ -470,6 +482,10 @@ mod tests {
             }],
         );
         listener_config.network.packet_plane.session_ttl_seconds = 123;
+        listener_config
+            .network
+            .packet_plane
+            .max_replay_windows_per_session = 321;
         let mut listener = build_node(&HostConfig {
             identity: listener_identity,
             network_name: listener_config.network.name.clone(),
@@ -521,6 +537,10 @@ mod tests {
         assert_eq!(status.service.network_name, "lab");
         assert_eq!(status.service.effective_mtu, 1280);
         assert_eq!(status.service.packet_plane_session_ttl_seconds, Some(123));
+        assert_eq!(
+            status.service.packet_plane_replay_windows_per_session,
+            Some(321)
+        );
         assert!(status.capabilities.advertised_routes.len() >= 2);
         assert_ne!(client_peer, listener_peer);
     }
@@ -531,6 +551,8 @@ mod tests {
     ) -> Result<(), RemoteQueryError> {
         let forwarder = Forwarder::from_config(&config)?;
         let packet_plane_session_ttl = config.network.packet_plane.session_ttl();
+        let packet_plane_replay_windows_per_session =
+            config.network.packet_plane.replay_window_limit();
         let local_capabilities =
             ControlCapabilities::local(&node.network_name, None, config.effective_packet_mtu())
                 .with_advertised_routes(forwarder.local_advertised_routes());
@@ -577,6 +599,7 @@ mod tests {
                         &local_capabilities,
                         &[],
                         packet_plane_session_ttl,
+                        packet_plane_replay_windows_per_session,
                     );
                     node.swarm
                         .behaviour_mut()

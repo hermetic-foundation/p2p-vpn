@@ -1435,6 +1435,11 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         optional_seconds(status.service.packet_plane_session_ttl_seconds)
     ));
     lines.push(format!(
+        "peer live packet plane replay windows per session: {} {}",
+        status.peer,
+        optional_usize(status.service.packet_plane_replay_windows_per_session)
+    ));
+    lines.push(format!(
         "peer live preferred path: {} {}",
         status.peer,
         path_name(
@@ -1916,6 +1921,10 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
             optional_seconds(status.service.packet_plane_session_ttl_seconds)
         ),
         format!(
+            "packet plane replay windows per session: {}",
+            optional_usize(status.service.packet_plane_replay_windows_per_session)
+        ),
+        format!(
             "preferred path: {}",
             path_name(
                 PathKind::from_wire_name(&status.capabilities.preferred_path)
@@ -1940,6 +1949,10 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
 
 fn optional_seconds(value: Option<u64>) -> String {
     value.map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
+}
+
+fn optional_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |count| count.to_string())
 }
 
 async fn up(
@@ -2447,7 +2460,8 @@ mod tests {
             peer,
             capabilities,
             service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
-                .with_packet_plane_session_ttl_seconds(321),
+                .with_packet_plane_session_ttl_seconds(321)
+                .with_packet_plane_replay_windows_per_session(654),
         };
 
         let lines = peer_status_lines(&status);
@@ -2459,6 +2473,11 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == "packet plane session ttl seconds: 321")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "packet plane replay windows per session: 654")
         );
         assert!(
             lines
@@ -2584,6 +2603,8 @@ mod tests {
             lines.iter().any(|line| line
                 == &format!("peer live packet plane session ttl seconds: {peer} unknown"))
         );
+        assert!(lines.iter().any(|line| line
+            == &format!("peer live packet plane replay windows per session: {peer} unknown")));
         assert!(lines.iter().any(|line| line
             == &format!("peer live preferred path: {peer} direct QUIC stream")));
         assert!(

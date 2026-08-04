@@ -1067,9 +1067,12 @@ async fn run_ready_node(
     wait_for_node_ready(&mut node, &config).await;
     fs::write(ready_file, b"ready").expect("write ready file");
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
-    let packet_plane = PacketPlaneRuntime::bind(config.packet_plane_listen_addrs()?)
-        .await
-        .map_err(runner::RunnerError::PacketPlane)?;
+    let packet_plane = PacketPlaneRuntime::bind_with_replay_window_limit(
+        config.packet_plane_listen_addrs()?,
+        config.network.packet_plane.replay_window_limit(),
+    )
+    .await
+    .map_err(runner::RunnerError::PacketPlane)?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
     Box::pin(runner::run_node_until(
@@ -1085,6 +1088,7 @@ async fn run_ready_node(
         None,
         packet_plane,
         config.network.packet_plane.session_ttl(),
+        config.network.packet_plane.replay_window_limit(),
         std::future::pending::<runner::ShutdownReason>(),
     ))
     .await
