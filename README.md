@@ -504,11 +504,18 @@ nix run .#tun-e2e
 The namespace suite covers direct static peer addresses, mDNS peer discovery,
 Kademlia/bootstrap peer discovery, circuit-relay fallback, signed-invite
 onboarding over a relayed inviter address, and relay-to-direct promotion with
-DCUtR and AutoNAT enabled. To run only the NAT traversal and path promotion
+DCUtR and AutoNAT enabled. A focused namespace smoke also covers direct owned
+QUIC packet-plane forwarding. To run only the NAT traversal and path promotion
 case:
 
 ```sh
 nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
+```
+
+To run only the owned QUIC packet-plane case:
+
+```sh
+nix run .#tun-e2e -- tun_namespace_ping_crosses_owned_quic_packet_plane -- --ignored --exact --nocapture
 ```
 
 Recorded namespace E2E smoke evidence is kept in

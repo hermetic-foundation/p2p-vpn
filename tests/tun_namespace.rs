@@ -23,7 +23,7 @@ use p2p_vpn::{
     runtime::{
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, build_node},
-        packet_plane::PacketPlaneRuntime,
+        packet_plane::{PacketPlaneQuicRuntime, PacketPlaneRuntime},
         runner,
         tun::{TunDevice, TunRuntimeConfig},
     },
@@ -31,6 +31,7 @@ use p2p_vpn::{
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
+const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
@@ -43,9 +44,19 @@ const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
 #[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
 fn tun_namespace_ping_crosses_two_node_overlay() {
     match env::var(CHILD_ENV).as_deref() {
-        Ok("orchestrator") => run_direct_orchestrator(),
+        Ok("orchestrator") => run_direct_orchestrator(DIRECT_TEST_NAME),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(DIRECT_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_ping_crosses_owned_quic_packet_plane() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_direct_orchestrator(DIRECT_QUIC_TEST_NAME),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(DIRECT_QUIC_TEST_NAME),
     }
 }
 
@@ -127,29 +138,26 @@ fn reexec_orchestrator(test_name: &str) {
     assert_output_success("unshare tun e2e orchestrator", &output);
 }
 
-fn run_direct_orchestrator() {
+fn run_direct_orchestrator(test_name: &str) {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
-    let temp_dir = env::temp_dir().join(format!("p2p-vpn-tun-e2e-{}", std::process::id()));
+    let temp_dir = env::temp_dir().join(format!("p2p-vpn-{test_name}-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
-    let config_b = node_config(
-        NETWORK_NAME,
-        "hse2eb",
-        &identity_b,
-        "/ip4/10.250.0.2/tcp/42102",
-        Vec::new(),
-        peer_config(&identity_a, Some("/ip4/10.250.0.1/tcp/42101"), Vec::new()),
-    );
+    let config_b = if test_name == DIRECT_QUIC_TEST_NAME {
+        direct_quic_overlay_config("b", &identity_b, &identity_a)
+    } else {
+        direct_overlay_config("b", &identity_b, &identity_a)
+    };
     let address_b = TunRuntimeConfig::from_config(&config_b)
         .expect("node B TUN config")
         .addresses
         .ipv4;
 
     let mut node_a = spawn_node(
-        DIRECT_TEST_NAME,
+        test_name,
         "a",
         &identity_a,
         Some(&identity_b),
@@ -158,7 +166,7 @@ fn run_direct_orchestrator() {
         &start_a,
     );
     let mut node_b = spawn_node(
-        DIRECT_TEST_NAME,
+        test_name,
         "b",
         &identity_b,
         Some(&identity_a),
@@ -177,6 +185,9 @@ fn run_direct_orchestrator() {
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
     thread::sleep(Duration::from_secs(4));
+    if test_name == DIRECT_QUIC_TEST_NAME {
+        wait_for_owned_quic_packet_plane_sessions(&temp_dir);
+    }
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let routed_ping = ping_from_namespace(node_b.id(), "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS);
     thread::sleep(Duration::from_secs(2));
@@ -184,7 +195,11 @@ fn run_direct_orchestrator() {
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
-    wait_for_packet_plane_datagrams(&temp_dir);
+    if test_name == DIRECT_QUIC_TEST_NAME {
+        wait_for_owned_quic_packet_plane_datagrams(&temp_dir);
+    } else {
+        wait_for_packet_plane_datagrams(&temp_dir);
+    }
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -208,8 +223,13 @@ fn run_direct_orchestrator() {
     );
     let initiator_log = read_log(&temp_dir.join("node-a.log"));
     let responder_log = read_log(&temp_dir.join("node-b.log"));
-    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
-    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    if test_name == DIRECT_QUIC_TEST_NAME {
+        assert_owned_quic_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+        assert_owned_quic_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    } else {
+        assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+        assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
+    }
     let _ = fs::remove_dir_all(temp_dir);
 }
 
@@ -698,6 +718,34 @@ fn assert_packet_plane_datagrams_used(context: &str, log: &str, peer_log: &str) 
     );
 }
 
+fn assert_owned_quic_packet_plane_datagrams_used(context: &str, log: &str, peer_log: &str) {
+    assert!(
+        owned_quic_packet_plane_datagrams_used(log),
+        "{context} did not negotiate and use owned QUIC packet-plane datagrams\n{context} log tail:\n{}\npeer log tail:\n{}",
+        log_tail(log, 100),
+        log_tail(peer_log, 100),
+    );
+}
+
+fn wait_for_owned_quic_packet_plane_sessions(temp_dir: &Path) -> (String, String) {
+    let node_a_path = temp_dir.join("node-a.log");
+    let node_b_path = temp_dir.join("node-b.log");
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let initiator_log = read_log(&node_a_path);
+        let responder_log = read_log(&node_b_path);
+        if owned_quic_packet_plane_session_established(&initiator_log)
+            && owned_quic_packet_plane_session_established(&responder_log)
+        {
+            return (initiator_log, responder_log);
+        }
+        if Instant::now() >= deadline {
+            return (initiator_log, responder_log);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
@@ -717,11 +765,43 @@ fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     }
 }
 
+fn wait_for_owned_quic_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
+    let node_a_path = temp_dir.join("node-a.log");
+    let node_b_path = temp_dir.join("node-b.log");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let initiator_log = read_log(&node_a_path);
+        let responder_log = read_log(&node_b_path);
+        if owned_quic_packet_plane_datagrams_used(&initiator_log)
+            && owned_quic_packet_plane_datagrams_used(&responder_log)
+        {
+            return (initiator_log, responder_log);
+        }
+        if Instant::now() >= deadline {
+            return (initiator_log, responder_log);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn packet_plane_datagrams_used(log: &str) -> bool {
     log.contains("event=packet_plane_session_established")
         && log_metric_positive(log, "path_healthy_direct_quic_datagram_paths")
         && log_metric_positive(log, "outbound_quic_datagram_packets")
         && log_metric_positive(log, "inbound_accepted_packets")
+}
+
+fn owned_quic_packet_plane_datagrams_used(log: &str) -> bool {
+    owned_quic_packet_plane_session_established(log)
+        && log.contains("event=packet_plane_quic_listening")
+        && (log_metric_positive(log, "outbound_quic_datagram_packets")
+            || log_metric_positive(log, "inbound_accepted_packets"))
+}
+
+fn owned_quic_packet_plane_session_established(log: &str) -> bool {
+    log.contains("event=packet_plane_session_established")
+        && log.contains("backend=owned_quic")
+        && log_metric_positive(log, "path_healthy_direct_quic_datagram_paths")
 }
 
 fn log_metric_positive(log: &str, metric: &str) -> bool {
@@ -925,6 +1005,8 @@ fn run_node_child() {
                 "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
                 other => panic!("unknown node role {other}"),
             }
+        } else if is_direct_quic_test_child() {
+            direct_quic_overlay_config(&role, &local, &remote)
         } else if is_mdns_test_child() {
             mdns_overlay_config(&role, &local, &remote)
         } else {
@@ -1001,6 +1083,21 @@ fn direct_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity
     );
     config.network.packet_plane.listen = vec![packet_endpoint.to_owned()];
     config.network.packet_plane.external_endpoints = vec![packet_endpoint.to_owned()];
+    config
+}
+
+fn direct_quic_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
+    let mut config = direct_overlay_config(role, local, remote);
+    config.network.discovery = relay_test_discovery();
+    config.network.packet_plane.listen = Vec::new();
+    config.network.packet_plane.external_endpoints = Vec::new();
+    let packet_endpoint = match role {
+        "a" => "10.250.0.1:44101",
+        "b" => "10.250.0.2:44102",
+        other => panic!("unknown owned QUIC node role {other}"),
+    };
+    config.network.packet_plane.quic_listen = vec![packet_endpoint.to_owned()];
+    config.network.packet_plane.quic_external_endpoints = vec![packet_endpoint.to_owned()];
     config
 }
 
@@ -1260,6 +1357,17 @@ async fn run_ready_node(
     )
     .await
     .map_err(runner::RunnerError::PacketPlane)?;
+    let packet_plane_quic = match config.packet_plane_quic_listen_addrs()?.as_slice() {
+        [] => None,
+        [listen_addr] => Some(
+            PacketPlaneQuicRuntime::bind_with_replay_window_limit(
+                *listen_addr,
+                config.network.packet_plane.replay_window_limit(),
+            )
+            .map_err(runner::RunnerError::PacketPlaneQuic)?,
+        ),
+        _ => unreachable!("namespace test configs use at most one owned QUIC listener"),
+    };
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
     Box::pin(runner::run_node_until(
@@ -1274,8 +1382,8 @@ async fn run_ready_node(
         Some(Duration::from_secs(1)),
         None,
         packet_plane,
-        None,
-        Vec::new(),
+        packet_plane_quic,
+        config.packet_plane_quic_endpoint_candidates()?,
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
         std::future::pending::<runner::ShutdownReason>(),
@@ -1586,6 +1694,10 @@ fn is_dht_test_child() -> bool {
 
 fn is_mdns_test_child() -> bool {
     env::args().any(|argument| argument == MDNS_TEST_NAME)
+}
+
+fn is_direct_quic_test_child() -> bool {
+    env::args().any(|argument| argument == DIRECT_QUIC_TEST_NAME)
 }
 
 fn is_relay_promotion_test_child() -> bool {
