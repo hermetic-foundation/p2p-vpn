@@ -490,6 +490,9 @@ case:
 nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
 ```
 
+Recorded namespace E2E smoke evidence is kept in
+`docs/namespace-e2e-smoke.md`.
+
 These tests intentionally stay outside `nix flake check` because they need a
 host kernel that permits user namespaces, network namespaces, veth setup, and
 `/dev/net/tun`.
