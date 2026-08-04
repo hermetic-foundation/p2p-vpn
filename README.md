@@ -377,10 +377,21 @@ and network namespaces:
 
 ```sh
 cargo test --test tun_namespace -- --ignored --nocapture
+nix run .#tun-e2e
 ```
 
 The namespace suite covers direct static peer addresses, mDNS peer discovery,
-Kademlia/bootstrap peer discovery, and circuit-relay fallback.
+Kademlia/bootstrap peer discovery, circuit-relay fallback, and relay-to-direct
+promotion with DCUtR and AutoNAT enabled. To run only the NAT traversal and path
+promotion case:
+
+```sh
+nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
+```
+
+These tests intentionally stay outside `nix flake check` because they need a
+host kernel that permits user namespaces, network namespaces, veth setup, and
+`/dev/net/tun`.
 
 ## Example Config
 

@@ -41,6 +41,32 @@
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
+        tunE2e = pkgs.writeShellApplication {
+          name = "p2p-vpn-tun-e2e";
+          runtimeInputs = [
+            cargo
+            rust
+            pkgs.iproute2
+            pkgs.iputils
+            pkgs.pkg-config
+            pkgs.procps
+            pkgs.stdenv.cc
+            pkgs.util-linux
+          ];
+          text = ''
+            if [[ ! -f Cargo.toml || ! -d tests ]]; then
+              echo "p2p-vpn-tun-e2e must be run from the p2p-vpn repository root" >&2
+              exit 2
+            fi
+
+            export RUST_BACKTRACE=1
+            if [[ "$#" -eq 0 ]]; then
+              exec cargo test --test tun_namespace -- --ignored --nocapture
+            fi
+
+            exec cargo test --test tun_namespace "$@"
+          '';
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -87,11 +113,21 @@
             -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
         '';
 
-        apps.default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/p2p-vpn";
-          meta = {
-            description = "Run the p2p-vpn CLI";
+        apps = {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.default}/bin/p2p-vpn";
+            meta = {
+              description = "Run the p2p-vpn CLI";
+            };
+          };
+        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          tun-e2e = {
+            type = "app";
+            program = "${tunE2e}/bin/p2p-vpn-tun-e2e";
+            meta = {
+              description = "Run privileged Linux TUN namespace end-to-end tests";
+            };
           };
         };
 
