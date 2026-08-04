@@ -89,7 +89,9 @@ and ephemeral X25519 public key. Verified handshakes can derive directional
 ChaCha20-Poly1305 keys and seal the existing packet frame inside an
 authenticated datagram envelope keyed by packet session id and sequence. The
 packet-plane runtime can send and receive those sealed frames over its bound UDP
-listeners. Socket-level encrypted UDP transport is intentionally separate from
+listeners and keeps a per-peer session registry with endpoint, MTU, role, and
+local/remote packet session ids visible through daemon state and capability
+views. Socket-level encrypted UDP transport is intentionally separate from
 daemon-integrated packet forwarding, which remains future packet-plane work.
 
 The current stream data plane uses a fixed binary header followed by the raw IP

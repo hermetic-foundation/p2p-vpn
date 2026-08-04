@@ -36,7 +36,7 @@ use crate::{
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
         p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
         packet::{PacketRejectionReason, PacketResponse},
-        packet_plane::{PacketPlaneRuntime, PacketPlaneSnapshot},
+        packet_plane::{PacketPlaneRuntime, PacketPlaneSessionRole, PacketPlaneSnapshot},
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
@@ -848,6 +848,7 @@ fn local_capability_lines(
             local_capabilities.packet_endpoint_candidates.len()
         ),
         format!("packet plane listeners: {}", packet_plane.listeners.len()),
+        format!("packet plane sessions: {}", packet_plane.sessions.len()),
         format!(
             "local capability advertised routes: {}",
             local_capabilities.advertised_routes.len()
@@ -875,6 +876,17 @@ fn extend_local_capability_detail_lines(
     }
     for listener in &packet_plane.listeners {
         lines.push(format!("packet plane listener: {listener}"));
+    }
+    for session in &packet_plane.sessions {
+        lines.push(format!(
+            "packet plane session: {} endpoint {} mtu {} role {} local_session {} remote_session {}",
+            session.peer,
+            session.endpoint,
+            session.mtu,
+            packet_plane_session_role_name(session.role),
+            session.local_session_id,
+            session.remote_session_id
+        ));
     }
 }
 
@@ -955,6 +967,10 @@ fn runtime_status_lines(
     lines.push(format!(
         "packet_plane_listeners {}",
         packet_plane.listeners.len()
+    ));
+    lines.push(format!(
+        "packet_plane_sessions {}",
+        packet_plane.sessions.len()
     ));
     lines
 }
@@ -1131,8 +1147,30 @@ fn extend_runtime_packet_plane_summary_lines(
         "packet_plane_listeners {}",
         packet_plane.listeners.len()
     ));
+    lines.push(format!(
+        "packet_plane_sessions {}",
+        packet_plane.sessions.len()
+    ));
     for listener in &packet_plane.listeners {
         lines.push(format!("packet_plane_listener {listener}"));
+    }
+    for session in &packet_plane.sessions {
+        lines.push(format!(
+            "packet_plane_session {} endpoint {} mtu {} role {} local_session {} remote_session {}",
+            session.peer,
+            session.endpoint,
+            session.mtu,
+            packet_plane_session_role_name(session.role),
+            session.local_session_id,
+            session.remote_session_id
+        ));
+    }
+}
+
+const fn packet_plane_session_role_name(role: PacketPlaneSessionRole) -> &'static str {
+    match role {
+        PacketPlaneSessionRole::Initiator => "initiator",
+        PacketPlaneSessionRole::Responder => "responder",
     }
 }
 
@@ -3574,6 +3612,7 @@ mod tests {
         },
         route::builtin_ipv4,
         runtime::control::ControlRoute,
+        runtime::packet_plane::PacketPlaneSessionSnapshot,
     };
 
     use super::*;
@@ -3798,6 +3837,7 @@ mod tests {
 
         let packet_plane = PacketPlaneSnapshot {
             listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
+            sessions: Vec::new(),
         };
         let capability_lines = runtime_capability_lines(
             &forwarder,
@@ -3817,12 +3857,25 @@ mod tests {
         let local_capabilities = ControlCapabilities::local("lab", None, 1280);
         let packet_plane = PacketPlaneSnapshot {
             listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
+            sessions: vec![PacketPlaneSessionSnapshot {
+                peer: PeerId::from_bytes([7; 32]),
+                endpoint: "127.0.0.1:51821".parse().expect("endpoint"),
+                mtu: 1200,
+                role: PacketPlaneSessionRole::Initiator,
+                local_session_id: 11,
+                remote_session_id: 13,
+            }],
         };
 
         let lines = local_capability_lines(&local_capabilities, &packet_plane);
 
         assert!(lines.contains(&"packet plane listeners: 1".to_owned()));
         assert!(lines.contains(&"packet plane listener: 127.0.0.1:51820".to_owned()));
+        assert!(lines.contains(&"packet plane sessions: 1".to_owned()));
+        assert!(lines.contains(&format!(
+            "packet plane session: {} endpoint 127.0.0.1:51821 mtu 1200 role initiator local_session 11 remote_session 13",
+            PeerId::from_bytes([7; 32])
+        )));
     }
 
     #[test]
@@ -3848,6 +3901,14 @@ mod tests {
         metrics.record_autonat_status(AutoNatReachability::Public);
         let packet_plane = PacketPlaneSnapshot {
             listeners: vec!["127.0.0.1:51820".parse::<SocketAddr>().expect("listener")],
+            sessions: vec![PacketPlaneSessionSnapshot {
+                peer: remote_overlay,
+                endpoint: "127.0.0.1:51821".parse().expect("endpoint"),
+                mtu: 1200,
+                role: PacketPlaneSessionRole::Responder,
+                local_session_id: 13,
+                remote_session_id: 11,
+            }],
         };
 
         let lines = runtime_state_lines(RuntimeStateView {
@@ -3892,6 +3953,10 @@ mod tests {
         assert!(lines.contains(&"packet_stream_fallback_limit_per_peer 256".to_owned()));
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
         assert!(lines.contains(&"packet_plane_listener 127.0.0.1:51820".to_owned()));
+        assert!(lines.contains(&"packet_plane_sessions 1".to_owned()));
+        assert!(lines.contains(&format!(
+            "packet_plane_session {remote_overlay} endpoint 127.0.0.1:51821 mtu 1200 role responder local_session 13 remote_session 11"
+        )));
         assert!(lines.iter().any(|line| {
             line == &format!(
                 "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
