@@ -139,6 +139,101 @@ pub fn route_advmss(prefix: IpCidr, mtu: u16) -> Option<u16> {
     mtu.checked_sub(header_bytes)
 }
 
+#[must_use]
+pub fn packet_too_big(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
+    match original.first().map(|byte| byte >> 4) {
+        Some(4) => ipv4_packet_too_big(original, mtu),
+        Some(6) => ipv6_packet_too_big(original, mtu),
+        _ => None,
+    }
+}
+
+fn ipv4_packet_too_big(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
+    if original.len() < 20 {
+        return None;
+    }
+    let ihl = usize::from(original[0] & 0x0f) * 4;
+    if ihl < 20 || original.len() < ihl {
+        return None;
+    }
+
+    let quote_len = original.len().min(548);
+    let total_len = 20 + 8 + quote_len;
+    let total_len = u16::try_from(total_len).ok()?;
+    let mut packet = vec![0; usize::from(total_len)];
+    packet[0] = 0x45;
+    packet[2..4].copy_from_slice(&total_len.to_be_bytes());
+    packet[8] = 64;
+    packet[9] = 1;
+    packet[12..16].copy_from_slice(&original[16..20]);
+    packet[16..20].copy_from_slice(&original[12..16]);
+    let header_checksum = internet_checksum(&packet[..20]);
+    packet[10..12].copy_from_slice(&header_checksum.to_be_bytes());
+
+    let icmp = 20;
+    packet[icmp] = 3;
+    packet[icmp + 1] = 4;
+    packet[icmp + 6..icmp + 8].copy_from_slice(&mtu.to_be_bytes());
+    packet[icmp + 8..icmp + 8 + quote_len].copy_from_slice(&original[..quote_len]);
+    let icmp_checksum = internet_checksum(&packet[icmp..]);
+    packet[icmp + 2..icmp + 4].copy_from_slice(&icmp_checksum.to_be_bytes());
+
+    Some(packet)
+}
+
+fn ipv6_packet_too_big(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
+    if original.len() < 40 {
+        return None;
+    }
+
+    let quote_len = original.len().min(1232);
+    let payload_len = 8 + quote_len;
+    let payload_len = u16::try_from(payload_len).ok()?;
+    let mut packet = vec![0; 40 + usize::from(payload_len)];
+    packet[0] = 0x60;
+    packet[4..6].copy_from_slice(&payload_len.to_be_bytes());
+    packet[6] = 58;
+    packet[7] = 64;
+    packet[8..24].copy_from_slice(&original[24..40]);
+    packet[24..40].copy_from_slice(&original[8..24]);
+
+    let icmp = 40;
+    packet[icmp] = 2;
+    packet[icmp + 4..icmp + 8].copy_from_slice(&u32::from(mtu).to_be_bytes());
+    packet[icmp + 8..icmp + 8 + quote_len].copy_from_slice(&original[..quote_len]);
+    let icmp_checksum = icmpv6_checksum(&packet[8..24], &packet[24..40], &packet[icmp..]);
+    packet[icmp + 2..icmp + 4].copy_from_slice(&icmp_checksum.to_be_bytes());
+
+    Some(packet)
+}
+
+fn icmpv6_checksum(source: &[u8], destination: &[u8], payload: &[u8]) -> u16 {
+    let payload_len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+    let mut pseudo = Vec::with_capacity(40 + payload.len());
+    pseudo.extend_from_slice(source);
+    pseudo.extend_from_slice(destination);
+    pseudo.extend_from_slice(&payload_len.to_be_bytes());
+    pseudo.extend_from_slice(&[0, 0, 0, 58]);
+    pseudo.extend_from_slice(payload);
+    internet_checksum(&pseudo)
+}
+
+fn internet_checksum(bytes: &[u8]) -> u16 {
+    let mut sum = 0_u32;
+    for chunk in bytes.chunks(2) {
+        let word = if chunk.len() == 2 {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from(chunk[0]) << 8
+        };
+        sum = sum.wrapping_add(u32::from(word));
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !u16::try_from(sum).expect("checksum sum is folded to 16 bits")
+}
+
 #[cfg(target_os = "linux")]
 pub struct TunDevice {
     device: tun::Device,
@@ -237,6 +332,73 @@ mod tests {
 
     fn peer_hex(seed: u8) -> String {
         format!("{seed:02x}").repeat(32)
+    }
+
+    fn ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
+        let mut packet = vec![0; 60];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&60_u16.to_be_bytes());
+        packet[8] = 64;
+        packet[9] = 6;
+        packet[12..16].copy_from_slice(&source.octets());
+        packet[16..20].copy_from_slice(&destination.octets());
+        packet
+    }
+
+    fn ipv6_packet(source: Ipv6Addr, destination: Ipv6Addr) -> Vec<u8> {
+        let mut packet = vec![0; 80];
+        packet[0] = 0x60;
+        packet[4..6].copy_from_slice(&40_u16.to_be_bytes());
+        packet[6] = 17;
+        packet[7] = 64;
+        packet[8..24].copy_from_slice(&source.octets());
+        packet[24..40].copy_from_slice(&destination.octets());
+        packet
+    }
+
+    #[test]
+    fn packet_too_big_builds_ipv4_fragmentation_needed() {
+        let source = Ipv4Addr::new(100, 64, 1, 10);
+        let destination = Ipv4Addr::new(100, 64, 2, 20);
+        let original = ipv4_packet(source, destination);
+
+        let reply = packet_too_big(&original, 1180).expect("packet too big");
+
+        assert_eq!(reply[0] >> 4, 4);
+        assert_eq!(reply[9], 1);
+        assert_eq!(&reply[12..16], &destination.octets());
+        assert_eq!(&reply[16..20], &source.octets());
+        assert_eq!(reply[20], 3);
+        assert_eq!(reply[21], 4);
+        assert_eq!(u16::from_be_bytes([reply[26], reply[27]]), 1180);
+        assert_eq!(&reply[28..], original.as_slice());
+        assert_eq!(internet_checksum(&reply[..20]), 0);
+        assert_eq!(internet_checksum(&reply[20..]), 0);
+    }
+
+    #[test]
+    fn packet_too_big_builds_ipv6_packet_too_big() {
+        let source = Ipv6Addr::LOCALHOST;
+        let destination = Ipv6Addr::UNSPECIFIED;
+        let original = ipv6_packet(source, destination);
+
+        let reply = packet_too_big(&original, 1200).expect("packet too big");
+
+        assert_eq!(reply[0] >> 4, 6);
+        assert_eq!(reply[6], 58);
+        assert_eq!(&reply[8..24], &destination.octets());
+        assert_eq!(&reply[24..40], &source.octets());
+        assert_eq!(reply[40], 2);
+        assert_eq!(reply[41], 0);
+        assert_eq!(
+            u32::from_be_bytes([reply[44], reply[45], reply[46], reply[47]]),
+            1200
+        );
+        assert_eq!(&reply[48..], original.as_slice());
+        assert_eq!(
+            icmpv6_checksum(&reply[8..24], &reply[24..40], &reply[40..]),
+            0
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ path.
 | Path selection and promotion | operational | `src/path.rs` scores direct datagram, direct stream, TCP, and relay paths. Runtime records promotions/fallbacks and logs path-selection changes. | `nix develop -c cargo test path::tests` |
 | NAT/DCUtR hole punching | operational on supported Linux hosts | The privileged namespace test starts a relay plus two peers, uses relay fallback, enables DCUtR and AutoNAT, observes a successful hole-punch result, promotes to a direct TCP path, and verifies TUN ping. | `nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture` |
 | Discovery and public libp2p/IPFS bootstrap | partial | Private Kademlia, mDNS, configurable bootstrap peers, relay reservations, and an opt-in IPFS Kademlia protocol/bootstrap template exist. Public peers are documented as reachability infrastructure, not membership or route authority. | `nix develop -c cargo test runtime::p2p::tests::build_node_accepts_ipfs_compatible_kademlia_protocol`; DHT E2E: `nix run .#tun-e2e -- tun_namespace_ping_crosses_dht_discovered_overlay -- --ignored --exact --nocapture` |
-| MTU and MSS behavior | partial | Effective packet MTU is bounded by the wire payload length and peer/path MTU. Linux route commands include MTU and `advmss` hints when possible. Oversized packets are rejected and counted; there is no Hyprspace-level fragmentation. | `nix develop -c cargo test runtime::tun::tests::route_commands_add_ipv6_mtu_and_mss_hint`; full MTU coverage: `nix develop -c cargo test mtu` |
+| MTU and MSS behavior | partial | Effective packet MTU is bounded by the wire payload length and peer/path MTU. Linux route commands include MTU and `advmss` hints when possible. Oversized path-MTU drops generate local IPv4 fragmentation-needed or ICMPv6 packet-too-big feedback when the original packet is parseable. There is no Hyprspace-level fragmentation or active PMTUD. | `nix develop -c cargo test runtime::tun::tests::packet_too_big_builds_ipv4_fragmentation_needed`; full MTU coverage: `nix develop -c cargo test mtu` |
 | Daemon lifecycle | operational | `src/runtime/runner.rs` handles shutdown reasons, structured runtime logs, metrics snapshots, control-socket shutdown, and orderly cleanup. | `nix develop -c cargo test runtime::runner::tests::runtime_control_shutdown_acknowledges_and_requests_stop`; full lifecycle coverage: `nix develop -c cargo test runtime::runner::tests` |
 | Local daemon control CLI | operational | `src/runtime/control_socket.rs` and `src/main.rs` expose `daemon-status`, `daemon-state`, `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`, `daemon-capabilities`, and `daemon-shutdown`. | `nix develop -c cargo test runtime::control_socket::tests::control_socket_serves_daemon_view_requests` |
 | Remote status/control CLI | operational | `src/runtime/remote.rs` and `src/main.rs` query peers for service status, live paths, routes, capabilities, and MTU-related state without requiring daemon-local socket access. | `nix develop -c cargo test runtime::remote::tests::query_peer_status_exchanges_live_control_and_service_status`; CLI line coverage: `nix develop -c cargo test peer_live` |
@@ -43,8 +43,9 @@ path.
    dependency surface. Closing this requires a lower-level transport integration,
    a dependency upgrade that exposes application datagrams, or a different
    datagram-capable substrate.
-2. MTU handling deliberately rejects oversized packets and provides Linux route
-   MSS hints, but it does not implement overlay fragmentation or active PMTUD.
+2. MTU handling deliberately rejects oversized packets, writes local
+   packet-too-big feedback where possible, and provides Linux route MSS hints,
+   but it does not implement overlay fragmentation or active PMTUD.
 3. Public libp2p/IPFS infrastructure is supported only as discovery and
    reachability assistance. It is not, and should not become, membership or route
    authority.

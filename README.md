@@ -142,7 +142,10 @@ effective packet MTU, while circuit-relay paths start at a conservative 1200
 byte estimate. Outbound queue draining and path probes use the selected path's
 estimate as an additional ceiling below the peer-advertised effective MTU, so
 an oversized packet is dropped predictably instead of being pushed onto a path
-that is known to be smaller.
+that is known to be smaller. When the original packet is IPv4 or IPv6, the
+daemon also writes a local ICMP fragmentation-needed or ICMPv6 packet-too-big
+message back to TUN and increments
+`outbound_packet_too_big_notifications`.
 Until native datagram sending is implemented, datagram-only paths do not release
 packets into the stream fallback; they increment
 `outbound_quic_datagram_unavailable_packets` while they remain queued. Packets
@@ -211,7 +214,10 @@ The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
 field and is used consistently by the TUN setup and packet forwarder. Runtime
 validation rejects a zero interface MTU. The `status` and `up` commands print
-both configured and effective MTU values.
+both configured and effective MTU values. The daemon does not fragment overlay
+packets; it rejects oversized packets, emits packet-too-big feedback where
+possible, and relies on route MSS hints or the local stack to retry smaller
+traffic.
 
 ## Development
 

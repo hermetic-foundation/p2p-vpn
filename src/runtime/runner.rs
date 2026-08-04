@@ -40,7 +40,7 @@ use crate::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
         },
-        tun::{TunDevice, TunReader, TunRuntimeError, TunWriter},
+        tun::{TunDevice, TunReader, TunRuntimeError, TunWriter, packet_too_big},
     },
     wire::{Frame, PayloadType},
 };
@@ -330,7 +330,16 @@ where
                     metrics.record_outbound_drop(outbound_drop_reason(&error));
                     eprintln!("dropping outbound packet: {error:?}");
                 }
-                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &mut queue_runtime, &metrics);
+                drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                    node: &mut node,
+                    forwarder: &forwarder,
+                    queues: &mut queues,
+                    paths: &paths,
+                    peer_capabilities: &peer_capabilities,
+                    queue_runtime: &mut queue_runtime,
+                    writer: &mut writer,
+                    metrics: &metrics,
+                });
             }
             event = node.swarm.select_next_some() => {
                 handle_swarm_event(
@@ -351,7 +360,16 @@ where
                     },
                     event,
                 )?;
-                drain_runtime_outbound_queue(&mut node, &forwarder, &mut queues, &paths, &peer_capabilities, &mut queue_runtime, &metrics);
+                drain_runtime_outbound_queue(RuntimeOutboundDrain {
+                    node: &mut node,
+                    forwarder: &forwarder,
+                    queues: &mut queues,
+                    paths: &paths,
+                    peer_capabilities: &peer_capabilities,
+                    queue_runtime: &mut queue_runtime,
+                    writer: &mut writer,
+                    metrics: &metrics,
+                });
             }
             _ = timers.redial.tick() => {
                 handle_redial_tick(&mut node, &mut queue_runtime.discovered_peer_addresses, &metrics);
@@ -1527,15 +1545,28 @@ fn spawn_tun_reader(
     rx
 }
 
-fn drain_runtime_outbound_queue(
-    node: &mut P2pNode,
-    forwarder: &Forwarder,
-    queues: &mut PeerQueues,
-    paths: &PathSet,
-    peer_capabilities: &PeerCapabilities,
-    queue_runtime: &mut QueueRuntimeState,
-    metrics: &RuntimeMetrics,
-) {
+struct RuntimeOutboundDrain<'a> {
+    node: &'a mut P2pNode,
+    forwarder: &'a Forwarder,
+    queues: &'a mut PeerQueues,
+    paths: &'a PathSet,
+    peer_capabilities: &'a PeerCapabilities,
+    queue_runtime: &'a mut QueueRuntimeState,
+    writer: &'a mut TunWriter,
+    metrics: &'a RuntimeMetrics,
+}
+
+fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
+    let RuntimeOutboundDrain {
+        node,
+        forwarder,
+        queues,
+        paths,
+        peer_capabilities,
+        queue_runtime,
+        writer,
+        metrics,
+    } = drain;
     let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
     let mut context = QueueDrainContext {
         paths,
@@ -1545,6 +1576,7 @@ fn drain_runtime_outbound_queue(
         configured_peer_addresses: &node.configured_peer_addresses,
         discovered_peer_addresses: &discovered_addresses,
         packet_in_flight: &mut queue_runtime.packet_in_flight,
+        writer: Some(writer),
         metrics,
     };
     drain_outbound_queue(&mut node.swarm, forwarder, queues, &mut context);
@@ -1576,6 +1608,7 @@ fn drain_outbound_queue(
                         context.metrics.record_outbound_stream_fallback();
                     }
                     Err(error) => {
+                        maybe_write_packet_too_big(context, packet.payload(), &error);
                         context
                             .metrics
                             .record_outbound_drop(outbound_drop_reason(&error));
@@ -1635,7 +1668,40 @@ struct QueueDrainContext<'a> {
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     packet_in_flight: &'a mut PacketInFlight,
+    writer: Option<&'a mut TunWriter>,
     metrics: &'a RuntimeMetrics,
+}
+
+fn maybe_write_packet_too_big(
+    context: &mut QueueDrainContext<'_>,
+    original: &[u8],
+    error: &ForwardError,
+) {
+    let ForwardError::PacketTooLarge { max, .. } = error else {
+        return;
+    };
+    let Some(writer) = context.writer.as_deref_mut() else {
+        return;
+    };
+    let mtu = u16::try_from(*max).unwrap_or(u16::MAX);
+    let Some(notification) = packet_too_big(original, mtu) else {
+        return;
+    };
+    match writer.write_packet(&notification) {
+        Ok(length) => {
+            context.metrics.record_tun_write(length);
+            context
+                .metrics
+                .record_outbound_packet_too_big_notification();
+        }
+        Err(error) => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "packet_too_big_write_failed",
+                &[("error", &format!("{error:?}"))],
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -3422,6 +3488,7 @@ mod tests {
             configured_peer_addresses: &[],
             discovered_peer_addresses: &[],
             packet_in_flight,
+            writer: None,
             metrics,
         }
     }
