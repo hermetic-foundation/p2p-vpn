@@ -72,6 +72,6 @@ P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/d
   -- --ignored --exact --nocapture
 ```
 
-`P2P_VPN_LIVE_RELAY_MULTIADDRS` accepts comma, semicolon, or newline-separated
-direct relay multiaddrs. `P2P_VPN_LIVE_RELAY_MULTIADDR` remains supported for a
-single relay.
+`P2P_VPN_LIVE_RELAY_MULTIADDRS` accepts up to eight comma, semicolon, or
+newline-separated direct relay multiaddrs. `P2P_VPN_LIVE_RELAY_MULTIADDR`
+remains supported for a single relay.

@@ -781,16 +781,16 @@ P2P_VPN_LIVE_RELAY_MULTIADDR=/dns4/relay.example.net/tcp/4001/p2p/RELAY \
   -- --ignored --exact --nocapture
 ```
 
-Use `P2P_VPN_LIVE_RELAY_MULTIADDRS` for comma, semicolon, or newline-separated
-candidate relay addresses. The single `P2P_VPN_LIVE_RELAY_MULTIADDR` variable is
-still accepted for one relay. Each supplied relay multiaddr must be the relay's
-direct address with its `/p2p/RELAY` peer ID and without `/p2p-circuit`. The
-tests try candidates until one succeeds and report all candidate failures if
-none work. The relayed-peer smoke creates a temporary listener, reserves a
-circuit on that relay, then uses `bootstrap-check` against a second temporary
-node to prove the relayed target can be dialed. The DCUtR smoke also gives both
-temporary nodes direct listen sockets and fails unless `bootstrap-check`
-observes a successful DCUtR hole-punch event.
+Use `P2P_VPN_LIVE_RELAY_MULTIADDRS` for up to eight comma, semicolon, or
+newline-separated candidate relay addresses. The single
+`P2P_VPN_LIVE_RELAY_MULTIADDR` variable is still accepted for one relay. Each
+supplied relay multiaddr must be the relay's direct address with its
+`/p2p/RELAY` peer ID and without `/p2p-circuit`. The tests try candidates until
+one succeeds and report all candidate failures if none work. The relayed-peer
+smoke creates a temporary listener, reserves a circuit on that relay, then uses
+`bootstrap-check` against a second temporary node to prove the relayed target can
+be dialed. The DCUtR smoke also gives both temporary nodes direct listen sockets
+and fails unless `bootstrap-check` observes a successful DCUtR hole-punch event.
 
 Recorded public bootstrap smoke evidence is kept in
 `docs/public-bootstrap-smoke.md`. The current recorded run proves public

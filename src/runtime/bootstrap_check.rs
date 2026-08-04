@@ -749,6 +749,7 @@ mod tests {
 
     const LIVE_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
     const LIVE_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
+    const LIVE_RELAY_CANDIDATE_LIMIT: usize = 8;
 
     #[tokio::test]
     async fn bootstrap_check_connects_to_configured_bootstrap_peer() {
@@ -1267,6 +1268,16 @@ mod tests {
                 .expect_err("missing peer id should fail")
                 .contains("missing /p2p/RELAY")
         );
+
+        let too_many = (0..=LIVE_RELAY_CANDIDATE_LIMIT)
+            .map(|_| format!("/dns4/relay.example.net/tcp/4001/p2p/{}", peer_id()))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            parse_live_relay_addresses(&too_many)
+                .expect_err("candidate limit should fail")
+                .contains("too many live relay candidates")
+        );
     }
 
     #[test]
@@ -1424,19 +1435,28 @@ mod tests {
     }
 
     fn parse_live_relay_addresses(raw: &str) -> Result<Vec<Multiaddr>, String> {
-        raw.split([',', ';', '\n'])
+        let mut addresses = Vec::new();
+        for candidate in raw
+            .split([',', ';', '\n'])
             .map(str::trim)
             .filter(|candidate| !candidate.is_empty())
-            .map(|candidate| {
+        {
+            if addresses.len() == LIVE_RELAY_CANDIDATE_LIMIT {
+                return Err(format!(
+                    "too many live relay candidates: maximum is {LIVE_RELAY_CANDIDATE_LIMIT}"
+                ));
+            }
+            addresses.push({
                 let address = candidate
                     .parse::<Multiaddr>()
                     .map_err(|error| format!("{candidate}: {error}"))?;
                 if address_peer(&address).is_none() {
                     return Err(format!("{candidate}: missing /p2p/RELAY"));
                 }
-                Ok(address)
-            })
-            .collect()
+                address
+            });
+        }
+        Ok(addresses)
     }
 
     fn relay_test_discovery() -> DiscoveryConfig {
