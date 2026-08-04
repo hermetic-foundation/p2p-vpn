@@ -614,13 +614,21 @@ mod tests {
     use super::*;
 
     fn config_for(remote: Libp2pPeerId) -> Config {
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_peer = loop {
+            let candidate = Keypair::generate_ed25519().public().to_peer_id();
+            let candidate_overlay = PeerId::from_libp2p(candidate);
+            if builtin_ipv4(candidate_overlay) != builtin_ipv4(remote_overlay)
+                && builtin_ipv6(candidate_overlay) != builtin_ipv6(remote_overlay)
+            {
+                break candidate.to_string();
+            }
+        };
+
         Config {
             network: NetworkConfig {
                 name: "lab".to_owned(),
-                local_peer: Keypair::generate_ed25519()
-                    .public()
-                    .to_peer_id()
-                    .to_string(),
+                local_peer,
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
