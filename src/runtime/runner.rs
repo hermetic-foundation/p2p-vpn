@@ -2485,6 +2485,7 @@ fn handle_control_event(
                 context.packet_plane,
                 context.packet_plane_negotiator,
                 context.identity,
+                context.paths,
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -2807,11 +2808,15 @@ fn handle_control_request(
         ControlRequest::PacketPlaneHello(handshake) => {
             context.metrics.record_control_request_received();
             let response = packet_plane_accept_response_for_peer(
-                context.forwarder,
-                context.peer_capabilities,
-                context.packet_plane,
-                context.identity,
-                context.local_capabilities,
+                PacketPlaneAcceptContext {
+                    forwarder: context.forwarder,
+                    peer_capabilities: context.peer_capabilities,
+                    paths: context.paths,
+                    metrics: context.metrics,
+                    packet_plane: context.packet_plane,
+                    identity: context.identity,
+                    local_capabilities: context.local_capabilities,
+                },
                 peer,
                 &handshake,
             );
@@ -2912,6 +2917,7 @@ fn handle_control_response_event(
     packet_plane: &mut PacketPlaneRuntime,
     packet_plane_negotiator: &mut PacketPlaneNegotiator,
     identity: &NodeIdentity,
+    paths: &mut PathSet,
 ) {
     metrics.record_control_response_received();
     match response {
@@ -2951,13 +2957,17 @@ fn handle_control_response_event(
         }
         ControlResponse::PacketPlaneAccepted(handshake) => {
             if let Err(error) = complete_packet_plane_hello(
-                forwarder,
-                peer_capabilities,
-                packet_plane,
-                packet_plane_negotiator,
+                &mut PacketPlaneCompleteContext {
+                    forwarder,
+                    peer_capabilities,
+                    packet_plane,
+                    negotiator: packet_plane_negotiator,
+                    paths,
+                    metrics,
+                    network_name: validation.network,
+                },
                 peer,
                 &handshake,
-                validation.network,
             ) {
                 metrics.record_control_failure();
                 eprintln!(
@@ -3199,24 +3209,22 @@ fn maybe_send_packet_plane_hello(
     }
 }
 
+struct PacketPlaneAcceptContext<'a> {
+    forwarder: &'a Forwarder,
+    peer_capabilities: &'a PeerCapabilities,
+    paths: &'a mut PathSet,
+    metrics: &'a RuntimeMetrics,
+    packet_plane: &'a mut PacketPlaneRuntime,
+    identity: &'a NodeIdentity,
+    local_capabilities: &'a ControlCapabilities,
+}
+
 fn packet_plane_accept_response_for_peer(
-    forwarder: &Forwarder,
-    peer_capabilities: &PeerCapabilities,
-    packet_plane: &mut PacketPlaneRuntime,
-    identity: &NodeIdentity,
-    local_capabilities: &ControlCapabilities,
+    mut context: PacketPlaneAcceptContext<'_>,
     peer: Libp2pPeerId,
     handshake: &[u8],
 ) -> ControlResponse {
-    match accept_packet_plane_hello(
-        forwarder,
-        peer_capabilities,
-        packet_plane,
-        identity,
-        local_capabilities,
-        peer,
-        handshake,
-    ) {
+    match accept_packet_plane_hello(&mut context, peer, handshake) {
         Ok(encoded) => ControlResponse::PacketPlaneAccepted(encoded),
         Err(error) => {
             eprintln!(
@@ -3229,19 +3237,16 @@ fn packet_plane_accept_response_for_peer(
 }
 
 fn accept_packet_plane_hello(
-    forwarder: &Forwarder,
-    peer_capabilities: &PeerCapabilities,
-    packet_plane: &mut PacketPlaneRuntime,
-    identity: &NodeIdentity,
-    local_capabilities: &ControlCapabilities,
+    context: &mut PacketPlaneAcceptContext<'_>,
     peer: Libp2pPeerId,
     handshake: &[u8],
 ) -> Result<Vec<u8>, PacketPlaneNegotiationError> {
-    if !forwarder.is_configured_transport_peer(peer) {
+    if !context.forwarder.is_configured_transport_peer(peer) {
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
-    let remote_capabilities = peer_capabilities
+    let remote_capabilities = context
+        .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
     if !remote_capabilities.supports_quic_datagrams {
@@ -3249,7 +3254,10 @@ fn accept_packet_plane_hello(
     }
     let hello = PacketPlaneHandshake::decode(handshake)
         .map_err(PacketPlaneNegotiationError::Decode)?
-        .verify(&local_capabilities.network_name, Some(remote_overlay))
+        .verify(
+            &context.local_capabilities.network_name,
+            Some(remote_overlay),
+        )
         .map_err(PacketPlaneNegotiationError::Verify)?;
     if hello.kind != PacketPlaneHandshakeKind::Hello
         || !endpoint_is_advertised(remote_capabilities, hello.endpoint)
@@ -3258,10 +3266,11 @@ fn accept_packet_plane_hello(
     }
     let (secret, accept, verified_accept) = signed_packet_plane_handshake(
         PacketPlaneHandshakeKind::Accept,
-        identity,
-        local_capabilities,
+        context.identity,
+        context.local_capabilities,
     )?;
-    packet_plane
+    let session = context
+        .packet_plane
         .establish_session(
             PacketPlaneSessionRole::Responder,
             &secret,
@@ -3269,6 +3278,12 @@ fn accept_packet_plane_hello(
             &hello,
         )
         .map_err(PacketPlaneNegotiationError::Session)?;
+    record_packet_plane_path_established(
+        context.paths,
+        context.metrics,
+        remote_overlay,
+        session.mtu,
+    );
     log_runtime_event(
         LogLevel::Info,
         "packet_plane_session_established",
@@ -3281,35 +3296,44 @@ fn accept_packet_plane_hello(
     accept.encode().map_err(PacketPlaneNegotiationError::Encode)
 }
 
+struct PacketPlaneCompleteContext<'a> {
+    forwarder: &'a Forwarder,
+    peer_capabilities: &'a PeerCapabilities,
+    packet_plane: &'a mut PacketPlaneRuntime,
+    negotiator: &'a mut PacketPlaneNegotiator,
+    paths: &'a mut PathSet,
+    metrics: &'a RuntimeMetrics,
+    network_name: &'a str,
+}
+
 fn complete_packet_plane_hello(
-    forwarder: &Forwarder,
-    peer_capabilities: &PeerCapabilities,
-    packet_plane: &mut PacketPlaneRuntime,
-    negotiator: &mut PacketPlaneNegotiator,
+    context: &mut PacketPlaneCompleteContext<'_>,
     peer: Libp2pPeerId,
     handshake: &[u8],
-    network_name: &str,
 ) -> Result<(), PacketPlaneNegotiationError> {
-    if !forwarder.is_configured_transport_peer(peer) {
+    if !context.forwarder.is_configured_transport_peer(peer) {
         return Err(PacketPlaneNegotiationError::UnauthorizedPeer);
     }
     let remote_overlay = PeerId::from_libp2p(peer);
-    let pending = negotiator
+    let pending = context
+        .negotiator
         .remove(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
-    let remote_capabilities = peer_capabilities
+    let remote_capabilities = context
+        .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
     let accept = PacketPlaneHandshake::decode(handshake)
         .map_err(PacketPlaneNegotiationError::Decode)?
-        .verify(network_name, Some(remote_overlay))
+        .verify(context.network_name, Some(remote_overlay))
         .map_err(PacketPlaneNegotiationError::Verify)?;
     if accept.kind != PacketPlaneHandshakeKind::Accept
         || !endpoint_is_advertised(remote_capabilities, accept.endpoint)
     {
         return Err(PacketPlaneNegotiationError::EndpointNotAdvertised);
     }
-    packet_plane
+    let session = context
+        .packet_plane
         .establish_session(
             PacketPlaneSessionRole::Initiator,
             &pending.secret,
@@ -3317,6 +3341,12 @@ fn complete_packet_plane_hello(
             &accept,
         )
         .map_err(PacketPlaneNegotiationError::Session)?;
+    record_packet_plane_path_established(
+        context.paths,
+        context.metrics,
+        remote_overlay,
+        session.mtu,
+    );
     log_runtime_event(
         LogLevel::Info,
         "packet_plane_session_established",
@@ -3327,6 +3357,16 @@ fn complete_packet_plane_hello(
         ],
     );
     Ok(())
+}
+
+fn record_packet_plane_path_established(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    mtu: u16,
+) {
+    let change = paths.record_established_with_mtu(peer, PathKind::DirectQuicDatagram, Some(mtu));
+    record_path_selection_change(metrics, change);
 }
 
 fn signed_packet_plane_handshake(
@@ -7460,6 +7500,9 @@ mod tests {
         responder_peer_capabilities.record(initiator_overlay, initiator_capabilities.clone());
         let mut initiator_peer_capabilities = PeerCapabilities::default();
         initiator_peer_capabilities.record(responder_overlay, responder_capabilities.clone());
+        let mut responder_paths = PathSet::new();
+        let mut initiator_paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
         let mut negotiator = PacketPlaneNegotiator::default();
         let (secret, hello, verified_hello) = signed_packet_plane_handshake(
             PacketPlaneHandshakeKind::Hello,
@@ -7471,11 +7514,15 @@ mod tests {
         let encoded_hello = hello.encode().expect("encoded hello");
 
         let response = packet_plane_accept_response_for_peer(
-            &responder_forwarder,
-            &responder_peer_capabilities,
-            &mut responder_packet_plane,
-            &responder_identity,
-            &responder_capabilities,
+            PacketPlaneAcceptContext {
+                forwarder: &responder_forwarder,
+                peer_capabilities: &responder_peer_capabilities,
+                paths: &mut responder_paths,
+                metrics: &metrics,
+                packet_plane: &mut responder_packet_plane,
+                identity: &responder_identity,
+                local_capabilities: &responder_capabilities,
+            },
             initiator_peer,
             &encoded_hello,
         );
@@ -7483,13 +7530,17 @@ mod tests {
             panic!("expected packet-plane accept, got {response:?}");
         };
         complete_packet_plane_hello(
-            &initiator_forwarder,
-            &initiator_peer_capabilities,
-            &mut initiator_packet_plane,
-            &mut negotiator,
+            &mut PacketPlaneCompleteContext {
+                forwarder: &initiator_forwarder,
+                peer_capabilities: &initiator_peer_capabilities,
+                packet_plane: &mut initiator_packet_plane,
+                negotiator: &mut negotiator,
+                paths: &mut initiator_paths,
+                metrics: &metrics,
+                network_name: "lab",
+            },
             responder_peer,
             &encoded_accept,
-            "lab",
         )
         .expect("complete hello");
 
@@ -7507,6 +7558,20 @@ mod tests {
             .expect("responder session");
         assert_eq!(initiator_session.role, PacketPlaneSessionRole::Initiator);
         assert_eq!(responder_session.role, PacketPlaneSessionRole::Responder);
+        assert_eq!(
+            initiator_paths
+                .best_for(responder_overlay)
+                .expect("initiator path")
+                .kind,
+            PathKind::DirectQuicDatagram
+        );
+        assert_eq!(
+            responder_paths
+                .best_for(initiator_overlay)
+                .expect("responder path")
+                .kind,
+            PathKind::DirectQuicDatagram
+        );
         assert_eq!(initiator_session.mtu, 1200);
         assert_eq!(responder_session.mtu, 1200);
         assert_eq!(

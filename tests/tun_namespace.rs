@@ -20,6 +20,7 @@ use p2p_vpn::{
     runtime::{
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, build_node},
+        packet_plane::PacketPlaneRuntime,
         runner,
         tun::{TunDevice, TunRuntimeConfig},
     },
@@ -164,10 +165,12 @@ fn run_direct_orchestrator() {
     thread::sleep(Duration::from_secs(4));
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let routed_ping = ping_from_namespace(node_b.id(), "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS);
+    thread::sleep(Duration::from_secs(2));
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
     let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+    wait_for_packet_plane_datagrams(&temp_dir);
 
     stop_child(&mut node_a);
     stop_child(&mut node_b);
@@ -189,6 +192,10 @@ fn run_direct_orchestrator() {
         &responder_addresses,
         &responder_routes,
     );
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
+    assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
+    assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     let _ = fs::remove_dir_all(temp_dir);
 }
 
@@ -563,6 +570,56 @@ fn assert_ping_success(
     );
 }
 
+fn assert_packet_plane_datagrams_used(context: &str, log: &str, peer_log: &str) {
+    assert!(
+        packet_plane_datagrams_used(log),
+        "{context} did not negotiate and use packet-plane datagrams\n{context} log tail:\n{}\npeer log tail:\n{}",
+        log_tail(log, 80),
+        log_tail(peer_log, 80),
+    );
+}
+
+fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
+    let node_a_path = temp_dir.join("node-a.log");
+    let node_b_path = temp_dir.join("node-b.log");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let initiator_log = read_log(&node_a_path);
+        let responder_log = read_log(&node_b_path);
+        if packet_plane_datagrams_used(&initiator_log)
+            && packet_plane_datagrams_used(&responder_log)
+        {
+            return (initiator_log, responder_log);
+        }
+        if Instant::now() >= deadline {
+            return (initiator_log, responder_log);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn packet_plane_datagrams_used(log: &str) -> bool {
+    log.contains("event=packet_plane_session_established")
+        && log_metric_positive(log, "path_healthy_direct_quic_datagram_paths")
+        && log_metric_positive(log, "outbound_quic_datagram_packets")
+        && log_metric_positive(log, "inbound_accepted_packets")
+}
+
+fn log_metric_positive(log: &str, metric: &str) -> bool {
+    log.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(metric)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .is_some_and(|value| value > 0)
+    })
+}
+
+fn log_tail(log: &str, lines: usize) -> String {
+    let mut tail = log.lines().rev().take(lines).collect::<Vec<_>>();
+    tail.reverse();
+    tail.join("\n")
+}
+
 fn spawn_node(
     test_name: &str,
     role: &str,
@@ -781,39 +838,45 @@ fn run_node_child() {
 }
 
 fn direct_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
-    let (name, interface, listen, remote_address, local_routes, peer_routes) = match role {
-        "a" => (
-            NETWORK_NAME,
-            "hse2ea",
-            "/ip4/10.250.0.1/tcp/42101",
-            Some("/ip4/10.250.0.2/tcp/42102"),
-            vec![RouteConfig {
-                prefix: "10.41.0.0/24".to_owned(),
-                metric: 100,
-            }],
-            Vec::new(),
-        ),
-        "b" => (
-            NETWORK_NAME,
-            "hse2eb",
-            "/ip4/10.250.0.2/tcp/42102",
-            None,
-            Vec::new(),
-            vec![RouteConfig {
-                prefix: "10.41.0.0/24".to_owned(),
-                metric: 100,
-            }],
-        ),
-        other => panic!("unknown node role {other}"),
-    };
-    node_config(
+    let (name, interface, listen, packet_endpoint, remote_address, local_routes, peer_routes) =
+        match role {
+            "a" => (
+                NETWORK_NAME,
+                "hse2ea",
+                "/ip4/10.250.0.1/tcp/42101",
+                "10.250.0.1:43101",
+                Some("/ip4/10.250.0.2/tcp/42102"),
+                vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                Vec::new(),
+            ),
+            "b" => (
+                NETWORK_NAME,
+                "hse2eb",
+                "/ip4/10.250.0.2/tcp/42102",
+                "10.250.0.2:43102",
+                None,
+                Vec::new(),
+                vec![RouteConfig {
+                    prefix: "10.41.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+            ),
+            other => panic!("unknown node role {other}"),
+        };
+    let mut config = node_config(
         name,
         interface,
         local,
         listen,
         local_routes,
         peer_config(remote, remote_address, peer_routes),
-    )
+    );
+    config.network.packet_plane.listen = vec![packet_endpoint.to_owned()];
+    config.network.packet_plane.external_endpoints = vec![packet_endpoint.to_owned()];
+    config
 }
 
 fn relay_overlay_config(
@@ -978,19 +1041,25 @@ async fn run_ready_node(
     })?;
     wait_for_node_ready(&mut node, &config).await;
     fs::write(ready_file, b"ready").expect("write ready file");
+    node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
+    let packet_plane = PacketPlaneRuntime::bind(config.packet_plane_listen_addrs()?)
+        .await
+        .map_err(runner::RunnerError::PacketPlane)?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
-    Box::pin(runner::run_node(
+    Box::pin(runner::run_node_until(
         node,
         forwarder,
         membership,
+        Vec::new(),
         device,
-        runner::RuntimeNodeOptions {
-            mtu,
-            queue: config.queue,
-            resources: config.resources,
-            metrics_interval: Some(Duration::from_secs(1)),
-        },
+        mtu,
+        config.queue,
+        config.resources,
+        Some(Duration::from_secs(1)),
+        None,
+        packet_plane,
+        std::future::pending::<runner::ShutdownReason>(),
     ))
     .await
 }
