@@ -811,6 +811,13 @@ cargo run -- relay-scan \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
 
+cargo run -- relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --write-config p2p-vpn-public-relay.json \
+  --candidate-timeout-seconds 45 \
+  --timeout-seconds 30
+
 cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --timeout-seconds 45
@@ -837,7 +844,9 @@ run `relay-check` against the printed candidate, or pass `--check-candidates`
 to validate scanned candidates immediately, before using it for a VPN
 reservation or DCUtR path. Add `--require-dcutr-success` with
 `--check-candidates` when the scan should only pass after a successful
-public-relay-assisted hole punch.
+public-relay-assisted hole punch. Pass `--write-config PATH` with
+`--check-candidates` to write the same default relay-assisted config that
+`relay-check --write-config` writes from the first validated scanned candidate.
 
 `relay-check` is rootless. In its default mode it creates a temporary listener,
 reserves a circuit on the supplied relay, and dials that listener from a second

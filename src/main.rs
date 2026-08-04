@@ -275,6 +275,10 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
         candidate_timeout_seconds: u64,
+        #[arg(long = "write-config")]
+        write_config: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -578,6 +582,8 @@ async fn main() -> Result<(), String> {
             check_candidates,
             require_dcutr_success,
             candidate_timeout_seconds,
+            write_config,
+            force,
         } => {
             Box::pin(relay_scan(RelayScanArgs {
                 config_path: config,
@@ -588,6 +594,8 @@ async fn main() -> Result<(), String> {
                 check_candidates,
                 require_dcutr_success,
                 candidate_timeout_seconds,
+                write_config,
+                force,
             }))
             .await
         }
@@ -767,6 +775,7 @@ struct InviteImportArgs {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct RelayScanArgs {
     config_path: Option<PathBuf>,
     bootstrap_peers: Vec<EndpointArg>,
@@ -776,6 +785,8 @@ struct RelayScanArgs {
     check_candidates: bool,
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
+    write_config: Option<PathBuf>,
+    force: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2128,20 +2139,26 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
 
     if succeeded {
         if let Some(output) = args.write_config {
-            let relay = report
-                .candidates
-                .iter()
-                .find(|candidate| candidate.succeeded)
-                .ok_or_else(|| {
-                    "public relay check succeeded without a winning candidate".to_owned()
-                })
-                .and_then(|candidate| relay_candidate_endpoint_arg(&candidate.address))?;
-            init_config(public_relay_config_args(output, relay, args.force))?;
+            write_public_relay_config_from_probe(&report, output, args.force)?;
         }
         Ok(())
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
     }
+}
+
+fn write_public_relay_config_from_probe(
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+    output: PathBuf,
+    force: bool,
+) -> Result<(), String> {
+    let relay = report
+        .candidates
+        .iter()
+        .find(|candidate| candidate.succeeded)
+        .ok_or_else(|| "public relay probe succeeded without a winning candidate".to_owned())
+        .and_then(|candidate| relay_candidate_endpoint_arg(&candidate.address))?;
+    init_config(public_relay_config_args(output, relay, force))
 }
 
 fn relay_candidate_endpoint_arg(address: &str) -> Result<EndpointArg, String> {
@@ -2189,9 +2206,7 @@ fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) ->
 }
 
 async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
-    if args.max_candidates == 0 {
-        return Err("--max-candidates must be greater than zero".to_owned());
-    }
+    validate_relay_scan_args(&args)?;
     let config = relay_scan_config(
         args.config_path.as_deref(),
         args.bootstrap_peers,
@@ -2243,10 +2258,23 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
     }
 
     if probe_succeeded {
+        if let Some(output) = args.write_config {
+            write_public_relay_config_from_probe(&probe, output, args.force)?;
+        }
         Ok(())
     } else {
         Err("public relay scan did not validate a usable candidate".to_owned())
     }
+}
+
+fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
+    if args.max_candidates == 0 {
+        return Err("--max-candidates must be greater than zero".to_owned());
+    }
+    if args.write_config.is_some() && !args.check_candidates {
+        return Err("--write-config requires --check-candidates".to_owned());
+    }
+    Ok(())
 }
 
 fn relay_scan_candidate_multiaddrs(
@@ -3992,6 +4020,9 @@ mod tests {
             "--require-dcutr-success",
             "--candidate-timeout-seconds",
             "15",
+            "--write-config",
+            "relay-scan-config.json",
+            "--force",
         ])
         .expect("cli");
 
@@ -4004,6 +4035,8 @@ mod tests {
             check_candidates,
             require_dcutr_success,
             candidate_timeout_seconds,
+            write_config,
+            force,
         } = cli.command
         else {
             panic!("expected relay-scan command");
@@ -4017,6 +4050,32 @@ mod tests {
         assert!(check_candidates);
         assert!(require_dcutr_success);
         assert_eq!(candidate_timeout_seconds, 15);
+        assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
+        assert!(force);
+    }
+
+    #[test]
+    fn relay_scan_write_config_requires_candidate_validation() {
+        let mut args = RelayScanArgs {
+            config_path: None,
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: true,
+            timeout_seconds: 30,
+            max_candidates: 8,
+            check_candidates: false,
+            require_dcutr_success: false,
+            candidate_timeout_seconds: 45,
+            write_config: Some(PathBuf::from("relay-scan-config.json")),
+            force: false,
+        };
+
+        assert_eq!(
+            validate_relay_scan_args(&args).expect_err("validation should fail"),
+            "--write-config requires --check-candidates"
+        );
+
+        args.check_candidates = true;
+        validate_relay_scan_args(&args).expect("validation should pass");
     }
 
     #[test]
