@@ -102,10 +102,13 @@ certificate trust, and the control capability schema now validates the
 advertised certificate material. Outbound queue draining distinguishes owned UDP
 and owned QUIC packet-plane sessions, prefers an established owned QUIC session
 when the peer advertised owned QUIC support, and otherwise falls back to an
-established UDP packet-plane session or packet streams. Automatic owned QUIC
-connect/accept lifecycle and inbound QUIC daemon receive handling are still
-pending. Outbound queue draining respects the peer's advertised effective MTU
-and drops oversized packets before sending them to the packet stream fallback.
+established UDP packet-plane session or packet streams. The control-plane hello
+flow opens or accepts the owned Quinn connection before registering the signed
+owned QUIC packet-plane session, and inbound owned QUIC datagrams enter the same
+authorization, rate-limit, route, replay, path-probe, and TUN write path as UDP
+packet-plane datagrams. Outbound queue draining respects the peer's advertised
+effective MTU and drops oversized packets before sending them to the packet
+stream fallback.
 Capability requests from unconfigured peers are
 rejected, and configured peers are only accepted when they advertise the same
 overlay network name, compatible wire version, packet protocol, packet header
@@ -128,11 +131,11 @@ views. Peers that both advertise packet-plane endpoints negotiate those sessions
 over the authenticated control plane with a deterministic single initiator,
 then use the owned UDP packet plane for outbound queue draining when path
 selection allows it. Established owned QUIC sessions can also carry outbound
-queued packet frames over Quinn datagrams. The daemon accepts inbound UDP frames from established
-packet-plane sessions, rejects duplicate authenticated datagrams at the UDP
-session boundary with bounded per-session replay state, and then applies the
-same route authorization, replay protection, rate limiting, and TUN write path
-as stream packets.
+queued packet frames over Quinn datagrams. The daemon accepts inbound UDP and
+owned QUIC frames from established packet-plane sessions, rejects duplicate
+authenticated datagrams at the session boundary with bounded per-session replay
+state, and then applies the same route authorization, replay protection, rate
+limiting, and TUN write path as stream packets.
 Packet-plane sessions are intentionally bounded: the daemon expires established
 sessions after the configured lifetime, defaulting to 600 seconds, marks the
 associated direct datagram path unhealthy, records

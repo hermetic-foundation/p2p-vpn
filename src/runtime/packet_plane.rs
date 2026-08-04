@@ -10,6 +10,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
     aead::{Aead as _, KeyInit as _, Payload},
 };
+use futures::future::select_all;
 use hkdf::Hkdf;
 use libp2p::identity::PublicKey;
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig};
@@ -697,6 +698,7 @@ pub enum PacketPlaneQuicError {
     Connect(quinn::ConnectError),
     Connection(quinn::ConnectionError),
     EndpointClosed,
+    NoSessions,
     NoConnection { peer: PeerId },
     SendDatagram(quinn::SendDatagramError),
     Datagram(PacketPlaneDatagramError),
@@ -1414,6 +1416,13 @@ impl PacketPlaneQuicRuntime {
         self.sessions.get(&peer).map(|session| session.mtu)
     }
 
+    #[must_use]
+    pub fn can_receive(&self) -> bool {
+        self.sessions
+            .keys()
+            .any(|peer| self.connections.contains_key(peer))
+    }
+
     pub async fn connect_peer(
         &mut self,
         peer: PeerId,
@@ -1519,6 +1528,50 @@ impl PacketPlaneQuicRuntime {
             frame,
             peer: Some(peer),
             remote_addr: connection.remote_address(),
+            local_addr: self.local_addr,
+        })
+    }
+
+    pub async fn recv_frame_from_session(
+        &mut self,
+    ) -> Result<PacketPlaneReceivedFrame, PacketPlaneQuicError> {
+        let peers = self
+            .sessions
+            .keys()
+            .filter(|peer| self.connections.contains_key(peer))
+            .copied()
+            .collect::<Vec<_>>();
+        if peers.is_empty() {
+            return Err(PacketPlaneQuicError::NoSessions);
+        }
+        let mut reads = Vec::with_capacity(peers.len());
+        for peer in peers {
+            let Some(connection) = self.connections.get(&peer) else {
+                continue;
+            };
+            reads.push(Box::pin(async move {
+                (
+                    peer,
+                    connection.remote_address(),
+                    connection.read_datagram().await,
+                )
+            }));
+        }
+        let ((peer, remote_addr, datagram), _, _) = select_all(reads).await;
+        let datagram = datagram?;
+        let session = self
+            .sessions
+            .get_mut(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
+        let frame = session
+            .keys
+            .open
+            .open_frame(&datagram, usize::from(session.mtu))?;
+        session.accept_datagram(&frame)?;
+        Ok(PacketPlaneReceivedFrame {
+            frame,
+            peer: Some(peer),
+            remote_addr,
             local_addr: self.local_addr,
         })
     }
@@ -2320,6 +2373,7 @@ mod tests {
                 &hello,
             )
             .expect("receiver session");
+        assert!(receiver.can_receive());
         let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
 
         let sent = sender
@@ -2383,13 +2437,10 @@ mod tests {
         let sent = sender
             .send_frame_to_peer(accept.peer, &frame)
             .expect("sent frame");
-        let inbound = timeout(
-            Duration::from_secs(2),
-            receiver.recv_frame_from_peer(hello.peer),
-        )
-        .await
-        .expect("receive should not time out")
-        .expect("received frame");
+        let inbound = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .expect("receive should not time out")
+            .expect("received frame");
 
         assert!(sent > 0);
         assert_eq!(inbound.peer, Some(hello.peer));
