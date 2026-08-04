@@ -10,8 +10,8 @@ use clap::{Parser, Subcommand};
 use p2p_vpn::{
     PathKind,
     config::{
-        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, QueueConfig, RelayConfig,
-        RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
+        Config, DiscoveryConfig, InitConfigTemplate, InitPeer, PacketPlaneConfig, QueueConfig,
+        RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
     },
     identity::NodeIdentity,
     invite::{
@@ -85,6 +85,10 @@ enum Command {
         listen_addresses: Vec<String>,
         #[arg(long = "external-address")]
         external_addresses: Vec<String>,
+        #[arg(long = "packet-listen")]
+        packet_listen: Vec<String>,
+        #[arg(long = "packet-endpoint")]
+        packet_endpoints: Vec<String>,
         #[arg(long = "bootstrap-peer")]
         bootstrap_peers: Vec<EndpointArg>,
         #[arg(long)]
@@ -316,6 +320,8 @@ async fn main() -> Result<(), String> {
             mtu,
             listen_addresses,
             external_addresses,
+            packet_listen,
+            packet_endpoints,
             bootstrap_peers,
             ipfs_bootstrap_peers,
             peers,
@@ -360,6 +366,10 @@ async fn main() -> Result<(), String> {
             mtu,
             listen_addresses,
             external_addresses,
+            packet_plane: PacketPlaneConfig {
+                listen: packet_listen,
+                external_endpoints: packet_endpoints,
+            },
             bootstrap_peers,
             ipfs_bootstrap_peers,
             peers,
@@ -559,6 +569,7 @@ struct InitConfigArgs {
     mtu: u16,
     listen_addresses: Vec<String>,
     external_addresses: Vec<String>,
+    packet_plane: PacketPlaneConfig,
     bootstrap_peers: Vec<EndpointArg>,
     ipfs_bootstrap_peers: bool,
     peers: Vec<EndpointArg>,
@@ -730,6 +741,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         mtu: args.mtu,
         listen_addresses: args.listen_addresses,
         external_addresses: args.external_addresses,
+        packet_plane: args.packet_plane,
         bootstrap_peers,
         peers: init_peers(args.peers, args.peer_routes),
         discovery: args.discovery,
@@ -1622,6 +1634,11 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
             .map_err(|error| format!("failed to compute membership tag: {error:?}"))?,
         config.effective_packet_mtu(),
     )
+    .with_packet_endpoint_candidates(
+        config
+            .packet_plane_endpoint_candidates()
+            .map_err(|error| format!("failed to parse packet endpoints: {error:?}"))?,
+    )
     .with_advertised_routes(
         routes
             .routes_for(local_peer)
@@ -1696,6 +1713,13 @@ fn push_capability_lines(
         "{prefix} supports quic datagrams: {}",
         capabilities.supports_quic_datagrams
     ));
+    lines.push(format!(
+        "{prefix} packet endpoint candidates: {}",
+        capabilities.packet_endpoint_candidates.len()
+    ));
+    for endpoint in &capabilities.packet_endpoint_candidates {
+        lines.push(format!("{prefix} packet endpoint candidate: {endpoint}"));
+    }
     lines.push(format!(
         "{prefix} advertised routes: {}",
         capabilities.advertised_routes.len()
@@ -2110,6 +2134,10 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: Vec::new(),
+                    external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                },
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2183,6 +2211,10 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: Vec::new(),
+                    external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                },
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2242,6 +2274,10 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: Vec::new(),
+                    external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                },
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2284,6 +2320,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2409,6 +2446,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2525,6 +2563,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2631,6 +2670,10 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: Vec::new(),
+                    external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                },
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2661,6 +2704,16 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == "local capability preferred path: direct QUIC stream")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability packet endpoint candidates: 1")
+        );
+        assert!(
+            lines.iter().any(
+                |line| line == "local capability packet endpoint candidate: 203.0.113.10:51820"
+            )
         );
         assert!(
             lines
@@ -2841,6 +2894,31 @@ mod tests {
         assert_eq!(max_concurrent_packet_streams, 22);
         assert_eq!(max_inbound_packets_per_peer_per_second, 333);
         assert_eq!(max_established_connections, 88);
+    }
+
+    #[test]
+    fn cli_parses_packet_plane_arguments() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "init-config",
+            "--packet-listen",
+            "0.0.0.0:51820",
+            "--packet-endpoint",
+            "203.0.113.10:51820",
+        ])
+        .expect("cli");
+
+        let Command::InitConfig {
+            packet_listen,
+            packet_endpoints,
+            ..
+        } = cli.command
+        else {
+            panic!("expected init-config command");
+        };
+
+        assert_eq!(packet_listen, vec!["0.0.0.0:51820"]);
+        assert_eq!(packet_endpoints, vec!["203.0.113.10:51820"]);
     }
 
     #[test]
@@ -3299,6 +3377,7 @@ mod tests {
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
             relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
             queue: QueueConfig::default(),
             resources: ResourceConfig::default(),
             force: true,
@@ -3356,6 +3435,7 @@ mod tests {
             }
             .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), true),
             relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
             queue: QueueConfig::default(),
             resources: ResourceConfig::default(),
             force: true,
@@ -3406,6 +3486,7 @@ mod tests {
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
             relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
             queue: QueueConfig::default(),
             resources: ResourceConfig::default(),
             force: true,
@@ -3452,6 +3533,7 @@ mod tests {
                     max_circuit_bytes: 4096,
                 },
             },
+            packet_plane: PacketPlaneConfig::default(),
             queue: QueueConfig {
                 max_packets_per_peer: 12,
                 max_bytes_per_peer: 8192,

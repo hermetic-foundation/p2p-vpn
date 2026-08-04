@@ -350,6 +350,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: crate::config::DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),

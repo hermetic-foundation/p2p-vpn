@@ -56,6 +56,7 @@ pub async fn query_peer_status(
         resources: config.resources,
         discovery: config.network.discovery.clone(),
     })?;
+    node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let forwarder = Forwarder::from_config(config)?;
     if !forwarder.is_configured_transport_peer(peer) {
         return Err(RemoteQueryError::UnconfiguredPeer(peer));
@@ -67,6 +68,7 @@ pub async fn query_peer_status(
         node.membership_tag.clone(),
         config.effective_packet_mtu(),
     )
+    .with_packet_endpoint_candidates(node.packet_endpoint_candidates.clone())
     .with_advertised_routes(forwarder.local_advertised_routes());
     let expected_network = local_capabilities.network_name.clone();
     let expected_membership_tag = local_capabilities.membership_tag.clone();
@@ -590,6 +592,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: test_discovery(),
                 relay: RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),

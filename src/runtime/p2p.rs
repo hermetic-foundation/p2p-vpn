@@ -48,6 +48,7 @@ pub struct P2pNode {
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub relay_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
+    pub packet_endpoint_candidates: Vec<String>,
     pub startup: StartupStatus,
 }
 
@@ -184,6 +185,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         bootstrap_peer_addresses,
         relay_peer_addresses,
         configured_peer_addresses,
+        packet_endpoint_candidates: Vec::new(),
         startup: startup_status(
             config,
             kademlia,

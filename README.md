@@ -63,17 +63,23 @@ The control plane exposes `/p2p-vpn/control/1` over a bounded reliable
 request-response stream. Peers exchange capabilities when a configured transport
 peer connects, including wire version, packet protocol, effective MTU, preferred
 path, overlay network name, advertised route prefixes, and whether native QUIC
-datagrams are currently supported. The current local capability advertises the
-node's built-in IPv4 and IPv6 host routes, direct QUIC streams as preferred, and
-native QUIC datagrams as unsupported, so peers do not negotiate an unreliable
-data path before one is implemented. Outbound queue draining respects the
+datagrams are currently supported. Configs can also declare owned packet-plane
+UDP bind addresses under `network.packet_plane.listen` and externally reachable
+direct packet endpoints under `network.packet_plane.external_endpoints`; the
+external endpoints are advertised as packet endpoint candidates in the
+capability exchange. The current local capability advertises the node's built-in
+IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
+datagrams as unsupported, so peers do not negotiate an unreliable data path
+before one is implemented. Outbound queue draining respects the
 peer's advertised effective MTU and drops oversized packets before sending them
 to the packet stream fallback. Capability requests from unconfigured peers are
 rejected, and configured peers are only accepted when they advertise the same
 overlay network name, compatible wire version, packet protocol, packet header
 length, matching membership tag when a key is configured, known preferred path,
 coherent datagram support, non-zero effective MTU, and no route prefixes outside
-their configured ownership.
+their configured ownership. Packet endpoint candidates must parse as socket
+addresses; they are candidates for the owned packet data plane, not membership
+or route authority.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the

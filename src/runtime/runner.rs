@@ -161,7 +161,7 @@ where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
     let identity = config.identity()?;
-    let node = build_node(&HostConfig {
+    let mut node = build_node(&HostConfig {
         identity,
         network_name: config.network.name.clone(),
         membership_tag: config.membership_tag()?,
@@ -178,6 +178,7 @@ where
         resources: config.resources,
         discovery: config.network.discovery.clone(),
     })?;
+    node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
     let previous_membership_tags = config.previous_membership_tags()?;
@@ -286,6 +287,7 @@ where
     );
     let local_capabilities =
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
+            .with_packet_endpoint_candidates(node.packet_endpoint_candidates.clone())
             .with_advertised_routes(forwarder.local_advertised_routes());
     timers.prime().await;
     let discovery = node.discovery.clone();
@@ -3510,6 +3512,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -3591,6 +3594,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -3989,6 +3993,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -4231,6 +4236,7 @@ mod tests {
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit")],
                     resources: crate::config::RelayResourceConfig::default(),
                 },
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -4776,6 +4782,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -4926,6 +4933,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -4985,6 +4993,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5046,6 +5055,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5108,6 +5118,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5161,6 +5172,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5221,6 +5233,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5279,6 +5292,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5332,6 +5346,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5381,6 +5396,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5430,6 +5446,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5482,6 +5499,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5531,6 +5549,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5589,6 +5608,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5672,6 +5692,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5757,6 +5778,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5845,6 +5867,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -5939,6 +5962,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -6051,6 +6075,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -6292,6 +6317,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),

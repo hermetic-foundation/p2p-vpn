@@ -201,6 +201,7 @@ pub fn import_invite_config_at(
                 reservations: invite.payload.relay_reservations.clone(),
                 resources: crate::config::RelayResourceConfig::default(),
             },
+            packet_plane: crate::config::PacketPlaneConfig::default(),
         },
         interface: InterfaceConfig {
             name: options.interface_name,
@@ -523,6 +524,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),

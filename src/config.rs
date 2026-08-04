@@ -1,6 +1,6 @@
 use std::{
     fs, io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     str::FromStr,
     time::Duration,
@@ -97,6 +97,8 @@ impl Config {
         self.bootstrap_multiaddrs()?;
         self.peer_multiaddrs()?;
         self.relay_reservation_multiaddrs()?;
+        self.packet_plane_listen_addrs()?;
+        self.packet_plane_external_endpoints()?;
         self.validate_peer_reachability()?;
         self.validate_discovery()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
@@ -253,6 +255,22 @@ impl Config {
         parse_relay_reservation_multiaddrs(&self.network.relay.reservations)
     }
 
+    pub fn packet_plane_listen_addrs(&self) -> Result<Vec<SocketAddr>, ConfigError> {
+        parse_socket_addrs(&self.network.packet_plane.listen)
+    }
+
+    pub fn packet_plane_external_endpoints(&self) -> Result<Vec<SocketAddr>, ConfigError> {
+        parse_socket_addrs(&self.network.packet_plane.external_endpoints)
+    }
+
+    pub fn packet_plane_endpoint_candidates(&self) -> Result<Vec<String>, ConfigError> {
+        Ok(self
+            .packet_plane_external_endpoints()?
+            .into_iter()
+            .map(|endpoint| endpoint.to_string())
+            .collect())
+    }
+
     #[must_use]
     pub fn effective_packet_mtu(&self) -> u16 {
         effective_packet_mtu(self.interface.mtu)
@@ -281,6 +299,8 @@ pub struct NetworkConfig {
     pub discovery: DiscoveryConfig,
     #[serde(default)]
     pub relay: RelayConfig,
+    #[serde(default)]
+    pub packet_plane: PacketPlaneConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -326,6 +346,14 @@ pub struct RelayConfig {
     pub reservations: Vec<String>,
     #[serde(default)]
     pub resources: RelayResourceConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PacketPlaneConfig {
+    #[serde(default)]
+    pub listen: Vec<String>,
+    #[serde(default)]
+    pub external_endpoints: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -527,6 +555,7 @@ pub struct InitConfigTemplate {
     pub mtu: u16,
     pub listen_addresses: Vec<String>,
     pub external_addresses: Vec<String>,
+    pub packet_plane: PacketPlaneConfig,
     pub bootstrap_peers: Vec<InitPeer>,
     pub peers: Vec<InitPeer>,
     pub discovery: DiscoveryConfig,
@@ -563,6 +592,7 @@ impl InitConfigTemplate {
                     .collect(),
                 discovery: self.discovery,
                 relay: self.relay,
+                packet_plane: self.packet_plane,
             },
             interface: InterfaceConfig {
                 name: self.interface_name,
@@ -593,6 +623,7 @@ pub enum ConfigError {
     PeerId(crate::PeerIdParseError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
+    SocketAddr(std::net::AddrParseError),
     KademliaProtocol(String),
     Address(AddressValidationError),
     Interface(InterfaceValidationError),
@@ -904,6 +935,13 @@ fn parse_multiaddrs(input: &[String]) -> Result<Vec<libp2p::Multiaddr>, ConfigEr
         .collect()
 }
 
+fn parse_socket_addrs(input: &[String]) -> Result<Vec<SocketAddr>, ConfigError> {
+    input
+        .iter()
+        .map(|address| address.parse().map_err(ConfigError::SocketAddr))
+        .collect()
+}
+
 fn parse_peer_address(
     peer: &str,
     address: &str,
@@ -1089,6 +1127,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1142,6 +1181,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1181,6 +1221,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1227,6 +1268,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1286,6 +1328,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1329,6 +1372,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1375,6 +1419,7 @@ mod tests {
                     ..DiscoveryConfig::default()
                 },
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1414,6 +1459,7 @@ mod tests {
                     autonat: true,
                 },
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1456,6 +1502,7 @@ mod tests {
                     autonat: true,
                 },
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1506,6 +1553,7 @@ mod tests {
                     autonat: true,
                 },
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1544,6 +1592,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1617,6 +1666,7 @@ mod tests {
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{remote}/p2p-circuit")],
                     resources: RelayResourceConfig::default(),
                 },
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1666,6 +1716,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1698,6 +1749,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1712,6 +1764,49 @@ mod tests {
             config.validate_runtime(),
             Err(ConfigError::Interface(InterfaceValidationError::ZeroMtu))
         ));
+    }
+
+    #[test]
+    fn packet_plane_config_parses_listener_and_endpoint_candidates() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: vec!["0.0.0.0:51820".to_owned()],
+                    external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert_eq!(
+            config.packet_plane_listen_addrs().expect("listen addrs"),
+            vec!["0.0.0.0:51820".parse().expect("socket")]
+        );
+        assert_eq!(
+            config
+                .packet_plane_endpoint_candidates()
+                .expect("endpoint candidates"),
+            vec!["203.0.113.10:51820"]
+        );
+        assert!(config.validate_runtime().is_ok());
     }
 
     #[test]
@@ -1730,6 +1825,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1774,6 +1870,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1831,6 +1928,7 @@ mod tests {
                     reservations: Vec::new(),
                     resources: RelayResourceConfig::default(),
                 },
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1926,6 +2024,7 @@ mod tests {
                 bootstrap_peers: Vec::new(),
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -1986,6 +2085,7 @@ mod tests {
                 }],
                 discovery: DiscoveryConfig::default(),
                 relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2047,6 +2147,7 @@ mod tests {
                     reservations: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
                     resources: RelayResourceConfig::default(),
                 },
+                packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
                 name: "hs0".to_owned(),
@@ -2108,6 +2209,10 @@ mod tests {
                 "/ip4/0.0.0.0/udp/0/quic-v1".to_owned(),
             ],
             external_addresses: vec!["/dns4/node-a.example.net/udp/4001/quic-v1".to_owned()],
+            packet_plane: PacketPlaneConfig {
+                listen: vec!["0.0.0.0:51820".to_owned()],
+                external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+            },
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
@@ -2184,6 +2289,13 @@ mod tests {
             }]
         );
         assert_eq!(decoded.network.external_addresses.len(), 1);
+        assert_eq!(
+            decoded.network.packet_plane,
+            PacketPlaneConfig {
+                listen: vec!["0.0.0.0:51820".to_owned()],
+                external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+            }
+        );
         assert_eq!(decoded.network.bootstrap_peers.len(), 1);
         assert!(decoded.network.relay.server);
         assert_eq!(

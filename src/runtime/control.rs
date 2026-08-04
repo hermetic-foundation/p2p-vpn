@@ -46,6 +46,8 @@ pub struct ControlCapabilities {
     pub effective_mtu: u16,
     pub preferred_path: String,
     pub supports_quic_datagrams: bool,
+    #[serde(default)]
+    pub packet_endpoint_candidates: Vec<String>,
 }
 
 impl ControlCapabilities {
@@ -62,12 +64,19 @@ impl ControlCapabilities {
             effective_mtu,
             preferred_path: preferred_path.wire_name().to_owned(),
             supports_quic_datagrams: false,
+            packet_endpoint_candidates: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn with_advertised_routes(mut self, routes: Vec<ControlRoute>) -> Self {
         self.advertised_routes = routes;
+        self
+    }
+
+    #[must_use]
+    pub fn with_packet_endpoint_candidates(mut self, endpoints: Vec<String>) -> Self {
+        self.packet_endpoint_candidates = endpoints;
         self
     }
 }
@@ -179,6 +188,13 @@ pub fn validate_capabilities(
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
     };
     if preferred_path.requires_quic_datagrams() && !capabilities.supports_quic_datagrams {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    }
+    if capabilities
+        .packet_endpoint_candidates
+        .iter()
+        .any(|endpoint| endpoint.parse::<std::net::SocketAddr>().is_err())
+    {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
 
@@ -386,6 +402,7 @@ mod tests {
             serde_json::from_value(payload).expect("capabilities decode");
 
         assert!(capabilities.advertised_routes.is_empty());
+        assert!(capabilities.packet_endpoint_candidates.is_empty());
     }
 
     #[tokio::test]
@@ -439,6 +456,19 @@ mod tests {
         assert_eq!(capabilities.preferred_path, "direct_quic_stream");
         assert!(capabilities.advertised_routes.is_empty());
         assert!(!capabilities.supports_quic_datagrams);
+        assert!(capabilities.packet_endpoint_candidates.is_empty());
+    }
+
+    #[test]
+    fn local_capabilities_can_advertise_owned_packet_endpoints() {
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_packet_endpoint_candidates(vec!["203.0.113.10:51820".to_owned()]);
+
+        assert_eq!(
+            capabilities.packet_endpoint_candidates,
+            vec!["203.0.113.10:51820"]
+        );
+        assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
     }
 
     #[test]
@@ -549,6 +579,12 @@ mod tests {
 
         capabilities.supports_quic_datagrams = true;
         assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
+
+        capabilities.packet_endpoint_candidates = vec!["not-a-socket".to_owned()];
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::UnsupportedPreferredPath)
+        );
     }
 
     #[test]

@@ -1160,6 +1160,7 @@ fn node_config(
             bootstrap_peers: Vec::new(),
             discovery: p2p_vpn::config::DiscoveryConfig::default(),
             relay: p2p_vpn::config::RelayConfig::default(),
+            packet_plane: p2p_vpn::config::PacketPlaneConfig::default(),
         },
         interface: InterfaceConfig {
             name: interface.to_owned(),
@@ -1193,6 +1194,7 @@ fn relay_config(identity: &NodeIdentity) -> Config {
                 reservations: Vec::new(),
                 resources: RelayResourceConfig::default(),
             },
+            packet_plane: p2p_vpn::config::PacketPlaneConfig::default(),
         },
         interface: InterfaceConfig {
             name: "unused-relay".to_owned(),
@@ -1222,6 +1224,7 @@ fn bootstrap_config(identity: &NodeIdentity) -> Config {
             bootstrap_peers: Vec::new(),
             discovery: dht_bootstrap_discovery(),
             relay: RelayConfig::default(),
+            packet_plane: p2p_vpn::config::PacketPlaneConfig::default(),
         },
         interface: InterfaceConfig {
             name: "unused-bootstrap".to_owned(),
