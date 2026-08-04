@@ -4536,6 +4536,12 @@ fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
         PacketPlaneIoError::Datagram(
             crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
         ) => PacketDropReason::PacketTooLarge,
+        PacketPlaneIoError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::ReplayedDatagram { .. }
+            | crate::runtime::packet_plane::PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+                ..
+            },
+        ) => PacketDropReason::Replay,
         PacketPlaneIoError::Datagram(_) | PacketPlaneIoError::UnexpectedEndpoint { .. } => {
             PacketDropReason::MalformedPacket
         }
@@ -4554,6 +4560,12 @@ fn packet_plane_inbound_drop_reason(error: &PacketPlaneIoError) -> PacketDropRea
         PacketPlaneIoError::Datagram(
             crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
         ) => PacketDropReason::PacketTooLarge,
+        PacketPlaneIoError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::ReplayedDatagram { .. }
+            | crate::runtime::packet_plane::PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+                ..
+            },
+        ) => PacketDropReason::Replay,
         PacketPlaneIoError::Datagram(_) => PacketDropReason::MalformedPacket,
         PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
             PacketDropReason::MalformedPacket
@@ -4745,6 +4757,12 @@ fn packet_plane_datagram_error_name(
         crate::runtime::packet_plane::PacketPlaneDatagramError::HeaderMismatch { .. } => {
             "header_mismatch"
         }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::ReplayedDatagram { .. } => {
+            "replayed_datagram"
+        }
+        crate::runtime::packet_plane::PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+            ..
+        } => "datagram_outside_replay_window",
         crate::runtime::packet_plane::PacketPlaneDatagramError::TrailingBytes { .. } => {
             "trailing_bytes"
         }
@@ -6414,6 +6432,10 @@ mod tests {
             max: 1_280,
         });
         let decrypt = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::Decrypt);
+        let replay = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::ReplayedDatagram {
+            session_id: 77,
+            sequence: 42,
+        });
 
         assert_eq!(
             packet_plane_inbound_drop_reason(&unknown_endpoint),
@@ -6433,6 +6455,11 @@ mod tests {
             PacketDropReason::MalformedPacket
         );
         assert_eq!(packet_plane_io_error_name(&decrypt), "decrypt");
+        assert_eq!(
+            packet_plane_inbound_drop_reason(&replay),
+            PacketDropReason::Replay
+        );
+        assert_eq!(packet_plane_io_error_name(&replay), "replayed_datagram");
     }
 
     #[test]

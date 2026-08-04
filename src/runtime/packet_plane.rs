@@ -29,6 +29,7 @@ const SESSION_KDF_DOMAIN: &[u8] = b"p2p-vpn packet-plane session keys v1";
 const DATAGRAM_HEADER_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
 const MAX_UDP_DATAGRAM_LEN: usize = 65_535;
+const PACKET_PLANE_REPLAY_WINDOW_BITS: u64 = 64;
 pub const PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN: usize = 32;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -212,6 +213,14 @@ pub enum PacketPlaneDatagramError {
         inner_session_id: SessionId,
         inner_sequence: Sequence,
     },
+    ReplayedDatagram {
+        session_id: SessionId,
+        sequence: Sequence,
+    },
+    DatagramOutsideReplayWindow {
+        session_id: SessionId,
+        sequence: Sequence,
+    },
     TrailingBytes {
         remaining: usize,
     },
@@ -266,6 +275,7 @@ pub struct PacketPlaneSession {
     remote_session_id: SessionId,
     established_at: Instant,
     keys: PacketPlaneSessionKeys,
+    replay_windows: HashMap<SessionId, PacketPlaneReplayWindow>,
 }
 
 impl PacketPlaneSession {
@@ -279,6 +289,74 @@ impl PacketPlaneSession {
             local_session_id: self.local_session_id,
             remote_session_id: self.remote_session_id,
         }
+    }
+
+    fn accept_datagram(&mut self, frame: &Frame) -> Result<(), PacketPlaneDatagramError> {
+        let window = self
+            .replay_windows
+            .entry(frame.header.session_id)
+            .or_default();
+        window
+            .accept(frame.header.sequence)
+            .map_err(|error| match error {
+                PacketPlaneReplayAcceptError::Duplicate => {
+                    PacketPlaneDatagramError::ReplayedDatagram {
+                        session_id: frame.header.session_id,
+                        sequence: frame.header.sequence,
+                    }
+                }
+                PacketPlaneReplayAcceptError::TooOld => {
+                    PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+                        session_id: frame.header.session_id,
+                        sequence: frame.header.sequence,
+                    }
+                }
+            })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PacketPlaneReplayWindow {
+    highest: Option<Sequence>,
+    seen: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketPlaneReplayAcceptError {
+    Duplicate,
+    TooOld,
+}
+
+impl PacketPlaneReplayWindow {
+    fn accept(&mut self, sequence: Sequence) -> Result<(), PacketPlaneReplayAcceptError> {
+        let Some(highest) = self.highest else {
+            self.highest = Some(sequence);
+            self.seen = 1;
+            return Ok(());
+        };
+
+        if sequence > highest {
+            let shift = sequence - highest;
+            self.seen = if shift >= PACKET_PLANE_REPLAY_WINDOW_BITS {
+                1
+            } else {
+                (self.seen << shift) | 1
+            };
+            self.highest = Some(sequence);
+            return Ok(());
+        }
+
+        let offset = highest - sequence;
+        if offset >= PACKET_PLANE_REPLAY_WINDOW_BITS {
+            return Err(PacketPlaneReplayAcceptError::TooOld);
+        }
+        let bit = 1_u64 << offset;
+        if self.seen & bit != 0 {
+            return Err(PacketPlaneReplayAcceptError::Duplicate);
+        }
+
+        self.seen |= bit;
+        Ok(())
     }
 }
 
@@ -931,6 +1009,7 @@ impl PacketPlaneRuntime {
             remote_session_id: remote.session_id,
             established_at,
             keys,
+            replay_windows: HashMap::new(),
         };
         let snapshot = session.snapshot();
         self.sessions.insert(remote.peer, session);
@@ -1064,20 +1143,20 @@ impl PacketPlaneRuntime {
     }
 
     pub async fn recv_frame_from_peer(
-        &self,
+        &mut self,
         peer: PeerId,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
         self.recv_frame_from_peer_on(0, peer).await
     }
 
     pub async fn recv_frame_from_peer_on(
-        &self,
+        &mut self,
         listener_index: usize,
         peer: PeerId,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
         let session = self
             .sessions
-            .get(&peer)
+            .get_mut(&peer)
             .ok_or(PacketPlaneIoError::NoSession { peer })?;
         let socket = self
             .sockets
@@ -1099,6 +1178,7 @@ impl PacketPlaneRuntime {
             .keys
             .open
             .open_frame(&datagram, usize::from(session.mtu))?;
+        session.accept_datagram(&frame)?;
         Ok(PacketPlaneReceivedFrame {
             frame,
             peer: Some(peer),
@@ -1108,13 +1188,13 @@ impl PacketPlaneRuntime {
     }
 
     pub async fn recv_frame_from_session(
-        &self,
+        &mut self,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
         self.recv_frame_from_session_on(0).await
     }
 
     pub async fn recv_frame_from_session_on(
-        &self,
+        &mut self,
         listener_index: usize,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
         if self.sessions.is_empty() {
@@ -1130,7 +1210,7 @@ impl PacketPlaneRuntime {
         let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
         let Some(session) = self
             .sessions
-            .values()
+            .values_mut()
             .find(|session| session.endpoint == remote_addr)
         else {
             return Err(PacketPlaneIoError::UnknownEndpoint {
@@ -1142,6 +1222,7 @@ impl PacketPlaneRuntime {
             .keys
             .open
             .open_frame(&datagram, usize::from(session.mtu))?;
+        session.accept_datagram(&frame)?;
         Ok(PacketPlaneReceivedFrame {
             frame,
             peer: Some(session.peer),
@@ -1908,8 +1989,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn udp_runtime_rejects_replayed_registered_session_datagram() {
+        let mut sender = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("sender bind");
+        let mut receiver = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+            .await
+            .expect("receiver bind");
+        let sender_addr = sender.snapshot().listeners[0];
+        let receiver_addr = receiver.snapshot().listeners[0];
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+        let frame = Frame::packet(77, 42, vec![0x45; 20]).expect("frame");
+        let datagram = sender
+            .sessions
+            .get(&accept.peer)
+            .expect("sender session")
+            .keys
+            .seal
+            .seal_frame(&frame)
+            .expect("sealed datagram");
+
+        sender
+            .sockets
+            .first()
+            .expect("sender socket")
+            .send_to(&datagram, receiver_addr)
+            .await
+            .expect("sent first datagram");
+        let inbound = timeout(
+            Duration::from_secs(1),
+            receiver.recv_frame_from_peer(hello.peer),
+        )
+        .await
+        .expect("receive should not time out")
+        .expect("first datagram accepted");
+
+        assert_eq!(inbound.frame, frame);
+
+        sender
+            .sockets
+            .first()
+            .expect("sender socket")
+            .send_to(&datagram, receiver_addr)
+            .await
+            .expect("sent replayed datagram");
+        let error = timeout(
+            Duration::from_secs(1),
+            receiver.recv_frame_from_peer(hello.peer),
+        )
+        .await
+        .expect("receive should not time out")
+        .expect_err("duplicate datagram should be rejected");
+
+        assert!(matches!(
+            error,
+            PacketPlaneIoError::Datagram(PacketPlaneDatagramError::ReplayedDatagram {
+                session_id: 77,
+                sequence: 42
+            })
+        ));
+    }
+
+    #[tokio::test]
     async fn udp_runtime_rejects_unknown_peer_sessions() {
-        let runtime = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
+        let mut runtime = PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
             .await
             .expect("runtime bind");
         let unknown = PeerId::from_bytes([9; 32]);
