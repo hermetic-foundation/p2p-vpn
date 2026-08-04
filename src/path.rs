@@ -245,6 +245,30 @@ impl PathSet {
         false
     }
 
+    pub fn raise_path_mtu(&mut self, peer: PeerId, kind: PathKind, mtu: u16, ceiling: u16) -> bool {
+        let Some(candidate) = self.candidates.iter_mut().find(|candidate| {
+            candidate.peer == peer && candidate.kind == kind && candidate.healthy
+        }) else {
+            return false;
+        };
+        let mtu = mtu.min(ceiling);
+
+        if candidate.estimated_mtu.is_some_and(|current| mtu > current) {
+            candidate.estimated_mtu = Some(mtu);
+            return true;
+        }
+
+        false
+    }
+
+    #[must_use]
+    pub fn path_mtu(&self, peer: PeerId, kind: PathKind) -> Option<u16> {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .and_then(|candidate| candidate.estimated_mtu)
+    }
+
     fn selection_change(
         &self,
         peer: PeerId,
@@ -507,6 +531,31 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.lower_path_mtu(peer(1), PathKind::DirectTcpStream, 1100));
+    }
+
+    #[test]
+    fn path_mtu_probe_learning_only_raises_healthy_paths_to_ceiling() {
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(peer(1), PathKind::DirectQuicDatagram, Some(1000));
+
+        assert!(paths.raise_path_mtu(peer(1), PathKind::DirectQuicDatagram, 1100, 1200));
+        assert_eq!(
+            paths.path_mtu(peer(1), PathKind::DirectQuicDatagram),
+            Some(1100)
+        );
+        assert!(!paths.raise_path_mtu(peer(1), PathKind::DirectQuicDatagram, 1050, 1200));
+        assert_eq!(
+            paths.path_mtu(peer(1), PathKind::DirectQuicDatagram),
+            Some(1100)
+        );
+        assert!(paths.raise_path_mtu(peer(1), PathKind::DirectQuicDatagram, 1300, 1200));
+        assert_eq!(
+            paths.path_mtu(peer(1), PathKind::DirectQuicDatagram),
+            Some(1200)
+        );
+
+        paths.record_closed(peer(1), PathKind::DirectQuicDatagram);
+        assert!(!paths.raise_path_mtu(peer(1), PathKind::DirectQuicDatagram, 1300, 1400));
     }
 
     #[test]
