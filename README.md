@@ -97,8 +97,9 @@ over the authenticated control plane with a deterministic single initiator,
 then use the owned UDP packet plane for outbound queue draining when path
 selection allows it. The daemon also accepts inbound UDP frames from established
 packet-plane sessions, rejects duplicate authenticated datagrams at the UDP
-session boundary, and then applies the same route authorization, replay
-protection, rate limiting, and TUN write path as stream packets.
+session boundary with bounded per-session replay state, and then applies the
+same route authorization, replay protection, rate limiting, and TUN write path
+as stream packets.
 Packet-plane sessions are intentionally bounded: the daemon expires established
 sessions after the configured lifetime, defaulting to 600 seconds, marks the
 associated direct datagram path unhealthy, records

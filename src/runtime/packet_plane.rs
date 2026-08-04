@@ -30,6 +30,7 @@ const DATAGRAM_HEADER_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
 const MAX_UDP_DATAGRAM_LEN: usize = 65_535;
 const PACKET_PLANE_REPLAY_WINDOW_BITS: u64 = 64;
+const MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION: usize = 1024;
 pub const PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN: usize = 32;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -292,12 +293,25 @@ impl PacketPlaneSession {
     }
 
     fn accept_datagram(&mut self, frame: &Frame) -> Result<(), PacketPlaneDatagramError> {
+        self.accept_datagram_at(frame, Instant::now())
+    }
+
+    fn accept_datagram_at(
+        &mut self,
+        frame: &Frame,
+        now: Instant,
+    ) -> Result<(), PacketPlaneDatagramError> {
+        if self.replay_windows.len() >= MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
+            && !self.replay_windows.contains_key(&frame.header.session_id)
+        {
+            self.prune_oldest_replay_window();
+        }
         let window = self
             .replay_windows
             .entry(frame.header.session_id)
-            .or_default();
+            .or_insert_with(|| PacketPlaneReplayWindow::new(now));
         window
-            .accept(frame.header.sequence)
+            .accept(frame.header.sequence, now)
             .map_err(|error| match error {
                 PacketPlaneReplayAcceptError::Duplicate => {
                     PacketPlaneDatagramError::ReplayedDatagram {
@@ -313,12 +327,25 @@ impl PacketPlaneSession {
                 }
             })
     }
+
+    fn prune_oldest_replay_window(&mut self) {
+        let Some(oldest) = self
+            .replay_windows
+            .iter()
+            .min_by_key(|(_, window)| window.updated_at)
+            .map(|(session_id, _)| *session_id)
+        else {
+            return;
+        };
+        self.replay_windows.remove(&oldest);
+    }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PacketPlaneReplayWindow {
     highest: Option<Sequence>,
     seen: u64,
+    updated_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,10 +355,23 @@ enum PacketPlaneReplayAcceptError {
 }
 
 impl PacketPlaneReplayWindow {
-    fn accept(&mut self, sequence: Sequence) -> Result<(), PacketPlaneReplayAcceptError> {
+    fn new(now: Instant) -> Self {
+        Self {
+            highest: None,
+            seen: 0,
+            updated_at: now,
+        }
+    }
+
+    fn accept(
+        &mut self,
+        sequence: Sequence,
+        now: Instant,
+    ) -> Result<(), PacketPlaneReplayAcceptError> {
         let Some(highest) = self.highest else {
             self.highest = Some(sequence);
             self.seen = 1;
+            self.updated_at = now;
             return Ok(());
         };
 
@@ -343,6 +383,7 @@ impl PacketPlaneReplayWindow {
                 (self.seen << shift) | 1
             };
             self.highest = Some(sequence);
+            self.updated_at = now;
             return Ok(());
         }
 
@@ -356,6 +397,7 @@ impl PacketPlaneReplayWindow {
         }
 
         self.seen |= bit;
+        self.updated_at = now;
         Ok(())
     }
 }
@@ -2065,6 +2107,74 @@ mod tests {
                 sequence: 42
             })
         ));
+    }
+
+    #[test]
+    fn packet_plane_session_replay_windows_are_bounded_per_peer_session() {
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::default();
+        runtime
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("session");
+        let session = runtime
+            .sessions
+            .get_mut(&accept.peer)
+            .expect("registered session");
+        let start = Instant::now();
+
+        for index in 0..MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION {
+            let session_id = u32::try_from(index + 1).expect("session index fits u32");
+            let frame = Frame::packet(session_id, 0, vec![0x45; 20]).expect("frame");
+            session
+                .accept_datagram_at(
+                    &frame,
+                    start + Duration::from_millis(u64::try_from(index).expect("index fits u64")),
+                )
+                .expect("accepted datagram");
+        }
+
+        assert_eq!(
+            session.replay_windows.len(),
+            MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
+        );
+
+        let refreshed = Frame::packet(1, 1, vec![0x45; 20]).expect("refreshed frame");
+        session
+            .accept_datagram_at(
+                &refreshed,
+                start
+                    + Duration::from_millis(
+                        u64::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 1)
+                            .expect("window count fits u64"),
+                    ),
+            )
+            .expect("refreshed oldest entry");
+        let new_session_id =
+            u32::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 1).expect("fits u32");
+        let new_frame = Frame::packet(new_session_id, 0, vec![0x45; 20]).expect("new frame");
+        session
+            .accept_datagram_at(
+                &new_frame,
+                start
+                    + Duration::from_millis(
+                        u64::try_from(MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION + 2)
+                            .expect("window count fits u64"),
+                    ),
+            )
+            .expect("accepted new window at capacity");
+
+        assert_eq!(
+            session.replay_windows.len(),
+            MAX_PACKET_PLANE_REPLAY_WINDOWS_PER_SESSION
+        );
+        assert!(session.replay_windows.contains_key(&1));
+        assert!(!session.replay_windows.contains_key(&2));
+        assert!(session.replay_windows.contains_key(&new_session_id));
     }
 
     #[tokio::test]
