@@ -819,6 +819,11 @@ cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --require-dcutr-success \
   --timeout-seconds 45
+
+cargo run -- relay-check \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --write-config p2p-vpn-public-relay.json \
+  --timeout-seconds 45
 ```
 
 `relay-scan` is rootless. It dials configured or supplied bootstrap peers,
@@ -847,9 +852,13 @@ same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
 `bootstrap-check`. Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
-`--relay-reservation .../p2p-circuit` address for `init-config`. Each supplied
-relay multiaddr must be the relay's direct address with its `/p2p/RELAY` peer
-ID and without `/p2p-circuit`.
+`--relay-reservation .../p2p-circuit` address for `init-config`. Pass
+`--write-config PATH` to write a default runtime-valid config from the first
+validated relay candidate; the relay is added as bootstrap/AutoNAT/relay
+infrastructure only and is not added as a VPN peer or route owner. Use `--force`
+to overwrite an existing output file. Each supplied relay multiaddr must be the
+relay's direct address with its `/p2p/RELAY` peer ID and without
+`/p2p-circuit`.
 
 The ignored tests run the same kind of probe from the test harness:
 

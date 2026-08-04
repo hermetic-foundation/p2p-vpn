@@ -97,6 +97,11 @@ nix develop -c cargo run -- relay-check \
   --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
   --require-dcutr-success \
   --timeout-seconds 45
+
+nix develop -c cargo run -- relay-check \
+  --relay-candidate /dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A \
+  --write-config p2p-vpn-public-relay.json \
+  --timeout-seconds 45
 ```
 
 The command tries candidates until one works, reports per-candidate failures,
@@ -108,7 +113,9 @@ successful candidates print, so failed relayed-circuit and DCUtR probes show
 which prerequisite was missing. Successful candidates also print a
 `public relay candidate config:` line with the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
-address to feed into `init-config`.
+address to feed into `init-config`. Use `--write-config PATH` to write that
+default relay-assisted config automatically after the first candidate validates;
+the relay is treated as reachability infrastructure, not as a VPN peer.
 
 The ignored test harness can run the same live checks:
 

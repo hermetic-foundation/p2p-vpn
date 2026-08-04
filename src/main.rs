@@ -253,6 +253,10 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
         timeout_seconds: u64,
+        #[arg(long = "write-config")]
+        write_config: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
     },
     RelayScan {
         #[arg(short, long)]
@@ -548,13 +552,22 @@ async fn main() -> Result<(), String> {
             relay_candidates,
             require_dcutr_success,
             timeout_seconds,
+            write_config,
+            force,
         } => {
             let mode = if require_dcutr_success {
                 PublicRelayProbeMode::DcutrSuccess
             } else {
                 PublicRelayProbeMode::RelayedPeerCircuit
             };
-            Box::pin(relay_check(&relay_candidates, timeout_seconds, mode)).await
+            Box::pin(relay_check(RelayCheckArgs {
+                relay_candidates,
+                timeout_seconds,
+                mode,
+                write_config,
+                force,
+            }))
+            .await
         }
         Command::RelayScan {
             config,
@@ -763,6 +776,15 @@ struct RelayScanArgs {
     check_candidates: bool,
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RelayCheckArgs {
+    relay_candidates: Vec<String>,
+    timeout_seconds: u64,
+    mode: PublicRelayProbeMode,
+    write_config: Option<PathBuf>,
+    force: bool,
 }
 
 impl FromStr for EndpointArg {
@@ -2088,18 +2110,14 @@ async fn bootstrap_check(
     }
 }
 
-async fn relay_check(
-    relay_candidates: &[String],
-    timeout_seconds: u64,
-    mode: PublicRelayProbeMode,
-) -> Result<(), String> {
-    let raw = relay_candidates.join("\n");
+async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
+    let raw = args.relay_candidates.join("\n");
     let addresses = parse_public_relay_addresses(&raw)
         .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
     let report = check_public_relay_candidates(
         &addresses,
-        mode,
-        Duration::from_secs(timeout_seconds.max(1)),
+        args.mode,
+        Duration::from_secs(args.timeout_seconds.max(1)),
     )
     .await;
     let succeeded = report.succeeded();
@@ -2109,9 +2127,64 @@ async fn relay_check(
     }
 
     if succeeded {
+        if let Some(output) = args.write_config {
+            let relay = report
+                .candidates
+                .iter()
+                .find(|candidate| candidate.succeeded)
+                .ok_or_else(|| {
+                    "public relay check succeeded without a winning candidate".to_owned()
+                })
+                .and_then(|candidate| relay_candidate_endpoint_arg(&candidate.address))?;
+            init_config(public_relay_config_args(output, relay, args.force))?;
+        }
         Ok(())
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
+    }
+}
+
+fn relay_candidate_endpoint_arg(address: &str) -> Result<EndpointArg, String> {
+    let address = address
+        .parse::<libp2p::Multiaddr>()
+        .map_err(|error| format!("validated relay candidate is not a multiaddr: {error}"))?;
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return Err("validated relay candidate must be a direct relay address".to_owned());
+    }
+    let relay = relay_peer_target(&address)
+        .ok_or_else(|| "validated relay candidate is missing /p2p/RELAY".to_owned())?;
+    Ok(EndpointArg {
+        id: relay.to_string(),
+        address: Some(address.to_string()),
+    })
+}
+
+fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) -> InitConfigArgs {
+    InitConfigArgs {
+        output,
+        network: "lab".to_owned(),
+        private_key: None,
+        membership_key: None,
+        previous_membership_tags: Vec::new(),
+        interface: "hs0".to_owned(),
+        mtu: 1280,
+        listen_addresses: Vec::new(),
+        external_addresses: Vec::new(),
+        packet_plane: PacketPlaneConfig::default(),
+        bootstrap_peers: Vec::new(),
+        relay_peers: vec![relay],
+        ipfs_bootstrap_peers: false,
+        peers: Vec::new(),
+        local_routes: Vec::new(),
+        peer_routes: Vec::new(),
+        discovery: DiscoveryConfig::default(),
+        relay: RelayConfig::default(),
+        queue: QueueConfig::default(),
+        resources: ResourceConfig::default(),
+        force,
     }
 }
 
@@ -3878,6 +3951,9 @@ mod tests {
             "--require-dcutr-success",
             "--timeout-seconds",
             "60",
+            "--write-config",
+            "relay-config.json",
+            "--force",
         ])
         .expect("cli");
 
@@ -3885,6 +3961,8 @@ mod tests {
             relay_candidates,
             require_dcutr_success,
             timeout_seconds,
+            write_config,
+            force,
         } = cli.command
         else {
             panic!("expected relay-check command");
@@ -3894,6 +3972,8 @@ mod tests {
         assert!(relay_candidates[0].contains("relay.example.net"));
         assert!(require_dcutr_success);
         assert_eq!(timeout_seconds, 60);
+        assert_eq!(write_config, Some(PathBuf::from("relay-config.json")));
+        assert!(force);
     }
 
     #[test]
@@ -4328,6 +4408,59 @@ mod tests {
                 relay.peer_id
             )]
         );
+    }
+
+    #[test]
+    fn relay_candidate_endpoint_arg_parses_validated_direct_address() {
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+
+        let arg = relay_candidate_endpoint_arg(&address).expect("relay endpoint arg");
+
+        assert_eq!(
+            arg,
+            EndpointArg {
+                id: relay.peer_id,
+                address: Some(address),
+            }
+        );
+        assert!(
+            relay_candidate_endpoint_arg("/ip4/127.0.0.1/tcp/4002")
+                .expect_err("missing relay peer should fail")
+                .contains("missing /p2p/RELAY")
+        );
+        assert!(
+            relay_candidate_endpoint_arg(&format!(
+                "/ip4/127.0.0.1/tcp/4002/p2p/{}/p2p-circuit",
+                arg.id
+            ))
+            .expect_err("relayed address should fail")
+            .contains("direct relay address")
+        );
+    }
+
+    #[test]
+    fn public_relay_config_args_generates_runtime_valid_relay_config() {
+        let output = temp_config_path("p2p-vpn-public-relay-config");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+        let relay = relay_candidate_endpoint_arg(&relay_address).expect("relay endpoint arg");
+
+        init_config(public_relay_config_args(output.clone(), relay, true)).expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(config.network.relay.reservations.len(), 1);
+        assert_eq!(
+            config.network.relay.reservations[0],
+            format!("{relay_address}/p2p-circuit")
+        );
+        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(config.peers.len(), 0);
+        assert!(config.network.discovery.dcutr);
+        assert!(config.network.discovery.autonat);
     }
 
     #[test]
