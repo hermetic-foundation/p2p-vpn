@@ -408,6 +408,13 @@ impl PublicRelayProbeReport {
                 self.candidates.len(),
                 succeeded
             ),
+            format!(
+                "public relay candidate failure stages: candidate_setup {} relay_reservation {} relayed_peer_circuit {} dcutr_success {}",
+                self.failure_stage_count(PublicRelayCandidateFailureStage::CandidateSetup),
+                self.failure_stage_count(PublicRelayCandidateFailureStage::RelayReservation),
+                self.failure_stage_count(PublicRelayCandidateFailureStage::RelayedPeerCircuit),
+                self.failure_stage_count(PublicRelayCandidateFailureStage::DcutrSuccess),
+            ),
         ];
 
         for candidate in &self.candidates {
@@ -434,6 +441,13 @@ impl PublicRelayProbeReport {
         }
 
         lines
+    }
+
+    fn failure_stage_count(&self, stage: PublicRelayCandidateFailureStage) -> usize {
+        self.candidates
+            .iter()
+            .filter(|candidate| !candidate.succeeded && candidate.failure_stage == stage)
+            .count()
     }
 }
 
@@ -2121,6 +2135,9 @@ mod tests {
 
         assert!(!report.succeeded());
         assert!(lines.contains(&"public relay probe: failed".to_owned()));
+        assert!(lines.contains(
+            &"public relay candidate failure stages: candidate_setup 0 relay_reservation 0 relayed_peer_circuit 0 dcutr_success 1".to_owned()
+        ));
         assert!(lines.iter().any(|line| {
             line.contains("failure_stage dcutr_success")
                 && line.contains("dcutr success check did not meet success threshold")
@@ -2158,6 +2175,9 @@ mod tests {
         let lines = report.lines();
 
         assert!(report.succeeded());
+        assert!(lines.contains(
+            &"public relay candidate failure stages: candidate_setup 0 relay_reservation 0 relayed_peer_circuit 0 dcutr_success 0".to_owned()
+        ));
         assert!(lines.contains(&format!(
             "public relay candidate config: relay_peer {relay}={address} relay_reservation {address}/p2p-circuit"
         )));

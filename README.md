@@ -880,6 +880,9 @@ candidate set; the command stops after the first usable relay and prints
 candidate-level failures when none work. Each candidate line includes a stable
 `failure_stage` value: `candidate_setup`, `relay_reservation`,
 `relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
+The report also prints a `public relay candidate failure stages:` summary with
+per-stage counts across the attempted candidate set, which is useful for
+comparing bounded public scans.
 Failed candidates report whether the probe connected directly to the relay,
 whether relay reservation acceptance or relayed listen-address publication
 timed out, and the last direct relay dial error when one was observed. When the

@@ -143,12 +143,14 @@ directly to the relay, whether relay reservation acceptance or relayed
 listen-address publication timed out, and the last direct relay dial error when
 one was observed. Candidate lines also include a stable `failure_stage` value:
 `candidate_setup`, `relay_reservation`, `relayed_peer_circuit`,
-`dcutr_success`, or `none` for a usable candidate. Failures after reservation
-setup include the same detailed bootstrap-check lines that successful
-candidates print, so failed relayed-circuit and DCUtR probes show which
-prerequisite was missing. DCUtR failures also include the last libp2p
-hole-punch error as `dcutr last_error`, which distinguishes cases such as no
-direct connection, rejected relay prerequisites, or direct handshake timeouts.
+`dcutr_success`, or `none` for a usable candidate. Probe output also includes a
+`public relay candidate failure stages:` summary with per-stage counts across
+the attempted set. Failures after reservation setup include the same detailed
+bootstrap-check lines that successful candidates print, so failed
+relayed-circuit and DCUtR probes show which prerequisite was missing. DCUtR
+failures also include the last libp2p hole-punch error as `dcutr last_error`,
+which distinguishes cases such as no direct connection, rejected relay
+prerequisites, or direct handshake timeouts.
 Successful candidates also print a `public relay candidate config:` line with
 the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
@@ -205,7 +207,7 @@ public relay scan identified: 1
 public relay scan relay_capable: 1
 public relay candidates: 1
 public relay scan validation: public relay probe: failed
-public relay scan validation: public relay candidate: /ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ succeeded false error relay reservation timed out accepted false relayed_listen_address false
+public relay scan validation: public relay candidate: /ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ succeeded false failure_stage relay_reservation error relay reservation timed out connected false accepted false relayed_listen_address false last_error none
 ```
 
 This confirms the validation path distinguishes a relay-hop advertisement from
@@ -245,7 +247,7 @@ public relay candidates: 24
 public relay scan validation: public relay probe: ok
 public relay scan validation: public relay probe mode: relayed_peer_circuit
 public relay scan validation: public relay candidates: 6 succeeded 1
-public relay scan validation: public relay candidate: /ip4/158.69.208.229/udp/4001/quic-v1/p2p/12D3KooWHtzDJvs5ziiQ2o2JEWdxSV95mFxuvS2hk1wVDAWScXeE succeeded true error none
+public relay scan validation: public relay candidate: /ip4/158.69.208.229/udp/4001/quic-v1/p2p/12D3KooWHtzDJvs5ziiQ2o2JEWdxSV95mFxuvS2hk1wVDAWScXeE succeeded true failure_stage none error none
 public relay scan validation: public relay candidate detail: relayed peer circuits: 1 connected 1
 ```
 
