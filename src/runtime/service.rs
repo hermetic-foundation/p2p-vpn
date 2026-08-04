@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     runtime::control::membership_tag_matches,
     runtime::packet::PACKET_PROTOCOL,
-    wire::{HEADER_LEN, WIRE_VERSION},
+    runtime::packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
+    wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
 
 pub const SERVICE_PROTOCOL: &str = "/p2p-vpn/service/1";
@@ -45,6 +46,12 @@ pub struct ServiceStatusResponse {
     pub wire_version: u8,
     pub packet_protocol: String,
     pub packet_header_len: usize,
+    #[serde(default)]
+    pub max_packet_payload_len: Option<usize>,
+    #[serde(default)]
+    pub packet_plane_datagram_overhead_len: Option<usize>,
+    #[serde(default)]
+    pub packet_plane_max_payload_len: Option<usize>,
     pub effective_mtu: u16,
     pub supports_quic_datagrams: bool,
     #[serde(default)]
@@ -68,6 +75,9 @@ impl ServiceStatusResponse {
             wire_version: WIRE_VERSION,
             packet_protocol: PACKET_PROTOCOL.to_owned(),
             packet_header_len: HEADER_LEN,
+            max_packet_payload_len: Some(MAX_PAYLOAD_LEN),
+            packet_plane_datagram_overhead_len: Some(PACKET_PLANE_DATAGRAM_OVERHEAD_LEN),
+            packet_plane_max_payload_len: Some(PACKET_PLANE_MAX_PAYLOAD_LEN),
             effective_mtu,
             supports_quic_datagrams: false,
             packet_plane_session_ttl_seconds: None,
@@ -358,6 +368,9 @@ mod tests {
 
         assert_eq!(decoded.packet_plane_session_ttl_seconds, None);
         assert_eq!(decoded.packet_plane_replay_windows_per_session, None);
+        assert_eq!(decoded.max_packet_payload_len, None);
+        assert_eq!(decoded.packet_plane_datagram_overhead_len, None);
+        assert_eq!(decoded.packet_plane_max_payload_len, None);
     }
 
     #[tokio::test]

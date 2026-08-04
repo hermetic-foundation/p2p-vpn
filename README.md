@@ -262,13 +262,14 @@ reservations and carry fallback traffic.
 
 The configured interface MTU is treated as the requested packet MTU. The
 effective packet MTU is capped by the fixed wire header's `u16` payload length
-field and is used consistently by the TUN setup and packet forwarder. Runtime
-validation rejects a zero interface MTU. The `status` and `up` commands print
-both configured and effective MTU values. The daemon does not fragment overlay
-packets; it rejects oversized packets, emits packet-too-big feedback where
-possible, lowers the selected path's MTU estimate when an oversized outbound
-packet proves a smaller negotiated ceiling, and relies on route MSS hints or the
-local stack to retry smaller traffic.
+field and the packet-plane UDP envelope's safe payload ceiling, then used
+consistently by the TUN setup and packet forwarder. Runtime validation rejects a
+zero interface MTU. The `status` and `up` commands print both configured and
+effective MTU values. The daemon does not fragment overlay packets; it rejects
+oversized packets, emits packet-too-big feedback where possible, lowers the
+selected path's MTU estimate when an oversized outbound packet proves a smaller
+negotiated ceiling, and relies on route MSS hints or the local stack to retry
+smaller traffic.
 
 ## Development
 
@@ -627,10 +628,12 @@ cargo run -- mtu --config p2p-vpn.json --live --timeout-seconds 10
 ```
 
 `mtu` reports the configured interface MTU, the effective packet MTU after wire
-payload capping, the packet header length, every compiled route's Linux
-`advmss` hint, and configured direct/relay path MTU estimates. Live mode queries
-configured peers and reports each peer's advertised effective MTU, the local
-negotiated ceiling, preferred path, and estimated path MTU.
+and packet-plane payload capping, the packet header length, the wire max packet
+payload length, packet-plane datagram overhead, packet-plane max payload length,
+every compiled route's Linux `advmss` hint, and configured direct/relay path MTU
+estimates. Live mode queries configured peers and reports each peer's advertised
+effective MTU, the local negotiated ceiling, preferred path, estimated path MTU,
+and remote packet-plane payload limits when the peer reports them.
 
 List configured peers and their route/address inventory:
 

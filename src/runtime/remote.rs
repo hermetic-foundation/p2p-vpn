@@ -536,6 +536,18 @@ mod tests {
         assert_eq!(status.capabilities.network_name, "lab");
         assert_eq!(status.service.network_name, "lab");
         assert_eq!(status.service.effective_mtu, 1280);
+        assert_eq!(
+            status.service.max_packet_payload_len,
+            Some(crate::wire::MAX_PAYLOAD_LEN)
+        );
+        assert_eq!(
+            status.service.packet_plane_datagram_overhead_len,
+            Some(crate::runtime::packet_plane::PACKET_PLANE_DATAGRAM_OVERHEAD_LEN)
+        );
+        assert_eq!(
+            status.service.packet_plane_max_payload_len,
+            Some(crate::runtime::packet_plane::PACKET_PLANE_MAX_PAYLOAD_LEN)
+        );
         assert_eq!(status.service.packet_plane_session_ttl_seconds, Some(123));
         assert_eq!(
             status.service.packet_plane_replay_windows_per_session,

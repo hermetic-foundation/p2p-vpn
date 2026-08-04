@@ -15,6 +15,7 @@ use crate::{
     identity::NodeIdentity,
     path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
+    runtime::packet_plane::PACKET_PLANE_MAX_PAYLOAD_LEN,
     wire::MAX_PAYLOAD_LEN,
 };
 
@@ -970,7 +971,10 @@ pub fn membership_tag(network_name: &str, membership_key: &[u8]) -> String {
 
 #[must_use]
 pub fn effective_packet_mtu(configured_mtu: u16) -> u16 {
-    configured_mtu.min(u16::try_from(MAX_PAYLOAD_LEN).expect("wire payload length fits u16"))
+    configured_mtu.min(
+        u16::try_from(MAX_PAYLOAD_LEN.min(PACKET_PLANE_MAX_PAYLOAD_LEN))
+            .expect("packet payload length fits u16"),
+    )
 }
 
 fn parse_cidr(input: &str) -> Result<IpCidr, RoutePrefixError> {
@@ -1417,7 +1421,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_packet_mtu_is_capped_by_wire_payload_length() {
+    fn effective_packet_mtu_is_capped_by_packet_plane_payload_length() {
         let mut config = Config {
             network: NetworkConfig {
                 name: "dev".to_owned(),
@@ -1448,7 +1452,7 @@ mod tests {
         config.interface.mtu = u16::MAX;
         assert_eq!(
             config.effective_packet_mtu(),
-            u16::try_from(MAX_PAYLOAD_LEN).expect("wire payload length fits u16")
+            u16::try_from(PACKET_PLANE_MAX_PAYLOAD_LEN).expect("packet payload length fits u16")
         );
     }
 

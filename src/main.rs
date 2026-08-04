@@ -23,12 +23,13 @@ use p2p_vpn::{
     queue::QueueStats,
     runtime::{
         forward::session_id_for_peer,
+        packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
         remote::{RemotePeerStatus, query_peer_status},
         runner::{self, ShutdownReason},
         service::SERVICE_PROTOCOL,
         tun::{TunAddresses, TunDevice, TunRuntimeConfig, route_advmss},
     },
-    wire::{HEADER_LEN, WIRE_VERSION},
+    wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
 
 const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
@@ -1121,7 +1122,10 @@ fn mtu_lines_configured(config: &Config) -> Result<Vec<String>, String> {
         format!("interface: {}", config.interface.name),
         format!("configured mtu: {}", config.interface.mtu),
         format!("effective packet mtu: {effective_mtu}"),
+        format!("wire max packet payload length: {MAX_PAYLOAD_LEN}"),
         format!("packet header length: {HEADER_LEN}"),
+        format!("packet plane datagram overhead length: {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"),
+        format!("packet plane max payload length: {PACKET_PLANE_MAX_PAYLOAD_LEN}"),
     ];
 
     for route in routes.routes() {
@@ -1200,12 +1204,15 @@ fn push_peer_live_mtu_lines(lines: &mut Vec<String>, status: &RemotePeerStatus, 
     let path_mtu = configured_path_mtu_estimate(preferred_path, peer_mtu);
 
     lines.push(format!(
-        "peer live mtu: {} effective_mtu {} negotiated_mtu {} preferred_path {} path_mtu_estimate {}",
+        "peer live mtu: {} effective_mtu {} negotiated_mtu {} preferred_path {} path_mtu_estimate {} wire_max_payload {} packet_plane_max_payload {} packet_plane_overhead {}",
         status.peer,
         status.service.effective_mtu,
         peer_mtu,
         path_name(preferred_path),
-        path_mtu
+        path_mtu,
+        optional_usize(status.service.max_packet_payload_len),
+        optional_usize(status.service.packet_plane_max_payload_len),
+        optional_usize(status.service.packet_plane_datagram_overhead_len)
     ));
 }
 
@@ -1911,6 +1918,18 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
         format!("wire version: {}", status.service.wire_version),
         format!("packet protocol: {}", status.service.packet_protocol),
         format!("packet header length: {}", status.service.packet_header_len),
+        format!(
+            "wire max packet payload length: {}",
+            optional_usize(status.service.max_packet_payload_len)
+        ),
+        format!(
+            "packet plane datagram overhead length: {}",
+            optional_usize(status.service.packet_plane_datagram_overhead_len)
+        ),
+        format!(
+            "packet plane max payload length: {}",
+            optional_usize(status.service.packet_plane_max_payload_len)
+        ),
         format!("effective mtu: {}", status.service.effective_mtu),
         format!(
             "supports quic datagrams: {}",
@@ -2406,6 +2425,17 @@ mod tests {
                 .iter()
                 .any(|line| line == "effective packet mtu: 1280")
         );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("wire max packet payload length: {MAX_PAYLOAD_LEN}"))
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "packet plane datagram overhead length: {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!("packet plane max payload length: {PACKET_PLANE_MAX_PAYLOAD_LEN}")));
         assert!(lines.iter().any(|line| line
             == &format!(
                 "route mtu: 10.42.0.0/24 owner peer {} name remote metric 100 configured mtu 1280 advmss 1240",
@@ -2442,7 +2472,7 @@ mod tests {
 
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer live mtu: {peer} effective_mtu 1400 negotiated_mtu 1280 preferred_path circuit relay path_mtu_estimate 1200"
+                "peer live mtu: {peer} effective_mtu 1400 negotiated_mtu 1280 preferred_path circuit relay path_mtu_estimate 1200 wire_max_payload {MAX_PAYLOAD_LEN} packet_plane_max_payload {PACKET_PLANE_MAX_PAYLOAD_LEN} packet_plane_overhead {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"
             )));
     }
 
@@ -2469,6 +2499,17 @@ mod tests {
         assert!(lines.iter().any(|line| line == &format!("peer: {peer}")));
         assert!(lines.iter().any(|line| line == "network: lab"));
         assert!(lines.iter().any(|line| line == "effective mtu: 1200"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("wire max packet payload length: {MAX_PAYLOAD_LEN}"))
+        );
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "packet plane datagram overhead length: {PACKET_PLANE_DATAGRAM_OVERHEAD_LEN}"
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!("packet plane max payload length: {PACKET_PLANE_MAX_PAYLOAD_LEN}")));
         assert!(
             lines
                 .iter()

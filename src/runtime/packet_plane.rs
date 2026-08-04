@@ -26,9 +26,13 @@ const DATAGRAM_MAGIC: &[u8; 8] = b"p2pvpnD1";
 const HANDSHAKE_MAGIC: &[u8; 8] = b"p2pvpnH1";
 const HANDSHAKE_SIGNING_DOMAIN: &[u8] = b"p2p-vpn packet-plane handshake v1";
 const SESSION_KDF_DOMAIN: &[u8] = b"p2p-vpn packet-plane session keys v1";
-const DATAGRAM_HEADER_LEN: usize = 24;
-const AEAD_TAG_LEN: usize = 16;
-const MAX_UDP_DATAGRAM_LEN: usize = 65_535;
+pub const PACKET_PLANE_DATAGRAM_HEADER_LEN: usize = 24;
+pub const PACKET_PLANE_AEAD_TAG_LEN: usize = 16;
+pub const PACKET_PLANE_MAX_UDP_DATAGRAM_LEN: usize = 65_535;
+pub const PACKET_PLANE_DATAGRAM_OVERHEAD_LEN: usize =
+    PACKET_PLANE_DATAGRAM_HEADER_LEN + PACKET_PLANE_AEAD_TAG_LEN + HEADER_LEN;
+pub const PACKET_PLANE_MAX_PAYLOAD_LEN: usize =
+    PACKET_PLANE_MAX_UDP_DATAGRAM_LEN - PACKET_PLANE_DATAGRAM_OVERHEAD_LEN;
 const PACKET_PLANE_REPLAY_WINDOW_BITS: u64 = 64;
 pub const PACKET_PLANE_EPHEMERAL_PUBLIC_KEY_LEN: usize = 32;
 
@@ -440,14 +444,28 @@ impl PacketPlaneCipher {
                 payload_len,
             });
         }
+        if payload_len > PACKET_PLANE_MAX_PAYLOAD_LEN {
+            return Err(PacketPlaneDatagramError::PayloadTooLarge {
+                actual: payload_len,
+                max: PACKET_PLANE_MAX_PAYLOAD_LEN,
+            });
+        }
 
         let plaintext = frame.encode();
-        let ciphertext_len = u16::try_from(plaintext.len() + AEAD_TAG_LEN).map_err(|_| {
-            PacketPlaneDatagramError::CiphertextTooLarge {
-                actual: plaintext.len() + AEAD_TAG_LEN,
-                max: usize::from(u16::MAX),
-            }
-        })?;
+        let ciphertext_len =
+            u16::try_from(plaintext.len() + PACKET_PLANE_AEAD_TAG_LEN).map_err(|_| {
+                PacketPlaneDatagramError::CiphertextTooLarge {
+                    actual: plaintext.len() + PACKET_PLANE_AEAD_TAG_LEN,
+                    max: usize::from(u16::MAX),
+                }
+            })?;
+        let datagram_len = PACKET_PLANE_DATAGRAM_HEADER_LEN + usize::from(ciphertext_len);
+        if datagram_len > PACKET_PLANE_MAX_UDP_DATAGRAM_LEN {
+            return Err(PacketPlaneDatagramError::PayloadTooLarge {
+                actual: payload_len,
+                max: PACKET_PLANE_MAX_PAYLOAD_LEN,
+            });
+        }
         let mut out = encode_datagram_header(
             frame.header.session_id,
             frame.header.sequence,
@@ -481,7 +499,7 @@ impl PacketPlaneCipher {
                 Nonce::from_slice(&nonce),
                 Payload {
                     msg: ciphertext,
-                    aad: &datagram[..DATAGRAM_HEADER_LEN],
+                    aad: &datagram[..PACKET_PLANE_DATAGRAM_HEADER_LEN],
                 },
             )
             .map_err(|_| PacketPlaneDatagramError::Decrypt)?;
@@ -769,7 +787,7 @@ fn encode_datagram_header(
     sequence: Sequence,
     ciphertext_len: u16,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(DATAGRAM_HEADER_LEN);
+    let mut out = Vec::with_capacity(PACKET_PLANE_DATAGRAM_HEADER_LEN);
     out.extend_from_slice(DATAGRAM_MAGIC);
     out.push(WIRE_VERSION);
     out.push(0);
@@ -782,10 +800,10 @@ fn encode_datagram_header(
 fn decode_datagram_header(
     datagram: &[u8],
 ) -> Result<(PacketPlaneDatagramHeader, &[u8]), PacketPlaneDatagramError> {
-    if datagram.len() < DATAGRAM_HEADER_LEN {
+    if datagram.len() < PACKET_PLANE_DATAGRAM_HEADER_LEN {
         return Err(PacketPlaneDatagramError::Truncated {
             actual: datagram.len(),
-            expected: DATAGRAM_HEADER_LEN,
+            expected: PACKET_PLANE_DATAGRAM_HEADER_LEN,
         });
     }
     if &datagram[..DATAGRAM_MAGIC.len()] != DATAGRAM_MAGIC {
@@ -801,7 +819,7 @@ fn decode_datagram_header(
         Sequence::from_be_bytes(datagram[14..22].try_into().expect("fixed slice length"));
     let ciphertext_len =
         u16::from_be_bytes(datagram[22..24].try_into().expect("fixed slice length"));
-    let actual_ciphertext_len = datagram.len() - DATAGRAM_HEADER_LEN;
+    let actual_ciphertext_len = datagram.len() - PACKET_PLANE_DATAGRAM_HEADER_LEN;
     if actual_ciphertext_len < usize::from(ciphertext_len) {
         return Err(PacketPlaneDatagramError::Truncated {
             actual: actual_ciphertext_len,
@@ -819,7 +837,7 @@ fn decode_datagram_header(
             sequence,
             ciphertext_len,
         },
-        &datagram[DATAGRAM_HEADER_LEN..],
+        &datagram[PACKET_PLANE_DATAGRAM_HEADER_LEN..],
     ))
 }
 
@@ -1194,7 +1212,7 @@ impl PacketPlaneRuntime {
             .ok_or(PacketPlaneIoError::NoListener {
                 index: listener_index,
             })?;
-        let mut datagram = vec![0; MAX_UDP_DATAGRAM_LEN];
+        let mut datagram = vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN];
         let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
         datagram.truncate(len);
         let frame = cipher.open_frame(&datagram, max_payload_len)?;
@@ -1228,7 +1246,7 @@ impl PacketPlaneRuntime {
             .ok_or(PacketPlaneIoError::NoListener {
                 index: listener_index,
             })?;
-        let mut datagram = vec![0; MAX_UDP_DATAGRAM_LEN];
+        let mut datagram = vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN];
         let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
         if remote_addr != session.endpoint {
             return Err(PacketPlaneIoError::UnexpectedEndpoint {
@@ -1270,7 +1288,7 @@ impl PacketPlaneRuntime {
             .ok_or(PacketPlaneIoError::NoListener {
                 index: listener_index,
             })?;
-        let mut datagram = vec![0; MAX_UDP_DATAGRAM_LEN];
+        let mut datagram = vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN];
         let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
         let Some(session) = self
             .sessions
@@ -1671,7 +1689,10 @@ mod tests {
             .expect("opened frame");
 
         assert_eq!(opened, frame);
-        assert_ne!(&datagram[DATAGRAM_HEADER_LEN..], frame.encode().as_slice());
+        assert_ne!(
+            &datagram[PACKET_PLANE_DATAGRAM_HEADER_LEN..],
+            frame.encode().as_slice()
+        );
     }
 
     #[test]
@@ -1764,6 +1785,28 @@ mod tests {
         assert_eq!(
             responder_keys.open.open_frame(&datagram, 4),
             Err(PacketPlaneDatagramError::PayloadTooLarge { actual: 20, max: 4 })
+        );
+    }
+
+    #[test]
+    fn packet_plane_datagram_rejects_payload_above_udp_safe_ceiling() {
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let initiator_keys = PacketPlaneSessionKeys::derive(
+            PacketPlaneSessionRole::Initiator,
+            &initiator_secret,
+            &hello,
+            &accept,
+        )
+        .expect("initiator keys");
+        let frame =
+            Frame::packet(77, 42, vec![0x45; PACKET_PLANE_MAX_PAYLOAD_LEN + 1]).expect("frame");
+
+        assert_eq!(
+            initiator_keys.seal.seal_frame(&frame),
+            Err(PacketPlaneDatagramError::PayloadTooLarge {
+                actual: PACKET_PLANE_MAX_PAYLOAD_LEN + 1,
+                max: PACKET_PLANE_MAX_PAYLOAD_LEN
+            })
         );
     }
 
