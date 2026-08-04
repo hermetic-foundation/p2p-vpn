@@ -484,6 +484,7 @@ where
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
                     packet_plane: &packet_plane,
+                    packet_plane_quic: packet_plane_quic.as_ref(),
                     metrics: &metrics,
                 })
                 .await;
@@ -521,6 +522,7 @@ where
                     queue_runtime: &mut queue_runtime,
                     writer: &mut writer,
                     packet_plane: &packet_plane,
+                    packet_plane_quic: packet_plane_quic.as_ref(),
                     metrics: &metrics,
                 })
                 .await;
@@ -590,6 +592,7 @@ where
                     &paths,
                     &peer_capabilities,
                     Some(&packet_plane),
+                    packet_plane_quic.as_ref(),
                     &metrics,
                 )
                 .await;
@@ -688,6 +691,7 @@ async fn send_path_probes(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     metrics: &RuntimeMetrics,
 ) {
     let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
@@ -700,28 +704,49 @@ async fn send_path_probes(
         let support = packet_transport_support_with_local_datagrams(
             peer_capabilities,
             peer,
-            packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer)),
+            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer)
+                .is_some(),
         );
         if !paths.has_supported_path(peer, support) {
             continue;
         }
 
-        let peer_mtu = selected_path_mtu(paths, peer_capabilities, packet_plane, peer, local_mtu);
-        match packet_transport_decision(paths, peer_capabilities, packet_plane, peer) {
-            PacketTransportDecision::PacketPlaneDatagram { .. } => {
-                let Some(packet_plane) = packet_plane else {
-                    continue;
-                };
+        let peer_mtu = selected_path_mtu(
+            paths,
+            peer_capabilities,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+            local_mtu,
+        );
+        match packet_transport_decision(
+            paths,
+            peer_capabilities,
+            packet_plane,
+            packet_plane_quic,
+            peer,
+        ) {
+            PacketTransportDecision::PacketPlaneDatagram { backend, .. } => {
                 let probe_mtu = selected_path_probe_mtu(
                     paths,
                     peer_capabilities,
                     packet_plane,
+                    packet_plane_quic,
+                    backend,
                     peer,
                     local_mtu,
                 );
                 let payload = mtu_sized_path_probe_payload(probe_mtu);
                 match forwarder.path_probe_frame_with_mtu(probe_mtu, &payload) {
-                    Ok(frame) => match packet_plane.send_frame_to_peer(peer, &frame).await {
+                    Ok(frame) => match send_packet_plane_frame(
+                        packet_plane,
+                        packet_plane_quic,
+                        backend,
+                        peer,
+                        &frame,
+                    )
+                    .await
+                    {
                         Ok(_) => metrics.record_outbound_path_probe_sent(),
                         Err(error) => {
                             metrics.record_outbound_path_probe_failure();
@@ -2232,6 +2257,7 @@ struct RuntimeOutboundDrain<'a> {
     queue_runtime: &'a mut QueueRuntimeState,
     writer: &'a mut TunWriter,
     packet_plane: &'a PacketPlaneRuntime,
+    packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
     metrics: &'a RuntimeMetrics,
 }
 
@@ -2245,6 +2271,7 @@ async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         queue_runtime,
         writer,
         packet_plane,
+        packet_plane_quic,
         metrics,
     } = drain;
     let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
@@ -2258,6 +2285,7 @@ async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         packet_in_flight: &mut queue_runtime.packet_in_flight,
         writer: Some(writer),
         packet_plane: Some(packet_plane),
+        packet_plane_quic,
         metrics,
     };
     drain_outbound_queue(&mut node.swarm, forwarder, queues, &mut context).await;
@@ -2276,6 +2304,7 @@ async fn drain_outbound_queue(
                 context.paths,
                 context.peer_capabilities,
                 context.packet_plane,
+                context.packet_plane_quic,
                 peer,
             )
             .can_send()
@@ -2284,6 +2313,7 @@ async fn drain_outbound_queue(
             context.paths,
             context.peer_capabilities,
             context.packet_plane,
+            context.packet_plane_quic,
             packet.peer(),
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         );
@@ -2291,11 +2321,12 @@ async fn drain_outbound_queue(
             context.paths,
             context.peer_capabilities,
             context.packet_plane,
+            context.packet_plane_quic,
             packet.peer(),
         ) {
-            PacketTransportDecision::PacketPlaneDatagram { path } => {
+            PacketTransportDecision::PacketPlaneDatagram { path, backend } => {
                 send_dequeued_packet_plane_datagram(
-                    swarm, forwarder, &packet, peer_mtu, path, context,
+                    swarm, forwarder, &packet, peer_mtu, path, backend, context,
                 )
                 .await;
             }
@@ -2317,6 +2348,7 @@ async fn drain_outbound_queue(
                 context.paths,
                 context.peer_capabilities,
                 context.packet_plane,
+                context.packet_plane_quic,
                 peer,
             );
             if decision.can_send()
@@ -2356,21 +2388,25 @@ async fn send_dequeued_packet_plane_datagram(
     packet: &crate::queue::Packet,
     peer_mtu: u16,
     path: PathKind,
+    backend: PacketDatagramBackend,
     context: &mut QueueDrainContext<'_>,
 ) {
     match forwarder.queued_packet_frame_with_mtu(packet, peer_mtu) {
-        Ok(frame) => match context
-            .packet_plane
-            .expect("packet-plane decision requires runtime")
-            .send_frame_to_peer(packet.peer(), &frame)
-            .await
+        Ok(frame) => match send_packet_plane_frame(
+            context.packet_plane,
+            context.packet_plane_quic,
+            backend,
+            packet.peer(),
+            &frame,
+        )
+        .await
         {
             Ok(_) => {
                 context.metrics.record_outbound_sent();
                 context.metrics.record_outbound_quic_datagram();
             }
             Err(error) => {
-                if maybe_demote_packet_plane_path(
+                if maybe_demote_packet_plane_send_path(
                     context.paths,
                     context.metrics,
                     packet.peer(),
@@ -2388,7 +2424,7 @@ async fn send_dequeued_packet_plane_datagram(
                 }
                 context
                     .metrics
-                    .record_outbound_drop(packet_plane_drop_reason(&error));
+                    .record_outbound_drop(packet_plane_send_drop_reason(&error));
                 eprintln!("dropping queued packet-plane outbound packet: {error:?}");
             }
         },
@@ -2400,6 +2436,26 @@ async fn send_dequeued_packet_plane_datagram(
                 .record_outbound_drop(outbound_drop_reason(&error));
             eprintln!("dropping queued packet-plane outbound packet: {error:?}");
         }
+    }
+}
+
+async fn send_packet_plane_frame(
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    backend: PacketDatagramBackend,
+    peer: PeerId,
+    frame: &Frame,
+) -> Result<usize, PacketPlaneSendError> {
+    match backend {
+        PacketDatagramBackend::OwnedUdp => packet_plane
+            .ok_or(PacketPlaneSendError::MissingUdpRuntime)?
+            .send_frame_to_peer(peer, frame)
+            .await
+            .map_err(PacketPlaneSendError::Udp),
+        PacketDatagramBackend::OwnedQuic => packet_plane_quic
+            .ok_or(PacketPlaneSendError::MissingQuicRuntime)?
+            .send_frame_to_peer(peer, frame)
+            .map_err(PacketPlaneSendError::Quic),
     }
 }
 
@@ -2438,6 +2494,7 @@ struct QueueDrainContext<'a> {
     packet_in_flight: &'a mut PacketInFlight,
     writer: Option<&'a mut TunWriter>,
     packet_plane: Option<&'a PacketPlaneRuntime>,
+    packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
     metrics: &'a RuntimeMetrics,
 }
 
@@ -2652,6 +2709,7 @@ fn dial_blocked_queue_peers(
 enum PacketTransportDecision {
     PacketPlaneDatagram {
         path: PathKind,
+        backend: PacketDatagramBackend,
     },
     StreamFallback {
         path: PathKind,
@@ -2660,6 +2718,20 @@ enum PacketTransportDecision {
         reason: PacketTransportBlockReason,
         best_path: Option<PathKind>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketDatagramBackend {
+    OwnedQuic,
+    OwnedUdp,
+}
+
+#[derive(Debug)]
+enum PacketPlaneSendError {
+    MissingUdpRuntime,
+    MissingQuicRuntime,
+    Udp(PacketPlaneIoError),
+    Quic(PacketPlaneQuicError),
 }
 
 impl PacketTransportDecision {
@@ -2682,6 +2754,7 @@ fn packet_transport_decision(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: PeerId,
 ) -> PacketTransportDecision {
     if !peer_capabilities.contains(peer) {
@@ -2691,12 +2764,17 @@ fn packet_transport_decision(
         };
     }
 
-    let local_datagrams = packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer));
+    let datagram_backend =
+        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+    let local_datagrams = datagram_backend.is_some();
     let support =
         packet_transport_support_with_local_datagrams(peer_capabilities, peer, local_datagrams);
     if let Some(path) = paths.best_supported_for(peer, support) {
         return if path.kind.requires_quic_datagrams() {
-            PacketTransportDecision::PacketPlaneDatagram { path: path.kind }
+            PacketTransportDecision::PacketPlaneDatagram {
+                path: path.kind,
+                backend: datagram_backend.expect("supported datagram path requires backend"),
+            }
         } else {
             PacketTransportDecision::StreamFallback { path: path.kind }
         };
@@ -2712,6 +2790,25 @@ fn packet_transport_decision(
         PacketTransportBlockReason::NoHealthyPath
     };
     PacketTransportDecision::Blocked { reason, best_path }
+}
+
+fn local_packet_datagram_backend(
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    peer: PeerId,
+) -> Option<PacketDatagramBackend> {
+    if packet_plane_quic.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        && peer_capabilities.supports_owned_quic_packet_plane_for(peer)
+    {
+        return Some(PacketDatagramBackend::OwnedQuic);
+    }
+    if packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        && peer_capabilities.supports_owned_udp_packet_plane_for(peer)
+    {
+        return Some(PacketDatagramBackend::OwnedUdp);
+    }
+    None
 }
 
 fn packet_transport_support(
@@ -3239,6 +3336,7 @@ async fn handle_packet_plane_path_probe(
         paths,
         peer_capabilities,
         Some(packet_plane),
+        None,
         overlay_peer,
         u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
     );
@@ -4287,6 +4385,7 @@ fn record_path_selection_change(
     }
 }
 
+#[cfg(test)]
 fn maybe_demote_packet_plane_path(
     paths: &mut PathSet,
     metrics: &RuntimeMetrics,
@@ -4310,6 +4409,34 @@ fn maybe_demote_packet_plane_path(
             ("peer", &peer),
             ("path", path.wire_name()),
             ("reason", packet_plane_io_error_name(error)),
+        ],
+    );
+    true
+}
+
+fn maybe_demote_packet_plane_send_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    path: PathKind,
+    error: &PacketPlaneSendError,
+) -> bool {
+    if !packet_plane_send_error_demotes_path(error) {
+        return false;
+    }
+
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_packet_plane_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "packet_plane_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", packet_plane_send_error_name(error)),
         ],
     );
     true
@@ -4754,51 +4881,81 @@ fn selected_path_mtu(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: PeerId,
     local_mtu: u16,
 ) -> u16 {
     let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+    let datagram_backend =
+        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
     let support = packet_transport_support_with_local_datagrams(
         peer_capabilities,
         peer,
-        packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer)),
+        datagram_backend.is_some(),
     );
     let path_mtu = paths
         .best_supported_for(peer, support)
         .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu));
-    packet_plane
-        .and_then(|packet_plane| packet_plane.session_mtu_for(peer))
+    selected_datagram_session_mtu(packet_plane, packet_plane_quic, datagram_backend, peer)
         .map_or(path_mtu, |session_mtu| path_mtu.min(session_mtu))
 }
 
 fn selected_path_probe_mtu(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
-    packet_plane: &PacketPlaneRuntime,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    backend: PacketDatagramBackend,
     peer: PeerId,
     local_mtu: u16,
 ) -> u16 {
     let current = selected_path_mtu(
         paths,
         peer_capabilities,
-        Some(packet_plane),
+        packet_plane,
+        packet_plane_quic,
         peer,
         local_mtu,
     );
-    let ceiling = selected_path_mtu_ceiling(peer_capabilities, packet_plane, peer, local_mtu);
+    let ceiling = selected_path_mtu_ceiling(
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        backend,
+        peer,
+        local_mtu,
+    );
     current.saturating_add(PATH_PROBE_MTU_STEP).min(ceiling)
 }
 
 fn selected_path_mtu_ceiling(
     peer_capabilities: &PeerCapabilities,
-    packet_plane: &PacketPlaneRuntime,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    backend: PacketDatagramBackend,
     peer: PeerId,
     local_mtu: u16,
 ) -> u16 {
     let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
-    packet_plane
-        .session_mtu_for(peer)
+    selected_datagram_session_mtu(packet_plane, packet_plane_quic, Some(backend), peer)
         .map_or(peer_mtu, |session_mtu| peer_mtu.min(session_mtu))
+}
+
+fn selected_datagram_session_mtu(
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    backend: Option<PacketDatagramBackend>,
+    peer: PeerId,
+) -> Option<u16> {
+    match backend {
+        Some(PacketDatagramBackend::OwnedUdp) => {
+            packet_plane.and_then(|packet_plane| packet_plane.session_mtu_for(peer))
+        }
+        Some(PacketDatagramBackend::OwnedQuic) => {
+            packet_plane_quic.and_then(|packet_plane| packet_plane.session_mtu_for(peer))
+        }
+        None => None,
+    }
 }
 
 fn maybe_confirm_path_mtu_probe(
@@ -4817,7 +4974,14 @@ fn maybe_confirm_path_mtu_probe(
     if path.kind != PathKind::DirectQuicDatagram {
         return;
     }
-    let ceiling = selected_path_mtu_ceiling(peer_capabilities, packet_plane, peer, local_mtu);
+    let ceiling = selected_path_mtu_ceiling(
+        peer_capabilities,
+        Some(packet_plane),
+        None,
+        PacketDatagramBackend::OwnedUdp,
+        peer,
+        local_mtu,
+    );
     if paths.raise_path_mtu(peer, path.kind, confirmed_mtu, ceiling) {
         metrics.record_outbound_path_mtu_update();
         metrics.record_outbound_path_mtu_probe_confirmation();
@@ -4895,6 +5059,38 @@ fn packet_plane_drop_reason(error: &PacketPlaneIoError) -> PacketDropReason {
         PacketPlaneIoError::NoListener { .. } | PacketPlaneIoError::Io(_) => {
             PacketDropReason::NoTransportPeer
         }
+    }
+}
+
+fn packet_plane_send_drop_reason(error: &PacketPlaneSendError) -> PacketDropReason {
+    match error {
+        PacketPlaneSendError::Udp(error) => packet_plane_drop_reason(error),
+        PacketPlaneSendError::Quic(PacketPlaneQuicError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::PayloadTooLarge { .. },
+        )) => PacketDropReason::PacketTooLarge,
+        PacketPlaneSendError::Quic(PacketPlaneQuicError::Datagram(
+            crate::runtime::packet_plane::PacketPlaneDatagramError::ReplayedDatagram { .. }
+            | crate::runtime::packet_plane::PacketPlaneDatagramError::DatagramOutsideReplayWindow {
+                ..
+            },
+        )) => PacketDropReason::Replay,
+        PacketPlaneSendError::Quic(
+            PacketPlaneQuicError::Datagram(_)
+            | PacketPlaneQuicError::Session(_)
+            | PacketPlaneQuicError::Certificate(_)
+            | PacketPlaneQuicError::Rustls(_)
+            | PacketPlaneQuicError::ClientVerifier(_),
+        ) => PacketDropReason::MalformedPacket,
+        PacketPlaneSendError::MissingUdpRuntime
+        | PacketPlaneSendError::MissingQuicRuntime
+        | PacketPlaneSendError::Quic(
+            PacketPlaneQuicError::NoConnection { .. }
+            | PacketPlaneQuicError::EndpointClosed
+            | PacketPlaneQuicError::Connect(_)
+            | PacketPlaneQuicError::Connection(_)
+            | PacketPlaneQuicError::SendDatagram(_)
+            | PacketPlaneQuicError::Io(_),
+        ) => PacketDropReason::NoTransportPeer,
     }
 }
 
@@ -4986,6 +5182,22 @@ fn packet_plane_send_failure_demotes_path(error: &PacketPlaneIoError) -> bool {
             | PacketPlaneIoError::NoSessions
             | PacketPlaneIoError::Io(_)
     )
+}
+
+fn packet_plane_send_error_demotes_path(error: &PacketPlaneSendError) -> bool {
+    match error {
+        PacketPlaneSendError::MissingUdpRuntime | PacketPlaneSendError::MissingQuicRuntime => true,
+        PacketPlaneSendError::Udp(error) => packet_plane_send_failure_demotes_path(error),
+        PacketPlaneSendError::Quic(error) => matches!(
+            error,
+            PacketPlaneQuicError::NoConnection { .. }
+                | PacketPlaneQuicError::EndpointClosed
+                | PacketPlaneQuicError::Connect(_)
+                | PacketPlaneQuicError::Connection(_)
+                | PacketPlaneQuicError::SendDatagram(_)
+                | PacketPlaneQuicError::Io(_)
+        ),
+    }
 }
 
 fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
@@ -5135,6 +5347,31 @@ fn packet_plane_io_error_name(error: &PacketPlaneIoError) -> &'static str {
         PacketPlaneIoError::UnexpectedEndpoint { .. } => "unexpected_endpoint",
         PacketPlaneIoError::Io(_) => "io_error",
         PacketPlaneIoError::Datagram(error) => packet_plane_datagram_error_name(error),
+    }
+}
+
+fn packet_plane_send_error_name(error: &PacketPlaneSendError) -> &'static str {
+    match error {
+        PacketPlaneSendError::MissingUdpRuntime => "missing_udp_runtime",
+        PacketPlaneSendError::MissingQuicRuntime => "missing_quic_runtime",
+        PacketPlaneSendError::Udp(error) => packet_plane_io_error_name(error),
+        PacketPlaneSendError::Quic(error) => packet_plane_quic_error_name(error),
+    }
+}
+
+fn packet_plane_quic_error_name(error: &PacketPlaneQuicError) -> &'static str {
+    match error {
+        PacketPlaneQuicError::Io(_) => "io_error",
+        PacketPlaneQuicError::Certificate(_) => "certificate_error",
+        PacketPlaneQuicError::Rustls(_) => "rustls_error",
+        PacketPlaneQuicError::ClientVerifier(_) => "client_verifier_error",
+        PacketPlaneQuicError::Connect(_) => "connect_error",
+        PacketPlaneQuicError::Connection(_) => "connection_error",
+        PacketPlaneQuicError::EndpointClosed => "endpoint_closed",
+        PacketPlaneQuicError::NoConnection { .. } => "no_connection",
+        PacketPlaneQuicError::SendDatagram(_) => "send_datagram",
+        PacketPlaneQuicError::Datagram(error) => packet_plane_datagram_error_name(error),
+        PacketPlaneQuicError::Session(_) => "session_error",
     }
 }
 
@@ -5368,6 +5605,7 @@ mod tests {
             packet_in_flight,
             writer: None,
             packet_plane: None,
+            packet_plane_quic: None,
             metrics,
         }
     }
@@ -5494,6 +5732,58 @@ mod tests {
                 &hello,
             )
             .expect("receiver packet-plane session");
+    }
+
+    async fn establish_test_packet_plane_quic_sessions(
+        sender: &mut PacketPlaneQuicRuntime,
+        receiver: &mut PacketPlaneQuicRuntime,
+        sender_identity: &crate::identity::NodeIdentity,
+        receiver_identity: &crate::identity::NodeIdentity,
+        sender_secret: &PacketPlaneEphemeralSecret,
+        receiver_secret: &PacketPlaneEphemeralSecret,
+        mtu: u16,
+    ) {
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+        let receiver_certificate = receiver.server_certificate();
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            sender_identity,
+            sender_secret,
+            mtu,
+            sender_addr,
+        );
+        let accept = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Accept,
+            receiver_identity,
+            receiver_secret,
+            mtu,
+            receiver_addr,
+        );
+
+        let (connect, accept_connection) = tokio::join!(
+            sender.connect_peer(accept.peer, receiver_addr, receiver_certificate),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.expect("sender QUIC connection");
+        accept_connection.expect("receiver QUIC connection");
+
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                sender_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender QUIC packet-plane session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                receiver_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver QUIC packet-plane session");
     }
 
     #[test]
@@ -8753,6 +9043,100 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn drain_outbound_queue_prefers_established_packet_plane_quic_datagram_path() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut sender_packet_plane =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver socket"))
+                .expect("receiver packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_quic_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        )
+        .await;
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet.clone())
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities = capabilities.with_owned_quic_packet_plane(true);
+        peer_capabilities.record(remote_overlay, capabilities);
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+        context.packet_plane_quic = Some(&sender_packet_plane);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+        let inbound = timeout(
+            TokioDuration::from_secs(1),
+            receiver_packet_plane.recv_frame_from_peer(local_overlay),
+        )
+        .await
+        .expect("packet-plane QUIC receive should not time out")
+        .expect("packet-plane QUIC receive");
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 0);
+        assert_eq!(inbound.peer, Some(local_overlay));
+        assert_eq!(inbound.frame.payload, packet);
+    }
+
+    #[tokio::test]
     async fn selected_path_mtu_respects_packet_plane_session_mtu() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote_identity =
@@ -8797,6 +9181,7 @@ mod tests {
                 &paths,
                 &peer_capabilities,
                 Some(&sender_packet_plane),
+                None,
                 remote_overlay,
                 1_280,
             ),
@@ -8871,6 +9256,7 @@ mod tests {
             &paths,
             &peer_capabilities,
             Some(&sender_packet_plane),
+            None,
             &metrics,
         )
         .await;
@@ -8990,6 +9376,7 @@ mod tests {
             &sender_paths,
             &sender_capabilities,
             Some(&sender_packet_plane),
+            None,
             &metrics,
         )
         .await;
@@ -9341,7 +9728,7 @@ mod tests {
         );
 
         assert_eq!(
-            packet_transport_decision(&paths, &peer_capabilities, None, remote_overlay),
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay),
             PacketTransportDecision::StreamFallback {
                 path: PathKind::DirectQuicStream
             }
@@ -9360,7 +9747,7 @@ mod tests {
         peer_capabilities.record(remote_overlay, capabilities);
 
         assert_eq!(
-            packet_transport_decision(&paths, &peer_capabilities, None, remote_overlay),
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay),
             PacketTransportDecision::Blocked {
                 reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
                 best_path: Some(PathKind::DirectQuicDatagram)
@@ -9439,6 +9826,7 @@ mod tests {
             &paths,
             &peer_capabilities,
             None,
+            None,
             &metrics,
         )
         .await;
@@ -9460,6 +9848,7 @@ mod tests {
             &mut forwarder,
             &paths,
             &peer_capabilities,
+            None,
             None,
             &metrics,
         )
@@ -9506,6 +9895,7 @@ mod tests {
             &mut forwarder,
             &paths,
             &peer_capabilities,
+            None,
             None,
             &metrics,
         )

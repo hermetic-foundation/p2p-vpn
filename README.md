@@ -99,10 +99,14 @@ runtime-generated certificate trust anchor and QUIC-specific endpoint
 candidates. The owned QUIC runtime primitive already carries the same
 authenticated packet-plane datagrams over Quinn QUIC DATAGRAM with explicit
 certificate trust, and the control capability schema now validates the
-advertised certificate material, but the daemon does not select QUIC for packet
-forwarding yet. Outbound queue draining respects the
-peer's advertised effective MTU and drops oversized packets before sending them
-to the packet stream fallback. Capability requests from unconfigured peers are
+advertised certificate material. Outbound queue draining distinguishes owned UDP
+and owned QUIC packet-plane sessions, prefers an established owned QUIC session
+when the peer advertised owned QUIC support, and otherwise falls back to an
+established UDP packet-plane session or packet streams. Automatic owned QUIC
+connect/accept lifecycle and inbound QUIC daemon receive handling are still
+pending. Outbound queue draining respects the peer's advertised effective MTU
+and drops oversized packets before sending them to the packet stream fallback.
+Capability requests from unconfigured peers are
 rejected, and configured peers are only accepted when they advertise the same
 overlay network name, compatible wire version, packet protocol, packet header
 length, matching membership tag when a key is configured, known preferred path,
@@ -123,7 +127,8 @@ local/remote packet session ids visible through daemon state and capability
 views. Peers that both advertise packet-plane endpoints negotiate those sessions
 over the authenticated control plane with a deterministic single initiator,
 then use the owned UDP packet plane for outbound queue draining when path
-selection allows it. The daemon also accepts inbound UDP frames from established
+selection allows it. Established owned QUIC sessions can also carry outbound
+queued packet frames over Quinn datagrams. The daemon accepts inbound UDP frames from established
 packet-plane sessions, rejects duplicate authenticated datagrams at the UDP
 session boundary with bounded per-session replay state, and then applies the
 same route authorization, replay protection, rate limiting, and TUN write path
