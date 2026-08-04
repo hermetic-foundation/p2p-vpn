@@ -128,10 +128,12 @@ authenticated request-response channel to the configured peer ID, and the
 receiver still applies the overlay allowlist, replay window, source-route
 ownership, and local-destination checks before writing to TUN. The runtime does
 not hand an unbounded burst of queued packets to request-response; each peer is
-limited by the configured packet stream send window and remaining packets stay
-in the bounded per-peer queue. It also does not report a native datagram packet
-as sent unless a real datagram-capable local data plane exists; datagram-only
-paths remain blocked instead of silently degrading into fake success.
+limited by the configured packet stream send window and a small hash of the
+inner IP flow. Packets from a shard that already has an in-flight fallback
+stream stay queued, while other shards for that peer can continue draining. It
+also does not report a native datagram packet as sent unless a real
+datagram-capable local data plane exists; datagram-only paths remain blocked
+instead of silently degrading into fake success.
 Configured peers with validated capabilities and a supported path are also sent
 periodic path-probe frames over the packet protocol, giving operators liveness
 traffic that does not depend on user IP packets.
@@ -187,9 +189,12 @@ exposed in metrics for NAT traversal diagnostics.
 
 Resource limits are part of the overlay config. The packet request-response
 fallback has a bounded concurrent stream limit, exposed through `resources`, so
-operators can tighten or relax stream pressure without changing code. Swarm
-connection limits are also exposed there so public bootstrap and relay-capable
-nodes can bound pending handshakes, established connections, and connections per
+operators can tighten or relax stream pressure without changing code. The
+fallback scheduler gates same-shard packets to reduce reordering within an
+inner flow while still allowing unrelated shards to use the peer's remaining
+stream window. Swarm connection limits are also exposed there so public
+bootstrap and relay-capable nodes can bound pending handshakes, established
+connections, and connections per
 peer. The packet protocol also enforces
 `resources.max_inbound_packets_per_peer_per_second` as a per-peer inbound token
 bucket before writing any accepted packet to TUN; over-limit frames receive a
@@ -747,7 +752,7 @@ daemon's current queue and path state instead of a startup snapshot.
 `daemon-state` reports the running daemon's configured peers, validated
 capability state, selected path, healthy direct and relay path counts, effective
 MTU, selected path MTU, per-candidate path MTU estimates, and path-probe, DCUtR,
-and AutoNAT counters. The narrower `daemon-peers`, `daemon-routes`,
+AutoNAT, and stream-fallback in-flight shard counters. The narrower `daemon-peers`, `daemon-routes`,
 `daemon-paths`, `daemon-mtu`, and `daemon-capabilities` commands expose those
 live daemon views directly for
 scripts and operators that do not want to parse the full state dump.

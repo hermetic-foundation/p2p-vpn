@@ -5,10 +5,15 @@ use std::{
 
 use crate::{PeerId, Sequence};
 
+pub type FlowShard = u8;
+
+const FLOW_SHARDS: FlowShard = 16;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Packet {
     peer: PeerId,
     sequence: Sequence,
+    flow_shard: FlowShard,
     bytes: Vec<u8>,
     enqueued_at: Instant,
 }
@@ -19,6 +24,7 @@ impl Packet {
         Self {
             peer,
             sequence,
+            flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at: Instant::now(),
         }
@@ -29,6 +35,7 @@ impl Packet {
         Self {
             peer,
             sequence,
+            flow_shard: flow_shard(&bytes),
             bytes,
             enqueued_at,
         }
@@ -42,6 +49,11 @@ impl Packet {
     #[must_use]
     pub const fn sequence(&self) -> Sequence {
         self.sequence
+    }
+
+    #[must_use]
+    pub const fn flow_shard(&self) -> FlowShard {
+        self.flow_shard
     }
 
     #[must_use]
@@ -170,6 +182,17 @@ impl PeerQueue {
         Some(packet)
     }
 
+    pub fn dequeue_ready(&mut self, mut is_ready: impl FnMut(&Packet) -> bool) -> Option<Packet> {
+        let index = self.packets.iter().position(&mut is_ready)?;
+        let packet = self
+            .packets
+            .remove(index)
+            .expect("packet index came from this queue");
+        self.stats.queued_packets -= 1;
+        self.stats.queued_bytes -= packet.len();
+        Some(packet)
+    }
+
     pub fn drop_expired(&mut self, now: Instant) {
         let Some(first_fresh) = self
             .packets
@@ -278,18 +301,23 @@ impl PeerQueues {
     }
 
     pub fn dequeue_ready(&mut self, mut is_ready: impl FnMut(PeerId) -> bool) -> Option<Packet> {
+        self.dequeue_ready_packet(|peer, _packet| is_ready(peer))
+    }
+
+    pub fn dequeue_ready_packet(
+        &mut self,
+        mut is_ready: impl FnMut(PeerId, &Packet) -> bool,
+    ) -> Option<Packet> {
         let ready_len = self.ready.len();
         for _ in 0..ready_len {
             let peer = self.ready.pop_front()?;
-            if !is_ready(peer) {
-                self.ready.push_back(peer);
-                continue;
-            }
-
             let Some(queue) = self.queues.get_mut(&peer) else {
                 continue;
             };
-            let Some(packet) = queue.dequeue() else {
+            let Some(packet) = queue.dequeue_ready(|packet| is_ready(peer, packet)) else {
+                if queue.stats().queued_packets > 0 {
+                    self.ready.push_back(peer);
+                }
                 continue;
             };
             if queue.stats().queued_packets > 0 {
@@ -350,6 +378,16 @@ impl PeerQueues {
             .filter_map(|(peer, queue)| (queue.stats().queued_packets > 0).then_some(*peer))
     }
 
+    pub fn peer_has_ready_packet(
+        &self,
+        peer: PeerId,
+        mut is_ready: impl FnMut(&Packet) -> bool,
+    ) -> bool {
+        self.queues
+            .get(&peer)
+            .is_some_and(|queue| queue.packets.iter().any(&mut is_ready))
+    }
+
     fn queue_mut(&mut self, peer: PeerId) -> &mut PeerQueue {
         self.queues.entry(peer).or_insert_with(|| {
             PeerQueue::with_packet_ttl(
@@ -365,6 +403,63 @@ fn duration_millis(now: Instant, then: Instant) -> u64 {
     u64::try_from(now.saturating_duration_since(then).as_millis()).unwrap_or(u64::MAX)
 }
 
+fn flow_shard(packet: &[u8]) -> FlowShard {
+    let hash = match packet.first().map(|byte| byte >> 4) {
+        Some(4) => ipv4_flow_hash(packet),
+        Some(6) => ipv6_flow_hash(packet),
+        _ => fallback_hash(packet),
+    };
+    u8::try_from(hash % u64::from(FLOW_SHARDS)).expect("flow shard is bounded")
+}
+
+fn ipv4_flow_hash(packet: &[u8]) -> u64 {
+    if packet.len() < 20 {
+        return fallback_hash(packet);
+    }
+    let protocol = packet[9];
+    let ihl = usize::from(packet[0] & 0x0f) * 4;
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    hash_bytes(&mut hash, &packet[12..16]);
+    hash_bytes(&mut hash, &packet[16..20]);
+    hash_byte(&mut hash, protocol);
+    if matches!(protocol, 6 | 17) && packet.len() >= ihl.saturating_add(4) {
+        hash_bytes(&mut hash, &packet[ihl..ihl + 4]);
+    }
+    hash
+}
+
+fn ipv6_flow_hash(packet: &[u8]) -> u64 {
+    if packet.len() < 40 {
+        return fallback_hash(packet);
+    }
+    let next_header = packet[6];
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    hash_bytes(&mut hash, &packet[8..24]);
+    hash_bytes(&mut hash, &packet[24..40]);
+    hash_byte(&mut hash, next_header);
+    if matches!(next_header, 6 | 17) && packet.len() >= 44 {
+        hash_bytes(&mut hash, &packet[40..44]);
+    }
+    hash
+}
+
+fn fallback_hash(packet: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    hash_bytes(&mut hash, packet);
+    hash
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        hash_byte(hash, *byte);
+    }
+}
+
+fn hash_byte(hash: &mut u64, byte: u8) {
+    *hash ^= u64::from(byte);
+    *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -373,6 +468,17 @@ mod tests {
 
     fn peer(seed: u8) -> PeerId {
         PeerId::from_bytes([seed; 32])
+    }
+
+    fn ipv4_tcp_packet(source_port: u16, destination_port: u16) -> Vec<u8> {
+        let mut packet = vec![0; 24];
+        packet[0] = 0x45;
+        packet[9] = 6;
+        packet[12..16].copy_from_slice(&[100, 64, 1, 1]);
+        packet[16..20].copy_from_slice(&[100, 64, 1, 2]);
+        packet[20..22].copy_from_slice(&source_port.to_be_bytes());
+        packet[22..24].copy_from_slice(&destination_port.to_be_bytes());
+        packet
     }
 
     #[test]
@@ -514,6 +620,45 @@ mod tests {
                 .sequence(),
             1
         );
+    }
+
+    #[test]
+    fn packets_hash_same_inner_flow_to_same_shard() {
+        let first = Packet::new(peer(1), 1, ipv4_tcp_packet(1234, 443));
+        let second = Packet::new(peer(1), 2, ipv4_tcp_packet(1234, 443));
+        let different_flow = Packet::new(peer(1), 3, ipv4_tcp_packet(1235, 443));
+
+        assert_eq!(first.flow_shard(), second.flow_shard());
+        assert!(
+            (0..FLOW_SHARDS).contains(&first.flow_shard()),
+            "shard should stay inside the configured shard count"
+        );
+        assert!(
+            (0..FLOW_SHARDS).contains(&different_flow.flow_shard()),
+            "shard should stay inside the configured shard count"
+        );
+    }
+
+    #[test]
+    fn peer_queues_can_skip_blocked_flow_shards() {
+        let blocked = Packet::new(peer(1), 1, ipv4_tcp_packet(1234, 443));
+        let blocked_shard = blocked.flow_shard();
+        let ready = (0..u16::MAX)
+            .map(|port| Packet::new(peer(1), u64::from(port) + 2, ipv4_tcp_packet(port, 443)))
+            .find(|packet| packet.flow_shard() != blocked_shard)
+            .expect("test should find a different flow shard");
+        let ready_sequence = ready.sequence();
+
+        let mut queues = PeerQueues::new(4, 4096);
+        queues.enqueue(blocked).expect("blocked packet");
+        queues.enqueue(ready).expect("ready packet");
+
+        let packet = queues
+            .dequeue_ready_packet(|_, packet| packet.flow_shard() != blocked_shard)
+            .expect("ready shard should bypass blocked shard");
+
+        assert_eq!(packet.sequence(), ready_sequence);
+        assert_eq!(queues.peer_stats(peer(1)).queued_packets, 1);
     }
 
     #[test]

@@ -22,9 +22,9 @@ use tokio::sync::mpsc;
 use crate::{
     PathKind, PeerId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
-    metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics},
+    metrics::{AutoNatReachability, PacketDropReason, RuntimeMetrics, RuntimeSnapshot},
     path::{PathSet, PathTransportSupport},
-    queue::{EnqueueError, PeerQueues},
+    queue::{EnqueueError, FlowShard, PeerQueues},
     route::RouteError,
     runtime::{
         control::{
@@ -404,6 +404,7 @@ where
                     metrics: &metrics,
                     queue: queues.total_stats(),
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                    packet_in_flight: queue_runtime.packet_in_flight.stats(),
                 };
                 if let Some(reason) = handle_runtime_control_request(request, control_context) {
                     log_runtime_event(
@@ -511,6 +512,7 @@ struct RuntimeControlContext<'a> {
     metrics: &'a RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
+    packet_in_flight: PacketInFlightStats,
 }
 
 fn handle_runtime_control_request(
@@ -533,6 +535,7 @@ fn handle_runtime_control_request(
                 context.metrics,
                 context.queue,
                 context.path_stats,
+                context.packet_in_flight,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
@@ -867,16 +870,47 @@ fn runtime_state_lines(
     metrics: &RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
+    packet_in_flight: PacketInFlightStats,
 ) -> Vec<String> {
     let snapshot = metrics.snapshot_with_paths(queue, path_stats);
     let mut peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
     peers.sort_by_key(ToString::to_string);
 
-    let mut lines = vec![
+    let mut lines = runtime_state_summary_lines(
+        &snapshot,
+        peers.len(),
+        peer_capabilities.len(),
+        forwarder.replay_window_count(),
+        packet_in_flight,
+    );
+
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    for peer in peers {
+        extend_runtime_peer_state_lines(
+            &mut lines,
+            forwarder,
+            paths,
+            peer_capabilities,
+            peer,
+            local_mtu,
+        );
+    }
+
+    lines
+}
+
+fn runtime_state_summary_lines(
+    snapshot: &RuntimeSnapshot,
+    configured_peers: usize,
+    validated_peers: usize,
+    replay_windows: usize,
+    packet_in_flight: PacketInFlightStats,
+) -> Vec<String> {
+    vec![
         "daemon state: running".to_owned(),
-        format!("configured peers: {}", peers.len()),
-        format!("validated peers: {}", peer_capabilities.len()),
-        format!("replay_windows {}", forwarder.replay_window_count()),
+        format!("configured peers: {configured_peers}"),
+        format!("validated peers: {validated_peers}"),
+        format!("replay_windows {replay_windows}"),
         format!(
             "outbound_stream_fallback_packets {}",
             snapshot.outbound_stream_fallback_packets
@@ -935,6 +969,22 @@ fn runtime_state_lines(
             snapshot.outbound_queue_blocked_packet_window_events
         ),
         format!(
+            "packet_stream_fallback_in_flight {}",
+            packet_in_flight.packets
+        ),
+        format!(
+            "packet_stream_fallback_in_flight_peers {}",
+            packet_in_flight.peers
+        ),
+        format!(
+            "packet_stream_fallback_in_flight_shards {}",
+            packet_in_flight.shards
+        ),
+        format!(
+            "packet_stream_fallback_limit_per_peer {}",
+            packet_in_flight.limit_per_peer
+        ),
+        format!(
             "peers_with_supported_path {}",
             snapshot.path.peers_with_supported_path
         ),
@@ -955,21 +1005,7 @@ fn runtime_state_lines(
             snapshot.path.healthy_direct_tcp_stream_paths
         ),
         format!("healthy_relay_paths {}", snapshot.path.healthy_relay_paths),
-    ];
-
-    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
-    for peer in peers {
-        extend_runtime_peer_state_lines(
-            &mut lines,
-            forwarder,
-            paths,
-            peer_capabilities,
-            peer,
-            local_mtu,
-        );
-    }
-
-    lines
+    ]
 }
 
 fn extend_runtime_peer_state_lines(
@@ -1521,8 +1557,8 @@ fn drain_outbound_queue(
     context: &mut QueueDrainContext<'_>,
 ) {
     expire_outbound_queue(queues, context.metrics);
-    while let Some(packet) = queues.dequeue_ready(|peer| {
-        context.packet_in_flight.can_send(peer)
+    while let Some(packet) = queues.dequeue_ready_packet(|peer, packet| {
+        context.packet_in_flight.can_send_packet(packet)
             && packet_transport_decision(context.paths, context.peer_capabilities, peer).can_send()
     }) {
         let peer_mtu = selected_path_mtu(
@@ -1535,7 +1571,7 @@ fn drain_outbound_queue(
             PacketTransportDecision::StreamFallback { .. } => {
                 match forwarder.send_queued_packet_with_mtu(swarm, &packet, peer_mtu) {
                     Ok(request_id) => {
-                        context.packet_in_flight.record(packet.peer(), request_id);
+                        context.packet_in_flight.record(&packet, request_id);
                         context.metrics.record_outbound_sent();
                         context.metrics.record_outbound_stream_fallback();
                     }
@@ -1560,7 +1596,11 @@ fn drain_outbound_queue(
         for peer in queues.queued_peers() {
             let decision =
                 packet_transport_decision(context.paths, context.peer_capabilities, peer);
-            if decision.can_send() && !context.packet_in_flight.can_send(peer) {
+            if decision.can_send()
+                && !queues.peer_has_ready_packet(peer, |packet| {
+                    context.packet_in_flight.can_send_packet(packet)
+                })
+            {
                 blocked_by_window = true;
                 continue;
             }
@@ -1616,8 +1656,8 @@ impl QueueRuntimeState {
 #[derive(Debug)]
 struct PacketInFlight {
     limit_per_peer: usize,
-    requests: HashMap<request_response::OutboundRequestId, PeerId>,
-    peers: HashMap<PeerId, usize>,
+    requests: HashMap<request_response::OutboundRequestId, (PeerId, FlowShard)>,
+    peers: HashMap<PeerId, PeerInFlight>,
 }
 
 impl PacketInFlight {
@@ -1630,29 +1670,93 @@ impl PacketInFlight {
     }
 
     fn can_send(&self, peer: PeerId) -> bool {
-        self.peers.get(&peer).copied().unwrap_or(0) < self.limit_per_peer
+        self.peers.get(&peer).map_or(0, |state| state.total) < self.limit_per_peer
     }
 
-    fn record(&mut self, peer: PeerId, request_id: request_response::OutboundRequestId) {
-        self.requests.insert(request_id, peer);
-        *self.peers.entry(peer).or_default() += 1;
+    fn can_send_packet(&self, packet: &crate::queue::Packet) -> bool {
+        self.can_send(packet.peer())
+            && self
+                .peers
+                .get(&packet.peer())
+                .is_none_or(|state| state.in_flight_for_shard(packet.flow_shard()) == 0)
+    }
+
+    fn record(
+        &mut self,
+        packet: &crate::queue::Packet,
+        request_id: request_response::OutboundRequestId,
+    ) {
+        self.requests
+            .insert(request_id, (packet.peer(), packet.flow_shard()));
+        self.peers
+            .entry(packet.peer())
+            .or_default()
+            .record(packet.flow_shard());
     }
 
     fn complete(&mut self, request_id: request_response::OutboundRequestId) -> Option<PeerId> {
-        let peer = self.requests.remove(&request_id)?;
-        if let Some(count) = self.peers.get_mut(&peer) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
+        let (peer, shard) = self.requests.remove(&request_id)?;
+        if let Some(state) = self.peers.get_mut(&peer) {
+            state.complete(shard);
+            if state.total == 0 {
                 self.peers.remove(&peer);
             }
         }
         Some(peer)
     }
 
+    fn stats(&self) -> PacketInFlightStats {
+        PacketInFlightStats {
+            packets: self.requests.len(),
+            peers: self.peers.len(),
+            shards: self.peers.values().map(PeerInFlight::active_shards).sum(),
+            limit_per_peer: self.limit_per_peer,
+        }
+    }
+
     #[cfg(test)]
     fn in_flight_for(&self, peer: PeerId) -> usize {
-        self.peers.get(&peer).copied().unwrap_or(0)
+        self.peers.get(&peer).map_or(0, |state| state.total)
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PeerInFlight {
+    total: usize,
+    shards: HashMap<FlowShard, usize>,
+}
+
+impl PeerInFlight {
+    fn record(&mut self, shard: FlowShard) {
+        self.total += 1;
+        *self.shards.entry(shard).or_default() += 1;
+    }
+
+    fn complete(&mut self, shard: FlowShard) {
+        self.total = self.total.saturating_sub(1);
+        if let Some(count) = self.shards.get_mut(&shard) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.shards.remove(&shard);
+            }
+        }
+    }
+
+    fn in_flight_for_shard(&self, shard: FlowShard) -> usize {
+        self.shards.get(&shard).copied().unwrap_or(0)
+    }
+
+    fn active_shards(&self) -> usize {
+        self.shards.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PacketInFlightStats {
+    packets: usize,
+    peers: usize,
+    shards: usize,
+    limit_per_peer: usize,
 }
 
 fn dial_blocked_queue_peers(
@@ -3288,6 +3392,22 @@ mod tests {
         packet
     }
 
+    fn ipv4_tcp_packet(
+        source: Ipv4Addr,
+        destination: Ipv4Addr,
+        source_port: u16,
+        destination_port: u16,
+    ) -> Vec<u8> {
+        let mut packet = vec![0; 24];
+        packet[0] = 0x45;
+        packet[9] = 6;
+        packet[12..16].copy_from_slice(&source.octets());
+        packet[16..20].copy_from_slice(&destination.octets());
+        packet[20..22].copy_from_slice(&source_port.to_be_bytes());
+        packet[22..24].copy_from_slice(&destination_port.to_be_bytes());
+        packet
+    }
+
     fn queue_drain_context<'a>(
         paths: &'a PathSet,
         peer_capabilities: &'a PeerCapabilities,
@@ -3372,6 +3492,7 @@ mod tests {
                 metrics: &metrics,
                 queue: crate::queue::QueueStats::default(),
                 path_stats: crate::path::PathRuntimeStats::default(),
+                packet_in_flight: PacketInFlightStats::default(),
             },
         );
 
@@ -3511,6 +3632,12 @@ mod tests {
             &metrics,
             crate::queue::QueueStats::default(),
             runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+            PacketInFlightStats {
+                packets: 2,
+                peers: 1,
+                shards: 2,
+                limit_per_peer: 256,
+            },
         );
 
         assert!(lines.contains(&"daemon state: running".to_owned()));
@@ -3533,6 +3660,10 @@ mod tests {
         assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_no_supported_path_events 0".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_packet_window_events 0".to_owned()));
+        assert!(lines.contains(&"packet_stream_fallback_in_flight 2".to_owned()));
+        assert!(lines.contains(&"packet_stream_fallback_in_flight_peers 1".to_owned()));
+        assert!(lines.contains(&"packet_stream_fallback_in_flight_shards 2".to_owned()));
+        assert!(lines.contains(&"packet_stream_fallback_limit_per_peer 256".to_owned()));
         assert!(lines.iter().any(|line| {
             line == &format!(
                 "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 healthy_paths 1 direct_paths 1 relay_paths 0"
@@ -5714,6 +5845,121 @@ mod tests {
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn drain_outbound_queue_gates_stream_fallback_by_flow_shard() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let local_ipv4 = builtin_ipv4(local_overlay);
+        let remote_ipv4 = builtin_ipv4(remote_overlay);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 8192,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let first_flow = ipv4_tcp_packet(local_ipv4, remote_ipv4, 10_000, 443);
+        let mut different_flow = None;
+        for port in 10_001..=u16::MAX {
+            let candidate = ipv4_tcp_packet(local_ipv4, remote_ipv4, port, 443);
+            let first_packet = crate::queue::Packet::new(remote_overlay, 0, first_flow.clone());
+            let candidate_packet = crate::queue::Packet::new(remote_overlay, 1, candidate.clone());
+            if first_packet.flow_shard() != candidate_packet.flow_shard() {
+                different_flow = Some(candidate);
+                break;
+            }
+        }
+        let different_flow = different_flow.expect("test should find a different flow shard");
+        let mut queues = PeerQueues::new(8, 8192);
+        forwarder
+            .enqueue_tun_packet(&mut queues, first_flow.clone())
+            .expect("first flow packet");
+        forwarder
+            .enqueue_tun_packet(&mut queues, first_flow)
+            .expect("same flow packet");
+        forwarder
+            .enqueue_tun_packet(&mut queues, different_flow)
+            .expect("different flow packet");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context =
+            queue_drain_context(&paths, &peer_capabilities, &mut packet_in_flight, &metrics);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context);
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 2);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 2);
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
+        assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 2);
+        assert_eq!(
+            packet_in_flight.stats(),
+            PacketInFlightStats {
+                packets: 2,
+                peers: 1,
+                shards: 2,
+                limit_per_peer: 256
+            }
+        );
     }
 
     #[tokio::test]
