@@ -787,6 +787,12 @@ second temporary node to prove the relayed target can be dialed. The DCUtR smoke
 also gives both temporary nodes direct listen sockets and fails unless
 `bootstrap-check` observes a successful DCUtR hole-punch event.
 
+Recorded public bootstrap smoke evidence is kept in
+`docs/public-bootstrap-smoke.md`. The current recorded run proves public
+IPFS-compatible bootstrap connectivity and AutoNAT observation, but public relay
+reservation and public-relay-assisted DCUtR proof still require a known circuit
+relay v2 endpoint that accepts reservations for the test.
+
 Inspect the runtime metric names and startup snapshot:
 
 ```sh

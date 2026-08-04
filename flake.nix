@@ -104,6 +104,7 @@
           cp ${package}/bin/p2p-vpn "$release_dir/bin/"
           cp ${./README.md} "$release_dir/README.md"
           cp ${./docs/feature-matrix.md} "$release_dir/docs/feature-matrix.md"
+          cp ${./docs/public-bootstrap-smoke.md} "$release_dir/docs/public-bootstrap-smoke.md"
           cp ${./flake.nix} "$release_dir/flake.nix"
           cp ${./flake.lock} "$release_dir/flake.lock"
           cp ${./Cargo.toml} "$release_dir/Cargo.toml"
