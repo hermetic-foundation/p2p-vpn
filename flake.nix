@@ -12,6 +12,13 @@
       nixpkgs,
       flake-utils,
     }:
+    let
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+    in
     {
       nixosModules.default = import ./nix/nixos-module.nix { inherit self; };
 
@@ -20,7 +27,7 @@
         description = "Two-node NixOS deployment skeleton for p2p-vpn";
       };
     }
-    // flake-utils.lib.eachDefaultSystem (
+    // flake-utils.lib.eachSystem supportedSystems (
       system:
       let
         pkgs = import nixpkgs { inherit system; };

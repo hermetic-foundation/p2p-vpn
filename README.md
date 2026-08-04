@@ -344,6 +344,10 @@ nix build .#default
 nix run . -- status --config p2p-vpn.json
 ```
 
+The flake exports packages, apps, development shells, and checks for
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`. `x86_64-darwin` is not
+exported because the pinned nixpkgs branch no longer supports that platform.
+
 Install the CLI into a user profile from a checked-out tree or a Git URL:
 
 ```sh
