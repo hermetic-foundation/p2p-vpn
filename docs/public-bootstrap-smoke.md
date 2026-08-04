@@ -68,6 +68,7 @@ nix develop -c cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 
 nix develop -c cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
   --check-candidates \
+  --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
 
@@ -75,6 +76,7 @@ nix develop -c cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
   --check-candidates \
   --write-config p2p-vpn-public-relay.json \
+  --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
 
@@ -102,7 +104,9 @@ addresses for one relay still tests other relays before cycling through that
 peer's alternate addresses. Hosts without a usable IPv6 route skip IPv6-only
 relay candidates during validation and print each skip with
 `reason ipv6_unreachable`, while still showing the candidate in the scan output.
-Add
+Use `--max-validation-candidates N` to bound each validation pass after host
+reachability filtering; this is especially useful with `--require-dcutr-success`
+because each public relay can consume the full candidate timeout. Add
 `--write-config PATH` with `--check-candidates` to write a default
 relay-assisted config from the first validated scanned candidate. When the scan
 uses `--config p2p-vpn.json`, the output preserves that config's overlay
@@ -260,3 +264,25 @@ Public-relay-assisted DCUtR is still unproven from this host. A follow-up run
 against the same relay with `--require-dcutr-success --timeout-seconds 45`
 connected the relayed circuit but did not observe a successful hole punch; the
 direct QUIC attempt ended with `HandshakeTimedOut`.
+
+Additional bounded public DCUtR search evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --check-candidates --require-dcutr-success --timeout-seconds 20 --candidate-timeout-seconds 5 --max-candidates 12 --max-validation-candidates 3
+public relay scan: ok
+public relay scan total_peers: 16
+public relay scan routing_peers: 11 dialed 0
+public relay candidates: 12
+public relay scan validation skipped: /ip6/... reason ipv6_unreachable
+public relay scan validation limited: 3 of 9 host-reachable candidates
+public relay scan validation: public relay probe: failed
+public relay scan validation: public relay probe mode: dcutr_success
+public relay scan validation: public relay candidates: 3 succeeded 0
+```
+
+This confirms public DCUtR search runs can now be bounded after host
+reachability filtering. In this sample, all three validated candidates timed
+out during relay reservation; the larger unbounded run in the same environment
+validated 17 host-reachable candidates with zero DCUtR successes. Several
+candidates established relayed circuits, but direct hole-punch dials still
+ended in `HandshakeTimedOut` or direct TCP timeout from this host.

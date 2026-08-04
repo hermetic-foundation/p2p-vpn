@@ -808,6 +808,7 @@ cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
 cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
   --check-candidates \
+  --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
 
@@ -815,6 +816,7 @@ cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
   --check-candidates \
   --write-config p2p-vpn-public-relay.json \
+  --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
 
@@ -853,9 +855,11 @@ tries scanned candidates round-robin by relay peer, so a candidate set with
 many addresses for one relay still gives other relays an early chance before
 cycling through alternate addresses. Validation skips IPv6-only relay
 candidates when the local host has no usable IPv6 route and prints each skip as
-`public relay scan validation skipped: ... reason ipv6_unreachable`. Add
-`--require-dcutr-success` with
-`--check-candidates` when the scan should only pass after a successful
+`public relay scan validation skipped: ... reason ipv6_unreachable`. Use
+`--max-validation-candidates N` to bound a validation pass after host
+reachability filtering; this is useful for public DCUtR searches where each
+candidate can consume the full candidate timeout. Add `--require-dcutr-success`
+with `--check-candidates` when the scan should only pass after a successful
 public-relay-assisted hole punch. Pass `--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that
 `relay-check --write-config` writes from the first validated scanned candidate.

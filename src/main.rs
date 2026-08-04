@@ -275,6 +275,8 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
         candidate_timeout_seconds: u64,
+        #[arg(long)]
+        max_validation_candidates: Option<usize>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
         #[arg(long)]
@@ -582,6 +584,7 @@ async fn main() -> Result<(), String> {
             check_candidates,
             require_dcutr_success,
             candidate_timeout_seconds,
+            max_validation_candidates,
             write_config,
             force,
         } => {
@@ -594,6 +597,7 @@ async fn main() -> Result<(), String> {
                 check_candidates,
                 require_dcutr_success,
                 candidate_timeout_seconds,
+                max_validation_candidates,
                 write_config,
                 force,
             }))
@@ -785,6 +789,7 @@ struct RelayScanArgs {
     check_candidates: bool,
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
+    max_validation_candidates: Option<usize>,
     write_config: Option<PathBuf>,
     force: bool,
 }
@@ -2329,6 +2334,14 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
             skipped.address, skipped.reason
         );
     }
+    let (candidates, limit) =
+        limit_relay_scan_validation_candidates(candidates, args.max_validation_candidates);
+    if let Some(limit) = limit {
+        println!(
+            "public relay scan validation limited: {} of {} host-reachable candidates",
+            limit.kept, limit.total
+        );
+    }
     if candidates.is_empty() {
         return Err(
             "public relay scan did not have a host-reachable candidate to validate".to_owned(),
@@ -2368,6 +2381,9 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
 fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
     if args.max_candidates == 0 {
         return Err("--max-candidates must be greater than zero".to_owned());
+    }
+    if args.max_validation_candidates == Some(0) {
+        return Err("--max-validation-candidates must be greater than zero".to_owned());
     }
     if args.write_config.is_some() && !args.check_candidates {
         return Err("--write-config requires --check-candidates".to_owned());
@@ -2423,6 +2439,34 @@ fn filter_relay_scan_validation_candidates(
     }
 
     (kept, skipped)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RelayScanValidationLimit {
+    kept: usize,
+    total: usize,
+}
+
+fn limit_relay_scan_validation_candidates(
+    mut candidates: Vec<libp2p::Multiaddr>,
+    max_validation_candidates: Option<usize>,
+) -> (Vec<libp2p::Multiaddr>, Option<RelayScanValidationLimit>) {
+    let Some(max_validation_candidates) = max_validation_candidates else {
+        return (candidates, None);
+    };
+    let total = candidates.len();
+    if total <= max_validation_candidates {
+        return (candidates, None);
+    }
+
+    candidates.truncate(max_validation_candidates);
+    (
+        candidates,
+        Some(RelayScanValidationLimit {
+            kept: max_validation_candidates,
+            total,
+        }),
+    )
 }
 
 fn local_relay_candidate_reachability() -> RelayCandidateReachability {
@@ -4210,6 +4254,8 @@ mod tests {
             "--require-dcutr-success",
             "--candidate-timeout-seconds",
             "15",
+            "--max-validation-candidates",
+            "3",
             "--write-config",
             "relay-scan-config.json",
             "--force",
@@ -4225,6 +4271,7 @@ mod tests {
             check_candidates,
             require_dcutr_success,
             candidate_timeout_seconds,
+            max_validation_candidates,
             write_config,
             force,
         } = cli.command
@@ -4240,6 +4287,7 @@ mod tests {
         assert!(check_candidates);
         assert!(require_dcutr_success);
         assert_eq!(candidate_timeout_seconds, 15);
+        assert_eq!(max_validation_candidates, Some(3));
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
     }
@@ -4255,6 +4303,7 @@ mod tests {
             check_candidates: false,
             require_dcutr_success: false,
             candidate_timeout_seconds: 45,
+            max_validation_candidates: None,
             write_config: Some(PathBuf::from("relay-scan-config.json")),
             force: false,
         };
@@ -4266,6 +4315,28 @@ mod tests {
 
         args.check_candidates = true;
         validate_relay_scan_args(&args).expect("validation should pass");
+    }
+
+    #[test]
+    fn relay_scan_validation_limit_rejects_zero() {
+        let args = RelayScanArgs {
+            config_path: None,
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: true,
+            timeout_seconds: 30,
+            max_candidates: 8,
+            check_candidates: true,
+            require_dcutr_success: true,
+            candidate_timeout_seconds: 45,
+            max_validation_candidates: Some(0),
+            write_config: None,
+            force: false,
+        };
+
+        assert_eq!(
+            validate_relay_scan_args(&args).expect_err("validation should fail"),
+            "--max-validation-candidates must be greater than zero"
+        );
     }
 
     #[test]
@@ -4427,6 +4498,52 @@ mod tests {
 
         assert_eq!(kept.len(), 1);
         assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn relay_scan_validation_limit_truncates_host_reachable_candidates() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let candidates = vec![
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer}")
+                .parse()
+                .expect("first candidate"),
+            format!("/ip4/203.0.113.11/tcp/4001/p2p/{peer}")
+                .parse()
+                .expect("second candidate"),
+            format!("/ip4/203.0.113.12/tcp/4001/p2p/{peer}")
+                .parse()
+                .expect("third candidate"),
+        ];
+
+        let (kept, limit) = limit_relay_scan_validation_candidates(candidates, Some(2));
+
+        assert_eq!(kept.len(), 2);
+        assert_eq!(limit, Some(RelayScanValidationLimit { kept: 2, total: 3 }));
+        assert_eq!(
+            kept.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![
+                format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer}"),
+                format!("/ip4/203.0.113.11/tcp/4001/p2p/{peer}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn relay_scan_validation_limit_is_noop_when_cap_covers_candidates() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let candidates = vec![
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer}")
+                .parse()
+                .expect("first candidate"),
+            format!("/ip4/203.0.113.11/tcp/4001/p2p/{peer}")
+                .parse()
+                .expect("second candidate"),
+        ];
+
+        let (kept, limit) = limit_relay_scan_validation_candidates(candidates, Some(2));
+
+        assert_eq!(kept.len(), 2);
+        assert_eq!(limit, None);
     }
 
     fn relay_scan_report_with_candidates(
