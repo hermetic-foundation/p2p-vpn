@@ -234,6 +234,8 @@ enum Command {
         require_autonat_status: bool,
         #[arg(long)]
         require_dcutr_ready: bool,
+        #[arg(long)]
+        require_relayed_peer_circuits: bool,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -481,6 +483,7 @@ async fn main() -> Result<(), String> {
             require_relay_reservations,
             require_autonat_status,
             require_dcutr_ready,
+            require_relayed_peer_circuits,
         } => {
             let threshold = if require_all {
                 BootstrapCheckThreshold::All
@@ -495,6 +498,7 @@ async fn main() -> Result<(), String> {
                     relay_reservations: require_relay_reservations,
                     autonat_status: require_autonat_status,
                     dcutr_ready: require_dcutr_ready,
+                    relayed_peer_circuits: require_relayed_peer_circuits,
                 },
             ))
             .await

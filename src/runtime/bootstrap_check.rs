@@ -31,18 +31,23 @@ pub struct BootstrapCheckReport {
     pub configured_relay_reservations: usize,
     pub accepted_relay_reservations: usize,
     pub relayed_listen_addresses: usize,
+    pub configured_relayed_peer_circuits: usize,
+    pub connected_relayed_peer_circuits: usize,
     pub autonat_probe_servers_registered: usize,
     pub autonat_status: BootstrapAutoNatStatus,
     pub kademlia: BootstrapKademliaCheck,
     pub peer_results: Vec<BootstrapPeerCheck>,
     pub relay_results: Vec<RelayReservationCheck>,
+    pub relayed_peer_results: Vec<RelayedPeerCircuitCheck>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BootstrapCheckRequirements {
     pub relay_reservations: bool,
     pub autonat_status: bool,
     pub dcutr_ready: bool,
+    pub relayed_peer_circuits: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -87,14 +92,20 @@ impl BootstrapCheckReport {
             || (self.autonat_probe_servers_registered > 0 && self.autonat_status.is_observed());
         let dcutr_ok = !self.requirements.dcutr_ready || self.dcutr.ready;
 
+        let relayed_peer_circuits_ok = !self.requirements.relayed_peer_circuits
+            || (self.configured_relayed_peer_circuits > 0
+                && self.connected_relayed_peer_circuits == self.configured_relayed_peer_circuits);
+
         (has_bootstrap_work
             || self.requirements.relay_reservations
             || self.requirements.autonat_status
-            || self.requirements.dcutr_ready)
+            || self.requirements.dcutr_ready
+            || self.requirements.relayed_peer_circuits)
             && bootstrap_ok
             && relay_ok
             && autonat_ok
             && dcutr_ok
+            && relayed_peer_circuits_ok
     }
 
     #[must_use]
@@ -114,6 +125,10 @@ impl BootstrapCheckReport {
                 self.requirements.autonat_status
             ),
             format!("require dcutr ready: {}", self.requirements.dcutr_ready),
+            format!(
+                "require relayed peer circuits: {}",
+                self.requirements.relayed_peer_circuits
+            ),
             format!("kademlia protocol: {}", self.kademlia_protocol),
             format!("ipfs compatible: {}", self.ipfs_compatible),
             format!("dcutr enabled: {}", self.dcutr.enabled),
@@ -145,6 +160,10 @@ impl BootstrapCheckReport {
                 self.accepted_relay_reservations,
                 self.relayed_listen_addresses
             ),
+            format!(
+                "relayed peer circuits: {} connected {}",
+                self.configured_relayed_peer_circuits, self.connected_relayed_peer_circuits
+            ),
         ];
 
         for peer in &self.peer_results {
@@ -162,6 +181,18 @@ impl BootstrapCheckReport {
             lines.push(format!(
                 "relay reservation: {} accepted {} relayed_listen_address {} address {}",
                 relay.relay_peer_id, relay.accepted, relay.relayed_listen_address, relay.address
+            ));
+        }
+
+        for peer in &self.relayed_peer_results {
+            lines.push(format!(
+                "relayed peer circuit: {} connected {} outbound_circuit {} dial_failures {} last_error {} address {}",
+                peer.peer_id,
+                peer.connected,
+                peer.outbound_circuit,
+                peer.dial_failures,
+                peer.last_error.as_deref().unwrap_or("none"),
+                peer.address
             ));
         }
 
@@ -216,6 +247,16 @@ pub struct RelayReservationCheck {
     pub relayed_listen_address: bool,
 }
 
+#[derive(Debug)]
+pub struct RelayedPeerCircuitCheck {
+    pub peer_id: Libp2pPeerId,
+    pub address: String,
+    pub connected: bool,
+    pub outbound_circuit: bool,
+    pub dial_failures: usize,
+    pub last_error: Option<String>,
+}
+
 pub async fn check_config_bootstrap(
     config: &Config,
     timeout: Duration,
@@ -226,10 +267,12 @@ pub async fn check_config_bootstrap(
     let mut node = build_node(&bootstrap_check_host_config(config)?)?;
     let bootstrap_peers = node.bootstrap_peer_addresses.clone();
     let relay_reservations = node.relay_peer_addresses.clone();
+    let relayed_peers = relayed_peer_addresses(&node.configured_peer_addresses);
     let poll = poll_bootstrap_events(
         &mut node,
         &bootstrap_peers,
         &relay_reservations,
+        &relayed_peers,
         timeout,
         threshold,
         requirements,
@@ -257,6 +300,8 @@ pub async fn check_config_bootstrap(
         configured_relay_reservations: relay_reservations.len(),
         accepted_relay_reservations: poll.accepted_relay_reservations.len(),
         relayed_listen_addresses: poll.relayed_listen_addresses.len(),
+        configured_relayed_peer_circuits: relayed_peers.len(),
+        connected_relayed_peer_circuits: poll.connected_relayed_peers.len(),
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: poll.autonat_status,
         kademlia: BootstrapKademliaCheck {
@@ -293,6 +338,29 @@ pub async fn check_config_bootstrap(
                 relayed_listen_address: poll.relayed_listen_addresses.contains_key(&relay_peer_id),
             })
             .collect(),
+        relayed_peer_results: relayed_peers
+            .into_iter()
+            .map(|(peer_id, address)| {
+                let relay_peer = relay_peer_from_relayed_address(&address);
+                RelayedPeerCircuitCheck {
+                    peer_id,
+                    address: address.to_string(),
+                    connected: poll.connected_relayed_peers.contains(&peer_id),
+                    outbound_circuit: relay_peer.is_some_and(|relay| {
+                        poll.outbound_circuit_relays.contains(&relay)
+                            || poll.connected_relayed_peers.contains(&peer_id)
+                    }),
+                    dial_failures: poll
+                        .relayed_peer_dial_failures
+                        .iter()
+                        .filter(|(failed_peer, _)| *failed_peer == peer_id)
+                        .count(),
+                    last_error: poll.relayed_peer_dial_failures.iter().rev().find_map(
+                        |(failed_peer, error)| (*failed_peer == peer_id).then(|| error.clone()),
+                    ),
+                }
+            })
+            .collect(),
     })
 }
 
@@ -320,6 +388,7 @@ async fn poll_bootstrap_events(
     node: &mut P2pNode,
     bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
     relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    relayed_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
     requirements: BootstrapCheckRequirements,
@@ -331,6 +400,9 @@ async fn poll_bootstrap_events(
             .collect(),
         ..BootstrapPollResult::default()
     };
+    if requirements.relayed_peer_circuits {
+        dial_relayed_peer_targets(node, relayed_peers, &mut result);
+    }
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
     while should_continue_polling(PollingStatus {
@@ -341,6 +413,8 @@ async fn poll_bootstrap_events(
         configured_relay_reservations: relay_reservations.len(),
         accepted_relay_reservations: result.accepted_relay_reservations.len(),
         relayed_listen_addresses: result.relayed_listen_addresses.len(),
+        configured_relayed_peer_circuits: relayed_peers.len(),
+        connected_relayed_peer_circuits: result.connected_relayed_peers.len(),
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: result.autonat_status,
         now: Instant::now(),
@@ -350,30 +424,73 @@ async fn poll_bootstrap_events(
         let Ok(event) = tokio::time::timeout(remaining, node.swarm.select_next_some()).await else {
             break;
         };
-        record_bootstrap_event(event, bootstrap_peers, relay_reservations, &mut result);
+        record_bootstrap_event(
+            event,
+            bootstrap_peers,
+            relay_reservations,
+            relayed_peers,
+            &mut result,
+        );
     }
 
     result
+}
+
+fn dial_relayed_peer_targets(
+    node: &mut P2pNode,
+    relayed_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    result: &mut BootstrapPollResult,
+) {
+    for (peer, address) in relayed_peers {
+        let dial_address = match peer_dial_address(*peer, address.clone()) {
+            Ok(address) => address,
+            Err(address) => {
+                result
+                    .relayed_peer_dial_failures
+                    .push((*peer, format!("address lacks valid /p2p/{peer}: {address}")));
+                continue;
+            }
+        };
+
+        if let Err(error) = node.swarm.dial(dial_address) {
+            result
+                .relayed_peer_dial_failures
+                .push((*peer, format!("{error:?}")));
+        }
+    }
 }
 
 fn record_bootstrap_event(
     event: SwarmEvent<BehaviourEvent>,
     bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
     relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    relayed_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
     result: &mut BootstrapPollResult,
 ) {
     match event {
-        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+        SwarmEvent::ConnectionEstablished {
+            peer_id, endpoint, ..
+        } => {
             if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
                 result.connected_bootstrap_peers.insert(peer_id);
+            }
+            if endpoint.is_relayed() && relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
+                result.connected_relayed_peers.insert(peer_id);
             }
         }
         SwarmEvent::OutgoingConnectionError {
             peer_id: Some(peer_id),
             error,
             ..
-        } if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) => {
-            result.dial_failures.push((peer_id, format!("{error:?}")));
+        } => {
+            if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
+                result.dial_failures.push((peer_id, format!("{error:?}")));
+            }
+            if relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
+                result
+                    .relayed_peer_dial_failures
+                    .push((peer_id, format!("{error:?}")));
+            }
         }
         SwarmEvent::Behaviour(BehaviourEvent::Relay(
             relay::client::Event::ReservationReqAccepted {
@@ -386,6 +503,11 @@ fn record_bootstrap_event(
             .any(|(peer, _)| *peer == relay_peer_id) =>
         {
             result.accepted_relay_reservations.insert(relay_peer_id);
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Relay(
+            relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. },
+        )) => {
+            result.outbound_circuit_relays.insert(relay_peer_id);
         }
         SwarmEvent::NewListenAddr { address, .. } => {
             if let Some(relay_peer) = relay_peer_from_relayed_address(&address)
@@ -412,6 +534,9 @@ struct BootstrapPollResult {
     dial_failures: Vec<(Libp2pPeerId, String)>,
     accepted_relay_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashMap<Libp2pPeerId, libp2p::Multiaddr>,
+    connected_relayed_peers: HashSet<Libp2pPeerId>,
+    outbound_circuit_relays: HashSet<Libp2pPeerId>,
+    relayed_peer_dial_failures: Vec<(Libp2pPeerId, String)>,
     autonat_status: BootstrapAutoNatStatus,
 }
 
@@ -424,6 +549,8 @@ struct PollingStatus {
     configured_relay_reservations: usize,
     accepted_relay_reservations: usize,
     relayed_listen_addresses: usize,
+    configured_relayed_peer_circuits: usize,
+    connected_relayed_peer_circuits: usize,
     autonat_probe_servers_registered: usize,
     autonat_status: BootstrapAutoNatStatus,
     now: Instant,
@@ -434,7 +561,8 @@ fn should_continue_polling(status: PollingStatus) -> bool {
     if (status.configured_bootstrap_peers == 0
         && !status.requirements.relay_reservations
         && !status.requirements.autonat_status
-        && !status.requirements.dcutr_ready)
+        && !status.requirements.dcutr_ready
+        && !status.requirements.relayed_peer_circuits)
         || status.now >= status.deadline
     {
         return false;
@@ -454,8 +582,11 @@ fn should_continue_polling(status: PollingStatus) -> bool {
     let autonat_waiting = status.requirements.autonat_status
         && status.autonat_probe_servers_registered > 0
         && !status.autonat_status.is_observed();
+    let relayed_peer_waiting = status.requirements.relayed_peer_circuits
+        && status.configured_relayed_peer_circuits > 0
+        && status.connected_relayed_peer_circuits < status.configured_relayed_peer_circuits;
 
-    bootstrap_waiting || relay_waiting || autonat_waiting
+    bootstrap_waiting || relay_waiting || autonat_waiting || relayed_peer_waiting
 }
 
 const fn relay_reservations_ready(
@@ -500,6 +631,30 @@ fn relay_peer_from_relayed_address(address: &libp2p::Multiaddr) -> Option<Libp2p
     None
 }
 
+fn relayed_peer_addresses(
+    configured_peer_addresses: &[(Libp2pPeerId, libp2p::Multiaddr)],
+) -> Vec<(Libp2pPeerId, libp2p::Multiaddr)> {
+    configured_peer_addresses
+        .iter()
+        .filter(|(_, address)| relay_peer_from_relayed_address(address).is_some())
+        .cloned()
+        .collect()
+}
+
+fn peer_dial_address(
+    peer: Libp2pPeerId,
+    address: libp2p::Multiaddr,
+) -> Result<libp2p::Multiaddr, libp2p::Multiaddr> {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2p(address_peer) if address_peer == peer))
+    {
+        return Ok(address);
+    }
+
+    address.with_p2p(peer)
+}
+
 #[derive(Debug)]
 pub enum BootstrapCheckError {
     Config(ConfigError),
@@ -536,7 +691,7 @@ mod tests {
     use crate::{
         config::{
             BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, NetworkConfig,
-            PacketPlaneConfig, QueueConfig, RelayConfig, ResourceConfig,
+            PacketPlaneConfig, PeerConfig, QueueConfig, RelayConfig, ResourceConfig,
         },
         identity::NodeIdentity,
         runtime::p2p::{HostConfig, build_node},
@@ -629,6 +784,7 @@ mod tests {
                 relay_reservations: true,
                 autonat_status: false,
                 dcutr_ready: true,
+                relayed_peer_circuits: false,
             },
         )
         .await
@@ -644,6 +800,103 @@ mod tests {
         assert!(report.lines().contains(&"bootstrap check: ok".to_owned()));
     }
 
+    #[tokio::test]
+    async fn bootstrap_check_can_probe_relayed_peer_circuit() {
+        let discovery = relay_test_discovery();
+        let mut relay_node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("relay identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("relay node");
+        let relay_peer = relay_node.local_peer_id;
+        let relay_address = next_listen_address(&mut relay_node).await;
+        relay_node.swarm.add_external_address(relay_address.clone());
+        let relay_reservation = relay_address
+            .clone()
+            .with_p2p(relay_peer)
+            .expect("relay address")
+            .with(Protocol::P2pCircuit);
+
+        let mut listener_node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation.clone()],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery,
+        })
+        .expect("listener node");
+        let listener_peer = listener_node.local_peer_id;
+        let relayed_target_address = relay_reservation.clone().with(Protocol::P2p(listener_peer));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_relay_reservation(
+                &mut relay_node,
+                &mut listener_node,
+                relayed_target_address.clone(),
+                relay_peer,
+            ),
+        )
+        .await
+        .expect("relay reservation timed out");
+
+        let _relay_task = tokio::spawn(async move {
+            loop {
+                let _ = relay_node.swarm.select_next_some().await;
+            }
+        });
+        let _listener_task = tokio::spawn(async move {
+            loop {
+                let _ = listener_node.swarm.select_next_some().await;
+            }
+        });
+
+        let config = config_with_relayed_peer(listener_peer, &relayed_target_address);
+        let report = check_config_bootstrap(
+            &config,
+            Duration::from_secs(10),
+            BootstrapCheckThreshold::Any,
+            BootstrapCheckRequirements {
+                relay_reservations: false,
+                autonat_status: false,
+                dcutr_ready: false,
+                relayed_peer_circuits: true,
+            },
+        )
+        .await
+        .expect("bootstrap check");
+
+        assert!(report.succeeded(), "{report:?}");
+        assert_eq!(report.configured_relayed_peer_circuits, 1);
+        assert_eq!(report.connected_relayed_peer_circuits, 1);
+        assert_eq!(report.relayed_peer_results.len(), 1);
+        assert!(report.relayed_peer_results[0].connected);
+        assert!(report.relayed_peer_results[0].outbound_circuit);
+    }
+
     #[test]
     fn bootstrap_check_lines_report_ipfs_compatible_thresholds() {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
@@ -653,6 +906,7 @@ mod tests {
                 relay_reservations: true,
                 autonat_status: true,
                 dcutr_ready: true,
+                relayed_peer_circuits: true,
             },
             kademlia_protocol: "/ipfs/kad/1.0.0".to_owned(),
             ipfs_compatible: true,
@@ -666,6 +920,8 @@ mod tests {
             configured_relay_reservations: 1,
             accepted_relay_reservations: 0,
             relayed_listen_addresses: 0,
+            configured_relayed_peer_circuits: 1,
+            connected_relayed_peer_circuits: 0,
             autonat_probe_servers_registered: 2,
             autonat_status: BootstrapAutoNatStatus::Private,
             kademlia: BootstrapKademliaCheck {
@@ -686,6 +942,14 @@ mod tests {
                 accepted: false,
                 relayed_listen_address: false,
             }],
+            relayed_peer_results: vec![RelayedPeerCircuitCheck {
+                peer_id: peer,
+                address: "/dns4/relay.example.net/tcp/4001/p2p/example/p2p-circuit".to_owned(),
+                connected: false,
+                outbound_circuit: false,
+                dial_failures: 1,
+                last_error: Some("dial failed".to_owned()),
+            }],
         };
 
         let lines = report.lines();
@@ -696,6 +960,7 @@ mod tests {
         assert!(lines.contains(&"require relay reservations: true".to_owned()));
         assert!(lines.contains(&"require autonat status: true".to_owned()));
         assert!(lines.contains(&"require dcutr ready: true".to_owned()));
+        assert!(lines.contains(&"require relayed peer circuits: true".to_owned()));
         assert!(lines.contains(&"ipfs compatible: true".to_owned()));
         assert!(lines.contains(&"dcutr enabled: true".to_owned()));
         assert!(lines.contains(&"dcutr ready: false".to_owned()));
@@ -712,6 +977,13 @@ mod tests {
                 .any(|line| line.contains("accepted false relayed_listen_address false"))
         );
         assert!(lines.iter().any(|line| line.contains("last_error none")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("relayed peer circuit:")
+                    && line.contains("connected false")
+                    && line.contains("dial_failures 1"))
+        );
     }
 
     #[test]
@@ -729,6 +1001,13 @@ mod tests {
         assert!(!dcutr_report(true, 1, 0, 1).succeeded());
         assert!(!dcutr_report(true, 1, 1, 0).succeeded());
         assert!(!dcutr_report(true, 0, 0, 0).succeeded());
+    }
+
+    #[test]
+    fn bootstrap_check_can_require_relayed_peer_circuits() {
+        assert!(relayed_peer_report(1, 1).succeeded());
+        assert!(!relayed_peer_report(1, 0).succeeded());
+        assert!(!relayed_peer_report(0, 0).succeeded());
     }
 
     #[test]
@@ -760,6 +1039,56 @@ mod tests {
             if let SwarmEvent::NewListenAddr { address, .. } = node.swarm.select_next_some().await {
                 return address;
             }
+        }
+    }
+
+    async fn wait_for_relay_reservation(
+        relay: &mut crate::runtime::p2p::P2pNode,
+        listener: &mut crate::runtime::p2p::P2pNode,
+        relayed_address: Multiaddr,
+        relay_peer: Libp2pPeerId,
+    ) {
+        let mut listen_addr_reported = false;
+        let mut reservation_accepted = false;
+
+        loop {
+            tokio::select! {
+                event = relay.swarm.select_next_some() => {
+                    let _ = event;
+                }
+                event = listener.swarm.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                            relay::client::Event::ReservationReqAccepted {
+                                relay_peer_id,
+                                renewal,
+                                ..
+                            },
+                        )) if relay_peer_id == relay_peer && !renewal => {
+                            reservation_accepted = true;
+                        }
+                        SwarmEvent::NewListenAddr { address, .. } if address == relayed_address => {
+                            listen_addr_reported = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if listen_addr_reported && reservation_accepted {
+                return;
+            }
+        }
+    }
+
+    fn relay_test_discovery() -> DiscoveryConfig {
+        DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
         }
     }
 
@@ -800,6 +1129,19 @@ mod tests {
         config
     }
 
+    fn config_with_relayed_peer(peer: Libp2pPeerId, address: &Multiaddr) -> Config {
+        let mut config = config_with_bootstrap_peer(peer_id(), &"/memory/9".parse().expect("addr"));
+        config.network.bootstrap_peers = Vec::new();
+        config.network.discovery = relay_test_discovery();
+        config.peers = vec![PeerConfig {
+            id: peer.to_string(),
+            name: Some("listener".to_owned()),
+            addresses: vec![address.to_string()],
+            routes: Vec::new(),
+        }];
+        config
+    }
+
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
     }
@@ -814,6 +1156,7 @@ mod tests {
                 relay_reservations: false,
                 autonat_status: true,
                 dcutr_ready: false,
+                relayed_peer_circuits: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -827,11 +1170,14 @@ mod tests {
             configured_relay_reservations: 0,
             accepted_relay_reservations: 0,
             relayed_listen_addresses: 0,
+            configured_relayed_peer_circuits: 0,
+            connected_relayed_peer_circuits: 0,
             autonat_probe_servers_registered,
             autonat_status,
             kademlia: BootstrapKademliaCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),
+            relayed_peer_results: Vec::new(),
         }
     }
 
@@ -845,6 +1191,7 @@ mod tests {
                 relay_reservations: true,
                 autonat_status: false,
                 dcutr_ready: false,
+                relayed_peer_circuits: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -855,11 +1202,14 @@ mod tests {
             configured_relay_reservations,
             accepted_relay_reservations,
             relayed_listen_addresses: configured_relay_reservations,
+            configured_relayed_peer_circuits: 0,
+            connected_relayed_peer_circuits: 0,
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
             peer_results: Vec::new(),
             relay_results,
+            relayed_peer_results: Vec::new(),
         }
     }
 
@@ -886,6 +1236,7 @@ mod tests {
                 relay_reservations: false,
                 autonat_status: false,
                 dcutr_ready: true,
+                relayed_peer_circuits: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -904,11 +1255,65 @@ mod tests {
             configured_relay_reservations,
             accepted_relay_reservations,
             relayed_listen_addresses,
+            configured_relayed_peer_circuits: 0,
+            connected_relayed_peer_circuits: 0,
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
             peer_results: Vec::new(),
             relay_results,
+            relayed_peer_results: Vec::new(),
+        }
+    }
+
+    fn relayed_peer_report(
+        configured_relayed_peer_circuits: usize,
+        connected_relayed_peer_circuits: usize,
+    ) -> BootstrapCheckReport {
+        let relayed_peer_results: Vec<_> = (0..configured_relayed_peer_circuits)
+            .map(|index| {
+                let target_peer = peer_id();
+                let relay_peer = peer_id();
+                RelayedPeerCircuitCheck {
+                    peer_id: target_peer,
+                    address: format!(
+                        "/memory/{}/p2p/{relay_peer}/p2p-circuit/p2p/{target_peer}",
+                        index + 20
+                    ),
+                    connected: index < connected_relayed_peer_circuits,
+                    outbound_circuit: index < connected_relayed_peer_circuits,
+                    dial_failures: usize::from(index >= connected_relayed_peer_circuits),
+                    last_error: (index >= connected_relayed_peer_circuits)
+                        .then(|| "dial failed".to_owned()),
+                }
+            })
+            .collect();
+
+        BootstrapCheckReport {
+            threshold: BootstrapCheckThreshold::Any,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: false,
+                autonat_status: false,
+                dcutr_ready: false,
+                relayed_peer_circuits: true,
+            },
+            kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
+            ipfs_compatible: false,
+            dcutr: BootstrapDcutrCheck::default(),
+            configured_bootstrap_peers: 0,
+            connected_bootstrap_peers: 0,
+            dial_failures: 0,
+            configured_relay_reservations: 0,
+            accepted_relay_reservations: 0,
+            relayed_listen_addresses: 0,
+            configured_relayed_peer_circuits,
+            connected_relayed_peer_circuits,
+            autonat_probe_servers_registered: 0,
+            autonat_status: BootstrapAutoNatStatus::Unknown,
+            kademlia: BootstrapKademliaCheck::default(),
+            peer_results: Vec::new(),
+            relay_results: Vec::new(),
+            relayed_peer_results,
         }
     }
 }

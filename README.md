@@ -726,6 +726,7 @@ cargo run -- bootstrap-check --config p2p-vpn.json --require-all --timeout-secon
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relay-reservations --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-autonat-status --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-ready --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-relayed-peer-circuits --timeout-seconds 30
 ```
 
 `bootstrap-check` builds the same libp2p host used by the daemon, starts the
@@ -749,8 +750,13 @@ that same relay has a corresponding relayed listen address. Use
 `--require-dcutr-ready` to fail unless DCUtR is enabled and the relay
 reservation prerequisites for DCUtR are usable on each configured relay;
 this is a rootless readiness check, not proof that a remote peer has completed a
-hole punch. It does not add bootstrap or relay peers to VPN membership or grant
-route authority.
+hole punch. Use `--require-relayed-peer-circuits` when the VPN peer list contains
+full relayed target addresses such as
+`/dns4/relay.example.net/tcp/4001/p2p/RELAY/p2p-circuit/p2p/PEER`; the command
+dials each configured relayed peer target, reports per-peer circuit status, and
+fails unless every configured relayed peer circuit connects before the timeout.
+It does not add bootstrap or relay peers to VPN membership or grant route
+authority.
 
 Inspect the runtime metric names and startup snapshot:
 
