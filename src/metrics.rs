@@ -138,6 +138,7 @@ pub struct RuntimeMetrics {
     autonat_status_changes_to_private: AtomicU64,
     kademlia_provider_lookups: AtomicU64,
     kademlia_providers_found: AtomicU64,
+    kademlia_providers_ignored: AtomicU64,
     kademlia_provider_dial_attempts: AtomicU64,
     kademlia_provider_dial_failures: AtomicU64,
     kademlia_provider_advertisements: AtomicU64,
@@ -552,6 +553,11 @@ impl RuntimeMetrics {
             u64::try_from(providers).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
+    }
+
+    pub fn record_kademlia_provider_ignored(&self) {
+        self.kademlia_providers_ignored
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_kademlia_provider_dial_attempt(&self) {
@@ -983,6 +989,8 @@ impl RuntimeMetrics {
             .load(Ordering::Relaxed);
         snapshot.kademlia_provider_lookups = self.kademlia_provider_lookups.load(Ordering::Relaxed);
         snapshot.kademlia_providers_found = self.kademlia_providers_found.load(Ordering::Relaxed);
+        snapshot.kademlia_providers_ignored =
+            self.kademlia_providers_ignored.load(Ordering::Relaxed);
         snapshot.kademlia_provider_dial_attempts =
             self.kademlia_provider_dial_attempts.load(Ordering::Relaxed);
         snapshot.kademlia_provider_dial_failures =
@@ -1167,6 +1175,7 @@ pub struct RuntimeSnapshot {
     pub autonat_status_changes_to_private: u64,
     pub kademlia_provider_lookups: u64,
     pub kademlia_providers_found: u64,
+    pub kademlia_providers_ignored: u64,
     pub kademlia_provider_dial_attempts: u64,
     pub kademlia_provider_dial_failures: u64,
     pub kademlia_provider_advertisements: u64,
@@ -1391,6 +1400,10 @@ impl RuntimeSnapshot {
                 self.kademlia_provider_lookups
             ),
             format!("kademlia_providers_found {}", self.kademlia_providers_found),
+            format!(
+                "kademlia_providers_ignored {}",
+                self.kademlia_providers_ignored
+            ),
             format!(
                 "kademlia_provider_dial_attempts {}",
                 self.kademlia_provider_dial_attempts
@@ -1840,6 +1853,7 @@ mod tests {
         metrics.record_autonat_status(AutoNatReachability::Private);
         metrics.record_kademlia_provider_lookup();
         metrics.record_kademlia_providers_found(2);
+        metrics.record_kademlia_provider_ignored();
         metrics.record_kademlia_provider_dial_attempt();
         metrics.record_kademlia_provider_dial_failure();
         metrics.record_kademlia_provider_advertisement();
@@ -2113,6 +2127,7 @@ mod tests {
         assert_eq!(snapshot.autonat_status_changes_to_private, 1);
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_providers_found, 2);
+        assert_eq!(snapshot.kademlia_providers_ignored, 1);
         assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
         assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);

@@ -4276,6 +4276,13 @@ fn dial_kademlia_providers(
 ) {
     metrics.record_kademlia_providers_found(providers.len());
     for provider in providers {
+        if *provider == *swarm.local_peer_id()
+            || !forwarder.is_configured_transport_peer(*provider)
+            || swarm.is_connected(provider)
+        {
+            metrics.record_kademlia_provider_ignored();
+            continue;
+        }
         dial_configured_peer(swarm, forwarder, metrics, *provider);
     }
 }
@@ -5864,6 +5871,7 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_providers_found, 2);
+        assert_eq!(snapshot.kademlia_providers_ignored, 1);
         assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
         assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
     }

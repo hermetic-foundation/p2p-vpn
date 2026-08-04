@@ -711,13 +711,13 @@ accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
 current public/private/unknown reachability gauges and status-change counters,
 service-plane request/response/status/rejection/failure counters, Kademlia
-provider lookup/result/configured-provider-dial/advertisement and bootstrap
-refresh counts, unauthorized connection drops, configured peer redial counters,
-accepted/dialed/rejected/expired discovered-address counters, asynchronous
-outgoing connection error counts, healthy path counts by transport kind,
-configured peers with and without a currently supported packet path, and
-queue-drain stalls caused by peers having no currently supported packet path or
-a full packet stream send window.
+provider lookup/result/ignored-provider/configured-provider-dial/advertisement
+and bootstrap refresh counts, unauthorized connection drops, configured peer
+redial counters, accepted/dialed/rejected/expired discovered-address counters,
+asynchronous outgoing connection error counts, healthy path counts by transport
+kind, configured peers with and without a currently supported packet path, and
+queue-drain stalls caused by peers having no currently supported packet path or a
+full packet stream send window.
 Those counters are intended to show whether a deployment is
 exchanging capabilities, checking service status, probing and advertising
 observed public addresses, refreshing DHT discovery, rejecting bad discovered
