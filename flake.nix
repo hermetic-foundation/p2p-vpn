@@ -50,6 +50,11 @@
                   tcpPorts = [ 4001 ];
                   udpPorts = [ 4001 ];
                 };
+                services.p2p-vpn.instances.node-b = {
+                  enable = true;
+                  configFile = "/etc/p2p-vpn/node-b.json";
+                  controlSocket = null;
+                };
               }
             )
           ];
@@ -115,6 +120,9 @@
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
           nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
+            execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
+            execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
+            execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
             killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
             timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
             runtimeDirectory = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectory;
@@ -127,6 +135,16 @@
               *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
             esac
+            case "$execStartNoSocket" in
+              *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
+              *"p2p-vpn up --config /etc/p2p-vpn/node-b.json"*) ;;
+              *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
+            esac
+            case "$execStop" in
+              *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;
+              *) echo "unexpected ExecStop: $execStop" >&2; exit 1 ;;
+            esac
+            test "$execStopNoSocket" = '[]'
             test "$killSignal" = SIGTERM
             test "$timeoutStopSec" = 30s
             test "$runtimeDirectory" = p2p-vpn-node-a

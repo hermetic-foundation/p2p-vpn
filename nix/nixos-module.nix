@@ -118,6 +118,14 @@ let
           ]
           ++ instance.extraArgs
         );
+        ExecStop = optionals (instance.controlSocket != null) [
+          (lib.escapeShellArgs [
+            "${cfg.package}/bin/p2p-vpn"
+            "daemon-shutdown"
+            "--socket"
+            instance.controlSocket
+          ])
+        ];
         Restart = "on-failure";
         RestartSec = "5s";
         KillSignal = "SIGTERM";

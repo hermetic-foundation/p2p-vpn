@@ -659,9 +659,12 @@ deployment skeleton is available as the `nixos-mesh` flake template in
 `examples/nixos-mesh`.
 
 The daemon handles Ctrl-C and systemd's SIGTERM as orderly shutdown requests.
-On shutdown it stops the libp2p runtime loop, prints a final metrics snapshot,
-and exits successfully. Runtime lifecycle and high-value network events are
-written to stderr as key-value lines such as
+When a NixOS instance has `controlSocket` enabled, the systemd unit first runs
+`p2p-vpn daemon-shutdown --socket ...` as `ExecStop`; SIGTERM and
+`TimeoutStopSec` remain as the fallback if the local control socket is disabled
+or unavailable. On shutdown it stops the libp2p runtime loop, prints a final
+metrics snapshot, and exits successfully. Runtime lifecycle and high-value
+network events are written to stderr as key-value lines such as
 `level=info event=connection_established peer=<peer-id> relayed=false`, which
 keeps journald output grep-friendly without requiring a separate logging
 collector. Rejected packet, control, and service requests emit warn-level audit
