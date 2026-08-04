@@ -11,6 +11,10 @@ use tokio::{
 
 const STATUS_REQUEST: &[u8] = b"status\n";
 const STATE_REQUEST: &[u8] = b"state\n";
+const PEERS_REQUEST: &[u8] = b"peers\n";
+const ROUTES_REQUEST: &[u8] = b"routes\n";
+const PATHS_REQUEST: &[u8] = b"paths\n";
+const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const MAX_REQUEST_LEN: usize = 64;
 const MAX_RESPONSE_LEN: usize = 256 * 1024;
@@ -22,6 +26,18 @@ pub enum RuntimeControlRequest {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     State {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Peers {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Routes {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Paths {
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
+    Capabilities {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     Shutdown {
@@ -93,6 +109,10 @@ async fn handle_connection(
     let request = match request.as_slice() {
         STATUS_REQUEST => RequestKind::Status,
         STATE_REQUEST => RequestKind::State,
+        PEERS_REQUEST => RequestKind::Peers,
+        ROUTES_REQUEST => RequestKind::Routes,
+        PATHS_REQUEST => RequestKind::Paths,
+        CAPABILITIES_REQUEST => RequestKind::Capabilities,
         SHUTDOWN_REQUEST => RequestKind::Shutdown,
         _ => {
             stream.write_all(b"error unsupported request\n").await?;
@@ -111,6 +131,34 @@ async fn handle_connection(
         }
         RequestKind::State => {
             tx.send(RuntimeControlRequest::State { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+        RequestKind::Peers => {
+            tx.send(RuntimeControlRequest::Peers { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+        RequestKind::Routes => {
+            tx.send(RuntimeControlRequest::Routes { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+        RequestKind::Paths => {
+            tx.send(RuntimeControlRequest::Paths { respond_to })
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+                })?;
+        }
+        RequestKind::Capabilities => {
+            tx.send(RuntimeControlRequest::Capabilities { respond_to })
                 .await
                 .map_err(|_| {
                     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
@@ -137,6 +185,10 @@ async fn handle_connection(
 enum RequestKind {
     Status,
     State,
+    Peers,
+    Routes,
+    Paths,
+    Capabilities,
     Shutdown,
 }
 
@@ -181,6 +233,34 @@ pub async fn query_state(
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
     query_lines(path, timeout, STATE_REQUEST).await
+}
+
+pub async fn query_peers(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, PEERS_REQUEST).await
+}
+
+pub async fn query_routes(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, ROUTES_REQUEST).await
+}
+
+pub async fn query_paths(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, PATHS_REQUEST).await
+}
+
+pub async fn query_capabilities(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, CAPABILITIES_REQUEST).await
 }
 
 pub async fn query_shutdown(
@@ -354,6 +434,71 @@ mod tests {
             .expect("query");
 
         assert_eq!(lines, vec!["shutdown accepted".to_owned()]);
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_serves_daemon_view_requests() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-control-{}-{}.sock",
+            std::process::id(),
+            "views"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            for expected in ["peers", "routes", "paths", "capabilities"] {
+                match (expected, rx.recv().await) {
+                    ("peers", Some(RuntimeControlRequest::Peers { respond_to })) => {
+                        respond_to
+                            .send(vec!["peers: 1".to_owned()])
+                            .expect("peers response accepted");
+                    }
+                    ("routes", Some(RuntimeControlRequest::Routes { respond_to })) => {
+                        respond_to
+                            .send(vec!["remote advertised routes: 1".to_owned()])
+                            .expect("routes response accepted");
+                    }
+                    ("paths", Some(RuntimeControlRequest::Paths { respond_to })) => {
+                        respond_to
+                            .send(vec!["peer selected path: abc direct_tcp_stream".to_owned()])
+                            .expect("paths response accepted");
+                    }
+                    ("capabilities", Some(RuntimeControlRequest::Capabilities { respond_to })) => {
+                        respond_to
+                            .send(vec!["validated peers: 1".to_owned()])
+                            .expect("capabilities response accepted");
+                    }
+                    (kind, other) => panic!("expected {kind} request, got {other:?}"),
+                }
+            }
+        });
+
+        assert_eq!(
+            query_peers(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("peers"),
+            vec!["peers: 1".to_owned()]
+        );
+        assert_eq!(
+            query_routes(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("routes"),
+            vec!["remote advertised routes: 1".to_owned()]
+        );
+        assert_eq!(
+            query_paths(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("paths"),
+            vec!["peer selected path: abc direct_tcp_stream".to_owned()]
+        );
+        assert_eq!(
+            query_capabilities(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("capabilities"),
+            vec!["validated peers: 1".to_owned()]
+        );
         responder.await.expect("responder");
         drop(socket);
     }

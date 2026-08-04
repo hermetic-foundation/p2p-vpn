@@ -234,6 +234,30 @@ enum Command {
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
     },
+    DaemonPeers {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
+    DaemonRoutes {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
+    DaemonPaths {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
+    DaemonCapabilities {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+    },
     DaemonShutdown {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -424,6 +448,22 @@ async fn main() -> Result<(), String> {
             socket,
             timeout_seconds,
         } => Box::pin(daemon_state(&socket, timeout_seconds)).await,
+        Command::DaemonPeers {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_peers(&socket, timeout_seconds)).await,
+        Command::DaemonRoutes {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_routes(&socket, timeout_seconds)).await,
+        Command::DaemonPaths {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_paths(&socket, timeout_seconds)).await,
+        Command::DaemonCapabilities {
+            socket,
+            timeout_seconds,
+        } => Box::pin(daemon_capabilities(&socket, timeout_seconds)).await,
         Command::DaemonShutdown {
             socket,
             timeout_seconds,
@@ -1568,6 +1608,66 @@ async fn daemon_state(socket: &Path, timeout_seconds: u64) -> Result<(), String>
     Ok(())
 }
 
+async fn daemon_peers(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_peers(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon peers query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+async fn daemon_routes(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_routes(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon routes query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+async fn daemon_paths(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_paths(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon paths query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+async fn daemon_capabilities(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_capabilities(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon capabilities query failed: {error:?}"))?;
+
+    for line in lines {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
 async fn daemon_shutdown(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_shutdown(
         socket,
@@ -2650,6 +2750,49 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_daemon_view_commands() {
+        for command in [
+            "daemon-peers",
+            "daemon-routes",
+            "daemon-paths",
+            "daemon-capabilities",
+        ] {
+            let cli = Cli::try_parse_from([
+                "p2p-vpn",
+                command,
+                "--socket",
+                "/run/p2p-vpn-node-a/control.sock",
+                "--timeout-seconds",
+                "3",
+            ])
+            .expect("cli");
+
+            let (socket, timeout_seconds) = match cli.command {
+                Command::DaemonPeers {
+                    socket,
+                    timeout_seconds,
+                }
+                | Command::DaemonRoutes {
+                    socket,
+                    timeout_seconds,
+                }
+                | Command::DaemonPaths {
+                    socket,
+                    timeout_seconds,
+                }
+                | Command::DaemonCapabilities {
+                    socket,
+                    timeout_seconds,
+                } => (socket, timeout_seconds),
+                other => panic!("expected daemon view command, got {other:?}"),
+            };
+
+            assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
+            assert_eq!(timeout_seconds, 3);
+        }
     }
 
     #[test]

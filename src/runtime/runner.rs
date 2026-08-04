@@ -391,15 +391,16 @@ where
                     .recv()
                     .await
             }, if control_rx.is_some() => {
-                if let Some(reason) = handle_runtime_control_request(
-                    request,
-                    &forwarder,
-                    &paths,
-                    &peer_capabilities,
-                    &metrics,
-                    queues.total_stats(),
-                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
-                ) {
+                let control_context = RuntimeControlContext {
+                    forwarder: &forwarder,
+                    paths: &paths,
+                    peer_capabilities: &peer_capabilities,
+                    local_capabilities: &local_capabilities,
+                    metrics: &metrics,
+                    queue: queues.total_stats(),
+                    path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                };
+                if let Some(reason) = handle_runtime_control_request(request, control_context) {
                     log_runtime_event(
                         LogLevel::Info,
                         "runtime_shutdown",
@@ -496,18 +497,24 @@ fn send_path_probes(
     }
 }
 
-fn handle_runtime_control_request(
-    request: RuntimeControlRequest,
-    forwarder: &Forwarder,
-    paths: &PathSet,
-    peer_capabilities: &PeerCapabilities,
-    metrics: &RuntimeMetrics,
+#[derive(Clone, Copy)]
+struct RuntimeControlContext<'a> {
+    forwarder: &'a Forwarder,
+    paths: &'a PathSet,
+    peer_capabilities: &'a PeerCapabilities,
+    local_capabilities: &'a ControlCapabilities,
+    metrics: &'a RuntimeMetrics,
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
+}
+
+fn handle_runtime_control_request(
+    request: RuntimeControlRequest,
+    context: RuntimeControlContext<'_>,
 ) -> Option<ShutdownReason> {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
-            let lines = runtime_status_lines(metrics, queue, path_stats);
+            let lines = runtime_status_lines(context.metrics, context.queue, context.path_stats);
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
@@ -515,15 +522,49 @@ fn handle_runtime_control_request(
         }
         RuntimeControlRequest::State { respond_to } => {
             let lines = runtime_state_lines(
-                forwarder,
-                paths,
-                peer_capabilities,
-                metrics,
-                queue,
-                path_stats,
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                context.metrics,
+                context.queue,
+                context.path_stats,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket state response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::Peers { respond_to } => {
+            let lines =
+                runtime_peer_lines(context.forwarder, context.paths, context.peer_capabilities);
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket peers response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::Routes { respond_to } => {
+            let lines = runtime_route_lines(context.forwarder, context.peer_capabilities);
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket routes response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::Paths { respond_to } => {
+            let lines =
+                runtime_path_lines(context.forwarder, context.paths, context.peer_capabilities);
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket paths response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::Capabilities { respond_to } => {
+            let lines = runtime_capability_lines(
+                context.forwarder,
+                context.peer_capabilities,
+                context.local_capabilities,
+            );
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket capabilities response receiver dropped");
             }
             None
         }
@@ -537,6 +578,224 @@ fn handle_runtime_control_request(
             Some(ShutdownReason::ControlSocket)
         }
     }
+}
+
+fn runtime_peer_lines(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+) -> Vec<String> {
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    let mut peers = sorted_configured_peers(forwarder);
+    let mut lines = vec![format!("peers: {}", peers.len())];
+
+    for peer in peers.drain(..) {
+        let transport = forwarder
+            .transport_peer_for_overlay(peer)
+            .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
+        let support = packet_transport_support(peer_capabilities, peer);
+        let selected_path = paths.best_supported_for(peer, support);
+        let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
+        let healthy_paths = candidates
+            .iter()
+            .filter(|candidate| candidate.healthy)
+            .count();
+
+        lines.push(format!(
+            "peer: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} healthy_paths {healthy_paths} selected_path {}",
+            peer_capabilities.contains(peer),
+            peer_capabilities.effective_mtu_for(peer, local_mtu),
+            support.quic_datagrams,
+            selected_path.map_or("none", |path| path.kind.wire_name()),
+        ));
+    }
+
+    lines
+}
+
+fn runtime_route_lines(forwarder: &Forwarder, peer_capabilities: &PeerCapabilities) -> Vec<String> {
+    let local_routes = forwarder.local_advertised_routes();
+    let mut peers = sorted_configured_peers(forwarder);
+    let remote_route_count = peers
+        .iter()
+        .filter_map(|peer| peer_capabilities.get(*peer))
+        .map(|capabilities| capabilities.advertised_routes.len())
+        .sum::<usize>();
+    let mut lines = vec![
+        format!("local advertised routes: {}", local_routes.len()),
+        format!("remote advertised routes: {remote_route_count}"),
+    ];
+
+    for route in local_routes {
+        lines.push(format!(
+            "local advertised route: {} metric {}",
+            route.prefix, route.metric
+        ));
+    }
+    for peer in peers.drain(..) {
+        let Some(capabilities) = peer_capabilities.get(peer) else {
+            lines.push(format!("peer advertised routes: {peer} unvalidated"));
+            continue;
+        };
+        lines.push(format!(
+            "peer advertised routes: {peer} {}",
+            capabilities.advertised_routes.len()
+        ));
+        for route in &capabilities.advertised_routes {
+            lines.push(format!(
+                "peer advertised route: {peer} {} metric {}",
+                route.prefix, route.metric
+            ));
+        }
+    }
+
+    lines
+}
+
+fn runtime_path_lines(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+) -> Vec<String> {
+    let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
+    let mut peers = sorted_configured_peers(forwarder);
+    let mut lines = vec![format!("peers: {}", peers.len())];
+
+    for peer in peers.drain(..) {
+        let support = packet_transport_support(peer_capabilities, peer);
+        let selected_path = paths.best_supported_for(peer, support);
+        let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
+        let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
+        lines.push(format!(
+            "peer selected path: {peer} {} score {} mtu {}",
+            selected_path.map_or("none", |path| path.kind.wire_name()),
+            selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
+            selected_path.map_or_else(
+                || "none".to_owned(),
+                |path| path.effective_mtu(peer_mtu).to_string()
+            )
+        ));
+        lines.push(format!("peer path candidates: {peer} {}", candidates.len()));
+        for candidate in candidates {
+            lines.push(format!(
+                "peer path: {peer} {} healthy {} relay {} direct {} established_connections {} score {} estimated_mtu {} effective_mtu {}",
+                candidate.kind.wire_name(),
+                candidate.healthy,
+                candidate.relay,
+                !candidate.relay,
+                candidate.established_connections,
+                candidate.score(),
+                candidate
+                    .estimated_mtu
+                    .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
+                candidate.effective_mtu(peer_mtu)
+            ));
+        }
+    }
+
+    lines
+}
+
+fn runtime_capability_lines(
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    local_capabilities: &ControlCapabilities,
+) -> Vec<String> {
+    let mut peers = sorted_configured_peers(forwarder);
+    let mut lines = vec![
+        format!(
+            "local capability network: {}",
+            local_capabilities.network_name
+        ),
+        format!(
+            "local capability membership key matched: {}",
+            local_capabilities.membership_tag.is_some()
+        ),
+        format!(
+            "local capability wire version: {}",
+            local_capabilities.wire_version
+        ),
+        format!(
+            "local capability packet protocol: {}",
+            local_capabilities.packet_protocol
+        ),
+        format!(
+            "local capability packet header length: {}",
+            local_capabilities.packet_header_len
+        ),
+        format!("local capability mtu: {}", local_capabilities.effective_mtu),
+        format!(
+            "local capability preferred path: {}",
+            local_capabilities.preferred_path
+        ),
+        format!(
+            "local capability supports quic datagrams: {}",
+            local_capabilities.supports_quic_datagrams
+        ),
+        format!(
+            "local capability advertised routes: {}",
+            local_capabilities.advertised_routes.len()
+        ),
+        format!("validated peers: {}", peer_capabilities.len()),
+    ];
+
+    for route in &local_capabilities.advertised_routes {
+        lines.push(format!(
+            "local capability advertised route: {} metric {}",
+            route.prefix, route.metric
+        ));
+    }
+    for peer in peers.drain(..) {
+        let Some(capabilities) = peer_capabilities.get(peer) else {
+            lines.push(format!("remote capability peer: {peer} unvalidated"));
+            continue;
+        };
+        lines.push(format!("remote capability peer: {peer}"));
+        lines.push(format!(
+            "remote capability network: {peer} {}",
+            capabilities.network_name
+        ));
+        lines.push(format!(
+            "remote capability membership key matched: {peer} {}",
+            capabilities.membership_tag.is_some()
+        ));
+        lines.push(format!(
+            "remote capability wire version: {peer} {}",
+            capabilities.wire_version
+        ));
+        lines.push(format!(
+            "remote capability packet protocol: {peer} {}",
+            capabilities.packet_protocol
+        ));
+        lines.push(format!(
+            "remote capability packet header length: {peer} {}",
+            capabilities.packet_header_len
+        ));
+        lines.push(format!(
+            "remote capability mtu: {peer} {}",
+            capabilities.effective_mtu
+        ));
+        lines.push(format!(
+            "remote capability preferred path: {peer} {}",
+            capabilities.preferred_path
+        ));
+        lines.push(format!(
+            "remote capability supports quic datagrams: {peer} {}",
+            capabilities.supports_quic_datagrams
+        ));
+        lines.push(format!(
+            "remote capability advertised routes: {peer} {}",
+            capabilities.advertised_routes.len()
+        ));
+    }
+
+    lines
+}
+
+fn sorted_configured_peers(forwarder: &Forwarder) -> Vec<PeerId> {
+    let mut peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
+    peers.sort_by_key(ToString::to_string);
+    peers
 }
 
 fn runtime_status_lines(
@@ -3007,16 +3266,20 @@ mod tests {
         let paths = PathSet::new();
         let peer_capabilities = PeerCapabilities::default();
         let metrics = RuntimeMetrics::default();
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
         let (respond_to, mut response) = tokio::sync::oneshot::channel();
 
         let reason = handle_runtime_control_request(
             RuntimeControlRequest::Shutdown { respond_to },
-            &forwarder,
-            &paths,
-            &peer_capabilities,
-            &metrics,
-            crate::queue::QueueStats::default(),
-            crate::path::PathRuntimeStats::default(),
+            RuntimeControlContext {
+                forwarder: &forwarder,
+                paths: &paths,
+                peer_capabilities: &peer_capabilities,
+                local_capabilities: &local_capabilities,
+                metrics: &metrics,
+                queue: crate::queue::QueueStats::default(),
+                path_stats: crate::path::PathRuntimeStats::default(),
+            },
         );
 
         assert_eq!(reason, Some(ShutdownReason::ControlSocket));
@@ -3024,6 +3287,92 @@ mod tests {
             response.try_recv().expect("shutdown response"),
             vec!["shutdown accepted".to_owned()]
         );
+    }
+
+    #[test]
+    fn runtime_control_view_lines_report_peers_routes_paths_and_capabilities() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key.clone()),
+                membership_key: None,
+                routes: vec![RouteConfig {
+                    prefix: "10.10.0.0/24".to_owned(),
+                    metric: 90,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: remote.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.20.0.0/24".to_owned(),
+                    metric: 70,
+                }],
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_advertised_routes(forwarder.local_advertised_routes());
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1200)
+                .with_advertised_routes(vec![ControlRoute::new("10.20.0.0/24", 70)]),
+        );
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(1180));
+        paths.record_established_with_mtu(remote_overlay, PathKind::CircuitRelay, Some(1000));
+
+        let peer_lines = runtime_peer_lines(&forwarder, &paths, &peer_capabilities);
+        assert!(peer_lines.contains(&"peers: 1".to_owned()));
+        assert!(peer_lines.iter().any(|line| {
+            line == &format!(
+                "peer: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false healthy_paths 2 selected_path direct_tcp_stream"
+            )
+        }));
+
+        let route_lines = runtime_route_lines(&forwarder, &peer_capabilities);
+        assert!(route_lines.contains(&"local advertised routes: 3".to_owned()));
+        assert!(route_lines.contains(&"remote advertised routes: 1".to_owned()));
+        assert!(route_lines.contains(&format!(
+            "peer advertised route: {remote_overlay} 10.20.0.0/24 metric 70"
+        )));
+
+        let path_lines = runtime_path_lines(&forwarder, &paths, &peer_capabilities);
+        assert!(path_lines.contains(&format!(
+            "peer selected path: {remote_overlay} direct_tcp_stream score 60 mtu 1180"
+        )));
+        assert!(path_lines.contains(&format!(
+            "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000"
+        )));
+
+        let capability_lines =
+            runtime_capability_lines(&forwarder, &peer_capabilities, &local_capabilities);
+        assert!(capability_lines.contains(&"local capability advertised routes: 3".to_owned()));
+        assert!(capability_lines.contains(&"validated peers: 1".to_owned()));
+        assert!(capability_lines.contains(&format!(
+            "remote capability preferred path: {remote_overlay} direct_quic_stream"
+        )));
     }
 
     #[test]
