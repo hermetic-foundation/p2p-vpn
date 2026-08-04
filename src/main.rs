@@ -2139,7 +2139,7 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
 
     if succeeded {
         if let Some(output) = args.write_config {
-            write_public_relay_config_from_probe(&report, output, args.force)?;
+            write_public_relay_config_from_probe(&report, &output, args.force)?;
         }
         Ok(())
     } else {
@@ -2149,16 +2149,33 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
 
 fn write_public_relay_config_from_probe(
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
-    output: PathBuf,
+    output: &Path,
     force: bool,
 ) -> Result<(), String> {
-    let relay = report
+    let relay = public_relay_probe_winner(report)?;
+    init_config(public_relay_config_args(output.to_path_buf(), relay, force))
+}
+
+fn write_public_relay_config_from_base(
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+    mut config: Config,
+    output: &Path,
+    force: bool,
+) -> Result<(), String> {
+    let relay = public_relay_probe_winner(report)?;
+    add_public_relay_infrastructure(&mut config, &relay)?;
+    write_config_output(&config, output, force)
+}
+
+fn public_relay_probe_winner(
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+) -> Result<EndpointArg, String> {
+    report
         .candidates
         .iter()
         .find(|candidate| candidate.succeeded)
         .ok_or_else(|| "public relay probe succeeded without a winning candidate".to_owned())
-        .and_then(|candidate| relay_candidate_endpoint_arg(&candidate.address))?;
-    init_config(public_relay_config_args(output, relay, force))
+        .and_then(|candidate| relay_candidate_endpoint_arg(&candidate.address))
 }
 
 fn relay_candidate_endpoint_arg(address: &str) -> Result<EndpointArg, String> {
@@ -2203,6 +2220,59 @@ fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) ->
         resources: ResourceConfig::default(),
         force,
     }
+}
+
+fn add_public_relay_infrastructure(config: &mut Config, relay: &EndpointArg) -> Result<(), String> {
+    let reservation = relay_reservation_address(relay)?;
+    let address = relay.address.clone().ok_or_else(|| {
+        format!(
+            "relay peer {} must include an address as PEER_ID=MULTIADDR",
+            relay.id
+        )
+    })?;
+
+    if !config
+        .network
+        .bootstrap_peers
+        .iter()
+        .any(|peer| peer.id == relay.id && peer.address == address)
+    {
+        config.network.bootstrap_peers.push(BootstrapPeerConfig {
+            id: relay.id.clone(),
+            address,
+        });
+    }
+
+    if !config.network.relay.reservations.contains(&reservation) {
+        config.network.relay.reservations.push(reservation);
+    }
+
+    Ok(())
+}
+
+fn write_config_output(config: &Config, output: &Path, force: bool) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    config
+        .validate_runtime()
+        .map_err(|error| format!("generated config is invalid: {error:?}"))?;
+    let rendered = serde_json::to_string_pretty(config)
+        .map_err(|error| format!("failed to render config: {error}"))?;
+
+    if output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+        println!("local peer: {}", config.network.local_peer);
+    }
+
+    Ok(())
 }
 
 async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
@@ -2259,7 +2329,11 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
 
     if probe_succeeded {
         if let Some(output) = args.write_config {
-            write_public_relay_config_from_probe(&probe, output, args.force)?;
+            if args.config_path.is_some() {
+                write_public_relay_config_from_base(&probe, config, &output, args.force)?;
+            } else {
+                write_public_relay_config_from_probe(&probe, &output, args.force)?;
+            }
         }
         Ok(())
     } else {
@@ -4520,6 +4594,111 @@ mod tests {
         assert_eq!(config.peers.len(), 0);
         assert!(config.network.discovery.dcutr);
         assert!(config.network.discovery.autonat);
+    }
+
+    fn public_relay_probe_report(
+        address: String,
+    ) -> p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport {
+        p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport {
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            candidates: vec![
+                p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateReport {
+                    address,
+                    succeeded: true,
+                    error: None,
+                    bootstrap: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn public_relay_config_from_base_preserves_existing_overlay_config() {
+        let base_output = temp_config_path("p2p-vpn-public-relay-base-config");
+        let output = temp_config_path("p2p-vpn-public-relay-updated-config");
+        let peer = NodeIdentity::generate_ed25519().expect("peer identity");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+
+        init_config(InitConfigArgs {
+            output: base_output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
+            peers: vec![EndpointArg {
+                id: peer.peer_id.clone(),
+                address: None,
+            }],
+            local_routes: vec![LocalRouteArg {
+                route: RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 90,
+                },
+            }],
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init base config");
+        let base = Config::load(&base_output).expect("load base config");
+        let report = public_relay_probe_report(relay_address.clone());
+
+        write_public_relay_config_from_base(&report, base.clone(), &output, true)
+            .expect("write updated config");
+
+        let updated = Config::load(&output).expect("load updated config");
+        let _ = std::fs::remove_file(&base_output);
+        let _ = std::fs::remove_file(&output);
+
+        updated.validate_runtime().expect("runtime-valid config");
+        assert_eq!(updated.network.local_peer, base.network.local_peer);
+        assert_eq!(updated.network.routes, base.network.routes);
+        assert_eq!(updated.peers, base.peers);
+        assert_eq!(
+            updated.network.relay.reservations,
+            vec![format!("{relay_address}/p2p-circuit")]
+        );
+        assert_eq!(
+            updated.network.bootstrap_peers,
+            vec![BootstrapPeerConfig {
+                id: relay.peer_id,
+                address: relay_address,
+            }]
+        );
+    }
+
+    #[test]
+    fn public_relay_infrastructure_insertion_is_idempotent() {
+        let output = temp_config_path("p2p-vpn-public-relay-idempotent-config");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+        let relay_arg = relay_candidate_endpoint_arg(&relay_address).expect("relay endpoint arg");
+
+        init_config(public_relay_config_args(
+            output.clone(),
+            relay_arg.clone(),
+            true,
+        ))
+        .expect("init config");
+        let mut config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        add_public_relay_infrastructure(&mut config, &relay_arg).expect("add relay");
+
+        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(config.network.relay.reservations.len(), 1);
     }
 
     #[test]

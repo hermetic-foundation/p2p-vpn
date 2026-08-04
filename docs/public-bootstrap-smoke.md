@@ -90,7 +90,10 @@ reservations because of load, policy, or resource limits. With
 relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
 the candidate must also prove public-relay-assisted hole punching. Add
 `--write-config PATH` with `--check-candidates` to write a default
-relay-assisted config from the first validated scanned candidate.
+relay-assisted config from the first validated scanned candidate. When the scan
+uses `--config p2p-vpn.json`, the output preserves that config's overlay
+identity, membership, peers, routes, queue limits, and packet-plane settings and
+adds only the validated relay bootstrap and reservation infrastructure.
 
 Then run the live relay smokes with a known-good relay or the scanned candidate
 set. The preferred rootless operator command is:

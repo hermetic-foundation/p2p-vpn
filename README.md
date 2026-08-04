@@ -847,6 +847,10 @@ reservation or DCUtR path. Add `--require-dcutr-success` with
 public-relay-assisted hole punch. Pass `--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that
 `relay-check --write-config` writes from the first validated scanned candidate.
+When `relay-scan` also receives `--config p2p-vpn.json`, the written config
+preserves that overlay's identity, membership, peers, routes, queue limits, and
+packet-plane settings while adding only the validated relay bootstrap and
+reservation infrastructure.
 
 `relay-check` is rootless. In its default mode it creates a temporary listener,
 reserves a circuit on the supplied relay, and dials that listener from a second
