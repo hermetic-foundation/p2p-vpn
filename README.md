@@ -82,9 +82,11 @@ length, matching membership tag when a key is configured, known preferred path,
 coherent datagram support, non-zero effective MTU, and no route prefixes outside
 their configured ownership. Packet endpoint candidates must parse as socket
 addresses; they are candidates for the owned packet data plane, not membership
-or route authority. The listener lifecycle is intentionally separate from packet
-session handshakes and encrypted packet forwarding, which remain future
-packet-plane work.
+or route authority. The packet-plane session primitive uses fixed binary
+hello/accept handshakes signed by the node's libp2p identity key and bound to
+the overlay network name, session id, nonce, MTU, endpoint, and public key. The
+listener lifecycle and authenticated handshake are intentionally separate from
+encrypted packet forwarding, which remains future packet-plane work.
 
 The current stream data plane uses a fixed binary header followed by the raw IP
 packet payload. The header includes a fresh non-zero packet session id for the
