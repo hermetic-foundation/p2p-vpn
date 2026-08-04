@@ -58,6 +58,8 @@ pub struct ControlCapabilities {
     #[serde(default)]
     pub owned_quic_packet_plane_certificate_der: Option<Vec<u8>>,
     #[serde(default)]
+    pub owned_quic_packet_endpoint_candidates: Vec<String>,
+    #[serde(default)]
     pub packet_endpoint_candidates: Vec<String>,
 }
 
@@ -79,6 +81,7 @@ impl ControlCapabilities {
             supports_owned_udp_packet_plane: false,
             supports_owned_quic_packet_plane: false,
             owned_quic_packet_plane_certificate_der: None,
+            owned_quic_packet_endpoint_candidates: Vec::new(),
             packet_endpoint_candidates: Vec::new(),
         }
     }
@@ -121,6 +124,12 @@ impl ControlCapabilities {
         self.supports_owned_quic_packet_plane = true;
         self.owned_quic_packet_plane_certificate_der = Some(certificate_der);
         self.supports_quic_datagrams = true;
+        self
+    }
+
+    #[must_use]
+    pub fn with_owned_quic_packet_endpoint_candidates(mut self, endpoints: Vec<String>) -> Self {
+        self.owned_quic_packet_endpoint_candidates = endpoints;
         self
     }
 
@@ -299,6 +308,13 @@ pub fn validate_capabilities(
     {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
+    if capabilities
+        .owned_quic_packet_endpoint_candidates
+        .iter()
+        .any(|endpoint| !validate_packet_plane_endpoint_candidate(endpoint))
+    {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    }
     if capabilities.supports_owned_quic_packet_plane {
         let Some(certificate) = capabilities
             .owned_quic_packet_plane_certificate_der
@@ -310,6 +326,12 @@ pub fn validate_capabilities(
             || certificate.len() > MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN
         {
             return Some(ControlRejectionReason::InvalidOwnedQuicCertificate);
+        }
+        if capabilities
+            .owned_quic_packet_endpoint_candidates
+            .is_empty()
+        {
+            return Some(ControlRejectionReason::UnsupportedPreferredPath);
         }
     } else if capabilities
         .owned_quic_packet_plane_certificate_der
@@ -634,7 +656,8 @@ mod tests {
         assert!(!owned.supports_owned_quic_packet_plane);
 
         let owned_quic = ControlCapabilities::local("lab", None, 1420)
-            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x82, 0x01, 0x01]);
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x82, 0x01, 0x01])
+            .with_owned_quic_packet_endpoint_candidates(vec!["203.0.113.10:51821".to_owned()]);
         assert!(owned_quic.supports_quic_datagrams);
         assert!(!owned_quic.supports_native_quic_datagrams);
         assert!(!owned_quic.supports_owned_udp_packet_plane);
@@ -718,7 +741,8 @@ mod tests {
         capabilities.record(
             peer,
             ControlCapabilities::local("lab", None, 1280)
-                .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]),
+                .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01])
+                .with_owned_quic_packet_endpoint_candidates(vec!["203.0.113.10:51821".to_owned()]),
         );
 
         assert!(capabilities.supports_quic_datagrams_for(peer));
@@ -834,8 +858,16 @@ mod tests {
         );
 
         capabilities = ControlCapabilities::local("lab", None, 1280)
-            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]);
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01])
+            .with_owned_quic_packet_endpoint_candidates(vec!["203.0.113.10:51821".to_owned()]);
         assert_eq!(validate_capabilities(&capabilities, "lab", None, &[]), None);
+
+        capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01]);
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::UnsupportedPreferredPath)
+        );
 
         capabilities =
             ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true);

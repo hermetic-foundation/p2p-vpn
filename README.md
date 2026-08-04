@@ -73,16 +73,19 @@ or owned QUIC packet-plane backend is available. Owned QUIC packet-plane support
 also carries a DER-encoded QUIC server certificate in the signed capability
 exchange so peers can pin the trust anchor before opening a direct Quinn
 connection. Configs can also declare owned packet-plane UDP bind addresses
-under `network.packet_plane.listen`, externally
-reachable direct packet endpoints under `network.packet_plane.external_endpoints`,
-and the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
+under `network.packet_plane.listen`, owned QUIC bind addresses under
+`network.packet_plane.quic_listen`, externally reachable UDP packet endpoints
+under `network.packet_plane.external_endpoints`, externally reachable owned
+QUIC packet endpoints under `network.packet_plane.quic_external_endpoints`, and
+the packet session lifetime under `network.packet_plane.session_ttl_seconds`.
 `network.packet_plane.max_replay_windows_per_session` bounds the authenticated
 datagram replay state retained for each packet-plane peer session. The external
 endpoints are advertised as packet endpoint candidates in the capability
 exchange. The daemon binds the configured packet-plane UDP listeners during
-startup, keeps those sockets alive for the future owned data plane, logs the
-bound listener addresses, and exposes them through daemon status, state, and
-capability views. Packet-plane negotiation resolves advertised DNS-style
+startup, binds at most one configured owned QUIC packet-plane listener, logs the
+bound listener addresses, and exposes UDP and QUIC packet-plane listener state
+through daemon status, state, and capability views. Packet-plane negotiation
+resolves advertised DNS-style
 `host:port` endpoint candidates to concrete socket endpoints, ranks the resolved
 endpoints before signing the packet-plane handshake, preferring public-style
 addresses over private addresses, private addresses over loopback or link-local
@@ -90,12 +93,14 @@ addresses, and concrete addresses over wildcard listener addresses. That keeps
 a generated public endpoint from being shadowed by a local bind address when
 both are advertised. The current local capability advertises the node's built-in
 IPv4 and IPv6 host routes, direct QUIC streams as preferred, and native QUIC
-datagrams plus owned QUIC packet-plane datagrams as unsupported, so peers do not
-negotiate a QUIC datagram path before daemon integration is implemented. The
-owned QUIC runtime primitive already carries the same authenticated packet-plane
-datagrams over Quinn QUIC DATAGRAM with explicit certificate trust, and the
-control capability schema now validates the advertised certificate material, but
-the daemon does not advertise or select it yet. Outbound queue draining respects the
+datagrams as unsupported. Owned QUIC packet-plane datagrams are advertised only
+when `network.packet_plane.quic_listen` binds successfully, including the
+runtime-generated certificate trust anchor and QUIC-specific endpoint
+candidates. The owned QUIC runtime primitive already carries the same
+authenticated packet-plane datagrams over Quinn QUIC DATAGRAM with explicit
+certificate trust, and the control capability schema now validates the
+advertised certificate material, but the daemon does not select QUIC for packet
+forwarding yet. Outbound queue draining respects the
 peer's advertised effective MTU and drops oversized packets before sending them
 to the packet stream fallback. Capability requests from unconfigured peers are
 rejected, and configured peers are only accepted when they advertise the same

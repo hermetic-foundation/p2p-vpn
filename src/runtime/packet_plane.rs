@@ -45,6 +45,13 @@ pub struct PacketPlaneSnapshot {
     pub sessions: Vec<PacketPlaneSessionSnapshot>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PacketPlaneQuicSnapshot {
+    pub listener: Option<SocketAddr>,
+    pub certificate_der: Option<Vec<u8>>,
+    pub sessions: Vec<PacketPlaneSessionSnapshot>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PacketPlaneHandshakeKind {
     Hello = 1,
@@ -1344,6 +1351,16 @@ impl PacketPlaneRuntime {
 
 impl PacketPlaneQuicRuntime {
     pub fn bind(listen_addr: SocketAddr) -> Result<Self, PacketPlaneQuicError> {
+        Self::bind_with_replay_window_limit(
+            listen_addr,
+            crate::config::default_packet_plane_replay_windows_per_session(),
+        )
+    }
+
+    pub fn bind_with_replay_window_limit(
+        listen_addr: SocketAddr,
+        max_replay_windows_per_session: usize,
+    ) -> Result<Self, PacketPlaneQuicError> {
         let (server_config, server_certificate) = quic_server_config()?;
         let endpoint = Endpoint::server(server_config, listen_addr)?;
         let local_addr = endpoint.local_addr()?;
@@ -1353,9 +1370,28 @@ impl PacketPlaneQuicRuntime {
             server_certificate,
             connections: HashMap::new(),
             sessions: HashMap::new(),
-            max_replay_windows_per_session:
-                crate::config::default_packet_plane_replay_windows_per_session(),
+            max_replay_windows_per_session: max_replay_windows_per_session.max(1),
         })
+    }
+
+    #[must_use]
+    pub fn disabled_snapshot() -> PacketPlaneQuicSnapshot {
+        PacketPlaneQuicSnapshot::default()
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> PacketPlaneQuicSnapshot {
+        let mut sessions = self
+            .sessions
+            .values()
+            .map(PacketPlaneSession::snapshot)
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|session| session.peer.to_string());
+        PacketPlaneQuicSnapshot {
+            listener: Some(self.local_addr),
+            certificate_der: Some(self.server_certificate.as_ref().to_vec()),
+            sessions,
+        }
     }
 
     #[must_use]
@@ -2350,6 +2386,20 @@ mod tests {
         assert_eq!(inbound.frame, frame);
         assert_eq!(inbound.remote_addr, sender_addr);
         assert_eq!(inbound.local_addr, receiver_addr);
+    }
+
+    #[tokio::test]
+    async fn quic_runtime_snapshot_reports_listener_and_certificate() {
+        let runtime = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("socket"))
+            .expect("quic bind");
+
+        let snapshot = runtime.snapshot();
+
+        assert_eq!(snapshot.listener, Some(runtime.local_addr()));
+        assert!(snapshot.certificate_der.is_some_and(|certificate| {
+            certificate.len() > 64 && certificate.starts_with(&[0x30])
+        }));
+        assert!(snapshot.sessions.is_empty());
     }
 
     #[tokio::test]

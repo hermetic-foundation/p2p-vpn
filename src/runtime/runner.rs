@@ -45,6 +45,7 @@ use crate::{
         packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeError,
             PacketPlaneHandshakeKind, PacketPlaneHandshakeParams, PacketPlaneIoError,
+            PacketPlaneQuicError, PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot,
             PacketPlaneReceivedFrame, PacketPlaneRuntime, PacketPlaneSessionError,
             PacketPlaneSessionRole, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
         },
@@ -238,6 +239,24 @@ where
     )
     .await
     .map_err(RunnerError::PacketPlane)?;
+    let packet_plane_quic = match config.packet_plane_quic_listen_addrs()?.as_slice() {
+        [] => None,
+        [listen_addr] => Some(
+            PacketPlaneQuicRuntime::bind_with_replay_window_limit(
+                *listen_addr,
+                config.network.packet_plane.replay_window_limit(),
+            )
+            .map_err(RunnerError::PacketPlaneQuic)?,
+        ),
+        _ => {
+            return Err(RunnerError::Config(ConfigError::PacketPlane(
+                crate::config::PacketPlaneValidationError::TooManyQuicListeners {
+                    actual: config.network.packet_plane.quic_listen.len(),
+                    max: 1,
+                },
+            )));
+        }
+    };
     let forwarder = Forwarder::from_config(&config)?;
     let membership = OverlayMembership::from_config(&config)?;
     let previous_membership_tags = config.previous_membership_tags()?;
@@ -254,6 +273,8 @@ where
         metrics_interval,
         control_socket,
         packet_plane,
+        packet_plane_quic,
+        config.packet_plane_quic_endpoint_candidates()?,
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
         shutdown,
@@ -298,6 +319,8 @@ pub async fn run_node(
         options.metrics_interval,
         None,
         PacketPlaneRuntime::disabled(),
+        None,
+        Vec::new(),
         options.packet_plane_session_ttl,
         options.packet_plane_replay_windows_per_session,
         std::future::pending::<ShutdownReason>(),
@@ -329,6 +352,8 @@ pub async fn run_node_until<Shutdown>(
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
+    packet_plane_quic: Option<PacketPlaneQuicRuntime>,
+    packet_plane_quic_external_endpoints: Vec<String>,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
     shutdown: Shutdown,
@@ -370,17 +395,41 @@ where
             }
         }
     }
+    let packet_plane_quic_snapshot = packet_plane_quic.as_ref().map_or_else(
+        PacketPlaneQuicRuntime::disabled_snapshot,
+        PacketPlaneQuicRuntime::snapshot,
+    );
+    let mut packet_plane_quic_endpoint_candidates = packet_plane_quic_external_endpoints;
+    if let Some(listener) = packet_plane_quic_snapshot.listener
+        && !listener.ip().is_unspecified()
+    {
+        let listener = listener.to_string();
+        if !packet_plane_quic_endpoint_candidates.contains(&listener) {
+            packet_plane_quic_endpoint_candidates.push(listener);
+        }
+    }
     let mut local_capabilities =
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
             .with_packet_endpoint_candidates(packet_endpoint_candidates)
+            .with_owned_quic_packet_endpoint_candidates(packet_plane_quic_endpoint_candidates)
             .with_advertised_routes(forwarder.local_advertised_routes());
     let owned_udp_packet_plane = packet_plane.primary_listener().is_some()
         && !local_capabilities.packet_endpoint_candidates.is_empty();
     let local_data_plane = local_packet_data_plane();
     local_capabilities = local_capabilities
         .with_native_quic_datagrams(local_data_plane.native_quic_datagrams)
-        .with_owned_udp_packet_plane(owned_udp_packet_plane)
-        .with_owned_quic_packet_plane(local_data_plane.owned_quic_packet_plane);
+        .with_owned_udp_packet_plane(owned_udp_packet_plane);
+    if let Some(certificate) = packet_plane_quic_snapshot.certificate_der.clone()
+        && !local_capabilities
+            .owned_quic_packet_endpoint_candidates
+            .is_empty()
+    {
+        local_capabilities =
+            local_capabilities.with_owned_quic_packet_plane_certificate(certificate);
+    } else {
+        local_capabilities = local_capabilities
+            .with_owned_quic_packet_plane(local_data_plane.owned_quic_packet_plane);
+    }
     timers.prime().await;
     let discovery = node.discovery.clone();
     let (_control_socket, mut control_rx) = match control_socket {
@@ -398,6 +447,7 @@ where
 
     log_startup_status(node.startup);
     log_packet_plane_status(packet_plane.snapshot());
+    log_packet_plane_quic_status(&packet_plane_quic_snapshot);
     log_runtime_event(
         LogLevel::Info,
         "runtime_started",
@@ -561,6 +611,7 @@ where
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     packet_plane: packet_plane.snapshot(),
+                    packet_plane_quic: packet_plane_quic_snapshot.clone(),
                     packet_plane_session_ttl,
                     packet_plane_replay_windows_per_session,
                 };
@@ -748,6 +799,7 @@ struct RuntimeControlContext<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     packet_plane: PacketPlaneSnapshot,
+    packet_plane_quic: PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
 }
@@ -765,6 +817,7 @@ fn handle_runtime_control_request(
                 &context.packet_plane,
                 context.packet_plane_session_ttl,
                 context.packet_plane_replay_windows_per_session,
+                &context.packet_plane_quic,
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
@@ -781,6 +834,7 @@ fn handle_runtime_control_request(
                 path_stats: context.path_stats,
                 packet_in_flight: context.packet_in_flight,
                 packet_plane: &context.packet_plane,
+                packet_plane_quic: &context.packet_plane_quic,
                 packet_plane_session_ttl: context.packet_plane_session_ttl,
                 packet_plane_replay_windows_per_session: context
                     .packet_plane_replay_windows_per_session,
@@ -1073,8 +1127,21 @@ fn local_capability_lines(
             local_capabilities.supports_owned_quic_packet_plane
         ),
         format!(
+            "local capability owned quic packet plane certificate bytes: {}",
+            local_capabilities
+                .owned_quic_packet_plane_certificate_der
+                .as_ref()
+                .map_or(0, Vec::len)
+        ),
+        format!(
             "local capability packet endpoint candidates: {}",
             local_capabilities.packet_endpoint_candidates.len()
+        ),
+        format!(
+            "local capability owned quic packet endpoint candidates: {}",
+            local_capabilities
+                .owned_quic_packet_endpoint_candidates
+                .len()
         ),
         format!("packet plane listeners: {}", packet_plane.listeners.len()),
         format!("packet plane sessions: {}", packet_plane.sessions.len()),
@@ -1101,6 +1168,11 @@ fn extend_local_capability_detail_lines(
     for endpoint in &local_capabilities.packet_endpoint_candidates {
         lines.push(format!(
             "local capability packet endpoint candidate: {endpoint}"
+        ));
+    }
+    for endpoint in &local_capabilities.owned_quic_packet_endpoint_candidates {
+        lines.push(format!(
+            "local capability owned quic packet endpoint candidate: {endpoint}"
         ));
     }
     for listener in &packet_plane.listeners {
@@ -1169,6 +1241,13 @@ fn extend_remote_capability_lines(
         "remote capability supports owned quic packet plane: {peer} {}",
         capabilities.supports_owned_quic_packet_plane
     ));
+    lines.push(format!(
+        "remote capability owned quic packet plane certificate bytes: {peer} {}",
+        capabilities
+            .owned_quic_packet_plane_certificate_der
+            .as_ref()
+            .map_or(0, Vec::len)
+    ));
     extend_remote_packet_endpoint_lines(lines, peer, capabilities);
     lines.push(format!(
         "remote capability advertised routes: {peer} {}",
@@ -1185,9 +1264,18 @@ fn extend_remote_packet_endpoint_lines(
         "remote capability packet endpoint candidates: {peer} {}",
         capabilities.packet_endpoint_candidates.len()
     ));
+    lines.push(format!(
+        "remote capability owned quic packet endpoint candidates: {peer} {}",
+        capabilities.owned_quic_packet_endpoint_candidates.len()
+    ));
     for endpoint in &capabilities.packet_endpoint_candidates {
         lines.push(format!(
             "remote capability packet endpoint candidate: {peer} {endpoint}"
+        ));
+    }
+    for endpoint in &capabilities.owned_quic_packet_endpoint_candidates {
+        lines.push(format!(
+            "remote capability owned quic packet endpoint candidate: {peer} {endpoint}"
         ));
     }
 }
@@ -1205,6 +1293,7 @@ fn runtime_status_lines(
     packet_plane: &PacketPlaneSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
 ) -> Vec<String> {
     let mut lines = metrics.snapshot_with_paths(queue, path).lines();
     lines.push(format!(
@@ -1222,6 +1311,7 @@ fn runtime_status_lines(
         "packet_plane_sessions {}",
         packet_plane.sessions.len()
     ));
+    extend_runtime_packet_plane_quic_summary_lines(&mut lines, packet_plane_quic);
     lines
 }
 
@@ -1235,6 +1325,7 @@ struct RuntimeStateView<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     packet_plane: &'a PacketPlaneSnapshot,
+    packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
 }
@@ -1256,6 +1347,7 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
         replay_windows: view.forwarder.replay_window_count(),
         packet_in_flight: view.packet_in_flight,
         packet_plane: view.packet_plane,
+        packet_plane_quic: view.packet_plane_quic,
         packet_plane_session_ttl: view.packet_plane_session_ttl,
         packet_plane_replay_windows_per_session: view.packet_plane_replay_windows_per_session,
     });
@@ -1283,6 +1375,7 @@ struct RuntimeStateSummaryView<'a> {
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
     packet_plane: &'a PacketPlaneSnapshot,
+    packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
 }
@@ -1335,6 +1428,7 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
     extend_runtime_discovery_summary_lines(&mut lines, snapshot);
     extend_runtime_path_summary_lines(&mut lines, snapshot);
     extend_runtime_packet_plane_summary_lines(&mut lines, view.packet_plane);
+    extend_runtime_packet_plane_quic_summary_lines(&mut lines, view.packet_plane_quic);
     lines
 }
 
@@ -1444,6 +1538,41 @@ fn extend_runtime_packet_plane_summary_lines(
     for session in &packet_plane.sessions {
         lines.push(format!(
             "packet_plane_session {} endpoint {} mtu {} role {} local_session {} remote_session {}",
+            session.peer,
+            session.endpoint,
+            session.mtu,
+            packet_plane_session_role_name(session.role),
+            session.local_session_id,
+            session.remote_session_id
+        ));
+    }
+}
+
+fn extend_runtime_packet_plane_quic_summary_lines(
+    lines: &mut Vec<String>,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
+) {
+    lines.push(format!(
+        "packet_plane_quic_listeners {}",
+        usize::from(packet_plane_quic.listener.is_some())
+    ));
+    lines.push(format!(
+        "packet_plane_quic_sessions {}",
+        packet_plane_quic.sessions.len()
+    ));
+    lines.push(format!(
+        "packet_plane_quic_certificate_bytes {}",
+        packet_plane_quic
+            .certificate_der
+            .as_ref()
+            .map_or(0, Vec::len)
+    ));
+    if let Some(listener) = packet_plane_quic.listener {
+        lines.push(format!("packet_plane_quic_listener {listener}"));
+    }
+    for session in &packet_plane_quic.sessions {
+        lines.push(format!(
+            "packet_plane_quic_session {} endpoint {} mtu {} role {} local_session {} remote_session {}",
             session.peer,
             session.endpoint,
             session.mtu,
@@ -1609,6 +1738,27 @@ fn log_packet_plane_status(packet_plane: PacketPlaneSnapshot) {
             &[("address", &listener.to_string())],
         );
     }
+}
+
+fn log_packet_plane_quic_status(packet_plane_quic: &PacketPlaneQuicSnapshot) {
+    let Some(listener) = packet_plane_quic.listener else {
+        return;
+    };
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_quic_listening",
+        &[
+            ("address", &listener.to_string()),
+            (
+                "certificate_bytes",
+                &packet_plane_quic
+                    .certificate_der
+                    .as_ref()
+                    .map_or(0, Vec::len)
+                    .to_string(),
+            ),
+        ],
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5110,6 +5260,7 @@ pub enum RunnerError {
     Tun(TunRuntimeError),
     ControlSocket(io::Error),
     PacketPlane(io::Error),
+    PacketPlaneQuic(PacketPlaneQuicError),
     PacketResponseDropped,
     ControlResponseDropped,
     ServiceResponseDropped,
@@ -5376,6 +5527,7 @@ mod tests {
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
+                packet_plane_quic: PacketPlaneQuicSnapshot::default(),
                 packet_plane_session_ttl: Duration::from_secs(42),
                 packet_plane_replay_windows_per_session: 512,
             },
@@ -5511,7 +5663,9 @@ mod tests {
 
     #[test]
     fn local_capability_lines_report_packet_plane_listeners() {
-        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01, 0x02])
+            .with_owned_quic_packet_endpoint_candidates(vec!["127.0.0.1:51822".to_owned()]);
         let packet_plane = PacketPlaneSnapshot {
             listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
             sessions: vec![PacketPlaneSessionSnapshot {
@@ -5527,6 +5681,20 @@ mod tests {
         let lines = local_capability_lines(&local_capabilities, &packet_plane);
 
         assert!(lines.contains(&"packet plane listeners: 1".to_owned()));
+        assert!(
+            lines.contains(&"local capability supports owned quic packet plane: true".to_owned())
+        );
+        assert!(
+            lines.contains(
+                &"local capability owned quic packet plane certificate bytes: 3".to_owned()
+            )
+        );
+        assert!(
+            lines.contains(&"local capability owned quic packet endpoint candidates: 1".to_owned())
+        );
+        assert!(lines.contains(
+            &"local capability owned quic packet endpoint candidate: 127.0.0.1:51822".to_owned()
+        ));
         assert!(lines.contains(&"packet plane listener: 127.0.0.1:51820".to_owned()));
         assert!(lines.contains(&"packet plane sessions: 1".to_owned()));
         assert!(lines.contains(&format!(
@@ -5541,6 +5709,11 @@ mod tests {
             listeners: vec!["127.0.0.1:51820".parse().expect("listener")],
             sessions: Vec::new(),
         };
+        let packet_plane_quic = PacketPlaneQuicSnapshot {
+            listener: Some("127.0.0.1:51821".parse().expect("quic listener")),
+            certificate_der: Some(vec![0x30, 0x01]),
+            sessions: Vec::new(),
+        };
         let lines = runtime_status_lines(
             &RuntimeMetrics::default(),
             crate::queue::QueueStats::default(),
@@ -5548,12 +5721,17 @@ mod tests {
             &packet_plane,
             Duration::from_secs(75),
             512,
+            &packet_plane_quic,
         );
 
         assert!(lines.contains(&"packet_plane_session_ttl_seconds 75".to_owned()));
         assert!(lines.contains(&"packet_plane_replay_windows_per_session 512".to_owned()));
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
         assert!(lines.contains(&"packet_plane_sessions 0".to_owned()));
+        assert!(lines.contains(&"packet_plane_quic_listeners 1".to_owned()));
+        assert!(lines.contains(&"packet_plane_quic_sessions 0".to_owned()));
+        assert!(lines.contains(&"packet_plane_quic_certificate_bytes 2".to_owned()));
+        assert!(lines.contains(&"packet_plane_quic_listener 127.0.0.1:51821".to_owned()));
     }
 
     #[test]
@@ -5605,6 +5783,7 @@ mod tests {
                 limit_per_peer: 256,
             },
             packet_plane: &packet_plane,
+            packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
             packet_plane_session_ttl: Duration::from_secs(90),
             packet_plane_replay_windows_per_session: 256,
         });

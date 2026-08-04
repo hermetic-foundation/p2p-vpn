@@ -1274,6 +1274,8 @@ async fn run_ready_node(
         Some(Duration::from_secs(1)),
         None,
         packet_plane,
+        None,
+        Vec::new(),
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
         std::future::pending::<runner::ShutdownReason>(),

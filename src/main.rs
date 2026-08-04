@@ -94,6 +94,10 @@ enum Command {
         packet_listen: Vec<String>,
         #[arg(long = "packet-endpoint")]
         packet_endpoints: Vec<String>,
+        #[arg(long = "packet-quic-listen")]
+        packet_quic_listen: Vec<String>,
+        #[arg(long = "packet-quic-endpoint")]
+        packet_quic_endpoints: Vec<String>,
         #[arg(
             long = "packet-session-ttl-seconds",
             default_value_t = default_packet_plane_session_ttl_seconds()
@@ -357,6 +361,8 @@ async fn main() -> Result<(), String> {
             external_addresses,
             packet_listen,
             packet_endpoints,
+            packet_quic_listen,
+            packet_quic_endpoints,
             packet_session_ttl_seconds,
             packet_replay_windows_per_session,
             bootstrap_peers,
@@ -407,6 +413,8 @@ async fn main() -> Result<(), String> {
             packet_plane: PacketPlaneConfig {
                 listen: packet_listen,
                 external_endpoints: packet_endpoints,
+                quic_listen: packet_quic_listen,
+                quic_external_endpoints: packet_quic_endpoints,
                 session_ttl_seconds: packet_session_ttl_seconds,
                 max_replay_windows_per_session: packet_replay_windows_per_session,
             },
@@ -1825,6 +1833,11 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
             .packet_plane_endpoint_candidates()
             .map_err(|error| format!("failed to parse packet endpoints: {error:?}"))?,
     )
+    .with_owned_quic_packet_endpoint_candidates(
+        config
+            .packet_plane_quic_endpoint_candidates()
+            .map_err(|error| format!("failed to parse packet QUIC endpoints: {error:?}"))?,
+    )
     .with_advertised_routes(
         routes
             .routes_for(local_peer)
@@ -1921,6 +1934,15 @@ fn push_capability_lines(
                 |certificate| certificate.len().to_string()
             )
     ));
+    lines.push(format!(
+        "{prefix} owned quic packet endpoint candidates: {}",
+        capabilities.owned_quic_packet_endpoint_candidates.len()
+    ));
+    for endpoint in &capabilities.owned_quic_packet_endpoint_candidates {
+        lines.push(format!(
+            "{prefix} owned quic packet endpoint candidate: {endpoint}"
+        ));
+    }
     lines.push(format!(
         "{prefix} packet endpoint candidates: {}",
         capabilities.packet_endpoint_candidates.len()
@@ -2413,6 +2435,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -2493,6 +2517,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -2559,6 +2585,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -3008,6 +3036,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -3284,6 +3314,10 @@ mod tests {
             "0.0.0.0:51820",
             "--packet-endpoint",
             "203.0.113.10:51820",
+            "--packet-quic-listen",
+            "0.0.0.0:51821",
+            "--packet-quic-endpoint",
+            "203.0.113.10:51821",
             "--packet-session-ttl-seconds",
             "45",
             "--packet-replay-windows-per-session",
@@ -3294,6 +3328,8 @@ mod tests {
         let Command::InitConfig {
             packet_listen,
             packet_endpoints,
+            packet_quic_listen,
+            packet_quic_endpoints,
             packet_session_ttl_seconds,
             packet_replay_windows_per_session,
             ..
@@ -3304,6 +3340,8 @@ mod tests {
 
         assert_eq!(packet_listen, vec!["0.0.0.0:51820"]);
         assert_eq!(packet_endpoints, vec!["203.0.113.10:51820"]);
+        assert_eq!(packet_quic_listen, vec!["0.0.0.0:51821"]);
+        assert_eq!(packet_quic_endpoints, vec!["203.0.113.10:51821"]);
         assert_eq!(packet_session_ttl_seconds, 45);
         assert_eq!(packet_replay_windows_per_session, 16);
     }

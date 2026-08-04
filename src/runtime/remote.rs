@@ -52,6 +52,7 @@ pub async fn query_peer_status(
         config.effective_packet_mtu(),
     )
     .with_packet_endpoint_candidates(node.packet_endpoint_candidates.clone())
+    .with_owned_quic_packet_endpoint_candidates(config.packet_plane_quic_endpoint_candidates()?)
     .with_advertised_routes(forwarder.local_advertised_routes());
     let expected_network = local_capabilities.network_name.clone();
     let expected_membership_tag = local_capabilities.membership_tag.clone();

@@ -100,6 +100,8 @@ impl Config {
         self.relay_reservation_multiaddrs()?;
         self.packet_plane_listen_addrs()?;
         self.packet_plane_external_endpoints()?;
+        self.packet_plane_quic_listen_addrs()?;
+        self.packet_plane_quic_external_endpoints()?;
         self.validate_packet_plane()?;
         self.validate_peer_reachability()?;
         self.validate_discovery()?;
@@ -186,6 +188,14 @@ impl Config {
         if self.network.packet_plane.max_replay_windows_per_session == 0 {
             return Err(ConfigError::PacketPlane(
                 PacketPlaneValidationError::NoReplayWindows,
+            ));
+        }
+        if self.network.packet_plane.quic_listen.len() > 1 {
+            return Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::TooManyQuicListeners {
+                    actual: self.network.packet_plane.quic_listen.len(),
+                    max: 1,
+                },
             ));
         }
 
@@ -276,12 +286,24 @@ impl Config {
         parse_socket_addrs(&self.network.packet_plane.listen)
     }
 
+    pub fn packet_plane_quic_listen_addrs(&self) -> Result<Vec<SocketAddr>, ConfigError> {
+        parse_socket_addrs(&self.network.packet_plane.quic_listen)
+    }
+
     pub fn packet_plane_external_endpoints(&self) -> Result<Vec<String>, ConfigError> {
         parse_packet_plane_endpoint_candidates(&self.network.packet_plane.external_endpoints)
     }
 
+    pub fn packet_plane_quic_external_endpoints(&self) -> Result<Vec<String>, ConfigError> {
+        parse_packet_plane_endpoint_candidates(&self.network.packet_plane.quic_external_endpoints)
+    }
+
     pub fn packet_plane_endpoint_candidates(&self) -> Result<Vec<String>, ConfigError> {
         self.packet_plane_external_endpoints()
+    }
+
+    pub fn packet_plane_quic_endpoint_candidates(&self) -> Result<Vec<String>, ConfigError> {
+        self.packet_plane_quic_external_endpoints()
     }
 
     #[must_use]
@@ -367,6 +389,10 @@ pub struct PacketPlaneConfig {
     pub listen: Vec<String>,
     #[serde(default)]
     pub external_endpoints: Vec<String>,
+    #[serde(default)]
+    pub quic_listen: Vec<String>,
+    #[serde(default)]
+    pub quic_external_endpoints: Vec<String>,
     #[serde(default = "default_packet_plane_session_ttl_seconds")]
     pub session_ttl_seconds: u64,
     #[serde(default = "default_packet_plane_replay_windows_per_session")]
@@ -378,6 +404,8 @@ impl Default for PacketPlaneConfig {
         Self {
             listen: Vec::new(),
             external_endpoints: Vec::new(),
+            quic_listen: Vec::new(),
+            quic_external_endpoints: Vec::new(),
             session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
             max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(),
         }
@@ -763,6 +791,7 @@ pub enum DiscoveryValidationError {
 pub enum PacketPlaneValidationError {
     NoSessionTtl,
     NoReplayWindows,
+    TooManyQuicListeners { actual: usize, max: usize },
     InvalidEndpoint(String),
 }
 
@@ -1892,6 +1921,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: vec!["0.0.0.0:51820".to_owned()],
                     external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                    quic_listen: vec!["0.0.0.0:51821".to_owned()],
+                    quic_external_endpoints: vec!["203.0.113.10:51821".to_owned()],
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -1912,9 +1943,21 @@ mod tests {
         );
         assert_eq!(
             config
+                .packet_plane_quic_listen_addrs()
+                .expect("quic listen addrs"),
+            vec!["0.0.0.0:51821".parse().expect("socket")]
+        );
+        assert_eq!(
+            config
                 .packet_plane_endpoint_candidates()
                 .expect("endpoint candidates"),
             vec!["203.0.113.10:51820"]
+        );
+        assert_eq!(
+            config
+                .packet_plane_quic_endpoint_candidates()
+                .expect("quic endpoint candidates"),
+            vec!["203.0.113.10:51821"]
         );
         assert!(config.validate_runtime().is_ok());
     }
@@ -1938,6 +1981,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: vec!["0.0.0.0:51820".to_owned()],
                     external_endpoints: vec!["vpn-a.example.net:51820".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -1980,6 +2025,8 @@ mod tests {
                 packet_plane: PacketPlaneConfig {
                     listen: Vec::new(),
                     external_endpoints: vec!["vpn-a.example.net".to_owned()],
+                    quic_listen: Vec::new(),
+                    quic_external_endpoints: Vec::new(),
                     session_ttl_seconds: default_packet_plane_session_ttl_seconds(),
                     max_replay_windows_per_session: default_packet_plane_replay_windows_per_session(
                     ),
@@ -2107,6 +2154,44 @@ mod tests {
             config.validate_runtime(),
             Err(ConfigError::PacketPlane(
                 PacketPlaneValidationError::NoReplayWindows
+            ))
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_multiple_packet_plane_quic_listeners() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "dev".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    quic_listen: vec!["127.0.0.1:51821".to_owned(), "127.0.0.1:51822".to_owned()],
+                    ..PacketPlaneConfig::default()
+                },
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        };
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::PacketPlane(
+                PacketPlaneValidationError::TooManyQuicListeners { actual: 2, max: 1 }
             ))
         ));
     }
@@ -2514,6 +2599,8 @@ mod tests {
             packet_plane: PacketPlaneConfig {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                quic_listen: Vec::new(),
+                quic_external_endpoints: Vec::new(),
                 session_ttl_seconds: 120,
                 max_replay_windows_per_session: 512,
             },
@@ -2598,6 +2685,8 @@ mod tests {
             PacketPlaneConfig {
                 listen: vec!["0.0.0.0:51820".to_owned()],
                 external_endpoints: vec!["203.0.113.10:51820".to_owned()],
+                quic_listen: Vec::new(),
+                quic_external_endpoints: Vec::new(),
                 session_ttl_seconds: 120,
                 max_replay_windows_per_session: 512,
             }
