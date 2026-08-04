@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use libp2p::{PeerId as Libp2pPeerId, multiaddr::Protocol, relay, swarm::SwarmEvent};
+use libp2p::{PeerId as Libp2pPeerId, autonat, multiaddr::Protocol, relay, swarm::SwarmEvent};
 
 use crate::{
     config::{Config, ConfigError},
@@ -22,6 +22,7 @@ pub enum BootstrapCheckThreshold {
 pub struct BootstrapCheckReport {
     pub threshold: BootstrapCheckThreshold,
     pub require_relay_reservations: bool,
+    pub require_autonat_status: bool,
     pub kademlia_protocol: String,
     pub ipfs_compatible: bool,
     pub configured_bootstrap_peers: usize,
@@ -31,9 +32,18 @@ pub struct BootstrapCheckReport {
     pub accepted_relay_reservations: usize,
     pub relayed_listen_addresses: usize,
     pub autonat_probe_servers_registered: usize,
+    pub autonat_status: BootstrapAutoNatStatus,
     pub kademlia: BootstrapKademliaCheck,
     pub peer_results: Vec<BootstrapPeerCheck>,
     pub relay_results: Vec<RelayReservationCheck>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BootstrapAutoNatStatus {
+    #[default]
+    Unknown,
+    Public,
+    Private,
 }
 
 #[derive(Debug, Default)]
@@ -58,8 +68,13 @@ impl BootstrapCheckReport {
             || (self.configured_relay_reservations > 0
                 && self.accepted_relay_reservations == self.configured_relay_reservations
                 && self.relayed_listen_addresses >= self.configured_relay_reservations);
+        let autonat_ok = !self.require_autonat_status
+            || (self.autonat_probe_servers_registered > 0 && self.autonat_status.is_observed());
 
-        (has_bootstrap_work || self.require_relay_reservations) && bootstrap_ok && relay_ok
+        (has_bootstrap_work || self.require_relay_reservations || self.require_autonat_status)
+            && bootstrap_ok
+            && relay_ok
+            && autonat_ok
     }
 
     #[must_use]
@@ -74,6 +89,7 @@ impl BootstrapCheckReport {
                 "require relay reservations: {}",
                 self.require_relay_reservations
             ),
+            format!("require autonat status: {}", self.require_autonat_status),
             format!("kademlia protocol: {}", self.kademlia_protocol),
             format!("ipfs compatible: {}", self.ipfs_compatible),
             format!(
@@ -92,6 +108,7 @@ impl BootstrapCheckReport {
                 "autonat probe servers registered: {}",
                 self.autonat_probe_servers_registered
             ),
+            format!("autonat status: {}", self.autonat_status.as_str()),
             format!(
                 "bootstrap peers: {} connected {} dial_failures {}",
                 self.configured_bootstrap_peers, self.connected_bootstrap_peers, self.dial_failures
@@ -135,6 +152,20 @@ impl BootstrapCheckThreshold {
     }
 }
 
+impl BootstrapAutoNatStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+
+    const fn is_observed(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
 #[derive(Debug)]
 pub struct BootstrapPeerCheck {
     pub peer_id: Libp2pPeerId,
@@ -156,6 +187,7 @@ pub async fn check_config_bootstrap(
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
     require_relay_reservations: bool,
+    require_autonat_status: bool,
 ) -> Result<BootstrapCheckReport, BootstrapCheckError> {
     config.validate_runtime()?;
     let mut node = build_node(&bootstrap_check_host_config(config)?)?;
@@ -168,12 +200,14 @@ pub async fn check_config_bootstrap(
         timeout,
         threshold,
         require_relay_reservations,
+        require_autonat_status,
     )
     .await;
 
     Ok(BootstrapCheckReport {
         threshold,
         require_relay_reservations,
+        require_autonat_status,
         kademlia_protocol: node.discovery.kademlia_protocol.clone(),
         ipfs_compatible: node.discovery.kademlia_protocol == "/ipfs/kad/1.0.0",
         configured_bootstrap_peers: bootstrap_peers.len(),
@@ -183,6 +217,7 @@ pub async fn check_config_bootstrap(
         accepted_relay_reservations: poll.accepted_relay_reservations.len(),
         relayed_listen_addresses: poll.relayed_listen_addresses.len(),
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
+        autonat_status: poll.autonat_status,
         kademlia: BootstrapKademliaCheck {
             bootstrap_started: node.startup.kademlia.bootstrap_started,
             rendezvous_lookup_started: node.startup.kademlia.rendezvous_lookup_started,
@@ -246,6 +281,7 @@ async fn poll_bootstrap_events(
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
     require_relay_reservations: bool,
+    require_autonat_status: bool,
 ) -> BootstrapPollResult {
     let mut result = BootstrapPollResult {
         connected_bootstrap_peers: bootstrap_peers
@@ -264,6 +300,9 @@ async fn poll_bootstrap_events(
         configured_relay_reservations: relay_reservations.len(),
         accepted_relay_reservations: result.accepted_relay_reservations.len(),
         relayed_listen_addresses: result.relayed_listen_addresses.len(),
+        require_autonat_status,
+        autonat_probe_servers_registered: node.startup.autonat_servers_registered,
+        autonat_status: result.autonat_status,
         now: Instant::now(),
         deadline,
     }) {
@@ -311,6 +350,12 @@ fn record_bootstrap_event(
         SwarmEvent::NewListenAddr { address, .. } if is_relayed_address(&address) => {
             result.relayed_listen_addresses.insert(address);
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Autonat(autonat::Event::StatusChanged {
+            new,
+            ..
+        })) => {
+            result.autonat_status = BootstrapAutoNatStatus::from_nat_status(&new);
+        }
         _ => {}
     }
 }
@@ -321,6 +366,7 @@ struct BootstrapPollResult {
     dial_failures: Vec<(Libp2pPeerId, String)>,
     accepted_relay_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashSet<libp2p::Multiaddr>,
+    autonat_status: BootstrapAutoNatStatus,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -332,12 +378,17 @@ struct PollingStatus {
     configured_relay_reservations: usize,
     accepted_relay_reservations: usize,
     relayed_listen_addresses: usize,
+    require_autonat_status: bool,
+    autonat_probe_servers_registered: usize,
+    autonat_status: BootstrapAutoNatStatus,
     now: Instant,
     deadline: Instant,
 }
 
 fn should_continue_polling(status: PollingStatus) -> bool {
-    if (status.configured_bootstrap_peers == 0 && !status.require_relay_reservations)
+    if (status.configured_bootstrap_peers == 0
+        && !status.require_relay_reservations
+        && !status.require_autonat_status)
         || status.now >= status.deadline
     {
         return false;
@@ -354,8 +405,21 @@ fn should_continue_polling(status: PollingStatus) -> bool {
         && status.configured_relay_reservations > 0
         && (status.accepted_relay_reservations < status.configured_relay_reservations
             || status.relayed_listen_addresses < status.configured_relay_reservations);
+    let autonat_waiting = status.require_autonat_status
+        && status.autonat_probe_servers_registered > 0
+        && !status.autonat_status.is_observed();
 
-    bootstrap_waiting || relay_waiting
+    bootstrap_waiting || relay_waiting || autonat_waiting
+}
+
+impl BootstrapAutoNatStatus {
+    fn from_nat_status(status: &autonat::NatStatus) -> Self {
+        match status {
+            autonat::NatStatus::Unknown => Self::Unknown,
+            autonat::NatStatus::Public(_) => Self::Public,
+            autonat::NatStatus::Private => Self::Private,
+        }
+    }
 }
 
 fn is_relayed_address(address: &libp2p::Multiaddr) -> bool {
@@ -440,6 +504,7 @@ mod tests {
             Duration::from_secs(5),
             BootstrapCheckThreshold::Any,
             false,
+            false,
         )
         .await
         .expect("bootstrap check");
@@ -490,6 +555,7 @@ mod tests {
             Duration::from_secs(5),
             BootstrapCheckThreshold::Any,
             true,
+            false,
         )
         .await
         .expect("bootstrap check");
@@ -508,6 +574,7 @@ mod tests {
         let report = BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::All,
             require_relay_reservations: true,
+            require_autonat_status: true,
             kademlia_protocol: "/ipfs/kad/1.0.0".to_owned(),
             ipfs_compatible: true,
             configured_bootstrap_peers: 2,
@@ -517,6 +584,7 @@ mod tests {
             accepted_relay_reservations: 0,
             relayed_listen_addresses: 0,
             autonat_probe_servers_registered: 2,
+            autonat_status: BootstrapAutoNatStatus::Private,
             kademlia: BootstrapKademliaCheck {
                 bootstrap_started: true,
                 rendezvous_lookup_started: true,
@@ -542,6 +610,7 @@ mod tests {
         assert!(lines.contains(&"bootstrap check: failed".to_owned()));
         assert!(lines.contains(&"success threshold: all".to_owned()));
         assert!(lines.contains(&"require relay reservations: true".to_owned()));
+        assert!(lines.contains(&"require autonat status: true".to_owned()));
         assert!(lines.contains(&"ipfs compatible: true".to_owned()));
         assert!(
             lines.contains(
@@ -549,7 +618,16 @@ mod tests {
             )
         );
         assert!(lines.contains(&"autonat probe servers registered: 2".to_owned()));
+        assert!(lines.contains(&"autonat status: private".to_owned()));
         assert!(lines.iter().any(|line| line.contains("last_error none")));
+    }
+
+    #[test]
+    fn bootstrap_check_can_require_observed_autonat_status() {
+        assert!(autonat_report(1, BootstrapAutoNatStatus::Private).succeeded());
+        assert!(autonat_report(1, BootstrapAutoNatStatus::Public).succeeded());
+        assert!(!autonat_report(1, BootstrapAutoNatStatus::Unknown).succeeded());
+        assert!(!autonat_report(0, BootstrapAutoNatStatus::Private).succeeded());
     }
 
     async fn next_listen_address(node: &mut crate::runtime::p2p::P2pNode) -> Multiaddr {
@@ -599,5 +677,29 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    fn autonat_report(
+        autonat_probe_servers_registered: usize,
+        autonat_status: BootstrapAutoNatStatus,
+    ) -> BootstrapCheckReport {
+        BootstrapCheckReport {
+            threshold: BootstrapCheckThreshold::Any,
+            require_relay_reservations: false,
+            require_autonat_status: true,
+            kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
+            ipfs_compatible: false,
+            configured_bootstrap_peers: 0,
+            connected_bootstrap_peers: 0,
+            dial_failures: 0,
+            configured_relay_reservations: 0,
+            accepted_relay_reservations: 0,
+            relayed_listen_addresses: 0,
+            autonat_probe_servers_registered,
+            autonat_status,
+            kademlia: BootstrapKademliaCheck::default(),
+            peer_results: Vec::new(),
+            relay_results: Vec::new(),
+        }
     }
 }
