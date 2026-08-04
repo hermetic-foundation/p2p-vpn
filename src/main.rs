@@ -23,7 +23,8 @@ use p2p_vpn::{
     queue::QueueStats,
     runtime::{
         bootstrap_check::{
-            BootstrapCheckRequirements, BootstrapCheckThreshold, check_config_bootstrap,
+            BootstrapCheckRequirements, BootstrapCheckThreshold, PublicRelayProbeMode,
+            check_config_bootstrap, check_public_relay_candidates, parse_public_relay_addresses,
         },
         forward::session_id_for_peer,
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
@@ -242,6 +243,14 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long)]
         require_relayed_peer_circuits: bool,
+    },
+    RelayCheck {
+        #[arg(long = "relay-candidate", required = true)]
+        relay_candidates: Vec<String>,
+        #[arg(long)]
+        require_dcutr_success: bool,
+        #[arg(long, default_value_t = 45)]
+        timeout_seconds: u64,
     },
     InviteExport {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -514,6 +523,18 @@ async fn main() -> Result<(), String> {
                 },
             ))
             .await
+        }
+        Command::RelayCheck {
+            relay_candidates,
+            require_dcutr_success,
+            timeout_seconds,
+        } => {
+            let mode = if require_dcutr_success {
+                PublicRelayProbeMode::DcutrSuccess
+            } else {
+                PublicRelayProbeMode::RelayedPeerCircuit
+            };
+            Box::pin(relay_check(&relay_candidates, timeout_seconds, mode)).await
         }
         Command::InviteExport {
             config,
@@ -2010,6 +2031,33 @@ async fn bootstrap_check(
         Ok(())
     } else {
         Err("bootstrap check did not meet success threshold".to_owned())
+    }
+}
+
+async fn relay_check(
+    relay_candidates: &[String],
+    timeout_seconds: u64,
+    mode: PublicRelayProbeMode,
+) -> Result<(), String> {
+    let raw = relay_candidates.join("\n");
+    let addresses = parse_public_relay_addresses(&raw)
+        .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
+    let report = check_public_relay_candidates(
+        &addresses,
+        mode,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await;
+    let succeeded = report.succeeded();
+
+    for line in report.lines() {
+        println!("{line}");
+    }
+
+    if succeeded {
+        Ok(())
+    } else {
+        Err("public relay check did not find a usable candidate".to_owned())
     }
 }
 
@@ -3619,6 +3667,34 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn cli_parses_relay_check_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-check",
+            "--relay-candidate",
+            "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "--require-dcutr-success",
+            "--timeout-seconds",
+            "60",
+        ])
+        .expect("cli");
+
+        let Command::RelayCheck {
+            relay_candidates,
+            require_dcutr_success,
+            timeout_seconds,
+        } = cli.command
+        else {
+            panic!("expected relay-check command");
+        };
+
+        assert_eq!(relay_candidates.len(), 1);
+        assert!(relay_candidates[0].contains("relay.example.net"));
+        assert!(require_dcutr_success);
+        assert_eq!(timeout_seconds, 60);
     }
 
     #[test]

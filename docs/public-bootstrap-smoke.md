@@ -60,7 +60,26 @@ DCUtR hole punching; those require a known public circuit-relay v2 endpoint that
 accepts reservations for the test.
 
 To record the remaining relay evidence, run the ignored live relay smokes with a
-known-good relay or a candidate set:
+known-good relay or a candidate set. The preferred rootless operator command is:
+
+```sh
+nix develop -c cargo run -- relay-check \
+  --relay-candidate /dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A \
+  --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
+  --timeout-seconds 45
+
+nix develop -c cargo run -- relay-check \
+  --relay-candidate /dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A \
+  --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
+  --require-dcutr-success \
+  --timeout-seconds 45
+```
+
+The command tries candidates until one works, reports per-candidate failures,
+and requires direct relay multiaddrs with `/p2p/RELAY` but without
+`/p2p-circuit`.
+
+The ignored test harness can run the same live checks:
 
 ```sh
 P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B' \

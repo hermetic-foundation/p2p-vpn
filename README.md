@@ -803,6 +803,29 @@ shared relay, or a small candidate set of relays, outside the deterministic
 local test suite:
 
 ```sh
+cargo run -- relay-check \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --timeout-seconds 45
+
+cargo run -- relay-check \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --require-dcutr-success \
+  --timeout-seconds 45
+```
+
+`relay-check` is rootless. In its default mode it creates a temporary listener,
+reserves a circuit on the supplied relay, and dials that listener from a second
+temporary node through the relay. With `--require-dcutr-success`, it also gives
+both temporary nodes direct listen sockets and fails unless libp2p reports a
+successful DCUtR hole-punch event. Repeat `--relay-candidate` to try a small
+candidate set; the command stops after the first usable relay and prints
+candidate-level failures when none work. Each supplied relay multiaddr must be
+the relay's direct address with its `/p2p/RELAY` peer ID and without
+`/p2p-circuit`.
+
+The ignored tests run the same kind of probe from the test harness:
+
+```sh
 P2P_VPN_LIVE_RELAY_MULTIADDR=/dns4/relay.example.net/tcp/4001/p2p/RELAY \
   cargo test runtime::bootstrap_check::tests::bootstrap_check_can_probe_live_public_relayed_peer_circuit \
   -- --ignored --exact --nocapture
