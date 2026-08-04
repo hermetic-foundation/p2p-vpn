@@ -108,9 +108,9 @@ usable IPv6 route skip IPv6-only relay candidates during validation and print ea
 `reason ipv6_unreachable`, while still showing the candidate in the scan output.
 Use `--max-validation-candidates N` to bound each validation pass after host
 reachability filtering; this is especially useful with `--require-dcutr-success`
-because each public relay can consume the full candidate timeout. Add
-`--write-config PATH` with `--check-candidates` to write a default
-relay-assisted config from the first validated scanned candidate. When the scan
+because each public relay has a single end-to-end reservation plus circuit/DCUtR
+timeout budget. Add `--write-config PATH` with `--check-candidates` to write a
+default relay-assisted config from the first validated scanned candidate. When the scan
 uses `--config p2p-vpn.json`, the output preserves that config's overlay
 identity, membership, peers, routes, queue limits, and packet-plane settings and
 adds only the validated relay bootstrap and reservation infrastructure.

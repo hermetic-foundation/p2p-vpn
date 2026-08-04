@@ -71,9 +71,11 @@ path.
    immediately test scanned candidates with the same reservation/circuit/DCUtR
    proof path as `relay-check`, while skipping IPv6-only validation candidates
    on hosts without a usable IPv6 route and optionally bounding how many
-   host-reachable candidates a validation pass probes. Validation preserves
-   relay-peer diversity and tries QUIC-capable addresses before TCP alternates
-   within each relay peer. Recorded 2026-08-04 public smokes now prove
+   host-reachable candidates a validation pass probes. Each validated candidate
+   uses one end-to-end timeout budget across relay reservation setup and the
+   subsequent relayed-circuit or DCUtR proof. Validation preserves relay-peer
+   diversity and tries QUIC-capable addresses before TCP alternates within each
+   relay peer. Recorded 2026-08-04 public smokes now prove
    public Kademlia-assisted relay discovery, public relay reservation
    acceptance, relayed circuit dialing, and relay-assisted config generation
    against a routing-table relay candidate. A follow-up `--require-dcutr-success`

@@ -861,9 +861,10 @@ IPv6 route and prints each skip as
 `public relay scan validation skipped: ... reason ipv6_unreachable`. Use
 `--max-validation-candidates N` to bound a validation pass after host
 reachability filtering; this is useful for public DCUtR searches where each
-candidate can consume the full candidate timeout. Add `--require-dcutr-success`
-with `--check-candidates` when the scan should only pass after a successful
-public-relay-assisted hole punch. Pass `--write-config PATH` with
+candidate has a single end-to-end reservation plus circuit/DCUtR timeout
+budget. Add `--require-dcutr-success` with `--check-candidates` when the scan
+should only pass after a successful public-relay-assisted hole punch. Pass
+`--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that
 `relay-check --write-config` writes from the first validated scanned candidate.
 When `relay-scan` also receives `--config p2p-vpn.json`, the written config

@@ -346,6 +346,16 @@ impl PublicRelayProbeFailure {
             bootstrap: Some(bootstrap),
         }
     }
+
+    fn candidate_timeout(stage: PublicRelayCandidateFailureStage) -> Self {
+        Self::at_stage(
+            stage,
+            format!(
+                "candidate timeout exhausted before {}",
+                stage.as_description()
+            ),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -459,6 +469,16 @@ impl PublicRelayCandidateFailureStage {
             Self::RelayReservation => "relay_reservation",
             Self::RelayedPeerCircuit => "relayed_peer_circuit",
             Self::DcutrSuccess => "dcutr_success",
+        }
+    }
+
+    const fn as_description(self) -> &'static str {
+        match self {
+            Self::None => "candidate success",
+            Self::CandidateSetup => "candidate setup",
+            Self::RelayReservation => "relay reservation",
+            Self::RelayedPeerCircuit => "relayed peer circuit check",
+            Self::DcutrSuccess => "dcutr success check",
         }
     }
 }
@@ -839,6 +859,7 @@ async fn live_public_relayed_peer_circuit(
     relay_address: &Multiaddr,
     timeout: Duration,
 ) -> Result<BootstrapCheckReport, PublicRelayProbeFailure> {
+    let deadline = public_relay_candidate_deadline(timeout);
     let relay_peer = address_peer(relay_address).ok_or_else(|| {
         PublicRelayProbeFailure::without_bootstrap("live relay multiaddr must include /p2p/RELAY")
     })?;
@@ -870,7 +891,11 @@ async fn live_public_relayed_peer_circuit(
         &mut listener_node,
         relayed_target_address.clone(),
         relay_peer,
-        timeout,
+        public_relay_candidate_remaining(deadline).ok_or_else(|| {
+            PublicRelayProbeFailure::candidate_timeout(
+                PublicRelayCandidateFailureStage::RelayReservation,
+            )
+        })?,
     )
     .await
     .map_err(|error| {
@@ -887,7 +912,11 @@ async fn live_public_relayed_peer_circuit(
         .map_err(PublicRelayProbeFailure::without_bootstrap)?;
     let report = check_config_bootstrap(
         &config,
-        timeout,
+        public_relay_candidate_remaining(deadline).ok_or_else(|| {
+            PublicRelayProbeFailure::candidate_timeout(
+                PublicRelayCandidateFailureStage::RelayedPeerCircuit,
+            )
+        })?,
         BootstrapCheckThreshold::Any,
         BootstrapCheckRequirements {
             relay_reservations: false,
@@ -920,6 +949,7 @@ async fn live_public_dcutr_success(
     relay_address: &Multiaddr,
     timeout: Duration,
 ) -> Result<BootstrapCheckReport, PublicRelayProbeFailure> {
+    let deadline = public_relay_candidate_deadline(timeout);
     let relay_peer = address_peer(relay_address).ok_or_else(|| {
         PublicRelayProbeFailure::without_bootstrap("live relay multiaddr must include /p2p/RELAY")
     })?;
@@ -951,7 +981,11 @@ async fn live_public_dcutr_success(
         &mut listener_node,
         relayed_target_address.clone(),
         relay_peer,
-        timeout,
+        public_relay_candidate_remaining(deadline).ok_or_else(|| {
+            PublicRelayProbeFailure::candidate_timeout(
+                PublicRelayCandidateFailureStage::RelayReservation,
+            )
+        })?,
     )
     .await
     .map_err(|error| {
@@ -973,7 +1007,11 @@ async fn live_public_dcutr_success(
     config.network.listen_addresses = vec!["/ip4/0.0.0.0/tcp/0".to_owned()];
     let report = check_config_bootstrap(
         &config,
-        timeout,
+        public_relay_candidate_remaining(deadline).ok_or_else(|| {
+            PublicRelayProbeFailure::candidate_timeout(
+                PublicRelayCandidateFailureStage::DcutrSuccess,
+            )
+        })?,
         BootstrapCheckThreshold::Any,
         BootstrapCheckRequirements {
             relay_reservations: false,
@@ -1000,6 +1038,18 @@ async fn live_public_dcutr_success(
             report,
         ))
     }
+}
+
+fn public_relay_candidate_deadline(timeout: Duration) -> Instant {
+    Instant::now() + timeout.max(Duration::from_millis(1))
+}
+
+fn public_relay_candidate_remaining(deadline: Instant) -> Option<Duration> {
+    let now = Instant::now();
+    if now >= deadline {
+        return None;
+    }
+    Some(deadline.saturating_duration_since(now))
 }
 
 async fn wait_for_external_relay_reservation(
@@ -2181,6 +2231,30 @@ mod tests {
         assert!(lines.contains(&format!(
             "public relay candidate config: relay_peer {relay}={address} relay_reservation {address}/p2p-circuit"
         )));
+    }
+
+    #[test]
+    fn public_relay_candidate_remaining_reports_stage_timeout() {
+        let remaining = public_relay_candidate_remaining(Instant::now());
+        let error = PublicRelayProbeFailure::candidate_timeout(
+            PublicRelayCandidateFailureStage::DcutrSuccess,
+        );
+
+        assert_eq!(remaining, None);
+        assert_eq!(error.stage, PublicRelayCandidateFailureStage::DcutrSuccess);
+        assert_eq!(
+            error.message,
+            "candidate timeout exhausted before dcutr success check"
+        );
+    }
+
+    #[test]
+    fn public_relay_candidate_remaining_returns_remaining_budget() {
+        let remaining = public_relay_candidate_remaining(Instant::now() + Duration::from_secs(1))
+            .expect("future deadline should have budget");
+
+        assert!(remaining > Duration::ZERO);
+        assert!(remaining <= Duration::from_secs(1));
     }
 
     #[test]
