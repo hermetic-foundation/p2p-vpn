@@ -63,9 +63,11 @@ path.
    AutoNAT status results, DCUtR relay readiness, configured relayed peer circuit
    dialing, and observed DCUtR success events. `relay-scan` can discover
    relay-hop candidate hints from configured or explicit bootstrap peers, and
-   with bundled public IPFS bootstrap peers it now samples additional peers from
-   the public `/ipfs/kad/1.0.0` routing table while filtering unsupported
-   transport addresses. `relay-scan --check-candidates` can
+   with bundled public IPFS bootstrap peers it now actively samples additional
+   peers from the public `/ipfs/kad/1.0.0` routing table while filtering
+   unsupported transport addresses, and its bounded candidate set prefers
+   distinct relay peers when a newly identified relay can replace duplicate
+   addresses from an already represented relay. `relay-scan --check-candidates` can
    immediately test scanned candidates with the same reservation/circuit/DCUtR
    proof path as `relay-check`, while skipping IPv6-only validation candidates
    on hosts without a usable IPv6 route. Recorded 2026-08-04 public smokes now prove

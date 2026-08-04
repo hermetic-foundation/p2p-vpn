@@ -330,6 +330,10 @@ pub struct PublicRelayScanReport {
     pub scanned_peers: usize,
     pub discovered_routing_peers: usize,
     pub dialed_routing_peers: usize,
+    pub closest_peer_lookup_started: bool,
+    pub closest_peer_lookup_finished: bool,
+    pub closest_peer_results: usize,
+    pub closest_peer_errors: usize,
     pub connected_bootstrap_peers: usize,
     pub identified_peers: usize,
     pub relay_capable_peers: usize,
@@ -441,6 +445,13 @@ impl PublicRelayScanReport {
             format!(
                 "public relay scan routing_peers: {} dialed {}",
                 self.discovered_routing_peers, self.dialed_routing_peers
+            ),
+            format!(
+                "public relay scan closest_peer_lookup: started {} finished {} results {} errors {}",
+                self.closest_peer_lookup_started,
+                self.closest_peer_lookup_finished,
+                self.closest_peer_results,
+                self.closest_peer_errors
             ),
             format!(
                 "public relay scan connected: {}",
@@ -651,6 +662,10 @@ fn public_relay_scan_report(
         scanned_peers: poll.scan_peers.len(),
         discovered_routing_peers: poll.discovered_routing_peers,
         dialed_routing_peers: poll.dialed_routing_peers,
+        closest_peer_lookup_started: poll.closest_peer_lookup_started,
+        closest_peer_lookup_finished: poll.closest_peer_lookup_finished,
+        closest_peer_results: poll.closest_peer_results,
+        closest_peer_errors: poll.closest_peer_errors,
         connected_bootstrap_peers: poll.connected_bootstrap_peers.len(),
         identified_peers: poll.identified_peers.len(),
         relay_capable_peers,
@@ -1130,6 +1145,16 @@ fn dcutr_direct_dial_last_error(
         .map(|(_, error)| format!("direct_dial: {error}"))
 }
 
+fn start_public_relay_closest_peer_lookup(node: &mut P2pNode) -> bool {
+    if !node.discovery.kademlia {
+        return false;
+    }
+
+    let local_peer = *node.swarm.local_peer_id();
+    node.swarm.behaviour_mut().kad.get_closest_peers(local_peer);
+    true
+}
+
 async fn poll_public_relay_scan_events(
     node: &mut P2pNode,
     bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
@@ -1144,16 +1169,15 @@ async fn poll_public_relay_scan_events(
             .collect(),
         ..PublicRelayScanPollResult::default()
     };
+    result.closest_peer_lookup_started = start_public_relay_closest_peer_lookup(node);
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
     while should_continue_public_relay_scan(
         bootstrap_peers.len(),
-        result.scan_peers.len(),
-        result.identified_peers.len(),
-        result.candidates.len(),
         max_candidates,
-        node.discovery.kademlia,
+        public_relay_kademlia_lookup_state(node.discovery.kademlia, &result),
         Instant::now() < deadline,
+        &result,
     ) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let Ok(event) = tokio::time::timeout(remaining, node.swarm.select_next_some()).await else {
@@ -1165,20 +1189,49 @@ async fn poll_public_relay_scan_events(
     result
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicRelayKademliaLookupState {
+    Disabled,
+    NotStarted,
+    Waiting,
+    Finished,
+}
+
+fn public_relay_kademlia_lookup_state(
+    kademlia_enabled: bool,
+    result: &PublicRelayScanPollResult,
+) -> PublicRelayKademliaLookupState {
+    if !kademlia_enabled {
+        PublicRelayKademliaLookupState::Disabled
+    } else if result.closest_peer_lookup_finished {
+        PublicRelayKademliaLookupState::Finished
+    } else if result.closest_peer_lookup_started {
+        PublicRelayKademliaLookupState::Waiting
+    } else {
+        PublicRelayKademliaLookupState::NotStarted
+    }
+}
+
 fn should_continue_public_relay_scan(
     bootstrap_peers: usize,
-    scan_peers: usize,
-    identified_peers: usize,
-    candidates: usize,
     max_candidates: usize,
-    kademlia_enabled: bool,
+    kademlia_lookup: PublicRelayKademliaLookupState,
     within_deadline: bool,
+    result: &PublicRelayScanPollResult,
 ) -> bool {
-    if !within_deadline || bootstrap_peers == 0 || candidates >= max_candidates {
+    if !within_deadline || bootstrap_peers == 0 {
         return false;
     }
 
-    identified_peers < scan_peers || (kademlia_enabled && scan_peers < PUBLIC_RELAY_SCAN_LIMIT)
+    let closest_peer_lookup_waiting = kademlia_lookup == PublicRelayKademliaLookupState::Waiting
+        && result.scan_peers.len() < PUBLIC_RELAY_SCAN_LIMIT;
+
+    let candidate_discovery_waiting = result.candidates.len() < max_candidates
+        && (result.identified_peers.len() < result.scan_peers.len()
+            || (kademlia_lookup != PublicRelayKademliaLookupState::Disabled
+                && result.scan_peers.len() < PUBLIC_RELAY_SCAN_LIMIT));
+
+    candidate_discovery_waiting || closest_peer_lookup_waiting
 }
 
 fn record_public_relay_scan_event(
@@ -1209,15 +1262,16 @@ fn record_public_relay_scan_event(
             ..
         })) if scan_peers_include(&result.scan_peers, peer_id) => {
             let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
-            let candidate_count_before = result.candidates.len();
+            let mut accepted_candidates = 0;
             if relay_hop {
                 for address in relay_scan_candidate_addresses(peer_id, &info, &result.scan_peers) {
-                    if result.candidates.len() == max_candidates {
-                        break;
-                    }
-                    let candidate = (peer_id, address);
-                    if !result.candidates.contains(&candidate) {
-                        result.candidates.push(candidate);
+                    if add_public_relay_candidate(
+                        &mut result.candidates,
+                        max_candidates,
+                        peer_id,
+                        address,
+                    ) {
+                        accepted_candidates += 1;
                     }
                 }
             }
@@ -1225,7 +1279,7 @@ fn record_public_relay_scan_event(
                 peer_id,
                 PublicRelayIdentifyResult {
                     relay_hop,
-                    candidate_addresses: result.candidates.len() - candidate_count_before,
+                    candidate_addresses: accepted_candidates,
                 },
             );
         }
@@ -1245,7 +1299,87 @@ fn record_public_relay_scan_event(
         })) => {
             record_public_relay_routing_peer(peer, addresses.iter(), node, result);
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed {
+            result: kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk { peers, .. })),
+            ..
+        })) => {
+            result.closest_peer_lookup_finished = true;
+            record_public_relay_closest_peer_results(peers, node, result);
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed {
+            result:
+                kad::QueryResult::GetClosestPeers(Err(kad::GetClosestPeersError::Timeout {
+                    peers, ..
+                })),
+            ..
+        })) => {
+            result.closest_peer_lookup_finished = true;
+            result.closest_peer_errors += 1;
+            record_public_relay_closest_peer_results(peers, node, result);
+        }
         _ => {}
+    }
+}
+
+fn add_public_relay_candidate(
+    candidates: &mut Vec<(Libp2pPeerId, Multiaddr)>,
+    max_candidates: usize,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+) -> bool {
+    if max_candidates == 0 {
+        return false;
+    }
+
+    let candidate = (peer, address);
+    if candidates.contains(&candidate) {
+        return false;
+    }
+
+    if candidates.len() < max_candidates {
+        candidates.push(candidate);
+        return true;
+    }
+
+    if candidates
+        .iter()
+        .any(|(candidate_peer, _)| *candidate_peer == peer)
+    {
+        return false;
+    }
+
+    let Some(replace_index) = replaceable_public_relay_candidate_index(candidates) else {
+        return false;
+    };
+    candidates.remove(replace_index);
+    candidates.push(candidate);
+    true
+}
+
+fn replaceable_public_relay_candidate_index(
+    candidates: &[(Libp2pPeerId, Multiaddr)],
+) -> Option<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, (peer, _))| {
+            let peer_candidates = candidates
+                .iter()
+                .filter(|(candidate_peer, _)| candidate_peer == peer)
+                .count();
+            (peer_candidates > 1).then_some(index)
+        })
+}
+
+fn record_public_relay_closest_peer_results(
+    peers: Vec<kad::PeerInfo>,
+    node: &mut P2pNode,
+    result: &mut PublicRelayScanPollResult,
+) {
+    result.closest_peer_results += peers.len();
+    for peer in peers {
+        record_public_relay_routing_peer(peer.peer_id, peer.addrs.iter(), node, result);
     }
 }
 
@@ -1479,6 +1613,10 @@ struct PublicRelayScanPollResult {
     candidates: Vec<(Libp2pPeerId, Multiaddr)>,
     discovered_routing_peers: usize,
     dialed_routing_peers: usize,
+    closest_peer_lookup_started: bool,
+    closest_peer_lookup_finished: bool,
+    closest_peer_results: usize,
+    closest_peer_errors: usize,
 }
 
 #[derive(Debug)]
@@ -2102,6 +2240,10 @@ mod tests {
             candidates: vec![(routing_relay, routing_address.clone())],
             discovered_routing_peers: 1,
             dialed_routing_peers: 1,
+            closest_peer_lookup_started: true,
+            closest_peer_lookup_finished: true,
+            closest_peer_results: 2,
+            closest_peer_errors: 0,
         };
 
         let report = public_relay_scan_report(&bootstrap_peers, &poll);
@@ -2112,15 +2254,95 @@ mod tests {
         assert_eq!(report.scanned_peers, 2);
         assert_eq!(report.discovered_routing_peers, 1);
         assert_eq!(report.dialed_routing_peers, 1);
+        assert!(report.closest_peer_lookup_started);
+        assert!(report.closest_peer_lookup_finished);
+        assert_eq!(report.closest_peer_results, 2);
+        assert_eq!(report.closest_peer_errors, 0);
         assert_eq!(report.identified_peers, 1);
         assert_eq!(report.relay_capable_peers, 1);
         assert!(lines.contains(&"public relay scan total_peers: 2".to_owned()));
         assert!(lines.contains(&"public relay scan routing_peers: 1 dialed 1".to_owned()));
+        assert!(lines.contains(
+            &"public relay scan closest_peer_lookup: started true finished true results 2 errors 0"
+                .to_owned()
+        ));
         assert!(lines.iter().any(|line| {
             line.contains(&routing_relay.to_string())
                 && line.contains("relay_hop true")
                 && line.contains(&routing_address.to_string())
         }));
+    }
+
+    #[test]
+    fn public_relay_scan_waits_for_active_closest_peer_lookup_at_candidate_limit() {
+        let waiting_scan = relay_scan_poll_at_candidate_limit(false);
+        let finished_scan = relay_scan_poll_at_candidate_limit(true);
+
+        assert!(should_continue_public_relay_scan(
+            5,
+            8,
+            public_relay_kademlia_lookup_state(true, &waiting_scan),
+            true,
+            &waiting_scan,
+        ));
+        assert!(!should_continue_public_relay_scan(
+            5,
+            8,
+            public_relay_kademlia_lookup_state(true, &finished_scan),
+            true,
+            &finished_scan,
+        ));
+    }
+
+    #[test]
+    fn public_relay_candidates_replace_duplicate_peer_when_full() {
+        let relay_a = peer_id();
+        let relay_b = peer_id();
+        let relay_c = peer_id();
+        let first_relay_addresses = [
+            public_relay_test_address(relay_a, 10),
+            public_relay_test_address(relay_a, 11),
+        ];
+        let second_relay_address = public_relay_test_address(relay_b, 20);
+        let new_relay_address = public_relay_test_address(relay_c, 30);
+        let mut candidates = vec![
+            (relay_a, first_relay_addresses[0].clone()),
+            (relay_a, first_relay_addresses[1].clone()),
+            (relay_b, second_relay_address.clone()),
+        ];
+
+        assert!(add_public_relay_candidate(
+            &mut candidates,
+            3,
+            relay_c,
+            new_relay_address.clone()
+        ));
+
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates.contains(&(relay_a, first_relay_addresses[0].clone())));
+        assert!(candidates.contains(&(relay_b, second_relay_address)));
+        assert!(candidates.contains(&(relay_c, new_relay_address)));
+        assert!(!candidates.contains(&(relay_a, first_relay_addresses[1].clone())));
+    }
+
+    #[test]
+    fn public_relay_candidates_keep_distinct_peers_when_full() {
+        let relays = [peer_id(), peer_id(), peer_id(), peer_id()];
+        let mut candidates = vec![
+            (relays[0], public_relay_test_address(relays[0], 10)),
+            (relays[1], public_relay_test_address(relays[1], 20)),
+            (relays[2], public_relay_test_address(relays[2], 30)),
+        ];
+        let original_candidates = candidates.clone();
+
+        assert!(!add_public_relay_candidate(
+            &mut candidates,
+            3,
+            relays[3],
+            public_relay_test_address(relays[3], 40)
+        ));
+
+        assert_eq!(candidates, original_candidates);
     }
 
     #[tokio::test]
@@ -2587,6 +2809,53 @@ mod tests {
 
     fn peer_id() -> Libp2pPeerId {
         Keypair::generate_ed25519().public().to_peer_id()
+    }
+
+    fn public_relay_test_address(peer: Libp2pPeerId, host_octet: u8) -> Multiaddr {
+        format!("/ip4/203.0.113.{host_octet}/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("public relay test address")
+    }
+
+    fn relay_scan_poll_at_candidate_limit(
+        closest_peer_lookup_finished: bool,
+    ) -> PublicRelayScanPollResult {
+        let scan_peers = (0..PUBLIC_RELAY_SCAN_LIMIT - 1)
+            .map(|index| {
+                (
+                    peer_id(),
+                    format!("/memory/{}", index + 1)
+                        .parse()
+                        .expect("scan peer address"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let identified_peers = scan_peers
+            .iter()
+            .map(|(peer, _)| {
+                (
+                    *peer,
+                    PublicRelayIdentifyResult {
+                        relay_hop: true,
+                        candidate_addresses: 1,
+                    },
+                )
+            })
+            .collect();
+        let candidates = scan_peers
+            .iter()
+            .take(8)
+            .map(|(peer, _)| (*peer, public_relay_test_address(*peer, 10)))
+            .collect();
+
+        PublicRelayScanPollResult {
+            scan_peers,
+            identified_peers,
+            candidates,
+            closest_peer_lookup_started: true,
+            closest_peer_lookup_finished,
+            ..PublicRelayScanPollResult::default()
+        }
     }
 
     fn autonat_report(

@@ -85,12 +85,15 @@ nix develop -c cargo run -- relay-scan \
 
 `relay-scan` reports direct `/p2p/RELAY` candidate multiaddrs. With
 `--ipfs-bootstrap-peers`, it uses the bundled public IPFS bootstrap set and
-samples additional peers learned through the public `/ipfs/kad/1.0.0` routing
+actively samples additional peers through the public `/ipfs/kad/1.0.0` routing
 table; scan output reports both configured bootstrap peers and total scanned
-peers, plus how many routing-table peers were discovered. Treat reported
-candidates as hints only; the peer can advertise relay-hop support and still
-reject reservations because of load, policy, or resource limits. The scanner
-filters out transport protocols this binary cannot dial. With
+peers, whether the active closest-peer lookup started and finished, how many
+peer records it returned, and how many routing-table peers were discovered. The
+bounded candidate set prefers distinct relay peers when it can replace
+duplicate addresses from an already represented relay. Treat reported candidates
+as hints only; the peer can advertise relay-hop support and still reject
+reservations because of load, policy, or resource limits. The scanner filters
+out transport protocols this binary cannot dial. With
 `--check-candidates`, the command immediately runs the same reservation and
 relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
 the candidate must also prove public-relay-assisted hole punching. Validation
@@ -217,7 +220,9 @@ public relay candidates: 45
 
 This confirms `relay-scan --ipfs-bootstrap-peers` now goes beyond the configured
 bootstrap peers and collects relay-hop candidates from peers learned through the
-public IPFS Kademlia routing table.
+public IPFS Kademlia routing table. Smaller bounded scans also keep candidates
+diverse by relay peer when they can replace duplicate addresses from a relay
+already in the candidate set.
 
 Additional round-robin public relay validation evidence on 2026-08-04:
 
