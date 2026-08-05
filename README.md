@@ -849,10 +849,14 @@ cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
 cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
   --write-candidates public-relay-candidates.txt \
-  --check-candidates \
-  --max-validation-candidates 6 \
-  --candidate-timeout-seconds 45 \
+  --write-report public-relay-scan.json \
   --timeout-seconds 30
+
+cargo run -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --write-report public-relay-check.json \
+  --max-validation-candidates 6 \
+  --timeout-seconds 45
 
 cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
@@ -861,11 +865,6 @@ cargo run -- relay-scan \
   --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
   --timeout-seconds 30
-
-cargo run -- relay-check \
-  --relay-candidates-file public-relay-candidates.txt \
-  --write-report public-relay-check.json \
-  --timeout-seconds 45
 
 cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
@@ -907,7 +906,9 @@ QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
 spend early attempts on the transports most likely to support hole punching.
 Pass `--write-candidates PATH` to write the ordered direct relay candidates as
 newline-separated multiaddrs for repeatable `relay-check --relay-candidates-file
-PATH` runs.
+PATH` runs. Pass `--write-report PATH` to preserve scan metadata, routing-peer
+counts, identified relay-hop peers, candidate addresses, and peer-level dial
+failures before validation begins.
 Validation skips relay candidates that require IPv4 or IPv6 when the local host
 has no usable route for that address family and prints each skip as
 `public relay scan validation skipped: ... reason ipv4_unreachable` or

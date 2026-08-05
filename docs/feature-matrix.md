@@ -101,7 +101,11 @@ path.
    bootstrap-check phase. `relay-check` can also consume larger bounded
    `relay-scan --write-candidates` artifacts when a validation cap is set, so
    broad public scans can feed repeatable smaller proof runs without manual
-   file trimming. A report-driven live run on 2026-08-04 found one public relay
+   file trimming. The packaged `public-relay-repro` app now runs discovery,
+   relay-circuit validation, and DCUtR validation as separate phases, preserving
+   the scan, relay-check, and DCUtR JSON reports even when a later phase fails,
+   so public topology failures can be compared across hosts. A report-driven
+   live run on 2026-08-04 found one public relay
    candidate that accepted a reservation, carried a relayed circuit, and wrote
    a relay-assisted config; the paired DCUtR-required report tested eight
    host-reachable candidates, with four reservation timeouts and four

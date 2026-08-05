@@ -91,37 +91,65 @@
 
             candidates="$artifact_dir/public-relay-candidates.txt"
             scan_report="$artifact_dir/public-relay-scan-report.json"
+            relay_report="$artifact_dir/public-relay-check-report.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
             max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
+            status=0
+
+            run_phase() {
+              phase="$1"
+              shift
+              echo "$phase" >&2
+              set +e
+              "$@"
+              phase_status="$?"
+              set -e
+              if [[ "$phase_status" -ne 0 ]]; then
+                echo "$phase failed with exit status $phase_status" >&2
+                status=1
+              fi
+            }
 
             echo "writing public relay repro artifacts to $artifact_dir" >&2
-            echo "scanning IPFS-compatible bootstrap peers for public relay candidates" >&2
-            p2p-vpn relay-scan \
+            run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
+              p2p-vpn relay-scan \
               --ipfs-bootstrap-peers \
               --timeout-seconds "$scan_timeout" \
               --max-candidates "$max_candidates" \
-              --check-candidates \
-              --candidate-timeout-seconds "$candidate_timeout" \
-              --max-validation-candidates "$max_validation" \
               --write-candidates "$candidates" \
               --write-report "$scan_report" \
               --force
 
-            echo "probing candidates for DCUtR success evidence" >&2
-            p2p-vpn relay-check \
-              --relay-candidates-file "$candidates" \
-              --timeout-seconds "$candidate_timeout" \
-              --max-validation-candidates "$max_validation" \
-              --require-dcutr-success \
-              --write-report "$dcutr_report" \
-              --force
+            if [[ -s "$candidates" ]]; then
+              run_phase "probing candidates for relay reservation and relayed-circuit evidence" \
+                p2p-vpn relay-check \
+                --relay-candidates-file "$candidates" \
+                --timeout-seconds "$candidate_timeout" \
+                --max-validation-candidates "$max_validation" \
+                --write-report "$relay_report" \
+                --force
+
+              run_phase "probing candidates for DCUtR success evidence" \
+                p2p-vpn relay-check \
+                --relay-candidates-file "$candidates" \
+                --timeout-seconds "$candidate_timeout" \
+                --max-validation-candidates "$max_validation" \
+                --require-dcutr-success \
+                --write-report "$dcutr_report" \
+                --force
+            else
+              echo "candidate file is empty; skipping relay-check probes" >&2
+              status=1
+            fi
 
             echo "candidate file: $candidates" >&2
             echo "scan report: $scan_report" >&2
+            echo "relay-check report: $relay_report" >&2
             echo "DCUtR report: $dcutr_report" >&2
+            exit "$status"
           '';
         };
         moduleEval = lib.nixosSystem {
