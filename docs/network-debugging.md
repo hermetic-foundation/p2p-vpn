@@ -112,11 +112,14 @@ Every repro directory also contains `repro-metadata.txt`,
 with the summary when triaging a failure: it records each phase status,
 phase duration, candidate counts, skipped candidates, routing-peer counts,
 failure-stage counts, candidate elapsed-time ranges, and the first candidate
-error from each report. Use the metadata file to compare the exact
-timeout/candidate-limit environment between runs. Use the host-network file to
-compare OS/kernel, IPv4/IPv6 route availability, interface addresses, and route
-tables across machines. Use the commands file to replay the same scan,
-relay-circuit, and DCUtR probes against the preserved candidate file.
+error from each report. For relay-check reports, it also summarizes observed
+relayed and direct connection addresses so DCUtR runs show whether they reached
+relay fallback only or completed direct promotion. Use the metadata file to
+compare the exact timeout/candidate-limit environment between runs. Use the
+host-network file to compare OS/kernel, IPv4/IPv6 route availability, interface
+addresses, and route tables across machines. Use the commands file to replay
+the same scan, relay-circuit, and DCUtR probes against the preserved candidate
+file.
 
 Probe candidates and write a machine-readable report:
 

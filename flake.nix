@@ -287,6 +287,18 @@
                     else "min=\(min),max=\(max)"
                     end
                 ),
+                "  relayed_connection_addresses=" + (
+                  [(.candidates // [])[].bootstrap.relayed_connection_addresses[]?]
+                  | if length == 0 then "none"
+                    else "count=\(length),first=\(.[0])"
+                    end
+                ),
+                "  direct_connection_addresses=" + (
+                  [(.candidates // [])[].bootstrap.direct_connection_addresses[]?]
+                  | if length == 0 then "none"
+                    else "count=\(length),first=\(.[0])"
+                    end
+                ),
                 "  first_error=" + (
                   (
                     [(.candidates // [])[].error, (.peer_results // [])[].last_error]

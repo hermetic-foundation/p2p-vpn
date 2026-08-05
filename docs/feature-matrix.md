@@ -111,8 +111,9 @@ path.
    Relay-check JSON reports include per-candidate elapsed milliseconds and
    observed path addresses so timeout signatures and direct-promotion evidence
    can be compared across hosts. The repro summary records
-   per-phase elapsed seconds and per-report candidate elapsed ranges so public
-   topology failures can be triaged without hand-parsing each JSON artifact.
+   per-phase elapsed seconds, per-report candidate elapsed ranges, and observed
+   relayed/direct connection address counts so public topology failures can be
+   triaged without hand-parsing each JSON artifact.
    The repro writes a runnable relay-assisted config when the relay-circuit phase
    succeeds. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that relay-assisted
    config preserves the supplied overlay. `P2P_VPN_REPRO_CANDIDATES_FILE` can
