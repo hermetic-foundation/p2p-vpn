@@ -139,6 +139,7 @@
           runtimeInputs = [
             package
             pkgs.coreutils
+            pkgs.git
             pkgs.iproute2
             pkgs.jq
           ];
@@ -196,6 +197,12 @@
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
                 echo "P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=$max_validation"
+                echo
+                echo "[git rev-parse HEAD]"
+                git rev-parse HEAD 2>&1 || true
+                echo
+                echo "[git status --short]"
+                git status --short 2>&1 || true
               } > "$metadata"
             }
 
@@ -535,6 +542,7 @@
           runtimeInputs = [
             package
             pkgs.coreutils
+            pkgs.git
             pkgs.iproute2
             pkgs.iputils
             pkgs.jq
@@ -690,6 +698,12 @@ EOF
                 echo "metrics_interval_seconds=$metrics_interval"
                 echo "require_packet_session=$require_packet_session"
                 echo "require_quic_session=$require_quic_session"
+                echo
+                echo "[git rev-parse HEAD]"
+                git rev-parse HEAD 2>&1 || true
+                echo
+                echo "[git status --short]"
+                git status --short 2>&1 || true
               } > "$metadata"
             }
 
@@ -1353,6 +1367,22 @@ EOF
             touch $out
           '';
           nixos-vm-smoke = nixosVmSmoke;
+          public-relay-repro-structure = pkgs.runCommand "p2p-vpn-public-relay-repro-structure" {
+            nativeBuildInputs = [
+              publicRelayRepro
+            ];
+          } ''
+            script="$(command -v p2p-vpn-public-relay-repro)"
+            test -x "$script"
+            grep -Fq 'echo "[git rev-parse HEAD]"' "$script"
+            grep -Fq 'git rev-parse HEAD 2>&1 || true' "$script"
+            grep -Fq 'echo "[git status --short]"' "$script"
+            grep -Fq 'git status --short 2>&1 || true' "$script"
+            grep -q 'repro-dcutr-listen-host-a.sh' "$script"
+            grep -q 'repro-dcutr-dial-host-b.sh' "$script"
+
+            touch $out
+          '';
           public-vpn-repro-structure = pkgs.runCommand "p2p-vpn-public-vpn-repro-structure" {
             nativeBuildInputs = [
               package
@@ -1394,6 +1424,8 @@ EOF
             grep -q 'host_network_before=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'host_network_after=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'host_network_after=' "$artifacts/vpn-repro-collect.sh"
+            grep -q '^\[git rev-parse HEAD\]$' "$artifacts/vpn-repro-metadata.txt"
+            grep -q '^\[git status --short\]$' "$artifacts/vpn-repro-metadata.txt"
 
             touch $out
           '';

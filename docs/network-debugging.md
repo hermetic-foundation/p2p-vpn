@@ -279,6 +279,9 @@ The app writes `vpn-repro-host-a.sh`, `vpn-repro-host-b.sh`,
 `vpn-repro-collect.sh`, `vpn-repro-shutdown.sh`, `vpn-repro-metadata.txt`,
 `vpn-repro-host-network.txt`, and `vpn-repro-summary.txt`. Run the generated
 Host A and Host B scripts with the privileges needed to create the TUN device.
+The metadata records source revision and dirty status when the app is run from
+a Git checkout, so artifact bundles can be compared against the exact code that
+produced them.
 Each host script records before/after host-network snapshots, preserves a
 daemon log tail, records command exit statuses, starts `p2p-vpn up`, waits on
 `daemon-health`, captures
@@ -336,9 +339,11 @@ type was observed.
 Every repro directory also contains `repro-metadata.txt`,
 `repro-host-network.txt`, `repro-commands.sh`,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
-`repro-summary.txt`. The Host A/Host B scripts are generated from the first
-successful relay-check candidate, or from `P2P_VPN_REPRO_RELAY_CANDIDATE` when
-that override is set. Use `P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
+`repro-summary.txt`. The metadata records source revision and dirty status when
+the app is run from a Git checkout. The Host A/Host B scripts are generated
+from the first successful relay-check candidate, or from
+`P2P_VPN_REPRO_RELAY_CANDIDATE` when that override is set. Use
+`P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
 `P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS` to tune the generated listener and
 dialer durations. Start
 with the summary when triaging a failure: it records each phase status,
