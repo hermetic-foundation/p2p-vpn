@@ -137,6 +137,56 @@
         checks = {
           package = package;
           releaseArchive = self.packages.${system}.releaseArchive;
+          releaseArchiveSanity = pkgs.runCommand "p2p-vpn-release-archive-sanity" {
+            nativeBuildInputs = [
+              pkgs.gnutar
+              pkgs.gzip
+            ];
+          } ''
+            archive=${self.packages.${system}.releaseArchive}
+            root="p2p-vpn-0.1.0-${system}"
+
+            tar -tzf "$archive" > entries
+            while IFS= read -r entry; do
+              case "$entry" in
+                "$root" | "$root/"*) ;;
+                *) echo "archive entry outside $root: $entry" >&2; exit 1 ;;
+              esac
+
+              case "$entry" in
+                /* | ../* | *"/../"* | *"/.." )
+                  echo "unsafe archive path: $entry" >&2
+                  exit 1
+                  ;;
+              esac
+            done < entries
+
+            for path in \
+              "$root/bin/p2p-vpn" \
+              "$root/README.md" \
+              "$root/flake.nix" \
+              "$root/flake.lock" \
+              "$root/Cargo.toml" \
+              "$root/docs/feature-matrix.md" \
+              "$root/docs/namespace-e2e-smoke.md" \
+              "$root/docs/public-bootstrap-smoke.md" \
+              "$root/examples/nixos-mesh/flake.nix" \
+              "$root/nix/nixos-module.nix"
+            do
+              grep -Fx "$path" entries >/dev/null || {
+                echo "release archive missing $path" >&2
+                exit 1
+              }
+            done
+
+            mkdir unpacked
+            tar -xzf "$archive" -C unpacked
+            test -x "unpacked/$root/bin/p2p-vpn"
+            "unpacked/$root/bin/p2p-vpn" --help > help
+            grep -q "p2p-vpn" help
+            grep -q "Usage:" help
+            touch $out
+          '';
           clippy = pkgs.rustPlatform.buildRustPackage {
             pname = "p2p-vpn-clippy";
             version = "0.1.0";
