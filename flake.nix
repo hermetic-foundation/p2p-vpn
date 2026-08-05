@@ -512,6 +512,8 @@
                   openFirewall = true;
                   tcpPorts = [ 4001 ];
                   udpPorts = [ 4001 ];
+                  packetPlaneUdpPorts = [ 51820 ];
+                  packetPlaneQuicPorts = [ 51821 ];
                 };
                 services.p2p-vpn.instances.node-b = {
                   enable = true;
@@ -762,7 +764,7 @@
             test "$runtimeDirectory" = p2p-vpn-node-a
             test "$runtimeDirectoryMode" = 0750
             test "$tcpPorts" = '[4001]'
-            test "$udpPorts" = '[4001]'
+            test "$udpPorts" = '[4001,51820,51821]'
             case "$kernelModules" in
               *tun*) ;;
               *) echo "tun kernel module not requested: $kernelModules" >&2; exit 1 ;;

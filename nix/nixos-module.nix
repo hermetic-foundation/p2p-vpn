@@ -71,21 +71,46 @@ let
         openFirewall = mkOption {
           type = types.bool;
           default = false;
-          description = "Open the configured TCP and UDP listen ports in the NixOS firewall.";
+          description = ''
+            Open the configured libp2p and packet-plane listen ports in the
+            NixOS firewall.
+          '';
         };
 
         tcpPorts = mkOption {
           type = types.listOf types.port;
           default = [ ];
           example = [ 4001 ];
-          description = "TCP ports to open when openFirewall is true.";
+          description = "Libp2p TCP transport ports to open when openFirewall is true.";
         };
 
         udpPorts = mkOption {
           type = types.listOf types.port;
           default = [ ];
           example = [ 4001 ];
-          description = "UDP ports to open when openFirewall is true.";
+          description = "Libp2p UDP/QUIC transport ports to open when openFirewall is true.";
+        };
+
+        packetPlaneUdpPorts = mkOption {
+          type = types.listOf types.port;
+          default = [ ];
+          example = [ 51820 ];
+          description = ''
+            Owned packet-plane UDP datagram listener ports to open when
+            openFirewall is true. These should match
+            network.packet_plane.listen entries in the runtime JSON config.
+          '';
+        };
+
+        packetPlaneQuicPorts = mkOption {
+          type = types.listOf types.port;
+          default = [ ];
+          example = [ 51821 ];
+          description = ''
+            Owned packet-plane QUIC listener ports to open when openFirewall is
+            true. These should match network.packet_plane.quic_listen entries
+            in the runtime JSON config.
+          '';
         };
       };
     };
@@ -165,6 +190,8 @@ in
           openFirewall = true;
           tcpPorts = [ 4001 ];
           udpPorts = [ 4001 ];
+          packetPlaneUdpPorts = [ 51820 ];
+          packetPlaneQuicPorts = [ 51821 ];
         };
       };
       description = "Named p2p-vpn daemon instances.";
@@ -185,7 +212,9 @@ in
       concatMap (instance: instance.tcpPorts) firewallInstances
     );
     networking.firewall.allowedUDPPorts = unique (
-      concatMap (instance: instance.udpPorts) firewallInstances
+      concatMap
+        (instance: instance.udpPorts ++ instance.packetPlaneUdpPorts ++ instance.packetPlaneQuicPorts)
+        firewallInstances
     );
 
     boot.kernelModules = [ "tun" ];

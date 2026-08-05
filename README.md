@@ -1165,6 +1165,8 @@ Run as a NixOS service:
             openFirewall = true;
             tcpPorts = [ 4001 ];
             udpPorts = [ 4001 ];
+            packetPlaneUdpPorts = [ 51820 ];
+            packetPlaneQuicPorts = [ 51821 ];
           };
         }
       ];
@@ -1177,7 +1179,11 @@ The NixOS module exports named systemd units such as `p2p-vpn-node-a.service`,
 loads the `tun` kernel module, runs `p2p-vpn up --config ...`, adds `iproute2`
 to the unit path for interface setup, grants `CAP_NET_ADMIN` and `CAP_NET_RAW`,
 restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
-firewall. The Linux flake checks include `checks.x86_64-linux.nixos-vm-smoke`,
+firewall. Use `tcpPorts` and `udpPorts` for libp2p transports, then use
+`packetPlaneUdpPorts` and `packetPlaneQuicPorts` for owned packet-plane
+listeners declared in `network.packet_plane.listen` and
+`network.packet_plane.quic_listen`. The Linux flake checks include
+`checks.x86_64-linux.nixos-vm-smoke`,
 which boots a NixOS VM, starts a module-managed instance, queries
 `daemon-status` and `daemon-health` over its control socket, stops the unit, and
 confirms orderly socket cleanup. Keep JSON configs that contain

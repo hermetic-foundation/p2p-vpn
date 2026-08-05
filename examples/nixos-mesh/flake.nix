@@ -37,6 +37,8 @@
                 openFirewall = true;
                 tcpPorts = [ 4001 ];
                 udpPorts = [ 4001 ];
+                packetPlaneUdpPorts = [ 51820 ];
+                packetPlaneQuicPorts = [ 51821 ];
               };
             }
           )
@@ -58,6 +60,8 @@
                 openFirewall = true;
                 tcpPorts = [ 4001 ];
                 udpPorts = [ 4001 ];
+                packetPlaneUdpPorts = [ 51820 ];
+                packetPlaneQuicPorts = [ 51821 ];
               };
             }
           )
