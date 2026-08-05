@@ -310,10 +310,16 @@ results from connected infrastructure peers. If a connected peer advertises the
 libp2p relay hop protocol and a supported TCP or QUIC direct address, the
 daemon starts a bounded automatic relay reservation through that peer. This
 turns public or shared relay infrastructure into live relay fallback without
-requiring every reservation to be written into the config. With Kademlia
-enabled, private nodes also query the DHT for nearby peers and provisionally
-admit direct TCP or QUIC candidates learned from routing-table updates or
-closest-peer results. Those peers remain relay-only infrastructure: Identify
+requiring every reservation to be written into the config. The client-side
+policy is tunable through `network.relay.auto.max_candidates`,
+`network.relay.auto.max_reservations`, and
+`network.relay.auto.retry_interval_seconds`, or the matching `init-config`
+flags. Setting either max count to `0` disables automatic relay reservations
+for that dimension while keeping configured relay reservations available. With
+Kademlia enabled, private nodes also query the DHT for nearby peers and
+provisionally admit direct TCP or QUIC candidates learned from routing-table
+updates or closest-peer results. Those peers remain relay-only infrastructure:
+Identify
 must confirm relay-hop support or the daemon disconnects them, and they do not
 gain VPN membership, packet forwarding, control-plane authority, service-plane
 authority, or route ownership. Provisional relay-only candidates are also
@@ -795,6 +801,10 @@ relay circuits for the overlay. `relay.resources` maps to circuit relay v2
 server limits; its defaults match libp2p's relay defaults while retaining the
 library's default rate limiters. Nodes with `relay.server` enabled reject zero
 relay reservation, circuit, duration, or byte limits during config validation.
+`relay.auto` controls client-side automatic reservation behavior when AutoNAT
+reports private reachability. It defaults to 16 retained relay candidates, 2
+simultaneous automatic reservations, and a 30-second retry delay after a failed
+or lost reservation; `retry_interval_seconds` must be greater than zero.
 
 Inspect the compiled local view:
 

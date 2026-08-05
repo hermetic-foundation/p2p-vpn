@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{
-        BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, PeerConfig, QueueConfig,
-        RelayConfig, ResourceConfig, RouteConfig, membership_tag,
+        AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, PeerConfig,
+        QueueConfig, RelayConfig, ResourceConfig, RouteConfig, membership_tag,
     },
     identity::NodeIdentity,
     runtime::{control::CONTROL_PROTOCOL, packet::PACKET_PROTOCOL, service::SERVICE_PROTOCOL},
@@ -200,6 +200,7 @@ pub fn import_invite_config_at(
             relay: RelayConfig {
                 server: false,
                 reservations: invite.payload.relay_reservations.clone(),
+                auto: AutoRelayConfig::default(),
                 resources: crate::config::RelayResourceConfig::default(),
             },
             packet_plane: crate::config::PacketPlaneConfig::default(),

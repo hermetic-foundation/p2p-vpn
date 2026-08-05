@@ -15,8 +15,8 @@ use futures::StreamExt as _;
 use libp2p::{Multiaddr, identify, multiaddr::Protocol, relay, swarm::SwarmEvent};
 use p2p_vpn::{
     config::{
-        Config, DiscoveryConfig, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
-        RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
+        AutoRelayConfig, Config, DiscoveryConfig, InterfaceConfig, NetworkConfig, PeerConfig,
+        QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
     },
     identity::NodeIdentity,
     invite::{
@@ -1874,6 +1874,7 @@ async fn run_ready_node(
         config.packet_plane_quic_endpoint_candidates()?,
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
+        config.network.relay.auto,
         std::future::pending::<runner::ShutdownReason>(),
     ))
     .await
@@ -2078,6 +2079,7 @@ fn relay_config(identity: &NodeIdentity) -> Config {
             relay: RelayConfig {
                 server: true,
                 reservations: Vec::new(),
+                auto: AutoRelayConfig::default(),
                 resources: RelayResourceConfig::default(),
             },
             packet_plane: p2p_vpn::config::PacketPlaneConfig::default(),

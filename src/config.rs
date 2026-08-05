@@ -228,6 +228,7 @@ impl Config {
                 ResourceValidationError::NoInboundPacketsPerPeerPerSecond,
             ));
         }
+        validate_auto_relay_policy(self.network.relay.auto).map_err(ConfigError::Resource)?;
         if self.network.relay.server {
             validate_relay_server_resources(self.network.relay.resources)
                 .map_err(ConfigError::Resource)?;
@@ -456,7 +457,36 @@ pub struct RelayConfig {
     #[serde(default)]
     pub reservations: Vec<String>,
     #[serde(default)]
+    pub auto: AutoRelayConfig,
+    #[serde(default)]
     pub resources: RelayResourceConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AutoRelayConfig {
+    #[serde(default = "default_auto_relay_max_candidates")]
+    pub max_candidates: usize,
+    #[serde(default = "default_auto_relay_max_reservations")]
+    pub max_reservations: usize,
+    #[serde(default = "default_auto_relay_retry_interval_seconds")]
+    pub retry_interval_seconds: u64,
+}
+
+impl Default for AutoRelayConfig {
+    fn default() -> Self {
+        Self {
+            max_candidates: default_auto_relay_max_candidates(),
+            max_reservations: default_auto_relay_max_reservations(),
+            retry_interval_seconds: default_auto_relay_retry_interval_seconds(),
+        }
+    }
+}
+
+impl AutoRelayConfig {
+    #[must_use]
+    pub fn retry_interval(self) -> Duration {
+        Duration::from_secs(self.retry_interval_seconds.max(1))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -876,6 +906,7 @@ pub enum ResourceValidationError {
     RelayServerNoCircuitsPerPeer,
     RelayServerNoCircuitDuration,
     RelayServerNoCircuitBytes,
+    NoAutoRelayRetryInterval,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1016,6 +1047,29 @@ const fn default_relay_max_circuit_duration_secs() -> u64 {
 
 const fn default_relay_max_circuit_bytes() -> u64 {
     1 << 17
+}
+
+#[must_use]
+pub const fn default_auto_relay_max_candidates() -> usize {
+    16
+}
+
+#[must_use]
+pub const fn default_auto_relay_max_reservations() -> usize {
+    2
+}
+
+#[must_use]
+pub const fn default_auto_relay_retry_interval_seconds() -> u64 {
+    30
+}
+
+fn validate_auto_relay_policy(auto: AutoRelayConfig) -> Result<(), ResourceValidationError> {
+    if auto.retry_interval_seconds == 0 {
+        return Err(ResourceValidationError::NoAutoRelayRetryInterval);
+    }
+
+    Ok(())
 }
 
 fn validate_relay_server_resources(
@@ -2149,6 +2203,7 @@ mod tests {
                 relay: RelayConfig {
                     server: true,
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4001/p2p/{remote}/p2p-circuit")],
+                    auto: AutoRelayConfig::default(),
                     resources: RelayResourceConfig::default(),
                 },
                 packet_plane: PacketPlaneConfig::default(),
@@ -2709,6 +2764,7 @@ mod tests {
                 relay: RelayConfig {
                     server: true,
                     reservations: Vec::new(),
+                    auto: AutoRelayConfig::default(),
                     resources: RelayResourceConfig::default(),
                 },
                 packet_plane: PacketPlaneConfig::default(),
@@ -2931,6 +2987,7 @@ mod tests {
                 relay: RelayConfig {
                     server: false,
                     reservations: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
+                    auto: AutoRelayConfig::default(),
                     resources: RelayResourceConfig::default(),
                 },
                 packet_plane: PacketPlaneConfig::default(),
@@ -3045,6 +3102,7 @@ mod tests {
             relay: RelayConfig {
                 server: true,
                 reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{remote}/p2p-circuit")],
+                auto: AutoRelayConfig::default(),
                 resources: RelayResourceConfig {
                     max_reservations: 17,
                     max_reservations_per_peer: 3,
@@ -3155,6 +3213,54 @@ mod tests {
             config.network.relay.resources,
             RelayResourceConfig::default()
         );
+        assert_eq!(config.network.relay.auto, AutoRelayConfig::default());
+    }
+
+    #[test]
+    fn auto_relay_config_deserializes_custom_policy() {
+        let config = serde_json::from_str::<Config>(
+            r#"{
+              "network": {
+                "name": "dev",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                "relay": {
+                  "auto": {
+                    "max_candidates": 24,
+                    "max_reservations": 3,
+                    "retry_interval_seconds": 17
+                  }
+                }
+              },
+              "interface": {
+                "name": "hs0",
+                "mtu": 1280
+              }
+            }"#,
+        )
+        .expect("config");
+
+        assert_eq!(
+            config.network.relay.auto,
+            AutoRelayConfig {
+                max_candidates: 24,
+                max_reservations: 3,
+                retry_interval_seconds: 17,
+            }
+        );
+    }
+
+    #[test]
+    fn auto_relay_config_rejects_zero_retry_interval() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = runtime_config_for_identity(identity);
+        config.network.relay.auto.retry_interval_seconds = 0;
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoAutoRelayRetryInterval
+            ))
+        ));
     }
 
     #[test]

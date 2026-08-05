@@ -10,10 +10,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
-        BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate, InitPeer,
-        PacketPlaneConfig, QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig,
-        RouteConfig, RuntimeDefaults, default_packet_plane_replay_windows_per_session,
-        default_packet_plane_session_ttl_seconds,
+        AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate,
+        InitPeer, PacketPlaneConfig, QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig,
+        RouteConfig, RuntimeDefaults, default_auto_relay_max_candidates,
+        default_auto_relay_max_reservations, default_auto_relay_retry_interval_seconds,
+        default_packet_plane_replay_windows_per_session, default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
     invite::{
@@ -160,6 +161,12 @@ enum Command {
         relay_max_circuit_duration_secs: u64,
         #[arg(long, default_value_t = 131_072)]
         relay_max_circuit_bytes: u64,
+        #[arg(long, default_value_t = default_auto_relay_max_candidates())]
+        auto_relay_max_candidates: usize,
+        #[arg(long, default_value_t = default_auto_relay_max_reservations())]
+        auto_relay_max_reservations: usize,
+        #[arg(long, default_value_t = default_auto_relay_retry_interval_seconds())]
+        auto_relay_retry_interval_seconds: u64,
         #[arg(long, default_value_t = 256)]
         queue_max_packets_per_peer: usize,
         #[arg(long, default_value_t = 524_288)]
@@ -574,6 +581,9 @@ async fn main() -> Result<(), String> {
             relay_max_circuits_per_peer,
             relay_max_circuit_duration_secs,
             relay_max_circuit_bytes,
+            auto_relay_max_candidates,
+            auto_relay_max_reservations,
+            auto_relay_retry_interval_seconds,
             queue_max_packets_per_peer,
             queue_max_bytes_per_peer,
             queue_max_packet_age_millis,
@@ -629,6 +639,11 @@ async fn main() -> Result<(), String> {
             relay: RelayConfig {
                 server: relay_server,
                 reservations: relay_reservations,
+                auto: AutoRelayConfig {
+                    max_candidates: auto_relay_max_candidates,
+                    max_reservations: auto_relay_max_reservations,
+                    retry_interval_seconds: auto_relay_retry_interval_seconds,
+                },
                 resources: RelayResourceConfig {
                     max_reservations: relay_max_reservations,
                     max_reservations_per_peer: relay_max_reservations_per_peer,
@@ -6042,6 +6057,35 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_auto_relay_policy_arguments() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "init-config",
+            "--auto-relay-max-candidates",
+            "21",
+            "--auto-relay-max-reservations",
+            "3",
+            "--auto-relay-retry-interval-seconds",
+            "11",
+        ])
+        .expect("cli");
+
+        let Command::InitConfig {
+            auto_relay_max_candidates,
+            auto_relay_max_reservations,
+            auto_relay_retry_interval_seconds,
+            ..
+        } = cli.command
+        else {
+            panic!("expected init-config command");
+        };
+
+        assert_eq!(auto_relay_max_candidates, 21);
+        assert_eq!(auto_relay_max_reservations, 3);
+        assert_eq!(auto_relay_retry_interval_seconds, 11);
+    }
+
+    #[test]
     fn cli_parses_relay_peer_argument() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -9022,6 +9066,7 @@ mod tests {
             relay: RelayConfig {
                 server: true,
                 reservations: Vec::new(),
+                auto: AutoRelayConfig::default(),
                 resources: RelayResourceConfig {
                     max_reservations: 17,
                     max_reservations_per_peer: 3,

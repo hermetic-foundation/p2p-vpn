@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
-    config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
+    config::{AutoRelayConfig, Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
     identity::NodeIdentity,
     membership::{SignedMembershipRecord, effective_membership_at},
     metrics::{
@@ -77,8 +77,6 @@ const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
-const AUTO_RELAY_MAX_CANDIDATES: usize = 16;
-const AUTO_RELAY_MAX_RESERVATIONS: usize = 2;
 const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 
@@ -343,6 +341,7 @@ where
         config.packet_plane_quic_endpoint_candidates()?,
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
+        config.network.relay.auto,
         shutdown,
     ))
     .await
@@ -389,6 +388,7 @@ pub async fn run_node(
         Vec::new(),
         options.packet_plane_session_ttl,
         options.packet_plane_replay_windows_per_session,
+        options.auto_relay,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -402,6 +402,7 @@ pub struct RuntimeNodeOptions {
     pub metrics_interval: Option<Duration>,
     pub packet_plane_session_ttl: Duration,
     pub packet_plane_replay_windows_per_session: usize,
+    pub auto_relay: AutoRelayConfig,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -422,6 +423,7 @@ pub async fn run_node_until<Shutdown>(
     packet_plane_quic_external_endpoints: Vec<String>,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
+    auto_relay_config: AutoRelayConfig,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -440,7 +442,7 @@ where
     let mut packet_plane_negotiator = PacketPlaneNegotiator::default();
     let mut path_probe_tracker = PathProbeTracker::default();
     let mut relay_readiness = RelayReadiness::default();
-    let mut auto_relay = AutoRelayState::default();
+    let mut auto_relay = AutoRelayState::new(auto_relay_config);
     let mut infrastructure_peers = InfrastructurePeers::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
@@ -2363,15 +2365,34 @@ struct RelayReadiness {
     attempted_ready_dials: HashSet<(Libp2pPeerId, Libp2pPeerId, Multiaddr)>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AutoRelayState {
+    policy: AutoRelayConfig,
     private_reachability: bool,
     candidates: Vec<(Libp2pPeerId, Multiaddr)>,
     attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
     reservation_peers: HashSet<Libp2pPeerId>,
+    retry_after: HashMap<Libp2pPeerId, Instant>,
+}
+
+impl Default for AutoRelayState {
+    fn default() -> Self {
+        Self::new(AutoRelayConfig::default())
+    }
 }
 
 impl AutoRelayState {
+    fn new(policy: AutoRelayConfig) -> Self {
+        Self {
+            policy,
+            private_reachability: false,
+            candidates: Vec::new(),
+            attempted_reservations: HashSet::new(),
+            reservation_peers: HashSet::new(),
+            retry_after: HashMap::new(),
+        }
+    }
+
     fn record_reachability(&mut self, reachability: AutoNatReachability) {
         self.private_reachability = reachability == AutoNatReachability::Private;
     }
@@ -2381,6 +2402,9 @@ impl AutoRelayState {
     }
 
     fn record_candidate(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
+        if self.policy.max_candidates == 0 {
+            return false;
+        }
         if self
             .candidates
             .iter()
@@ -2388,7 +2412,7 @@ impl AutoRelayState {
         {
             return false;
         }
-        if self.candidates.len() >= AUTO_RELAY_MAX_CANDIDATES
+        if self.candidates.len() >= self.policy.max_candidates
             && !self
                 .candidates
                 .iter()
@@ -2396,7 +2420,7 @@ impl AutoRelayState {
         {
             return false;
         }
-        if self.candidates.len() >= AUTO_RELAY_MAX_CANDIDATES {
+        if self.candidates.len() >= self.policy.max_candidates {
             return false;
         }
 
@@ -2404,8 +2428,10 @@ impl AutoRelayState {
         true
     }
 
-    fn next_reservation_targets(&mut self) -> Vec<(Libp2pPeerId, Multiaddr)> {
-        if !self.private_reachability || self.reservation_peers.len() >= AUTO_RELAY_MAX_RESERVATIONS
+    fn next_reservation_targets(&mut self, now: Instant) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        if !self.private_reachability
+            || self.policy.max_reservations == 0
+            || self.reservation_peers.len() >= self.policy.max_reservations
         {
             return Vec::new();
         }
@@ -2415,12 +2441,19 @@ impl AutoRelayState {
             if self.reservation_peers.contains(peer) {
                 continue;
             }
+            if self
+                .retry_after
+                .get(peer)
+                .is_some_and(|retry_after| now < *retry_after)
+            {
+                continue;
+            }
             if !self.attempted_reservations.insert((*peer, address.clone())) {
                 continue;
             }
             self.reservation_peers.insert(*peer);
             targets.push((*peer, address.clone()));
-            if self.reservation_peers.len() >= AUTO_RELAY_MAX_RESERVATIONS {
+            if self.reservation_peers.len() >= self.policy.max_reservations {
                 break;
             }
         }
@@ -2436,6 +2469,13 @@ impl AutoRelayState {
         let released = self.release_reservation_peer(peer);
         self.attempted_reservations
             .retain(|(attempted_peer, _)| *attempted_peer != peer);
+        released
+    }
+
+    fn release_reservation_for_retry_after(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+        let released = self.release_reservation_for_retry(peer);
+        self.retry_after
+            .insert(peer, now + self.policy.retry_interval());
         released
     }
 }
@@ -2592,7 +2632,8 @@ fn attempt_auto_relay_reservations(
     metrics: &RuntimeMetrics,
 ) {
     let local_peer = *swarm.local_peer_id();
-    for (relay_peer, relay_address) in auto_relay.next_reservation_targets() {
+    let now = Instant::now();
+    for (relay_peer, relay_address) in auto_relay.next_reservation_targets(now) {
         let reservation_address =
             peer_dial_address(local_peer, relay_address.clone().with(Protocol::P2pCircuit));
         metrics.record_auto_relay_reservation_attempt();
@@ -2605,7 +2646,7 @@ fn attempt_auto_relay_reservations(
             ],
         );
         if let Err(error) = swarm.listen_on(reservation_address.clone()) {
-            auto_relay.release_reservation_peer(relay_peer);
+            auto_relay.release_reservation_for_retry_after(relay_peer, now);
             metrics.record_auto_relay_reservation_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -3909,7 +3950,9 @@ async fn handle_swarm_event(
                     .relay_readiness
                     .record_relay_reservation_lost(peer_id)
                 {
-                    context.auto_relay.release_reservation_for_retry(peer_id);
+                    context
+                        .auto_relay
+                        .release_reservation_for_retry_after(peer_id, Instant::now());
                     context.metrics.record_relay_reservation_lost();
                     log_runtime_event(
                         LogLevel::Warn,
@@ -8866,22 +8909,28 @@ mod tests {
             .parse()
             .expect("relay address");
         let mut state = AutoRelayState::default();
+        let now = Instant::now();
 
         assert!(state.record_candidate(relay, address.clone()));
         assert!(!state.record_candidate(relay, address.clone()));
-        assert!(state.next_reservation_targets().is_empty());
+        assert!(state.next_reservation_targets(now).is_empty());
 
         state.record_reachability(AutoNatReachability::Private);
 
-        assert_eq!(state.next_reservation_targets(), vec![(relay, address)]);
-        assert!(state.next_reservation_targets().is_empty());
+        assert_eq!(state.next_reservation_targets(now), vec![(relay, address)]);
+        assert!(state.next_reservation_targets(now).is_empty());
     }
 
     #[test]
     fn auto_relay_state_caps_reservation_targets() {
-        let mut state = AutoRelayState::default();
+        let max_reservations = 3;
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 8,
+            max_reservations,
+            retry_interval_seconds: 5,
+        });
         state.record_reachability(AutoNatReachability::Private);
-        let candidates = (0..AUTO_RELAY_MAX_RESERVATIONS + 2)
+        let candidates = (0..max_reservations + 2)
             .map(|port| {
                 let relay = peer_id();
                 let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}/p2p/{relay}", 4001 + port)
@@ -8894,16 +8943,68 @@ mod tests {
             assert!(state.record_candidate(*relay, address.clone()));
         }
 
-        let targets = state.next_reservation_targets();
+        let targets = state.next_reservation_targets(Instant::now());
 
-        assert_eq!(targets.len(), AUTO_RELAY_MAX_RESERVATIONS);
+        assert_eq!(targets.len(), max_reservations);
+    }
+
+    #[test]
+    fn auto_relay_state_respects_configured_candidate_cap() {
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 5,
+        });
+        let relay_a = peer_id();
+        let relay_b = peer_id();
+        let address_a: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_a}")
+            .parse()
+            .expect("relay address");
+        let address_b: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay_b}")
+            .parse()
+            .expect("relay address");
+
+        assert!(state.record_candidate(relay_a, address_a));
+        assert!(!state.record_candidate(relay_b, address_b));
+    }
+
+    #[test]
+    fn auto_relay_state_zero_limits_disable_auto_reservation() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let mut no_candidates = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 0,
+            max_reservations: 1,
+            retry_interval_seconds: 5,
+        });
+        assert!(!no_candidates.record_candidate(relay, address.clone()));
+
+        let mut no_reservations = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 0,
+            retry_interval_seconds: 5,
+        });
+        no_reservations.record_reachability(AutoNatReachability::Private);
+        assert!(no_reservations.record_candidate(relay, address));
+        assert!(
+            no_reservations
+                .next_reservation_targets(Instant::now())
+                .is_empty()
+        );
     }
 
     #[test]
     fn auto_relay_state_releases_failed_attempt_slot_without_retrying_same_address() {
-        let mut state = AutoRelayState::default();
+        let max_reservations = 2;
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 4,
+            max_reservations,
+            retry_interval_seconds: 5,
+        });
         state.record_reachability(AutoNatReachability::Private);
-        let candidates = (0..=AUTO_RELAY_MAX_RESERVATIONS)
+        let candidates = (0..=max_reservations)
             .map(|port| {
                 let relay = peer_id();
                 let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}/p2p/{relay}", 4101 + port)
@@ -8915,36 +9016,47 @@ mod tests {
         for (relay, address) in &candidates {
             assert!(state.record_candidate(*relay, address.clone()));
         }
-        let initial_targets = state.next_reservation_targets();
-        assert_eq!(initial_targets.len(), AUTO_RELAY_MAX_RESERVATIONS);
+        let now = Instant::now();
+        let initial_targets = state.next_reservation_targets(now);
+        assert_eq!(initial_targets.len(), max_reservations);
         let failed_relay = initial_targets[0].0;
 
         assert!(state.release_reservation_peer(failed_relay));
-        let retry_targets = state.next_reservation_targets();
+        let retry_targets = state.next_reservation_targets(now);
 
-        assert_eq!(
-            retry_targets,
-            vec![candidates[AUTO_RELAY_MAX_RESERVATIONS].clone()]
-        );
+        assert_eq!(retry_targets, vec![candidates[max_reservations].clone()]);
     }
 
     #[test]
-    fn auto_relay_state_retries_lost_reservation_after_releasing_attempts() {
+    fn auto_relay_state_retries_lost_reservation_after_configured_delay() {
         let relay = peer_id();
         let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
-        let mut state = AutoRelayState::default();
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 7,
+        });
         state.record_reachability(AutoNatReachability::Private);
         assert!(state.record_candidate(relay, address.clone()));
+        let now = Instant::now();
         assert_eq!(
-            state.next_reservation_targets(),
+            state.next_reservation_targets(now),
             vec![(relay, address.clone())]
         );
 
-        assert!(state.release_reservation_for_retry(relay));
+        assert!(state.release_reservation_for_retry_after(relay, now));
 
-        assert_eq!(state.next_reservation_targets(), vec![(relay, address)]);
+        assert!(
+            state
+                .next_reservation_targets(now + Duration::from_secs(6))
+                .is_empty()
+        );
+        assert_eq!(
+            state.next_reservation_targets(now + Duration::from_secs(7)),
+            vec![(relay, address)]
+        );
     }
 
     #[test]
@@ -8954,12 +9066,13 @@ mod tests {
             .parse()
             .expect("relay address");
         let mut state = AutoRelayState::default();
+        let now = Instant::now();
         state.record_reachability(AutoNatReachability::Private);
         assert!(state.record_candidate(relay, address.clone()));
 
-        assert_eq!(state.next_reservation_targets(), vec![(relay, address)]);
+        assert_eq!(state.next_reservation_targets(now), vec![(relay, address)]);
 
-        assert!(state.next_reservation_targets().is_empty());
+        assert!(state.next_reservation_targets(now).is_empty());
     }
 
     #[tokio::test]
@@ -9193,6 +9306,7 @@ mod tests {
                 relay: RelayConfig {
                     server: false,
                     reservations: vec![format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit")],
+                    auto: crate::config::AutoRelayConfig::default(),
                     resources: crate::config::RelayResourceConfig::default(),
                 },
                 packet_plane: crate::config::PacketPlaneConfig::default(),
