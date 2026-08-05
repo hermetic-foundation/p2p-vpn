@@ -90,6 +90,7 @@
             mkdir -p "$artifact_dir"
 
             candidates="$artifact_dir/public-relay-candidates.txt"
+            scan_report="$artifact_dir/public-relay-scan-report.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
@@ -106,6 +107,7 @@
               --candidate-timeout-seconds "$candidate_timeout" \
               --max-validation-candidates "$max_validation" \
               --write-candidates "$candidates" \
+              --write-report "$scan_report" \
               --force
 
             echo "probing candidates for DCUtR success evidence" >&2
@@ -118,6 +120,7 @@
               --force
 
             echo "candidate file: $candidates" >&2
+            echo "scan report: $scan_report" >&2
             echo "DCUtR report: $dcutr_report" >&2
           '';
         };

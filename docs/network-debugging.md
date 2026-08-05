@@ -57,7 +57,11 @@ For packet-plane failures, check for `event=packet_plane_session_established`,
 Scan public IPFS-compatible bootstrap peers and write candidates:
 
 ```sh
-p2p-vpn relay-scan --ipfs-bootstrap-peers --check-candidates --write-candidates /tmp/p2p-vpn-relays.txt
+p2p-vpn relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --write-candidates /tmp/p2p-vpn-relays.txt \
+  --write-report /tmp/p2p-vpn-relay-scan-report.json
 ```
 
 Run the packaged repro bundle:
@@ -75,7 +79,9 @@ with `P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS`,
 Probe candidates and write a machine-readable report:
 
 ```sh
-p2p-vpn relay-check --candidate-file /tmp/p2p-vpn-relays.txt --write-report /tmp/p2p-vpn-relay-report.json
+p2p-vpn relay-check \
+  --relay-candidates-file /tmp/p2p-vpn-relays.txt \
+  --write-report /tmp/p2p-vpn-relay-report.json
 ```
 
 When debugging hole punching, require DCUtR evidence so the command fails at
@@ -83,10 +89,11 @@ the relevant stage:
 
 ```sh
 p2p-vpn relay-check \
-  --candidate-file /tmp/p2p-vpn-relays.txt \
+  --relay-candidates-file /tmp/p2p-vpn-relays.txt \
   --require-dcutr-success \
   --write-report /tmp/p2p-vpn-dcutr-report.json
 ```
 
-Inspect `failure_stage`, bootstrap details, relay readiness, DCUtR counters,
-direct connection counts, and `last_error` fields in the report.
+Inspect scan report peer counts, routing peer counts, candidate addresses,
+candidate peer results, `failure_stage`, bootstrap details, relay readiness,
+DCUtR counters, direct connection counts, and `last_error` fields.

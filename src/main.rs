@@ -288,6 +288,8 @@ enum Command {
         max_validation_candidates: Option<usize>,
         #[arg(long = "write-candidates")]
         write_candidates: Option<PathBuf>,
+        #[arg(long = "write-report")]
+        write_report: Option<PathBuf>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
         #[arg(long)]
@@ -603,6 +605,7 @@ async fn main() -> Result<(), String> {
             candidate_timeout_seconds,
             max_validation_candidates,
             write_candidates,
+            write_report,
             write_config,
             force,
         } => {
@@ -617,6 +620,7 @@ async fn main() -> Result<(), String> {
                 candidate_timeout_seconds,
                 max_validation_candidates,
                 write_candidates,
+                write_report,
                 write_config,
                 force,
             }))
@@ -810,6 +814,7 @@ struct RelayScanArgs {
     candidate_timeout_seconds: u64,
     max_validation_candidates: Option<usize>,
     write_candidates: Option<PathBuf>,
+    write_report: Option<PathBuf>,
     write_config: Option<PathBuf>,
     force: bool,
 }
@@ -2669,7 +2674,7 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
     validate_relay_scan_args(&args)?;
     let config = relay_scan_config(
         args.config_path.as_deref(),
-        args.bootstrap_peers,
+        args.bootstrap_peers.clone(),
         args.ipfs_bootstrap_peers,
     )?;
     if config.network.bootstrap_peers.is_empty() {
@@ -2689,6 +2694,10 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
 
     for line in report.lines() {
         println!("{line}");
+    }
+
+    if let Some(output) = &args.write_report {
+        write_public_relay_scan_report(&args, &report, output)?;
     }
 
     if !scan_succeeded {
@@ -2799,6 +2808,122 @@ fn write_public_relay_candidates(
     }
 
     Ok(())
+}
+
+fn write_public_relay_scan_report(
+    args: &RelayScanArgs,
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
+    output: &Path,
+) -> Result<(), String> {
+    if !args.force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    let rendered = serde_json::to_string_pretty(&public_relay_scan_report_json(args, report))
+        .map_err(|error| format!("failed to encode public relay scan report: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[allow(clippy::struct_excessive_bools)]
+struct PublicRelayScanReportJson<'a> {
+    schema_version: u8,
+    succeeded: bool,
+    timeout_seconds: u64,
+    max_candidates: usize,
+    check_candidates: bool,
+    require_dcutr_success: bool,
+    candidate_timeout_seconds: u64,
+    max_validation_candidates: Option<usize>,
+    scanned_bootstrap_peers: usize,
+    scanned_peers: usize,
+    discovered_routing_peers: usize,
+    dialed_routing_peers: usize,
+    closest_peer_lookup_started: bool,
+    closest_peer_lookup_finished: bool,
+    closest_peer_results: usize,
+    closest_peer_errors: usize,
+    connected_bootstrap_peers: usize,
+    identified_peers: usize,
+    relay_capable_peers: usize,
+    dial_failures: usize,
+    candidates: Vec<PublicRelayScanCandidateJson<'a>>,
+    peer_results: Vec<PublicRelayScanPeerJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct PublicRelayScanCandidateJson<'a> {
+    peer_id: String,
+    address: &'a str,
+}
+
+#[derive(Serialize)]
+struct PublicRelayScanPeerJson<'a> {
+    peer_id: String,
+    address: &'a str,
+    connected: bool,
+    identified: bool,
+    relay_hop: bool,
+    candidate_addresses: usize,
+    dial_failures: usize,
+    last_error: Option<&'a str>,
+}
+
+fn public_relay_scan_report_json<'a>(
+    args: &RelayScanArgs,
+    report: &'a p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
+) -> PublicRelayScanReportJson<'a> {
+    PublicRelayScanReportJson {
+        schema_version: 1,
+        succeeded: report.succeeded(),
+        timeout_seconds: args.timeout_seconds.max(1),
+        max_candidates: args.max_candidates,
+        check_candidates: args.check_candidates,
+        require_dcutr_success: args.require_dcutr_success,
+        candidate_timeout_seconds: args.candidate_timeout_seconds.max(1),
+        max_validation_candidates: args.max_validation_candidates,
+        scanned_bootstrap_peers: report.scanned_bootstrap_peers,
+        scanned_peers: report.scanned_peers,
+        discovered_routing_peers: report.discovered_routing_peers,
+        dialed_routing_peers: report.dialed_routing_peers,
+        closest_peer_lookup_started: report.closest_peer_lookup_started,
+        closest_peer_lookup_finished: report.closest_peer_lookup_finished,
+        closest_peer_results: report.closest_peer_results,
+        closest_peer_errors: report.closest_peer_errors,
+        connected_bootstrap_peers: report.connected_bootstrap_peers,
+        identified_peers: report.identified_peers,
+        relay_capable_peers: report.relay_capable_peers,
+        dial_failures: report.dial_failures,
+        candidates: report
+            .candidates
+            .iter()
+            .map(|candidate| PublicRelayScanCandidateJson {
+                peer_id: candidate.peer_id.to_string(),
+                address: &candidate.address,
+            })
+            .collect(),
+        peer_results: report
+            .peer_results
+            .iter()
+            .map(|peer| PublicRelayScanPeerJson {
+                peer_id: peer.peer_id.to_string(),
+                address: &peer.address,
+                connected: peer.connected,
+                identified: peer.identified,
+                relay_hop: peer.relay_hop,
+                candidate_addresses: peer.candidate_addresses,
+                dial_failures: peer.dial_failures,
+                last_error: peer.last_error.as_deref(),
+            })
+            .collect(),
+    }
 }
 
 fn relay_scan_candidate_multiaddrs(
@@ -4747,6 +4872,8 @@ mod tests {
             "3",
             "--write-candidates",
             "relay-candidates.txt",
+            "--write-report",
+            "relay-scan-report.json",
             "--write-config",
             "relay-scan-config.json",
             "--force",
@@ -4764,6 +4891,7 @@ mod tests {
             candidate_timeout_seconds,
             max_validation_candidates,
             write_candidates,
+            write_report,
             write_config,
             force,
         } = cli.command
@@ -4784,6 +4912,7 @@ mod tests {
             write_candidates,
             Some(PathBuf::from("relay-candidates.txt"))
         );
+        assert_eq!(write_report, Some(PathBuf::from("relay-scan-report.json")));
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
     }
@@ -4957,6 +5086,71 @@ mod tests {
         fs::remove_file(&output).expect("remove report");
     }
 
+    #[test]
+    fn relay_scan_writes_machine_readable_scan_report() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let candidate = format!("/dns4/relay.example.net/tcp/4001/p2p/{peer}");
+        let mut report = relay_scan_report_with_candidates(&[&candidate]);
+        report.discovered_routing_peers = 4;
+        report.dialed_routing_peers = 2;
+        report.closest_peer_lookup_started = true;
+        report.closest_peer_lookup_finished = true;
+        report.closest_peer_results = 3;
+        report.peer_results[0].dial_failures = 1;
+        report.peer_results[0].last_error = Some("dial failed: no route".to_owned());
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-relay-scan-report-{}-{}.json",
+            std::process::id(),
+            "scan"
+        ));
+        let _ = fs::remove_file(&output);
+        let args = RelayScanArgs {
+            config_path: None,
+            bootstrap_peers: Vec::new(),
+            ipfs_bootstrap_peers: true,
+            timeout_seconds: 60,
+            max_candidates: 4,
+            check_candidates: true,
+            require_dcutr_success: true,
+            candidate_timeout_seconds: 15,
+            max_validation_candidates: Some(1),
+            write_candidates: None,
+            write_report: Some(output.clone()),
+            write_config: None,
+            force: false,
+        };
+
+        write_public_relay_scan_report(&args, &report, &output).expect("write report");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["succeeded"], true);
+        assert_eq!(value["timeout_seconds"], 60);
+        assert_eq!(value["max_candidates"], 4);
+        assert_eq!(value["check_candidates"], true);
+        assert_eq!(value["require_dcutr_success"], true);
+        assert_eq!(value["candidate_timeout_seconds"], 15);
+        assert_eq!(value["max_validation_candidates"], 1);
+        assert_eq!(value["discovered_routing_peers"], 4);
+        assert_eq!(value["dialed_routing_peers"], 2);
+        assert_eq!(value["closest_peer_lookup_started"], true);
+        assert_eq!(value["closest_peer_results"], 3);
+        assert_eq!(value["candidates"][0]["peer_id"], peer);
+        assert_eq!(value["candidates"][0]["address"], candidate);
+        assert_eq!(value["peer_results"][0]["dial_failures"], 1);
+        assert_eq!(
+            value["peer_results"][0]["last_error"],
+            "dial failed: no route"
+        );
+        assert!(
+            write_public_relay_scan_report(&args, &report, &output)
+                .expect_err("overwrite should require force")
+                .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove report");
+    }
+
     fn failed_public_dcutr_bootstrap_report()
     -> p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
         p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
@@ -5120,6 +5314,7 @@ mod tests {
             candidate_timeout_seconds: 45,
             max_validation_candidates: None,
             write_candidates: None,
+            write_report: None,
             write_config: Some(PathBuf::from("relay-scan-config.json")),
             force: false,
         };
@@ -5146,6 +5341,7 @@ mod tests {
             candidate_timeout_seconds: 45,
             max_validation_candidates: Some(0),
             write_candidates: None,
+            write_report: None,
             write_config: None,
             force: false,
         };
@@ -5508,6 +5704,21 @@ mod tests {
                     address: (*address).to_owned(),
                 }
             })
+            .collect::<Vec<_>>();
+        let peer_results = candidates
+            .iter()
+            .map(
+                |candidate| p2p_vpn::runtime::bootstrap_check::PublicRelayScanPeer {
+                    peer_id: candidate.peer_id,
+                    address: candidate.address.clone(),
+                    connected: true,
+                    identified: true,
+                    relay_hop: true,
+                    candidate_addresses: 1,
+                    dial_failures: 0,
+                    last_error: None,
+                },
+            )
             .collect();
 
         p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport {
@@ -5524,7 +5735,7 @@ mod tests {
             relay_capable_peers: addresses.len(),
             dial_failures: 0,
             candidates,
-            peer_results: Vec::new(),
+            peer_results,
         }
     }
 

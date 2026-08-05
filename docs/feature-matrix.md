@@ -90,10 +90,14 @@ path.
    a stable public relay candidate `failure_stage` plus the most recent libp2p
    DCUtR failure as `dcutr last_error`, so future public relay runs can
    distinguish setup, reservation, relayed-circuit, DCUtR prerequisite, and
-   direct handshake failures. `relay-check --write-report` also persists the
-   bounded public relay probe as JSON with mode, timeout, validation cap,
-   host-reachable candidates, skipped candidates, per-candidate failure stages,
-   errors, and bootstrap/DCUtR summary fields for candidates that reached the
+   direct handshake failures. `relay-scan --write-report` persists scan
+   discovery as JSON with timeout knobs, public routing counts, peer identify
+   results, relay-hop capability, dial failures, and candidate addresses before
+   validation starts, so failed public scans still leave a reproducible
+   artifact. `relay-check --write-report` also persists the bounded public
+   relay probe as JSON with mode, timeout, validation cap, host-reachable
+   candidates, skipped candidates, per-candidate failure stages, errors, and
+   bootstrap/DCUtR summary fields for candidates that reached the
    bootstrap-check phase. `relay-check` can also consume larger bounded
    `relay-scan --write-candidates` artifacts when a validation cap is set, so
    broad public scans can feed repeatable smaller proof runs without manual
