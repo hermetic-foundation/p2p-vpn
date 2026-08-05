@@ -1030,8 +1030,13 @@ nix run .#public-relay-repro
 ```
 
 In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
-`repro-metadata.txt`, `repro-host-network.txt`, `repro-commands.sh`, and
-`repro-summary.txt`. The summary captures phase exit statuses, candidate
+`repro-metadata.txt`, `repro-host-network.txt`, `repro-commands.sh`,
+`repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
+`repro-summary.txt`. The two host scripts use the first successful relay-check
+candidate, or `P2P_VPN_REPRO_RELAY_CANDIDATE` when supplied, to turn the manual
+Host A/Host B DCUtR proof into a repeatable handoff. Tune those scripts with
+`P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
+`P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS`. The summary captures phase exit statuses, candidate
 durations, candidate counts, skipped-candidate counts, routing-peer counts,
 failure-stage counts, candidate elapsed-time ranges, and the first candidate
 error from each report. For relay-check reports, it also summarizes observed

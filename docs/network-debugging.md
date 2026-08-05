@@ -108,7 +108,13 @@ reservation, relayed-circuit, or DCUtR timeouts, and confirm which concrete path
 type was observed.
 
 Every repro directory also contains `repro-metadata.txt`,
-`repro-host-network.txt`, `repro-commands.sh`, and `repro-summary.txt`. Start
+`repro-host-network.txt`, `repro-commands.sh`,
+`repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
+`repro-summary.txt`. The Host A/Host B scripts are generated from the first
+successful relay-check candidate, or from `P2P_VPN_REPRO_RELAY_CANDIDATE` when
+that override is set. Use `P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
+`P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS` to tune the generated listener and
+dialer durations. Start
 with the summary when triaging a failure: it records each phase status,
 phase duration, candidate counts, skipped candidates, routing-peer counts,
 failure-stage counts, candidate elapsed-time ranges, and the first candidate

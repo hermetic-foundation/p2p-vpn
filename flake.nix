@@ -132,9 +132,13 @@
             relay_report="$artifact_dir/public-relay-check-report.json"
             relay_config="$artifact_dir/public-relay-config.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
+            dcutr_listener_descriptor="$artifact_dir/public-dcutr-listener.json"
+            dcutr_dial_report="$artifact_dir/public-dcutr-dial-report.json"
             metadata="$artifact_dir/repro-metadata.txt"
             host_network="$artifact_dir/repro-host-network.txt"
             commands="$artifact_dir/repro-commands.sh"
+            dcutr_listen_script="$artifact_dir/repro-dcutr-listen-host-a.sh"
+            dcutr_dial_script="$artifact_dir/repro-dcutr-dial-host-b.sh"
             summary="$artifact_dir/repro-summary.txt"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
@@ -142,6 +146,9 @@
             max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
             base_config="''${P2P_VPN_REPRO_BASE_CONFIG:-}"
             repro_candidates_file="''${P2P_VPN_REPRO_CANDIDATES_FILE:-}"
+            repro_relay_candidate="''${P2P_VPN_REPRO_RELAY_CANDIDATE:-}"
+            dcutr_serve_seconds="''${P2P_VPN_REPRO_DCUTR_SERVE_SECONDS:-900}"
+            dcutr_dial_timeout="''${P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS:-90}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -159,6 +166,9 @@
                 echo "P2P_VPN_REPRO_DIR=$artifact_dir"
                 echo "P2P_VPN_REPRO_BASE_CONFIG=$base_config"
                 echo "P2P_VPN_REPRO_CANDIDATES_FILE=$repro_candidates_file"
+                echo "P2P_VPN_REPRO_RELAY_CANDIDATE=$repro_relay_candidate"
+                echo "P2P_VPN_REPRO_DCUTR_SERVE_SECONDS=$dcutr_serve_seconds"
+                echo "P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS=$dcutr_dial_timeout"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -215,6 +225,11 @@
                 if [[ -n "$repro_candidates_file" ]]; then
                   printf "export P2P_VPN_REPRO_CANDIDATES_FILE=%q\n" "$repro_candidates_file"
                 fi
+                if [[ -n "$repro_relay_candidate" ]]; then
+                  printf "export P2P_VPN_REPRO_RELAY_CANDIDATE=%q\n" "$repro_relay_candidate"
+                fi
+                printf "export P2P_VPN_REPRO_DCUTR_SERVE_SECONDS=%q\n" "$dcutr_serve_seconds"
+                printf "export P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS=%q\n" "$dcutr_dial_timeout"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -254,8 +269,60 @@
                 echo "  --require-dcutr-success \\"
                 printf "  --write-report %q \\\\\n" "$dcutr_report"
                 echo "  --force"
+                echo
+                printf "%q\n" "$dcutr_listen_script"
+                printf "%q\n" "$dcutr_dial_script"
               } > "$commands"
               chmod +x "$commands"
+            }
+
+            selected_public_dcutr_candidate() {
+              if [[ -n "$repro_relay_candidate" ]]; then
+                printf "%s\n" "$repro_relay_candidate"
+                return
+              fi
+
+              if [[ -s "$relay_report" ]]; then
+                relay_candidate="$(jq -r '[.candidates[]? | select(.succeeded == true) | .address][0] // empty' "$relay_report")"
+                if [[ -n "$relay_candidate" ]]; then
+                  printf "%s\n" "$relay_candidate"
+                  return
+                fi
+              fi
+
+              if [[ -s "$dcutr_report" ]]; then
+                jq -r '[.candidates[]? | select(.failure_stage == "dcutr_success") | .address][0] // empty' "$dcutr_report"
+              fi
+            }
+
+            write_public_dcutr_handoff_scripts() {
+              selected_relay_candidate="$(selected_public_dcutr_candidate)"
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                if [[ -n "$selected_relay_candidate" ]]; then
+                  printf "relay_candidate=%q\n" "$selected_relay_candidate"
+                else
+                  printf '%s\n' "relay_candidate=\"\$""{P2P_VPN_REPRO_RELAY_CANDIDATE:?set P2P_VPN_REPRO_RELAY_CANDIDATE to a direct /p2p/RELAY multiaddr}\""
+                fi
+                printf "p2p-vpn relay-dcutr-listen \\\\\n"
+                printf "  --relay-candidate \"\$relay_candidate\" \\\\\n"
+                printf "  --write-descriptor %q \\\\\n" "$dcutr_listener_descriptor"
+                printf "  --serve-seconds %q \\\\\n" "$dcutr_serve_seconds"
+                echo "  --force"
+              } > "$dcutr_listen_script"
+
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                printf "p2p-vpn relay-dcutr-dial \\\\\n"
+                printf "  --descriptor %q \\\\\n" "$dcutr_listener_descriptor"
+                printf "  --timeout-seconds %q \\\\\n" "$dcutr_dial_timeout"
+                printf "  --write-report %q \\\\\n" "$dcutr_dial_report"
+                echo "  --force"
+              } > "$dcutr_dial_script"
+
+              chmod +x "$dcutr_listen_script" "$dcutr_dial_script"
             }
 
             append_report_summary() {
@@ -309,6 +376,20 @@
               ' "$report" >> "$summary"
             }
 
+            append_handoff_summary() {
+              selected_relay_candidate="$(selected_public_dcutr_candidate)"
+              {
+                echo "two-host dcutr handoff:"
+                echo "  selected_relay_candidate=''${selected_relay_candidate:-none}"
+                echo "  listen_script=$dcutr_listen_script"
+                echo "  dial_script=$dcutr_dial_script"
+                echo "  listener_descriptor=$dcutr_listener_descriptor"
+                echo "  dial_report=$dcutr_dial_report"
+                echo "  serve_seconds=$dcutr_serve_seconds"
+                echo "  dial_timeout_seconds=$dcutr_dial_timeout"
+              } >> "$summary"
+            }
+
             write_summary() {
               {
                 echo "p2p-vpn public relay repro summary"
@@ -316,6 +397,8 @@
                 echo "metadata=$metadata"
                 echo "host_network=$host_network"
                 echo "commands=$commands"
+                echo "dcutr_listen_script=$dcutr_listen_script"
+                echo "dcutr_dial_script=$dcutr_dial_script"
                 echo "candidate_file=$candidates"
                 echo "relay_assisted_config=$relay_config"
                 echo
@@ -330,6 +413,7 @@
               append_report_summary "scan" "$scan_report"
               append_report_summary "relay-check" "$relay_report"
               append_report_summary "dcutr" "$dcutr_report"
+              append_handoff_summary
             }
 
             run_phase() {
@@ -402,10 +486,13 @@
             echo "relay-check report: $relay_report" >&2
             echo "relay-assisted config: $relay_config" >&2
             echo "DCUtR report: $dcutr_report" >&2
+            write_public_dcutr_handoff_scripts
             write_summary
             echo "metadata: $metadata" >&2
             echo "host network: $host_network" >&2
             echo "replay commands: $commands" >&2
+            echo "Host A DCUtR listener script: $dcutr_listen_script" >&2
+            echo "Host B DCUtR dial script: $dcutr_dial_script" >&2
             echo "summary: $summary" >&2
             exit "$status"
           '';
