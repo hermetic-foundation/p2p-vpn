@@ -76,7 +76,9 @@ For packet-plane failures, check for `event=packet_plane_session_established`,
 `outbound_quic_datagram_packets` or `inbound_accepted_packets`. Use
 `p2p-vpn daemon-paths --socket ...` or `p2p-vpn daemon-state --socket ...` to
 compare `observed_rtt_ms` across healthy path candidates after packet-plane
-path probes have started flowing.
+path probes have started flowing. From another configured peer, use
+`p2p-vpn peer-live-paths --config ...` to compare the remote daemon's reported
+selected path, score, MTU, and RTT without direct access to its control socket.
 
 ## Public Relay Smoke
 

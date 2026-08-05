@@ -65,6 +65,14 @@ pub struct ServiceStatusResponse {
     pub packet_plane_session_ttl_seconds: Option<u64>,
     #[serde(default)]
     pub packet_plane_replay_windows_per_session: Option<usize>,
+    #[serde(default)]
+    pub selected_path: Option<String>,
+    #[serde(default)]
+    pub selected_path_score: Option<i32>,
+    #[serde(default)]
+    pub selected_path_mtu: Option<u16>,
+    #[serde(default)]
+    pub selected_path_rtt_ms: Option<u16>,
 }
 
 impl ServiceStatusResponse {
@@ -92,6 +100,10 @@ impl ServiceStatusResponse {
             supports_owned_quic_packet_plane: false,
             packet_plane_session_ttl_seconds: None,
             packet_plane_replay_windows_per_session: None,
+            selected_path: None,
+            selected_path_score: None,
+            selected_path_mtu: None,
+            selected_path_rtt_ms: None,
         }
     }
 
@@ -124,6 +136,21 @@ impl ServiceStatusResponse {
         self.packet_plane_replay_windows_per_session = Some(replay_windows_per_session);
         self
     }
+
+    #[must_use]
+    pub fn with_selected_path(
+        mut self,
+        path: String,
+        score: i32,
+        mtu: u16,
+        rtt_ms: Option<u16>,
+    ) -> Self {
+        self.selected_path = Some(path);
+        self.selected_path_score = Some(score);
+        self.selected_path_mtu = Some(mtu);
+        self.selected_path_rtt_ms = rtt_ms;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -131,6 +158,7 @@ pub enum ServiceRequest {
     Status(ServiceStatusRequest),
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ServiceResponse {
     Status(ServiceStatusResponse),
@@ -363,7 +391,8 @@ mod tests {
         let response = ServiceResponse::Status(
             ServiceStatusResponse::local("lab", Some("member".to_owned()), 42, 1280)
                 .with_packet_plane_session_ttl_seconds(123)
-                .with_packet_plane_replay_windows_per_session(456),
+                .with_packet_plane_replay_windows_per_session(456)
+                .with_selected_path("direct_quic_datagram".to_owned(), 97, 1200, Some(31)),
         );
         let mut written = Cursor::new(Vec::new());
 
@@ -396,6 +425,10 @@ mod tests {
         assert_eq!(decoded.max_packet_payload_len, None);
         assert_eq!(decoded.packet_plane_datagram_overhead_len, None);
         assert_eq!(decoded.packet_plane_max_payload_len, None);
+        assert_eq!(decoded.selected_path, None);
+        assert_eq!(decoded.selected_path_score, None);
+        assert_eq!(decoded.selected_path_mtu, None);
+        assert_eq!(decoded.selected_path_rtt_ms, None);
         assert!(!decoded.supports_native_quic_datagrams);
         assert!(!decoded.supports_owned_udp_packet_plane);
         assert!(!decoded.supports_owned_quic_packet_plane);

@@ -4436,6 +4436,8 @@ fn handle_service_request(
             eprintln!("service status request from {peer}: {request:?}");
             let response = service_status_response_for_peer(
                 context.forwarder,
+                context.paths,
+                context.peer_capabilities,
                 peer,
                 &request,
                 context.local_capabilities,
@@ -4654,8 +4656,11 @@ fn capability_response_for_peer(
     accepted_capabilities_response(local_capabilities)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn service_status_response_for_peer(
     forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
     peer: Libp2pPeerId,
     request: &ServiceStatusRequest,
     local_capabilities: &ControlCapabilities,
@@ -4676,17 +4681,27 @@ fn service_status_response_for_peer(
         return ServiceResponse::Rejected(reason);
     }
 
-    ServiceResponse::Status(
-        ServiceStatusResponse::local(
-            &local_capabilities.network_name,
-            local_capabilities.membership_tag.clone(),
-            request.nonce,
-            local_capabilities.effective_mtu,
-        )
-        .with_packet_data_plane_capabilities(local_capabilities)
-        .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs())
-        .with_packet_plane_replay_windows_per_session(packet_plane_replay_windows_per_session),
+    let mut response = ServiceStatusResponse::local(
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.clone(),
+        request.nonce,
+        local_capabilities.effective_mtu,
     )
+    .with_packet_data_plane_capabilities(local_capabilities)
+    .with_packet_plane_session_ttl_seconds(packet_plane_session_ttl.as_secs())
+    .with_packet_plane_replay_windows_per_session(packet_plane_replay_windows_per_session);
+    let overlay_peer = PeerId::from_libp2p(peer);
+    let support = packet_transport_support(peer_capabilities, overlay_peer);
+    if let Some(path) = paths.best_supported_for(overlay_peer, support) {
+        response = response.with_selected_path(
+            path.kind.wire_name().to_owned(),
+            path.score(),
+            path.effective_mtu(local_capabilities.effective_mtu),
+            path.observed_rtt_ms,
+        );
+    }
+
+    ServiceResponse::Status(response)
 }
 
 fn validate_peer_capabilities(
@@ -8333,6 +8348,8 @@ mod tests {
         assert_eq!(
             service_status_response_for_peer(
                 &forwarder,
+                &PathSet::new(),
+                &PeerCapabilities::default(),
                 relay,
                 &ServiceStatusRequest::local("lab", None, 42),
                 &local_capabilities,
@@ -9548,11 +9565,22 @@ mod tests {
         let remote = peer_id();
         let config = config_with_peer(&local_identity, remote);
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectQuicStream, Some(1_200));
+        paths.record_rtt(remote_overlay, PathKind::DirectQuicStream, 42);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1_280),
+        );
         let local_capabilities = ControlCapabilities::local("lab", None, 1280);
 
         assert_eq!(
             service_status_response_for_peer(
                 &forwarder,
+                &paths,
+                &peer_capabilities,
                 remote,
                 &ServiceStatusRequest::local("lab", None, 42),
                 &local_capabilities,
@@ -9564,6 +9592,12 @@ mod tests {
                 ServiceStatusResponse::local("lab", None, 42, 1280)
                     .with_packet_plane_session_ttl_seconds(123)
                     .with_packet_plane_replay_windows_per_session(456)
+                    .with_selected_path(
+                        PathKind::DirectQuicStream.wire_name().to_owned(),
+                        71,
+                        1_200,
+                        Some(42)
+                    )
             )
         );
     }
@@ -9581,6 +9615,8 @@ mod tests {
         assert_eq!(
             service_status_response_for_peer(
                 &forwarder,
+                &PathSet::new(),
+                &PeerCapabilities::default(),
                 unconfigured,
                 &ServiceStatusRequest::local("lab", Some("expected".to_owned()), 1),
                 &local_capabilities,
@@ -9593,6 +9629,8 @@ mod tests {
         assert_eq!(
             service_status_response_for_peer(
                 &forwarder,
+                &PathSet::new(),
+                &PeerCapabilities::default(),
                 remote,
                 &ServiceStatusRequest::local("prod", Some("expected".to_owned()), 1),
                 &local_capabilities,
@@ -9605,6 +9643,8 @@ mod tests {
         assert_eq!(
             service_status_response_for_peer(
                 &forwarder,
+                &PathSet::new(),
+                &PeerCapabilities::default(),
                 remote,
                 &ServiceStatusRequest::local("lab", Some("wrong".to_owned()), 1),
                 &local_capabilities,

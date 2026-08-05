@@ -1902,6 +1902,7 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         "peer live owned quic packet plane: {} {}",
         status.peer, status.service.supports_owned_quic_packet_plane
     ));
+    push_peer_live_reported_path_lines(lines, status);
     push_peer_live_packet_plane_lines(lines, status);
     lines.push(format!(
         "peer live preferred path: {} {}",
@@ -1912,6 +1913,29 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         )
     ));
     push_peer_live_advertised_route_lines(lines, status);
+}
+
+fn push_peer_live_reported_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
+    lines.push(format!(
+        "peer live reported selected path: {} {}",
+        status.peer,
+        optional_path_name(status.service.selected_path.as_deref())
+    ));
+    lines.push(format!(
+        "peer live reported selected path score: {} {}",
+        status.peer,
+        optional_i32(status.service.selected_path_score)
+    ));
+    lines.push(format!(
+        "peer live reported selected path mtu: {} {}",
+        status.peer,
+        optional_u16(status.service.selected_path_mtu)
+    ));
+    lines.push(format!(
+        "peer live reported selected path rtt ms: {} {}",
+        status.peer,
+        optional_u16(status.service.selected_path_rtt_ms)
+    ));
 }
 
 fn push_peer_live_packet_plane_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
@@ -2094,12 +2118,16 @@ fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus)
         configured_path_mtu_estimate(preferred_path, status.service.effective_mtu);
 
     lines.push(format!(
-        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} path_probe_ready {} operational_ready {} operational_reason {}",
+        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} reported_selected_path {} reported_selected_path_score {} reported_selected_path_mtu {} reported_selected_path_rtt_ms {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} path_probe_ready {} operational_ready {} operational_reason {}",
         status.peer,
         path_name(preferred_path),
         preferred_path.default_score(),
         status.service.effective_mtu,
         estimated_path_mtu,
+        optional_path_name(status.service.selected_path.as_deref()),
+        optional_i32(status.service.selected_path_score),
+        optional_u16(status.service.selected_path_mtu),
+        optional_u16(status.service.selected_path_rtt_ms),
         status.service.supports_quic_datagrams,
         status.service.supports_native_quic_datagrams,
         status.service.supports_owned_udp_packet_plane,
@@ -4032,6 +4060,22 @@ fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
             optional_usize(status.service.packet_plane_replay_windows_per_session)
         ),
         format!(
+            "reported selected path: {}",
+            optional_path_name(status.service.selected_path.as_deref())
+        ),
+        format!(
+            "reported selected path score: {}",
+            optional_i32(status.service.selected_path_score)
+        ),
+        format!(
+            "reported selected path mtu: {}",
+            optional_u16(status.service.selected_path_mtu)
+        ),
+        format!(
+            "reported selected path rtt ms: {}",
+            optional_u16(status.service.selected_path_rtt_ms)
+        ),
+        format!(
             "preferred path: {}",
             path_name(
                 PathKind::from_wire_name(&status.capabilities.preferred_path)
@@ -4058,8 +4102,21 @@ fn optional_seconds(value: Option<u64>) -> String {
     value.map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
 }
 
+fn optional_i32(value: Option<i32>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |count| count.to_string())
+}
+
+fn optional_u16(value: Option<u16>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |count| count.to_string())
+}
+
 fn optional_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "unknown".to_owned(), |count| count.to_string())
+}
+
+fn optional_path_name(path: Option<&str>) -> String {
+    path.and_then(PathKind::from_wire_name)
+        .map_or_else(|| "unknown".to_owned(), |path| path_name(path).to_owned())
 }
 
 async fn up(
@@ -4598,7 +4655,13 @@ mod tests {
             capabilities,
             service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
                 .with_packet_plane_session_ttl_seconds(321)
-                .with_packet_plane_replay_windows_per_session(654),
+                .with_packet_plane_replay_windows_per_session(654)
+                .with_selected_path(
+                    PathKind::DirectQuicDatagram.wire_name().to_owned(),
+                    96,
+                    1180,
+                    Some(37),
+                ),
         };
 
         let lines = peer_status_lines(&status);
@@ -4631,6 +4694,26 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == "packet plane replay windows per session: 654")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "reported selected path: direct QUIC datagram")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "reported selected path score: 96")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "reported selected path mtu: 1180")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "reported selected path rtt ms: 37")
         );
         assert!(
             lines
@@ -4739,7 +4822,13 @@ mod tests {
         let status = RemotePeerStatus {
             peer,
             capabilities,
-            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200),
+            service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+                .with_selected_path(
+                    PathKind::DirectQuicStream.wire_name().to_owned(),
+                    59,
+                    1200,
+                    Some(8),
+                ),
         };
         let mut lines = Vec::new();
 
@@ -4763,6 +4852,25 @@ mod tests {
         );
         assert!(lines.iter().any(|line| line
             == &format!("peer live owned quic packet plane certificate bytes: {peer} 4")));
+        assert!(
+            lines.iter().any(|line| line
+                == &format!("peer live reported selected path: {peer} direct QUIC stream"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live reported selected path score: {peer} 59"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live reported selected path mtu: {peer} 1200"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("peer live reported selected path rtt ms: {peer} 8"))
+        );
         assert!(
             lines
                 .iter()
@@ -4896,7 +5004,7 @@ mod tests {
 
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false path_probe_ready false operational_ready false operational_reason remote_datagram_support_missing"
+                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 reported_selected_path unknown reported_selected_path_score unknown reported_selected_path_mtu unknown reported_selected_path_rtt_ms unknown quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false path_probe_ready false operational_ready false operational_reason remote_datagram_support_missing"
             )));
     }
 
