@@ -194,10 +194,18 @@ impl BootstrapCheckReport {
             format!("ipfs compatible: {}", self.ipfs_compatible),
             format!("dcutr enabled: {}", self.dcutr.enabled),
             format!("dcutr ready: {}", self.dcutr.ready),
+            format!(
+                "dcutr readiness_reason: {}",
+                dcutr_readiness_reason(self).as_str()
+            ),
             format!("dcutr successes: {}", self.dcutr.successes),
             format!(
                 "dcutr direct_connections: {}",
                 self.dcutr.direct_connections
+            ),
+            format!(
+                "dcutr success_reason: {}",
+                dcutr_success_reason(self).as_str()
             ),
             format!("dcutr failures: {}", self.dcutr.failures),
             format!(
@@ -337,6 +345,80 @@ fn append_membership_record_lines(
             membership_records.last_error.as_deref().unwrap_or("none")
         ),
     ]);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapDcutrReadinessReason {
+    Ready,
+    Disabled,
+    NoRelayReservationsConfigured,
+    MissingRelayReservation,
+    MissingRelayedListenAddress,
+    IncompleteReadinessEvidence,
+}
+
+impl BootstrapDcutrReadinessReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Disabled => "disabled",
+            Self::NoRelayReservationsConfigured => "no_relay_reservations_configured",
+            Self::MissingRelayReservation => "missing_relay_reservation",
+            Self::MissingRelayedListenAddress => "missing_relayed_listen_address",
+            Self::IncompleteReadinessEvidence => "incomplete_readiness_evidence",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapDcutrSuccessReason {
+    Ready,
+    Disabled,
+    NoHolePunchSuccess,
+    MissingDirectConnectionEvidence,
+}
+
+impl BootstrapDcutrSuccessReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Disabled => "disabled",
+            Self::NoHolePunchSuccess => "no_hole_punch_success",
+            Self::MissingDirectConnectionEvidence => "missing_direct_connection_evidence",
+        }
+    }
+}
+
+fn dcutr_readiness_reason(report: &BootstrapCheckReport) -> BootstrapDcutrReadinessReason {
+    if report.dcutr.ready {
+        return BootstrapDcutrReadinessReason::Ready;
+    }
+    if !report.dcutr.enabled {
+        return BootstrapDcutrReadinessReason::Disabled;
+    }
+    if report.configured_relay_reservations == 0 {
+        return BootstrapDcutrReadinessReason::NoRelayReservationsConfigured;
+    }
+    if report.accepted_relay_reservations < report.configured_relay_reservations {
+        return BootstrapDcutrReadinessReason::MissingRelayReservation;
+    }
+    if report.relays_with_listen_addresses() < report.configured_relay_reservations {
+        return BootstrapDcutrReadinessReason::MissingRelayedListenAddress;
+    }
+    BootstrapDcutrReadinessReason::IncompleteReadinessEvidence
+}
+
+fn dcutr_success_reason(report: &BootstrapCheckReport) -> BootstrapDcutrSuccessReason {
+    if report.dcutr.enabled && report.dcutr.successes > 0 && report.dcutr.direct_connections > 0 {
+        return BootstrapDcutrSuccessReason::Ready;
+    }
+    if !report.dcutr.enabled {
+        return BootstrapDcutrSuccessReason::Disabled;
+    }
+    if report.dcutr.successes == 0 {
+        return BootstrapDcutrSuccessReason::NoHolePunchSuccess;
+    }
+    BootstrapDcutrSuccessReason::MissingDirectConnectionEvidence
 }
 
 impl BootstrapCheckThreshold {
@@ -2966,6 +3048,11 @@ mod tests {
                 .any(|line| line.contains("public relay candidate detail: dcutr successes: 0"))
         );
         assert!(lines.iter().any(|line| {
+            line.contains(
+                "public relay candidate detail: dcutr success_reason: no_hole_punch_success",
+            )
+        }));
+        assert!(lines.iter().any(|line| {
             line.contains("public relay candidate detail: dcutr last_error: NoDirectConnection")
         }));
     }
@@ -3412,8 +3499,10 @@ mod tests {
         assert!(lines.contains(&"ipfs compatible: true".to_owned()));
         assert!(lines.contains(&"dcutr enabled: true".to_owned()));
         assert!(lines.contains(&"dcutr ready: false".to_owned()));
+        assert!(lines.contains(&"dcutr readiness_reason: missing_relay_reservation".to_owned()));
         assert!(lines.contains(&"dcutr successes: 0".to_owned()));
         assert!(lines.contains(&"dcutr direct_connections: 0".to_owned()));
+        assert!(lines.contains(&"dcutr success_reason: no_hole_punch_success".to_owned()));
         assert!(lines.contains(&"dcutr failures: 1".to_owned()));
         assert!(lines.contains(&"dcutr last_error: HandshakeTimedOut".to_owned()));
         assert!(
@@ -3629,12 +3718,54 @@ mod tests {
         assert!(success.lines().iter().any(|line| {
             line.starts_with("direct peer connection address: ") && line.contains("/memory/30")
         }));
-        assert!(!dcutr_success_report(true, 1, 0, 0, None).succeeded());
+        let missing_direct_evidence = dcutr_success_report(true, 1, 0, 0, None);
+        assert!(!missing_direct_evidence.succeeded());
+        assert!(
+            missing_direct_evidence
+                .lines()
+                .contains(&"dcutr success_reason: missing_direct_connection_evidence".to_owned())
+        );
         assert!(!dcutr_success_report(true, 0, 1, 0, None).succeeded());
         assert!(
             !dcutr_success_report(true, 0, 0, 1, Some("NoDirectConnection".to_owned())).succeeded()
         );
         assert!(!dcutr_success_report(false, 1, 1, 0, None).succeeded());
+    }
+
+    #[test]
+    fn bootstrap_check_lines_report_dcutr_readiness_reason() {
+        assert!(
+            dcutr_report(true, 1, 1, 1)
+                .lines()
+                .contains(&"dcutr readiness_reason: ready".to_owned())
+        );
+        assert!(
+            dcutr_report(false, 1, 1, 1)
+                .lines()
+                .contains(&"dcutr readiness_reason: disabled".to_owned())
+        );
+        assert!(
+            dcutr_report(true, 0, 0, 0)
+                .lines()
+                .contains(&"dcutr readiness_reason: no_relay_reservations_configured".to_owned())
+        );
+        assert!(
+            dcutr_report(true, 2, 1, 1)
+                .lines()
+                .contains(&"dcutr readiness_reason: missing_relay_reservation".to_owned())
+        );
+        assert!(
+            dcutr_report(true, 2, 2, 1)
+                .lines()
+                .contains(&"dcutr readiness_reason: missing_relayed_listen_address".to_owned())
+        );
+        let mut incomplete = dcutr_report(true, 1, 1, 1);
+        incomplete.dcutr.ready = false;
+        assert!(
+            incomplete
+                .lines()
+                .contains(&"dcutr readiness_reason: incomplete_readiness_evidence".to_owned())
+        );
     }
 
     #[test]
