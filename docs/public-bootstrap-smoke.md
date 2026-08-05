@@ -430,3 +430,13 @@ private `/ip4/192.168.0.180/...` address and no libp2p DCUtR success event was
 observed. Public-relay-assisted DCUtR therefore remains unproven from this host;
 the new summary path-evidence fields make the distinction visible without
 hand-parsing the JSON reports.
+
+For repeated runs against the same public candidate set, source the generated
+`repro-retry-env.sh` from a previous repro directory and then run
+`nix run .#public-relay-repro`; override `P2P_VPN_REPRO_DIR` after sourcing to
+write the retry into a fresh directory. The generated `repro-phases.tsv`
+records each phase status with UTC start/end timestamps and elapsed seconds for
+cross-host comparison. When debugging one known relay, set
+`P2P_VPN_REPRO_RELAY_CANDIDATE` to its direct `/p2p/RELAY` multiaddr; the
+packaged repro writes that single candidate to its candidate file and skips
+public discovery.

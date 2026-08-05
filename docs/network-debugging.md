@@ -251,6 +251,9 @@ phase fails without deleting earlier evidence.
    `found_records`, `verified_records`, `accepted_records`, `invalid_records`,
    and `last_error` to separate public Kademlia reachability problems from
    signature or trust-root validation problems.
+   For wall-clock comparisons, inspect `repro-phases.tsv`; it records each
+   phase status with UTC start/end times and elapsed seconds, which is easier
+   to diff across repeated public relay or two-host NAT runs than console logs.
 
 3. Replay the same candidate set without public discovery when iterating:
 
@@ -266,6 +269,14 @@ phase fails without deleting earlier evidence.
    `public-relay-candidates.txt` from another repro directory. This keeps
    repeated NAT/DCUtR runs comparable because only the local topology and
    timeout budget changed.
+   Every run also writes `repro-retry-env.sh`; source it before the next
+   `nix run .#public-relay-repro` to reuse the preserved candidate file and
+   timeout knobs. Override `P2P_VPN_REPRO_DIR` after sourcing when the retry
+   should write into a fresh artifact directory.
+   For the fastest single-relay retry, set
+   `P2P_VPN_REPRO_RELAY_CANDIDATE` to a direct `/p2p/RELAY` multiaddr; the
+   repro writes that one candidate into the artifact directory and skips public
+   discovery.
 
 4. For a two-host public hole-punch proof, run the generated Host A listener
    while Host B dials the descriptor:
