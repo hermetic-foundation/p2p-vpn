@@ -180,6 +180,8 @@
             commands="$artifact_dir/repro-commands.sh"
             retry_env="$artifact_dir/repro-retry-env.sh"
             phase_log="$artifact_dir/repro-phases.tsv"
+            phase_logs_dir="$artifact_dir/phase-logs"
+            phase_logs_manifest="$artifact_dir/repro-phase-logs.tsv"
             dcutr_listen_script="$artifact_dir/repro-dcutr-listen-host-a.sh"
             dcutr_dial_script="$artifact_dir/repro-dcutr-dial-host-b.sh"
             summary="$artifact_dir/repro-summary.txt"
@@ -204,7 +206,9 @@
               relay_check_base_args=(--config "$base_config")
             fi
             status=0
+            phase_index=0
             phase_results=()
+            mkdir -p "$phase_logs_dir"
 
             write_metadata() {
               {
@@ -742,6 +746,8 @@
                 --arg commands "$commands" \
                 --arg retry_env "$retry_env" \
                 --arg phase_log "$phase_log" \
+                --arg phase_logs_dir "$phase_logs_dir" \
+                --arg phase_logs_manifest "$phase_logs_manifest" \
                 --arg candidate_file "$candidates" \
                 --arg relay_assisted_config "$relay_config" \
                 --arg vpn_host_a_config "$vpn_host_a_config" \
@@ -773,6 +779,8 @@
                     commands: $commands,
                     retry_env: $retry_env,
                     phase_log: $phase_log,
+                    phase_logs_dir: $phase_logs_dir,
+                    phase_logs_manifest: $phase_logs_manifest,
                     candidate_file: $candidate_file,
                     relay_assisted_config: $relay_assisted_config,
                     vpn_host_a_config: $vpn_host_a_config,
@@ -816,6 +824,8 @@
                 echo "commands=$commands"
                 echo "retry_env=$retry_env"
                 echo "phase_log=$phase_log"
+                echo "phase_logs_dir=$phase_logs_dir"
+                echo "phase_logs_manifest=$phase_logs_manifest"
                 echo "summary_json=$summary_json"
                 echo "dcutr_listen_script=$dcutr_listen_script"
                 echo "dcutr_dial_script=$dcutr_dial_script"
@@ -847,23 +857,39 @@
               phase_started_utc="$3"
               phase_finished_utc="$4"
               phase_elapsed="$5"
-              phase_results+=("$phase status=$phase_status elapsed_seconds=$phase_elapsed")
-              printf "%s\t%s\t%s\t%s\t%s\n" \
+              phase_stdout="$6"
+              phase_stderr="$7"
+              phase_results+=("$phase status=$phase_status elapsed_seconds=$phase_elapsed stdout=$phase_stdout stderr=$phase_stderr")
+              printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
                 "$phase" \
                 "$phase_status" \
                 "$phase_started_utc" \
                 "$phase_finished_utc" \
-                "$phase_elapsed" >> "$phase_log"
+                "$phase_elapsed" \
+                "$phase_stdout" \
+                "$phase_stderr" >> "$phase_log"
+              printf "%s\t%s\t%s\n" \
+                "$phase" \
+                "$phase_stdout" \
+                "$phase_stderr" >> "$phase_logs_manifest"
             }
 
             run_phase() {
               phase="$1"
               shift
+              phase_index="$((phase_index + 1))"
+              phase_slug="$(printf "%s" "$phase" | tr '[:upper:] ' '[:lower:]-' | tr -cd '[:alnum:]._-')"
+              if [[ -z "$phase_slug" ]]; then
+                phase_slug="phase"
+              fi
+              phase_id="$(printf "%02d-%s" "$phase_index" "$phase_slug")"
+              phase_stdout="$phase_logs_dir/$phase_id.stdout"
+              phase_stderr="$phase_logs_dir/$phase_id.stderr"
               echo "$phase" >&2
               phase_started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               phase_started="$(date +%s)"
               set +e
-              "$@"
+              "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
               phase_status="$?"
               set -e
               phase_finished="$(date +%s)"
@@ -873,11 +899,12 @@
                 echo "$phase failed with exit status $phase_status after ''${phase_elapsed}s" >&2
                 status=1
               fi
-              record_phase_result "$phase" "$phase_status" "$phase_started_utc" "$phase_finished_utc" "$phase_elapsed"
+              record_phase_result "$phase" "$phase_status" "$phase_started_utc" "$phase_finished_utc" "$phase_elapsed" "$phase_stdout" "$phase_stderr"
             }
 
             echo "writing public relay repro artifacts to $artifact_dir" >&2
-            printf "phase\tstatus\tstarted_utc\tfinished_utc\telapsed_seconds\n" > "$phase_log"
+            printf "phase\tstatus\tstarted_utc\tfinished_utc\telapsed_seconds\tstdout_log\tstderr_log\n" > "$phase_log"
+            printf "phase\tstdout_log\tstderr_log\n" > "$phase_logs_manifest"
             write_metadata
             write_host_network
             write_commands
@@ -893,7 +920,7 @@
               fi
             else
               phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              record_phase_result "membership-record DHT repro disabled" 0 "$phase_utc" "$phase_utc" 0
+              record_phase_result "membership-record DHT repro disabled" 0 "$phase_utc" "$phase_utc" 0 "" ""
             fi
             if [[ -n "$repro_candidates_file" ]]; then
               if [[ ! -s "$repro_candidates_file" ]]; then
@@ -902,11 +929,11 @@
               fi
               cp "$repro_candidates_file" "$candidates"
               phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              record_phase_result "using supplied public relay candidate file" 0 "$phase_utc" "$phase_utc" 0
+              record_phase_result "using supplied public relay candidate file" 0 "$phase_utc" "$phase_utc" 0 "" ""
             elif [[ -n "$repro_relay_candidate" ]]; then
               printf "%s\n" "$repro_relay_candidate" > "$candidates"
               phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              record_phase_result "using supplied public relay candidate" 0 "$phase_utc" "$phase_utc" 0
+              record_phase_result "using supplied public relay candidate" 0 "$phase_utc" "$phase_utc" 0 "" ""
             else
               run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
                 p2p-vpn relay-scan \
@@ -2009,6 +2036,10 @@ EOF
             grep -q 'repro-dcutr-dial-host-b.sh' "$script"
             grep -q 'repro-retry-env.sh' "$script"
             grep -q 'repro-phases.tsv' "$script"
+            grep -q 'repro-phase-logs.tsv' "$script"
+            grep -q 'phase-logs' "$script"
+            grep -q 'tee "$phase_stdout"' "$script"
+            grep -q 'tee "$phase_stderr" >&2' "$script"
             grep -q 'write_retry_env' "$script"
             grep -q 'record_phase_result' "$script"
             grep -q 'using supplied public relay candidate' "$script"

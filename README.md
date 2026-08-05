@@ -1193,7 +1193,8 @@ nix run .#public-relay-repro
 
 In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
 `public-membership-dht-bootstrap-check.json`, `repro-metadata.txt`,
-`repro-host-network.txt`, `repro-commands.sh`,
+`repro-host-network.txt`, `repro-commands.sh`, `repro-phases.tsv`,
+`repro-phase-logs.tsv`, a `phase-logs/` directory with per-phase stdout/stderr,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
 `repro-summary.txt`. When relay-circuit validation succeeds it also writes
 `public-vpn-host-a.json` and `public-vpn-host-b.json`, a matched static
@@ -1209,7 +1210,8 @@ check budget. It also writes `repro-summary.json`, a machine-readable index of
 artifact paths, phase results, host IPv4/IPv6 route availability, per-report
 candidate/failure/elapsed summaries, relay reservation and relayed circuit
 diagnostic counts, membership-record DHT publish/lookup/verification counts,
-observed relayed/direct address counts, and the two-host DCUtR handoff files.
+observed relayed/direct address counts, phase-log paths, and the two-host DCUtR
+handoff files.
 The metadata records source revision and dirty status when the app is run from
 a Git checkout. The two host scripts use the first
 successful relay-check candidate, or `P2P_VPN_REPRO_RELAY_CANDIDATE` when

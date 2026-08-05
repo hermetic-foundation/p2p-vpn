@@ -252,8 +252,9 @@ phase fails without deleting earlier evidence.
    and `last_error` to separate public Kademlia reachability problems from
    signature or trust-root validation problems.
    For wall-clock comparisons, inspect `repro-phases.tsv`; it records each
-   phase status with UTC start/end times and elapsed seconds, which is easier
-   to diff across repeated public relay or two-host NAT runs than console logs.
+   phase status with UTC start/end times, elapsed seconds, and captured
+   stdout/stderr paths. Use `repro-phase-logs.tsv` or the `phase-logs/`
+   directory when a command fails before writing its JSON report.
 
 3. Replay the same candidate set without public discovery when iterating:
 
@@ -423,7 +424,8 @@ reservation, relayed-circuit, or DCUtR timeouts, and confirm which concrete path
 type was observed.
 
 Every repro directory also contains `repro-metadata.txt`,
-`repro-host-network.txt`, `repro-commands.sh`,
+`repro-host-network.txt`, `repro-commands.sh`, `repro-phases.tsv`,
+`repro-phase-logs.tsv`, a `phase-logs/` directory with per-phase stdout/stderr,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
 `repro-summary.txt`. The metadata records source revision and dirty status when
 the app is run from a Git checkout. The Host A/Host B scripts are generated
@@ -442,7 +444,8 @@ relayed and direct connection addresses so DCUtR runs show whether they reached
 relay fallback only or completed direct promotion. Use the metadata file to
 compare the exact timeout/candidate-limit environment between runs. Use the
 host-network file to compare OS/kernel, IPv4/IPv6 route availability, interface
-addresses, and route tables across machines. Use the commands file to replay
+addresses, and route tables across machines. Use the phase log files when a
+phase exits before producing its JSON report. Use the commands file to replay
 the same scan, relay-circuit, and DCUtR probes against the preserved candidate
 file.
 
