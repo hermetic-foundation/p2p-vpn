@@ -127,6 +127,7 @@ set. The preferred rootless operator command is:
 ```sh
 nix develop -c cargo run -- relay-check \
   --relay-candidates-file public-relay-candidates.txt \
+  --write-report public-relay-check.json \
   --timeout-seconds 45
 
 nix develop -c cargo run -- relay-check \
@@ -139,6 +140,7 @@ nix develop -c cargo run -- relay-check \
   --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
   --require-dcutr-success \
   --max-validation-candidates 4 \
+  --write-report public-relay-dcutr.json \
   --timeout-seconds 45
 
 nix develop -c cargo run -- relay-check \
@@ -172,6 +174,11 @@ requires both libp2p's hole-punch event and a direct non-relayed connection to
 the target peer. DCUtR failures also include the last libp2p hole-punch error
 as `dcutr last_error`, which distinguishes cases such as no direct connection,
 rejected relay prerequisites, or direct handshake timeouts.
+Use `--write-report PATH` to persist the same probe outcome as pretty-printed
+JSON, including schema version, probe mode, timeout, validation cap,
+host-reachable candidates, skipped candidates with reasons, per-candidate
+success, failure stage, error, and bootstrap/DCUtR summary fields for candidates
+that reached the bootstrap-check phase.
 Successful candidates also print a `public relay candidate config:` line with
 the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`

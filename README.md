@@ -849,6 +849,7 @@ cargo run -- relay-scan \
 
 cargo run -- relay-check \
   --relay-candidates-file public-relay-candidates.txt \
+  --write-report public-relay-check.json \
   --timeout-seconds 45
 
 cargo run -- relay-check \
@@ -859,6 +860,7 @@ cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --require-dcutr-success \
   --max-validation-candidates 4 \
+  --write-report public-relay-dcutr.json \
   --timeout-seconds 45
 
 cargo run -- relay-check \
@@ -939,7 +941,11 @@ timed out, and the last direct relay dial error when one was observed. When the
 probe reaches the bootstrap-check phase, the failed candidate also includes the
 same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
 `bootstrap-check`, including `dcutr last_error` for the most recent libp2p
-hole-punch failure. Successful candidates also print a
+hole-punch failure. Pass `--write-report PATH` to save a pretty-printed JSON
+artifact with schema version, probe mode, timeout, validation cap,
+host-reachable candidates, skipped candidates with reasons, per-candidate
+success, failure stage, error, and the bootstrap/DCUtR summary observed for
+each candidate that reached the bootstrap-check phase. Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
 `--relay-reservation .../p2p-circuit` address for `init-config`. Pass

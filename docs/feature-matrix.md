@@ -90,7 +90,11 @@ path.
    a stable public relay candidate `failure_stage` plus the most recent libp2p
    DCUtR failure as `dcutr last_error`, so future public relay runs can
    distinguish setup, reservation, relayed-circuit, DCUtR prerequisite, and
-   direct handshake failures. The long-running daemon also reports currently
+   direct handshake failures. `relay-check --write-report` also persists the
+   bounded public relay probe as JSON with mode, timeout, validation cap,
+   host-reachable candidates, skipped candidates, per-candidate failure stages,
+   errors, and bootstrap/DCUtR summary fields for candidates that reached the
+   bootstrap-check phase. The long-running daemon also reports currently
    admitted relay-only infrastructure peers in `daemon-state`, including the
    candidate address and live swarm connection flag, so public DHT/IPFS
    reachability attempts are inspectable without scraping logs. The project

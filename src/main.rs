@@ -37,6 +37,7 @@ use p2p_vpn::{
     },
     wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
+use serde::Serialize;
 
 const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
 const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
@@ -257,6 +258,8 @@ enum Command {
         timeout_seconds: u64,
         #[arg(long)]
         max_validation_candidates: Option<usize>,
+        #[arg(long = "write-report")]
+        write_report: Option<PathBuf>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
         #[arg(long)]
@@ -566,6 +569,7 @@ async fn main() -> Result<(), String> {
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
+            write_report,
             write_config,
             force,
         } => {
@@ -580,6 +584,7 @@ async fn main() -> Result<(), String> {
                 timeout_seconds,
                 mode,
                 max_validation_candidates,
+                write_report,
                 write_config,
                 force,
             }))
@@ -814,6 +819,7 @@ struct RelayCheckArgs {
     timeout_seconds: u64,
     mode: PublicRelayProbeMode,
     max_validation_candidates: Option<usize>,
+    write_report: Option<PathBuf>,
     write_config: Option<PathBuf>,
     force: bool,
 }
@@ -2196,19 +2202,35 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     let addresses = relay_check_candidate_multiaddrs(&raw)?;
     let (addresses, skipped_candidates) =
         filter_relay_validation_candidates(addresses, local_relay_candidate_reachability());
-    for skipped in skipped_candidates {
+    for skipped in &skipped_candidates {
         println!(
             "public relay check skipped: {} reason {}",
             skipped.address, skipped.reason
         );
     }
     if addresses.is_empty() {
+        if let Some(output) = &args.write_report {
+            write_public_relay_probe_report(
+                &args,
+                &[],
+                &skipped_candidates,
+                &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport {
+                    mode: args.mode,
+                    candidates: Vec::new(),
+                },
+                output,
+            )?;
+        }
         return Err(
             "public relay check did not have a host-reachable candidate to validate".to_owned(),
         );
     }
     let (addresses, limit) =
         limit_relay_validation_candidates(addresses, args.max_validation_candidates);
+    let host_reachable_candidates = addresses
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
     if let Some(limit) = limit {
         println!(
             "public relay check limited: {} of {} host-reachable candidates",
@@ -2225,6 +2247,16 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
 
     for line in report.lines() {
         println!("{line}");
+    }
+
+    if let Some(output) = &args.write_report {
+        write_public_relay_probe_report(
+            &args,
+            &host_reachable_candidates,
+            &skipped_candidates,
+            &report,
+            output,
+        )?;
     }
 
     if succeeded {
@@ -2268,6 +2300,231 @@ fn relay_check_candidate_multiaddrs(raw: &str) -> Result<Vec<libp2p::Multiaddr>,
     let addresses = parse_public_relay_addresses(raw)
         .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
     order_relay_validation_candidates(addresses, "relay-check candidate")
+}
+
+fn write_public_relay_probe_report(
+    args: &RelayCheckArgs,
+    host_reachable_candidates: &[String],
+    skipped_candidates: &[SkippedRelayCandidate],
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+    output: &Path,
+) -> Result<(), String> {
+    if !args.force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    let rendered = serde_json::to_string_pretty(&public_relay_probe_report_json(
+        args,
+        host_reachable_candidates,
+        skipped_candidates,
+        report,
+    ))
+    .map_err(|error| format!("failed to encode public relay report: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PublicRelayProbeReportJson<'a> {
+    schema_version: u8,
+    mode: &'static str,
+    succeeded: bool,
+    timeout_seconds: u64,
+    max_validation_candidates: Option<usize>,
+    host_reachable_candidates: &'a [String],
+    skipped_candidates: Vec<SkippedRelayCandidateJson<'a>>,
+    candidates: Vec<PublicRelayCandidateReportJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct SkippedRelayCandidateJson<'a> {
+    address: &'a str,
+    reason: &'static str,
+}
+
+#[derive(Serialize)]
+struct PublicRelayCandidateReportJson<'a> {
+    address: &'a str,
+    succeeded: bool,
+    failure_stage: &'static str,
+    error: Option<&'a str>,
+    bootstrap: Option<BootstrapCheckReportJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct BootstrapCheckReportJson<'a> {
+    succeeded: bool,
+    threshold: &'static str,
+    requirements: BootstrapRequirementsJson,
+    kademlia_protocol: &'a str,
+    ipfs_compatible: bool,
+    dcutr: BootstrapDcutrJson<'a>,
+    configured_bootstrap_peers: usize,
+    connected_bootstrap_peers: usize,
+    dial_failures: usize,
+    configured_relay_reservations: usize,
+    accepted_relay_reservations: usize,
+    relayed_listen_addresses: usize,
+    configured_relayed_peer_circuits: usize,
+    connected_relayed_peer_circuits: usize,
+    autonat_probe_servers_registered: usize,
+    autonat_status: &'static str,
+    kademlia: BootstrapKademliaJson,
+}
+
+#[derive(Serialize)]
+#[allow(clippy::struct_excessive_bools)]
+struct BootstrapRequirementsJson {
+    relay_reservations: bool,
+    autonat_status: bool,
+    dcutr_ready: bool,
+    dcutr_success: bool,
+    relayed_peer_circuits: bool,
+}
+
+#[derive(Serialize)]
+struct BootstrapDcutrJson<'a> {
+    enabled: bool,
+    ready: bool,
+    successes: usize,
+    direct_connections: usize,
+    failures: usize,
+    last_error: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct BootstrapKademliaJson {
+    bootstrap_started: bool,
+    rendezvous_lookup_started: bool,
+    rendezvous_advertise_started: bool,
+}
+
+fn public_relay_probe_report_json<'a>(
+    args: &RelayCheckArgs,
+    host_reachable_candidates: &'a [String],
+    skipped_candidates: &'a [SkippedRelayCandidate],
+    report: &'a p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+) -> PublicRelayProbeReportJson<'a> {
+    PublicRelayProbeReportJson {
+        schema_version: 1,
+        mode: public_relay_probe_mode_name(args.mode),
+        succeeded: report.succeeded(),
+        timeout_seconds: args.timeout_seconds.max(1),
+        max_validation_candidates: args.max_validation_candidates,
+        host_reachable_candidates,
+        skipped_candidates: skipped_candidates
+            .iter()
+            .map(|candidate| SkippedRelayCandidateJson {
+                address: &candidate.address,
+                reason: candidate.reason,
+            })
+            .collect(),
+        candidates: report
+            .candidates
+            .iter()
+            .map(|candidate| PublicRelayCandidateReportJson {
+                address: &candidate.address,
+                succeeded: candidate.succeeded,
+                failure_stage: public_relay_failure_stage_name(candidate.failure_stage),
+                error: candidate.error.as_deref(),
+                bootstrap: candidate
+                    .bootstrap
+                    .as_ref()
+                    .map(bootstrap_check_report_json),
+            })
+            .collect(),
+    }
+}
+
+fn bootstrap_check_report_json(
+    report: &p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
+) -> BootstrapCheckReportJson<'_> {
+    BootstrapCheckReportJson {
+        succeeded: report.succeeded(),
+        threshold: bootstrap_threshold_name(report.threshold),
+        requirements: BootstrapRequirementsJson {
+            relay_reservations: report.requirements.relay_reservations,
+            autonat_status: report.requirements.autonat_status,
+            dcutr_ready: report.requirements.dcutr_ready,
+            dcutr_success: report.requirements.dcutr_success,
+            relayed_peer_circuits: report.requirements.relayed_peer_circuits,
+        },
+        kademlia_protocol: &report.kademlia_protocol,
+        ipfs_compatible: report.ipfs_compatible,
+        dcutr: BootstrapDcutrJson {
+            enabled: report.dcutr.enabled,
+            ready: report.dcutr.ready,
+            successes: report.dcutr.successes,
+            direct_connections: report.dcutr.direct_connections,
+            failures: report.dcutr.failures,
+            last_error: report.dcutr.last_error.as_deref(),
+        },
+        configured_bootstrap_peers: report.configured_bootstrap_peers,
+        connected_bootstrap_peers: report.connected_bootstrap_peers,
+        dial_failures: report.dial_failures,
+        configured_relay_reservations: report.configured_relay_reservations,
+        accepted_relay_reservations: report.accepted_relay_reservations,
+        relayed_listen_addresses: report.relayed_listen_addresses,
+        configured_relayed_peer_circuits: report.configured_relayed_peer_circuits,
+        connected_relayed_peer_circuits: report.connected_relayed_peer_circuits,
+        autonat_probe_servers_registered: report.autonat_probe_servers_registered,
+        autonat_status: bootstrap_autonat_status_name(report.autonat_status),
+        kademlia: BootstrapKademliaJson {
+            bootstrap_started: report.kademlia.bootstrap_started,
+            rendezvous_lookup_started: report.kademlia.rendezvous_lookup_started,
+            rendezvous_advertise_started: report.kademlia.rendezvous_advertise_started,
+        },
+    }
+}
+
+const fn public_relay_probe_mode_name(mode: PublicRelayProbeMode) -> &'static str {
+    match mode {
+        PublicRelayProbeMode::RelayedPeerCircuit => "relayed_peer_circuit",
+        PublicRelayProbeMode::DcutrSuccess => "dcutr_success",
+    }
+}
+
+const fn public_relay_failure_stage_name(
+    stage: p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage,
+) -> &'static str {
+    match stage {
+        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::None => "none",
+        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::CandidateSetup => {
+            "candidate_setup"
+        }
+        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::RelayReservation => {
+            "relay_reservation"
+        }
+        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::RelayedPeerCircuit => {
+            "relayed_peer_circuit"
+        }
+        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::DcutrSuccess => {
+            "dcutr_success"
+        }
+    }
+}
+
+const fn bootstrap_threshold_name(threshold: BootstrapCheckThreshold) -> &'static str {
+    match threshold {
+        BootstrapCheckThreshold::Any => "any",
+        BootstrapCheckThreshold::All => "all",
+    }
+}
+
+const fn bootstrap_autonat_status_name(
+    status: p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus,
+) -> &'static str {
+    match status {
+        p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus::Unknown => "unknown",
+        p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus::Public => "public",
+        p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus::Private => "private",
+    }
 }
 
 fn write_public_relay_config_from_probe(
@@ -4424,6 +4681,8 @@ mod tests {
             "60",
             "--max-validation-candidates",
             "3",
+            "--write-report",
+            "relay-report.json",
             "--write-config",
             "relay-config.json",
             "--force",
@@ -4436,6 +4695,7 @@ mod tests {
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
+            write_report,
             write_config,
             force,
         } = cli.command
@@ -4452,6 +4712,7 @@ mod tests {
         assert!(require_dcutr_success);
         assert_eq!(timeout_seconds, 60);
         assert_eq!(max_validation_candidates, Some(3));
+        assert_eq!(write_report, Some(PathBuf::from("relay-report.json")));
         assert_eq!(write_config, Some(PathBuf::from("relay-config.json")));
         assert!(force);
     }
@@ -4576,6 +4837,7 @@ mod tests {
             timeout_seconds: 45,
             mode: PublicRelayProbeMode::RelayedPeerCircuit,
             max_validation_candidates: None,
+            write_report: None,
             write_config: None,
             force: false,
         };
@@ -4591,6 +4853,76 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![inline, file_candidate]
         );
+    }
+
+    #[test]
+    fn relay_check_writes_machine_readable_probe_report() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let skipped_peer = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let candidate = format!("/dns4/relay.example.net/tcp/4001/p2p/{peer}");
+        let skipped = SkippedRelayCandidate {
+            address: format!("/ip4/203.0.113.10/tcp/4001/p2p/{skipped_peer}"),
+            reason: "ipv4_unreachable",
+        };
+        let report = p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport {
+            mode: PublicRelayProbeMode::DcutrSuccess,
+            candidates: vec![
+                p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateReport {
+                    address: candidate.clone(),
+                    succeeded: false,
+                    failure_stage:
+                        p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::DcutrSuccess,
+                    error: Some("dcutr success check did not meet success threshold".to_owned()),
+                    bootstrap: None,
+                },
+            ],
+        };
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-relay-check-report-{}-{}.json",
+            std::process::id(),
+            "probe"
+        ));
+        let _ = fs::remove_file(&output);
+        let args = RelayCheckArgs {
+            relay_candidates: vec![candidate.clone()],
+            relay_candidates_file: None,
+            timeout_seconds: 45,
+            mode: PublicRelayProbeMode::DcutrSuccess,
+            max_validation_candidates: Some(1),
+            write_report: Some(output.clone()),
+            write_config: None,
+            force: false,
+        };
+
+        write_public_relay_probe_report(
+            &args,
+            std::slice::from_ref(&candidate),
+            std::slice::from_ref(&skipped),
+            &report,
+            &output,
+        )
+        .expect("write report");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "dcutr_success");
+        assert_eq!(value["succeeded"], false);
+        assert_eq!(value["timeout_seconds"], 45);
+        assert_eq!(value["max_validation_candidates"], 1);
+        assert_eq!(value["host_reachable_candidates"][0], candidate);
+        assert_eq!(value["skipped_candidates"][0]["reason"], "ipv4_unreachable");
+        assert_eq!(value["candidates"][0]["failure_stage"], "dcutr_success");
+        assert_eq!(
+            value["candidates"][0]["error"],
+            "dcutr success check did not meet success threshold"
+        );
+        assert!(
+            write_public_relay_probe_report(&args, &[candidate], &[skipped], &report, &output)
+                .expect_err("overwrite should require force")
+                .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove report");
     }
 
     #[test]
@@ -4639,6 +4971,7 @@ mod tests {
             timeout_seconds: 45,
             mode: PublicRelayProbeMode::RelayedPeerCircuit,
             max_validation_candidates: Some(0),
+            write_report: None,
             write_config: None,
             force: false,
         };
@@ -4657,6 +4990,7 @@ mod tests {
             timeout_seconds: 45,
             mode: PublicRelayProbeMode::RelayedPeerCircuit,
             max_validation_candidates: None,
+            write_report: None,
             write_config: None,
             force: false,
         };
