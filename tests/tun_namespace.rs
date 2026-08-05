@@ -217,6 +217,74 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
     let _ = fs::remove_dir_all(temp_dir);
 }
 
+#[test]
+fn packet_plane_datagram_state_evidence_is_backend_specific() {
+    let udp_lines = vec![
+        "packet_plane_sessions 1".to_owned(),
+        "packet_plane_quic_sessions 0".to_owned(),
+        "healthy_direct_udp_datagram_paths 1".to_owned(),
+        "healthy_direct_quic_datagram_paths 0".to_owned(),
+        "outbound_quic_datagram_packets 1".to_owned(),
+        "inbound_accepted_packets 1".to_owned(),
+    ];
+    let quic_lines = vec![
+        "packet_plane_sessions 0".to_owned(),
+        "packet_plane_quic_sessions 1".to_owned(),
+        "healthy_direct_udp_datagram_paths 0".to_owned(),
+        "healthy_direct_quic_datagram_paths 1".to_owned(),
+        "outbound_quic_datagram_packets 1".to_owned(),
+        "inbound_accepted_packets 1".to_owned(),
+    ];
+    let missing_packets = vec![
+        "packet_plane_sessions 1".to_owned(),
+        "healthy_direct_udp_datagram_paths 1".to_owned(),
+        "outbound_quic_datagram_packets 0".to_owned(),
+        "inbound_accepted_packets 1".to_owned(),
+    ];
+
+    assert!(packet_plane_datagram_state_used(
+        &udp_lines,
+        PacketPlaneDatagramEvidence::OwnedUdp
+    ));
+    assert!(!packet_plane_datagram_state_used(
+        &udp_lines,
+        PacketPlaneDatagramEvidence::OwnedQuic
+    ));
+    assert!(packet_plane_datagram_state_used(
+        &quic_lines,
+        PacketPlaneDatagramEvidence::OwnedQuic
+    ));
+    assert!(!packet_plane_datagram_state_used(
+        &quic_lines,
+        PacketPlaneDatagramEvidence::OwnedUdp
+    ));
+    assert!(!packet_plane_datagram_state_used(
+        &missing_packets,
+        PacketPlaneDatagramEvidence::OwnedUdp
+    ));
+}
+
+#[test]
+fn packet_plane_datagram_log_evidence_is_backend_specific() {
+    let udp_log = "\
+event=packet_plane_session_established backend=owned_udp\n\
+path_healthy_direct_udp_datagram_paths 1\n\
+path_healthy_direct_quic_datagram_paths 0\n\
+outbound_quic_datagram_packets 1\n\
+inbound_accepted_packets 1\n";
+    let quic_log = "\
+event=packet_plane_session_established backend=owned_quic\n\
+event=packet_plane_quic_listening\n\
+path_healthy_direct_udp_datagram_paths 0\n\
+path_healthy_direct_quic_datagram_paths 1\n\
+outbound_quic_datagram_packets 1\n";
+
+    assert!(packet_plane_datagrams_used(udp_log));
+    assert!(!packet_plane_datagrams_used(quic_log));
+    assert!(owned_quic_packet_plane_datagrams_used(quic_log));
+    assert!(!owned_quic_packet_plane_datagrams_used(udp_log));
+}
+
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
     let default_timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
@@ -1053,39 +1121,60 @@ fn wait_for_owned_quic_packet_plane_sessions(temp_dir: &Path) -> (String, String
 fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
-    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(8));
-    loop {
-        let initiator_log = read_log(&node_a_path);
-        let responder_log = read_log(&node_b_path);
-        if packet_plane_datagrams_used(&initiator_log)
-            && packet_plane_datagrams_used(&responder_log)
-        {
-            return (initiator_log, responder_log);
-        }
-        if Instant::now() >= deadline {
-            return (initiator_log, responder_log);
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
+    wait_for_packet_plane_datagrams_for_role(temp_dir, "a", PacketPlaneDatagramEvidence::OwnedUdp);
+    wait_for_packet_plane_datagrams_for_role(temp_dir, "b", PacketPlaneDatagramEvidence::OwnedUdp);
+    (read_log(&node_a_path), read_log(&node_b_path))
 }
 
 fn wait_for_owned_quic_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
-    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(8));
-    loop {
-        let initiator_log = read_log(&node_a_path);
-        let responder_log = read_log(&node_b_path);
-        if owned_quic_packet_plane_datagrams_used(&initiator_log)
-            && owned_quic_packet_plane_datagrams_used(&responder_log)
-        {
-            return (initiator_log, responder_log);
+    wait_for_packet_plane_datagrams_for_role(temp_dir, "a", PacketPlaneDatagramEvidence::OwnedQuic);
+    wait_for_packet_plane_datagrams_for_role(temp_dir, "b", PacketPlaneDatagramEvidence::OwnedQuic);
+    (read_log(&node_a_path), read_log(&node_b_path))
+}
+
+#[derive(Clone, Copy)]
+enum PacketPlaneDatagramEvidence {
+    OwnedUdp,
+    OwnedQuic,
+}
+
+impl PacketPlaneDatagramEvidence {
+    const fn context(self) -> &'static str {
+        match self {
+            Self::OwnedUdp => "owned UDP packet-plane datagrams",
+            Self::OwnedQuic => "owned QUIC packet-plane datagrams",
         }
-        if Instant::now() >= deadline {
-            return (initiator_log, responder_log);
-        }
-        thread::sleep(Duration::from_millis(250));
     }
+
+    const fn healthy_path_metric(self) -> &'static str {
+        match self {
+            Self::OwnedUdp => "healthy_direct_udp_datagram_paths",
+            Self::OwnedQuic => "healthy_direct_quic_datagram_paths",
+        }
+    }
+
+    const fn session_metric(self) -> &'static str {
+        match self {
+            Self::OwnedUdp => "packet_plane_sessions",
+            Self::OwnedQuic => "packet_plane_quic_sessions",
+        }
+    }
+}
+
+fn wait_for_packet_plane_datagrams_for_role(
+    temp_dir: &Path,
+    role: &str,
+    evidence: PacketPlaneDatagramEvidence,
+) {
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        scaled_wait_timeout(Duration::from_secs(8)),
+        evidence.context(),
+        |lines| packet_plane_datagram_state_used(lines, evidence),
+    );
 }
 
 fn wait_for_daemon_running(temp_dir: &Path, role: &str) {
@@ -1351,9 +1440,20 @@ fn state_metric_count(lines: &[String], name: &str) -> Option<usize> {
     })
 }
 
+fn packet_plane_datagram_state_used(
+    lines: &[String],
+    evidence: PacketPlaneDatagramEvidence,
+) -> bool {
+    state_metric_count(lines, evidence.session_metric()).is_some_and(|count| count >= 1)
+        && state_metric_count(lines, evidence.healthy_path_metric()).is_some_and(|count| count >= 1)
+        && state_metric_count(lines, "outbound_quic_datagram_packets")
+            .is_some_and(|count| count >= 1)
+        && state_metric_count(lines, "inbound_accepted_packets").is_some_and(|count| count >= 1)
+}
+
 fn packet_plane_datagrams_used(log: &str) -> bool {
     log.contains("event=packet_plane_session_established")
-        && log_metric_positive(log, "path_healthy_direct_quic_datagram_paths")
+        && log_metric_positive(log, "path_healthy_direct_udp_datagram_paths")
         && log_metric_positive(log, "outbound_quic_datagram_packets")
         && log_metric_positive(log, "inbound_accepted_packets")
 }
