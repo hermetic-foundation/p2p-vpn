@@ -361,6 +361,10 @@ hand-parsing every log. The artifact names are stable so two hosts can exchange
 directories and compare the selected path,
 packet-plane session state, drops, queue state, route ownership, MTU ceilings,
 capability negotiation, host topology, and ping result directly.
+The non-network Nix check
+`nix build .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).public-vpn-repro-evidence-structure`
+injects synthetic final daemon artifacts and validates the generated
+`vpn-repro-evidence.json` schema and field extraction with `jq`.
 
 Scan public IPFS-compatible bootstrap peers and write candidates:
 

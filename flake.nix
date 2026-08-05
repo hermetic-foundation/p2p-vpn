@@ -1344,6 +1344,10 @@ EOF
                 echo "      final_path_lines: \$path_lines"
                 echo "    }' > \"\$evidence_json\""
                 echo "}"
+                echo "if [[ \"\''${P2P_VPN_VPN_REPRO_WRITE_EVIDENCE_ONLY:-0}\" == 1 ]]; then"
+                echo "  write_evidence_summary"
+                echo "  exit 0"
+                echo "fi"
                 echo "on_exit() {"
                 echo "  status=\"\$?\""
                 echo "  set +e"
@@ -1535,6 +1539,9 @@ EOF
             write_shutdown
             write_commands
             write_summary
+            if [[ "''${P2P_VPN_VPN_REPRO_EVIDENCE_ONLY:-0}" == 1 ]]; then
+              P2P_VPN_VPN_REPRO_WRITE_EVIDENCE_ONLY=1 bash "$host_a_script"
+            fi
             echo "metadata: $metadata" >&2
             echo "host network: $host_network" >&2
             echo "replay commands: $commands" >&2
@@ -1969,6 +1976,7 @@ EOF
             grep -q 'evidence_json=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'vpn-repro-evidence.json' "$artifacts/vpn-repro-summary.txt"
             grep -q 'write_evidence_summary' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'P2P_VPN_VPN_REPRO_WRITE_EVIDENCE_ONLY' "$artifacts/vpn-repro-host-a.sh"
             grep -q 'p2p_vpn_path_promotions_to_direct' "$artifacts/vpn-repro-host-a.sh"
             grep -q 'jq . ' "$artifacts/vpn-repro-commands.sh"
             grep -q 'host_network_before=' "$artifacts/vpn-repro-summary.txt"
@@ -1976,6 +1984,106 @@ EOF
             grep -q 'host_network_after=' "$artifacts/vpn-repro-collect.sh"
             grep -q '^\[git rev-parse HEAD\]$' "$artifacts/vpn-repro-metadata.txt"
             grep -q '^\[git status --short\]$' "$artifacts/vpn-repro-metadata.txt"
+
+            touch $out
+          '';
+          public-vpn-repro-evidence-structure = pkgs.runCommand "p2p-vpn-public-vpn-repro-evidence-structure" {
+            nativeBuildInputs = [
+              package
+              publicVpnRepro
+              pkgs.jq
+            ];
+          } ''
+            config="$TMPDIR/public-vpn-repro-config.json"
+            artifacts="$TMPDIR/public-vpn-repro"
+            mkdir -p "$artifacts"
+
+            p2p-vpn init-config \
+              --output "$config" \
+              --network public-vpn-repro-evidence-structure \
+              --interface hs-repro0 \
+              --disable-mdns \
+              --disable-kademlia \
+              --force
+
+            cat > "$artifacts/daemon-health.txt" <<'EOF'
+daemon_health_ready true
+daemon_health_check daemon_running ok control socket responded
+daemon_health_check validated_peers ok 1 peers validated
+daemon_health_check supported_paths ok 1 peers have supported paths
+daemon_health_check packet_plane_session ok 1 sessions active
+EOF
+            cat > "$artifacts/vpn-repro-result.txt" <<'EOF'
+1970-01-01T00:00:00Z daemon_health exit=0
+1970-01-01T00:00:01Z ping exit=0
+EOF
+            cat > "$artifacts/daemon-status-prometheus-final.txt" <<'EOF'
+p2p_vpn_path_promotions_to_direct 1
+p2p_vpn_dcutr_successes 2
+p2p_vpn_direct_connections_established 3
+p2p_vpn_relayed_connections_established 4
+p2p_vpn_path_peers_with_supported_path 5
+p2p_vpn_packet_plane_sessions 6
+p2p_vpn_packet_plane_quic_sessions 7
+p2p_vpn_path_healthy_direct_quic_datagram_paths 8
+p2p_vpn_path_healthy_direct_quic_stream_paths 9
+p2p_vpn_path_healthy_direct_tcp_stream_paths 10
+p2p_vpn_path_healthy_relay_paths 11
+EOF
+            cat > "$artifacts/daemon-paths-final.json" <<'EOF'
+{
+  "lines": [
+    "peer node-b direct true protocol quic",
+    "peer node-b circuit relay true reservation active"
+  ]
+}
+EOF
+            cat > "$artifacts/daemon-state-final.json" <<'EOF'
+{
+  "lines": [
+    "peer node-b validated true",
+    "packet-plane session node-b active"
+  ]
+}
+EOF
+
+            P2P_VPN_VPN_REPRO_DIR="$artifacts" \
+              P2P_VPN_VPN_REPRO_CONFIG="$config" \
+              P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
+              P2P_VPN_VPN_REPRO_EVIDENCE_ONLY=1 \
+              p2p-vpn-public-vpn-repro
+
+            test -s "$artifacts/vpn-repro-evidence.json"
+            jq -e '
+              .schema_version == 1
+              and (.generated_utc | type == "string")
+              and .artifact_dir == $artifact_dir
+              and .config == $config
+              and .ping_target == "10.42.0.2"
+              and .health_ready == true
+              and .ping_succeeded == true
+              and .ping_exit == 0
+              and .metrics.path_promotions_to_direct == 1
+              and .metrics.dcutr_successes == 2
+              and .metrics.direct_connections_established == 3
+              and .metrics.relayed_connections_established == 4
+              and .metrics.peers_with_supported_path == 5
+              and .metrics.packet_plane_sessions == 6
+              and .metrics.packet_plane_quic_sessions == 7
+              and .metrics.healthy_direct_quic_datagram_paths == 8
+              and .metrics.healthy_direct_quic_stream_paths == 9
+              and .metrics.healthy_direct_tcp_stream_paths == 10
+              and .metrics.healthy_relay_paths == 11
+              and (.path_evidence.direct_lines | length) == 1
+              and (.path_evidence.relay_lines | length) == 1
+              and (.health_lines | length) == 5
+              and (.result_lines | length) == 2
+              and (.final_state_lines | length) == 2
+              and (.final_path_lines | length) == 2
+            ' \
+              --arg artifact_dir "$artifacts" \
+              --arg config "$config" \
+              "$artifacts/vpn-repro-evidence.json"
 
             touch $out
           '';
