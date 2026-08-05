@@ -41,11 +41,43 @@
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
+        namespacePreflight = pkgs.writeShellApplication {
+          name = "p2p-vpn-namespace-preflight";
+          runtimeInputs = [
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.iproute2
+            pkgs.util-linux
+          ];
+          text = ''
+            if [[ "$(uname -s)" != Linux ]]; then
+              echo "namespace preflight requires Linux" >&2
+              exit 2
+            fi
+
+            if [[ ! -c /dev/net/tun ]]; then
+              echo "missing /dev/net/tun; load the tun module and expose the device" >&2
+              exit 2
+            fi
+
+            unshare --user --map-root-user --mount --net -- bash -euo pipefail -c '
+              ip link add p2p-vpn-pre0 type veth peer name p2p-vpn-pre1
+              ip link set p2p-vpn-pre0 up
+              ip tuntap add dev p2p-vpn-pre-tun mode tun
+              ip link set p2p-vpn-pre-tun up
+              ip link delete p2p-vpn-pre0
+              ip link delete p2p-vpn-pre-tun
+            ' >/dev/null
+
+            echo "namespace preflight ok: user namespace, network namespace, veth, and TUN creation work"
+          '';
+        };
         tunE2e = pkgs.writeShellApplication {
           name = "p2p-vpn-tun-e2e";
           runtimeInputs = [
             cargo
             rust
+            namespacePreflight
             pkgs.iproute2
             pkgs.iputils
             pkgs.pkg-config
@@ -57,6 +89,10 @@
             if [[ ! -f Cargo.toml || ! -d tests ]]; then
               echo "p2p-vpn-tun-e2e must be run from the p2p-vpn repository root" >&2
               exit 2
+            fi
+
+            if [[ "''${P2P_VPN_TUN_E2E_SKIP_PREFLIGHT:-0}" != 1 ]]; then
+              p2p-vpn-namespace-preflight
             fi
 
             export RUST_BACKTRACE=1
@@ -392,6 +428,7 @@
             -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
         '';
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          namespace-preflight = namespacePreflight;
           namespace-repro = namespaceRepro;
           public-relay-repro = publicRelayRepro;
         };
@@ -405,6 +442,13 @@
             };
           };
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          namespace-preflight = {
+            type = "app";
+            program = "${namespacePreflight}/bin/p2p-vpn-namespace-preflight";
+            meta = {
+              description = "Check host support for privileged namespace E2E tests";
+            };
+          };
           namespace-repro = {
             type = "app";
             program = "${namespaceRepro}/bin/p2p-vpn-namespace-repro";

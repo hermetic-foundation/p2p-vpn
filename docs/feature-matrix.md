@@ -125,4 +125,6 @@ path.
 3. Privileged namespace tests passed on this host on 2026-08-04, including a
    focused owned-QUIC packet-plane path, but they still
    require a Linux kernel with user namespaces, network namespaces, veth, and
-   `/dev/net/tun`.
+   `/dev/net/tun`. `nix run .#namespace-preflight` now checks those host
+   prerequisites before running the slower ignored namespace suite, and
+   `nix run .#tun-e2e` runs the same preflight by default.

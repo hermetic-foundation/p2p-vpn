@@ -529,9 +529,15 @@ Run the Linux TUN end-to-end smoke test on hosts that allow unprivileged user
 and network namespaces:
 
 ```sh
+nix run .#namespace-preflight
 cargo test --test tun_namespace -- --ignored --nocapture
 nix run .#tun-e2e
 ```
+
+`namespace-preflight` checks the host can create a rootless user namespace,
+network namespace, veth pair, and TUN device before you wait for the ignored
+test binary to build. `tun-e2e` runs the same preflight by default; set
+`P2P_VPN_TUN_E2E_SKIP_PREFLIGHT=1` only when you need to bypass that host check.
 
 The namespace suite covers direct static peer addresses, mDNS peer discovery,
 Kademlia/bootstrap peer discovery, circuit-relay fallback, signed-invite

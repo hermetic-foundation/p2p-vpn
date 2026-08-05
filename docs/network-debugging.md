@@ -5,6 +5,12 @@ fails and you need artifacts that can be inspected after the command exits.
 
 ## Namespace E2E
 
+Check host namespace/TUN prerequisites before running the slower ignored suite:
+
+```sh
+nix run .#namespace-preflight
+```
+
 Run the whole Linux namespace suite:
 
 ```sh
@@ -29,6 +35,11 @@ Preserve generated configs and node logs after successful runs:
 ```sh
 P2P_VPN_TUN_E2E_KEEP_TEMP=1 nix run .#tun-e2e -- -- --ignored --nocapture
 ```
+
+`tun-e2e` runs `namespace-preflight` by default. Set
+`P2P_VPN_TUN_E2E_SKIP_PREFLIGHT=1` only when debugging the preflight itself or
+when a controlled environment has already proved user namespaces, network
+namespaces, veth setup, and `/dev/net/tun`.
 
 The preserved directory is printed on stderr. It contains `node-a.log`,
 `node-b.log`, and, for relay or bootstrap scenarios, `node-relay.log` or
