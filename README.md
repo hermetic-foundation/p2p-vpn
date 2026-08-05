@@ -1053,6 +1053,20 @@ memory. Set
 run to skip the public discovery phase and immediately replay relay-circuit and
 DCUtR validation against those relay candidates.
 
+Once `public-relay-repro` writes `public-relay-config.json`, generate a
+two-host VPN data-plane runbook with:
+
+```sh
+P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$P2P_VPN_REPRO_DIR" \
+P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
+nix run .#public-vpn-repro
+```
+
+The generated Host A/Host B scripts start `p2p-vpn up`, wait on daemon health
+requirements, capture daemon state/path/status artifacts, run a ping proof when
+`P2P_VPN_VPN_REPRO_PING_TARGET` is set, and write stable logs for comparing the
+same public relay-assisted overlay across two machines.
+
 The ignored tests run the same kind of probe from the test harness:
 
 ```sh

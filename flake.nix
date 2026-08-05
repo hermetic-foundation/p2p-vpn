@@ -497,6 +497,302 @@
             exit "$status"
           '';
         };
+        publicVpnRepro = pkgs.writeShellApplication {
+          name = "p2p-vpn-public-vpn-repro";
+          runtimeInputs = [
+            package
+            pkgs.coreutils
+            pkgs.iproute2
+            pkgs.iputils
+            pkgs.jq
+            pkgs.procps
+          ];
+          text = ''
+            umask 077
+
+            artifact_dir="''${P2P_VPN_VPN_REPRO_DIR:-}"
+            if [[ -z "$artifact_dir" ]]; then
+              artifact_dir="$(mktemp -d -t p2p-vpn-public-vpn-repro.XXXXXXXX)"
+            fi
+            mkdir -p "$artifact_dir"
+
+            config="''${P2P_VPN_VPN_REPRO_CONFIG:-}"
+            public_relay_dir="''${P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR:-}"
+            if [[ -z "$config" && -n "$public_relay_dir" && -s "$public_relay_dir/public-relay-config.json" ]]; then
+              config="$public_relay_dir/public-relay-config.json"
+            fi
+            if [[ -z "$config" ]]; then
+              config="$artifact_dir/public-relay-config.json"
+            fi
+            if [[ ! -s "$config" ]]; then
+              cat >&2 <<EOF
+missing relay-assisted VPN config: $config
+
+Set P2P_VPN_VPN_REPRO_CONFIG to an existing overlay config, or set
+P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR to a public-relay-repro artifact directory
+containing public-relay-config.json.
+EOF
+              exit 2
+            fi
+
+            metadata="$artifact_dir/vpn-repro-metadata.txt"
+            host_network="$artifact_dir/vpn-repro-host-network.txt"
+            commands="$artifact_dir/vpn-repro-commands.sh"
+            host_a_script="$artifact_dir/vpn-repro-host-a.sh"
+            host_b_script="$artifact_dir/vpn-repro-host-b.sh"
+            collect_script="$artifact_dir/vpn-repro-collect.sh"
+            shutdown_script="$artifact_dir/vpn-repro-shutdown.sh"
+            summary="$artifact_dir/vpn-repro-summary.txt"
+            ping_target="''${P2P_VPN_VPN_REPRO_PING_TARGET:-}"
+            ping_count="''${P2P_VPN_VPN_REPRO_PING_COUNT:-3}"
+            ping_timeout="''${P2P_VPN_VPN_REPRO_PING_TIMEOUT_SECONDS:-2}"
+            health_wait="''${P2P_VPN_VPN_REPRO_HEALTH_WAIT_SECONDS:-60}"
+            metrics_interval="''${P2P_VPN_VPN_REPRO_METRICS_INTERVAL_SECONDS:-5}"
+            control_socket="''${P2P_VPN_VPN_REPRO_CONTROL_SOCKET:-$artifact_dir/control.sock}"
+            pidfile="''${P2P_VPN_VPN_REPRO_PIDFILE:-$artifact_dir/p2p-vpn.pid}"
+            daemon_log="''${P2P_VPN_VPN_REPRO_DAEMON_LOG:-$artifact_dir/p2p-vpn-daemon.log}"
+            health_log="$artifact_dir/daemon-health.txt"
+            state_log="$artifact_dir/daemon-state.txt"
+            paths_log="$artifact_dir/daemon-paths.txt"
+            status_log="$artifact_dir/daemon-status.txt"
+            prometheus_log="$artifact_dir/daemon-status-prometheus.txt"
+            ping_log="$artifact_dir/ping.txt"
+            require_packet_session="''${P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION:-1}"
+            require_quic_session="''${P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION:-0}"
+
+            route_available() {
+              family="$1"
+              target="$2"
+              if ip "$family" route get "$target" >/dev/null 2>&1; then
+                echo yes
+              else
+                echo no
+              fi
+            }
+
+            write_host_network() {
+              os_pretty_name=unknown
+              if [[ -r /etc/os-release ]]; then
+                # shellcheck disable=SC1091
+                . /etc/os-release
+                os_pretty_name="''${PRETTY_NAME:-unknown}"
+              fi
+
+              {
+                echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "os_pretty_name=$os_pretty_name"
+                echo "kernel_name=$(uname -s)"
+                echo "kernel_release=$(uname -r)"
+                echo "machine=$(uname -m)"
+                echo "ipv4_route_to_1_1_1_1=$(route_available -4 1.1.1.1)"
+                echo "ipv6_route_to_2606_4700_4700_1111=$(route_available -6 2606:4700:4700::1111)"
+                echo
+                echo "[ip -br addr]"
+                ip -br addr || true
+                echo
+                echo "[ip route show]"
+                ip route show || true
+                echo
+                echo "[ip -6 route show]"
+                ip -6 route show || true
+              } > "$host_network"
+            }
+
+            write_metadata() {
+              peer_count="$(jq '(.peers // []) | length' "$config" 2>/dev/null || echo unknown)"
+              route_count="$(jq '(.network.routes // []) | length' "$config" 2>/dev/null || echo unknown)"
+              interface_name="$(jq -r '.interface.name // "unknown"' "$config" 2>/dev/null || echo unknown)"
+              interface_mtu="$(jq -r '.interface.mtu // "unknown"' "$config" 2>/dev/null || echo unknown)"
+              {
+                echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "working_directory=$(pwd)"
+                echo "system=$(uname -a)"
+                echo "p2p_vpn_binary=$(command -v p2p-vpn)"
+                echo "p2p_vpn_version=$(p2p-vpn --version 2>/dev/null || echo unknown)"
+                echo "artifact_dir=$artifact_dir"
+                echo "config=$config"
+                echo "public_relay_dir=$public_relay_dir"
+                echo "peer_count=$peer_count"
+                echo "route_count=$route_count"
+                echo "interface_name=$interface_name"
+                echo "interface_mtu=$interface_mtu"
+                echo "control_socket=$control_socket"
+                echo "pidfile=$pidfile"
+                echo "daemon_log=$daemon_log"
+                echo "ping_target=$ping_target"
+                echo "ping_count=$ping_count"
+                echo "ping_timeout_seconds=$ping_timeout"
+                echo "health_wait_seconds=$health_wait"
+                echo "metrics_interval_seconds=$metrics_interval"
+                echo "require_packet_session=$require_packet_session"
+                echo "require_quic_session=$require_quic_session"
+              } > "$metadata"
+            }
+
+            write_runner() {
+              script="$1"
+              role="$2"
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                echo "umask 077"
+                printf "artifact_dir=%q\n" "$artifact_dir"
+                printf "config=%q\n" "$config"
+                printf "control_socket=%q\n" "$control_socket"
+                printf "pidfile=%q\n" "$pidfile"
+                printf "daemon_log=%q\n" "$daemon_log"
+                printf "health_log=%q\n" "$health_log"
+                printf "state_log=%q\n" "$state_log"
+                printf "paths_log=%q\n" "$paths_log"
+                printf "status_log=%q\n" "$status_log"
+                printf "prometheus_log=%q\n" "$prometheus_log"
+                printf "ping_log=%q\n" "$ping_log"
+                printf "ping_target=%q\n" "$ping_target"
+                printf "ping_count=%q\n" "$ping_count"
+                printf "ping_timeout=%q\n" "$ping_timeout"
+                printf "health_wait=%q\n" "$health_wait"
+                printf "metrics_interval=%q\n" "$metrics_interval"
+                printf "require_packet_session=%q\n" "$require_packet_session"
+                printf "require_quic_session=%q\n" "$require_quic_session"
+                echo "mkdir -p \"\$artifact_dir\" \"$(dirname "$control_socket")\""
+                echo "if [[ -e \"\$pidfile\" ]] && kill -0 \"\$(cat \"\$pidfile\")\" 2>/dev/null; then"
+                echo "  echo \"p2p-vpn already running with pid \$(cat \"\$pidfile\")\" >&2"
+                echo "else"
+                echo "  rm -f \"\$control_socket\""
+                echo "  p2p-vpn up --config \"\$config\" --metrics-interval-seconds \"\$metrics_interval\" --control-socket \"\$control_socket\" > \"\$daemon_log\" 2>&1 &"
+                echo "  echo \"\$!\" > \"\$pidfile\""
+                echo "fi"
+                echo "health_args=(--socket \"\$control_socket\" --wait-seconds \"\$health_wait\" --require-validated-peers --require-supported-paths)"
+                echo "if [[ \"\$require_packet_session\" == 1 ]]; then"
+                echo "  health_args+=(--require-packet-plane-session)"
+                echo "fi"
+                echo "if [[ \"\$require_quic_session\" == 1 ]]; then"
+                echo "  health_args+=(--require-packet-plane-quic-session)"
+                echo "fi"
+                # shellcheck disable=SC2016
+                echo 'p2p-vpn daemon-health "''${health_args[@]}" | tee "$health_log"'
+                echo "p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
+                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" | tee \"\$paths_log\""
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
+                echo "if [[ -n \"\$ping_target\" ]]; then"
+                echo "  ping -c \"\$ping_count\" -W \"\$ping_timeout\" \"\$ping_target\" | tee \"\$ping_log\""
+                echo "else"
+                echo "  echo \"set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address to prove data forwarding\" | tee \"\$ping_log\""
+                echo "fi"
+                printf "echo %q\n" "$role complete; artifacts in $artifact_dir"
+              } > "$script"
+              chmod +x "$script"
+            }
+
+            write_collect() {
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                printf "control_socket=%q\n" "$control_socket"
+                printf "health_log=%q\n" "$health_log"
+                printf "state_log=%q\n" "$state_log"
+                printf "paths_log=%q\n" "$paths_log"
+                printf "status_log=%q\n" "$status_log"
+                printf "prometheus_log=%q\n" "$prometheus_log"
+                echo "p2p-vpn daemon-health --socket \"\$control_socket\" | tee \"\$health_log\""
+                echo "p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
+                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" | tee \"\$paths_log\""
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
+              } > "$collect_script"
+              chmod +x "$collect_script"
+            }
+
+            write_shutdown() {
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                printf "control_socket=%q\n" "$control_socket"
+                printf "pidfile=%q\n" "$pidfile"
+                echo "if [[ -S \"\$control_socket\" ]]; then"
+                echo "  p2p-vpn daemon-shutdown --socket \"\$control_socket\" || true"
+                echo "fi"
+                echo "if [[ -e \"\$pidfile\" ]] && kill -0 \"\$(cat \"\$pidfile\")\" 2>/dev/null; then"
+                echo "  kill \"\$(cat \"\$pidfile\")\" || true"
+                echo "fi"
+              } > "$shutdown_script"
+              chmod +x "$shutdown_script"
+            }
+
+            write_commands() {
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                printf "export P2P_VPN_VPN_REPRO_DIR=%q\n" "$artifact_dir"
+                printf "export P2P_VPN_VPN_REPRO_CONFIG=%q\n" "$config"
+                printf "export P2P_VPN_VPN_REPRO_CONTROL_SOCKET=%q\n" "$control_socket"
+                printf "export P2P_VPN_VPN_REPRO_PIDFILE=%q\n" "$pidfile"
+                printf "export P2P_VPN_VPN_REPRO_DAEMON_LOG=%q\n" "$daemon_log"
+                printf "export P2P_VPN_VPN_REPRO_PING_TARGET=%q\n" "$ping_target"
+                printf "export P2P_VPN_VPN_REPRO_PING_COUNT=%q\n" "$ping_count"
+                printf "export P2P_VPN_VPN_REPRO_PING_TIMEOUT_SECONDS=%q\n" "$ping_timeout"
+                printf "export P2P_VPN_VPN_REPRO_HEALTH_WAIT_SECONDS=%q\n" "$health_wait"
+                printf "export P2P_VPN_VPN_REPRO_METRICS_INTERVAL_SECONDS=%q\n" "$metrics_interval"
+                printf "export P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION=%q\n" "$require_packet_session"
+                printf "export P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION=%q\n" "$require_quic_session"
+                echo
+                printf "nix run .#public-vpn-repro\n"
+                printf "%q\n" "$host_a_script"
+                printf "%q\n" "$host_b_script"
+                printf "%q\n" "$collect_script"
+                printf "%q\n" "$shutdown_script"
+              } > "$commands"
+              chmod +x "$commands"
+            }
+
+            write_summary() {
+              {
+                echo "p2p-vpn public VPN repro summary"
+                echo "artifact_dir=$artifact_dir"
+                echo "config=$config"
+                echo "metadata=$metadata"
+                echo "host_network=$host_network"
+                echo "commands=$commands"
+                echo "host_a_script=$host_a_script"
+                echo "host_b_script=$host_b_script"
+                echo "collect_script=$collect_script"
+                echo "shutdown_script=$shutdown_script"
+                echo "daemon_log=$daemon_log"
+                echo "health_log=$health_log"
+                echo "state_log=$state_log"
+                echo "paths_log=$paths_log"
+                echo "status_log=$status_log"
+                echo "prometheus_log=$prometheus_log"
+                echo "ping_log=$ping_log"
+                echo
+                echo "workflow:"
+                echo "  1. Copy the overlay config to both hosts or point both hosts at equivalent configs."
+                echo "  2. Set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address on each host."
+                echo "  3. Run the generated host script with sudo on each host."
+                echo "  4. Compare daemon-health, daemon-paths, daemon-status, daemon logs, and ping output."
+              } > "$summary"
+            }
+
+            echo "writing public VPN repro artifacts to $artifact_dir" >&2
+            write_metadata
+            write_host_network
+            write_runner "$host_a_script" "Host A"
+            write_runner "$host_b_script" "Host B"
+            write_collect
+            write_shutdown
+            write_commands
+            write_summary
+            echo "metadata: $metadata" >&2
+            echo "host network: $host_network" >&2
+            echo "replay commands: $commands" >&2
+            echo "Host A VPN script: $host_a_script" >&2
+            echo "Host B VPN script: $host_b_script" >&2
+            echo "collect script: $collect_script" >&2
+            echo "shutdown script: $shutdown_script" >&2
+            echo "summary: $summary" >&2
+          '';
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -619,6 +915,7 @@
           namespace-preflight = namespacePreflight;
           namespace-repro = namespaceRepro;
           public-relay-repro = publicRelayRepro;
+          public-vpn-repro = publicVpnRepro;
         };
 
         apps = {
@@ -649,6 +946,13 @@
             program = "${publicRelayRepro}/bin/p2p-vpn-public-relay-repro";
             meta = {
               description = "Run public IPFS relay and DCUtR repro diagnostics";
+            };
+          };
+          public-vpn-repro = {
+            type = "app";
+            program = "${publicVpnRepro}/bin/p2p-vpn-public-vpn-repro";
+            meta = {
+              description = "Generate two-host public relay VPN data-plane repro scripts";
             };
           };
           tun-e2e = {

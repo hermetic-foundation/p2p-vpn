@@ -169,6 +169,35 @@ phase fails without deleting earlier evidence.
    `--require-packet-plane-session` or
    `--require-packet-plane-quic-session` to `daemon-health`.
 
+### Two-Host Public VPN Data-Plane Repro
+
+After `public-relay-repro` writes `public-relay-config.json`, generate the
+two-host daemon runbook:
+
+```sh
+export P2P_VPN_VPN_REPRO_DIR="/tmp/p2p-vpn-public-vpn-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)"
+export P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$P2P_VPN_REPRO_DIR"
+export P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2
+nix run .#public-vpn-repro
+```
+
+Use `P2P_VPN_VPN_REPRO_CONFIG=/path/to/p2p-vpn.json` instead of
+`P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR` when both hosts already have their final
+overlay configs. Set `P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION=0` when the run
+is intentionally proving stream fallback over a relayed circuit. Set
+`P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION=1` when the expected result is an owned
+QUIC packet-plane session.
+
+The app writes `vpn-repro-host-a.sh`, `vpn-repro-host-b.sh`,
+`vpn-repro-collect.sh`, `vpn-repro-shutdown.sh`, `vpn-repro-metadata.txt`,
+`vpn-repro-host-network.txt`, and `vpn-repro-summary.txt`. Run the generated
+Host A and Host B scripts with the privileges needed to create the TUN device.
+Each host script starts `p2p-vpn up`, waits on `daemon-health`, captures
+`daemon-state`, `daemon-paths`, line-oriented metrics, Prometheus metrics, and
+then pings `P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The artifact names
+are stable so two hosts can exchange directories and compare the selected path,
+packet-plane session state, drops, queue state, and ping result directly.
+
 Scan public IPFS-compatible bootstrap peers and write candidates:
 
 ```sh
