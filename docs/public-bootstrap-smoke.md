@@ -126,6 +126,10 @@ set. The preferred rootless operator command is:
 
 ```sh
 nix develop -c cargo run -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --timeout-seconds 45
+
+nix develop -c cargo run -- relay-check \
   --relay-candidate /dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A \
   --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
   --timeout-seconds 45
@@ -174,6 +178,10 @@ PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
 address to feed into `init-config`. Use `--write-config PATH` to write that
 default relay-assisted config automatically after the first candidate validates;
 the relay is treated as reachability infrastructure, not as a VPN peer.
+Use `--relay-candidates-file PATH` to consume the newline-separated candidate
+file from `relay-scan --write-candidates`; repeated `--relay-candidate` flags
+and file candidates can be combined in one run before host reachability
+filtering and validation limits are applied.
 
 The ignored test harness can run the same live checks:
 

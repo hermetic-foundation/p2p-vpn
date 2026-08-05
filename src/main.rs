@@ -247,8 +247,10 @@ enum Command {
         require_relayed_peer_circuits: bool,
     },
     RelayCheck {
-        #[arg(long = "relay-candidate", required = true)]
+        #[arg(long = "relay-candidate")]
         relay_candidates: Vec<String>,
+        #[arg(long = "relay-candidates-file")]
+        relay_candidates_file: Option<PathBuf>,
         #[arg(long)]
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
@@ -560,6 +562,7 @@ async fn main() -> Result<(), String> {
         }
         Command::RelayCheck {
             relay_candidates,
+            relay_candidates_file,
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
@@ -573,6 +576,7 @@ async fn main() -> Result<(), String> {
             };
             Box::pin(relay_check(RelayCheckArgs {
                 relay_candidates,
+                relay_candidates_file,
                 timeout_seconds,
                 mode,
                 max_validation_candidates,
@@ -806,6 +810,7 @@ struct RelayScanArgs {
 #[derive(Clone, Debug)]
 struct RelayCheckArgs {
     relay_candidates: Vec<String>,
+    relay_candidates_file: Option<PathBuf>,
     timeout_seconds: u64,
     mode: PublicRelayProbeMode,
     max_validation_candidates: Option<usize>,
@@ -2187,7 +2192,7 @@ async fn bootstrap_check(
 
 async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     validate_relay_check_args(&args)?;
-    let raw = args.relay_candidates.join("\n");
+    let raw = relay_check_candidate_input(&args)?;
     let addresses = relay_check_candidate_multiaddrs(&raw)?;
     let (addresses, skipped_candidates) =
         filter_relay_validation_candidates(addresses, local_relay_candidate_reachability());
@@ -2233,10 +2238,30 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
 }
 
 fn validate_relay_check_args(args: &RelayCheckArgs) -> Result<(), String> {
+    if args.relay_candidates.is_empty() && args.relay_candidates_file.is_none() {
+        return Err(
+            "relay-check needs at least one --relay-candidate or --relay-candidates-file"
+                .to_owned(),
+        );
+    }
     if args.max_validation_candidates == Some(0) {
         return Err("--max-validation-candidates must be greater than zero".to_owned());
     }
     Ok(())
+}
+
+fn relay_check_candidate_input(args: &RelayCheckArgs) -> Result<String, String> {
+    let mut sources = Vec::new();
+    if !args.relay_candidates.is_empty() {
+        sources.push(args.relay_candidates.join("\n"));
+    }
+    if let Some(path) = &args.relay_candidates_file {
+        let contents = fs::read_to_string(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        sources.push(contents);
+    }
+
+    Ok(sources.join("\n"))
 }
 
 fn relay_check_candidate_multiaddrs(raw: &str) -> Result<Vec<libp2p::Multiaddr>, String> {
@@ -4392,6 +4417,8 @@ mod tests {
             "relay-check",
             "--relay-candidate",
             "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "--relay-candidates-file",
+            "relay-candidates.txt",
             "--require-dcutr-success",
             "--timeout-seconds",
             "60",
@@ -4405,6 +4432,7 @@ mod tests {
 
         let Command::RelayCheck {
             relay_candidates,
+            relay_candidates_file,
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
@@ -4417,6 +4445,10 @@ mod tests {
 
         assert_eq!(relay_candidates.len(), 1);
         assert!(relay_candidates[0].contains("relay.example.net"));
+        assert_eq!(
+            relay_candidates_file,
+            Some(PathBuf::from("relay-candidates.txt"))
+        );
         assert!(require_dcutr_success);
         assert_eq!(timeout_seconds, 60);
         assert_eq!(max_validation_candidates, Some(3));
@@ -4526,6 +4558,42 @@ mod tests {
     }
 
     #[test]
+    fn relay_check_candidate_input_reads_scan_candidate_file() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let inline = format!("/dns4/relay-a.example.net/tcp/4001/p2p/{peer_a}");
+        let file_candidate = format!("/dns4/relay-b.example.net/udp/4001/quic-v1/p2p/{peer_b}");
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-relay-check-candidates-{}-{}.txt",
+            std::process::id(),
+            "input"
+        ));
+        let _ = fs::remove_file(&output);
+        fs::write(&output, format!("{file_candidate}\n")).expect("write candidates");
+        let args = RelayCheckArgs {
+            relay_candidates: vec![inline.clone()],
+            relay_candidates_file: Some(output.clone()),
+            timeout_seconds: 45,
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            max_validation_candidates: None,
+            write_config: None,
+            force: false,
+        };
+
+        let raw = relay_check_candidate_input(&args).expect("candidate input");
+        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+        fs::remove_file(&output).expect("remove candidates");
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![inline, file_candidate]
+        );
+    }
+
+    #[test]
     fn relay_check_candidates_filter_host_unreachable_ipv4() {
         let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
         let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
@@ -4567,6 +4635,7 @@ mod tests {
                 "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
                     .to_owned(),
             ],
+            relay_candidates_file: None,
             timeout_seconds: 45,
             mode: PublicRelayProbeMode::RelayedPeerCircuit,
             max_validation_candidates: Some(0),
@@ -4577,6 +4646,24 @@ mod tests {
         assert_eq!(
             validate_relay_check_args(&args).expect_err("validation should fail"),
             "--max-validation-candidates must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn relay_check_requires_candidate_or_candidate_file() {
+        let args = RelayCheckArgs {
+            relay_candidates: Vec::new(),
+            relay_candidates_file: None,
+            timeout_seconds: 45,
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            max_validation_candidates: None,
+            write_config: None,
+            force: false,
+        };
+
+        assert_eq!(
+            validate_relay_check_args(&args).expect_err("validation should fail"),
+            "relay-check needs at least one --relay-candidate or --relay-candidates-file"
         );
     }
 
