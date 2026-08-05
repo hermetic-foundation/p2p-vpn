@@ -155,6 +155,10 @@
             relay_report="$artifact_dir/public-relay-check-report.json"
             relay_config="$artifact_dir/public-relay-config.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
+            membership_config="$artifact_dir/public-membership-dht-config.json"
+            membership_root_record="$artifact_dir/public-membership-root.record.json"
+            membership_installed_config="$artifact_dir/public-membership-dht-config.with-record.json"
+            membership_dht_report="$artifact_dir/public-membership-dht-bootstrap-check.json"
             dcutr_listener_descriptor="$artifact_dir/public-dcutr-listener.json"
             dcutr_listen_report="$artifact_dir/public-relay-dcutr-listen-report.json"
             dcutr_dial_report="$artifact_dir/public-dcutr-dial-report.json"
@@ -174,6 +178,9 @@
             repro_relay_candidate="''${P2P_VPN_REPRO_RELAY_CANDIDATE:-}"
             dcutr_serve_seconds="''${P2P_VPN_REPRO_DCUTR_SERVE_SECONDS:-900}"
             dcutr_dial_timeout="''${P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS:-90}"
+            membership_dht="''${P2P_VPN_REPRO_MEMBERSHIP_DHT:-1}"
+            membership_network="''${P2P_VPN_REPRO_MEMBERSHIP_NETWORK:-public-membership-repro}"
+            membership_dht_timeout="''${P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS:-45}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -194,6 +201,9 @@
                 echo "P2P_VPN_REPRO_RELAY_CANDIDATE=$repro_relay_candidate"
                 echo "P2P_VPN_REPRO_DCUTR_SERVE_SECONDS=$dcutr_serve_seconds"
                 echo "P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS=$dcutr_dial_timeout"
+                echo "P2P_VPN_REPRO_MEMBERSHIP_DHT=$membership_dht"
+                echo "P2P_VPN_REPRO_MEMBERSHIP_NETWORK=$membership_network"
+                echo "P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=$membership_dht_timeout"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -270,6 +280,9 @@
                 fi
                 printf "export P2P_VPN_REPRO_DCUTR_SERVE_SECONDS=%q\n" "$dcutr_serve_seconds"
                 printf "export P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS=%q\n" "$dcutr_dial_timeout"
+                printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT=%q\n" "$membership_dht"
+                printf "export P2P_VPN_REPRO_MEMBERSHIP_NETWORK=%q\n" "$membership_network"
+                printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=%q\n" "$membership_dht_timeout"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -310,6 +323,36 @@
                 printf "  --write-report %q \\\\\n" "$dcutr_report"
                 echo "  --force"
                 echo
+                if [[ "$membership_dht" == 1 ]]; then
+                  echo "p2p-vpn init-config \\"
+                  printf "  --output %q \\\\\n" "$membership_config"
+                  printf "  --network %q \\\\\n" "$membership_network"
+                  echo "  --ipfs-kademlia \\"
+                  echo "  --ipfs-bootstrap-peers \\"
+                  echo "  --disable-mdns \\"
+                  echo "  --disable-dcutr \\"
+                  echo "  --force"
+                  echo
+                  echo "p2p-vpn membership-record-issue \\"
+                  printf "  --issuer-config %q \\\\\n" "$membership_config"
+                  echo "  --issuer-as-member \\"
+                  printf "  --output %q \\\\\n" "$membership_root_record"
+                  echo "  --force"
+                  echo
+                  echo "p2p-vpn membership-record-install \\"
+                  printf "  --config %q \\\\\n" "$membership_config"
+                  printf "  --record %q \\\\\n" "$membership_root_record"
+                  printf "  --output %q \\\\\n" "$membership_installed_config"
+                  echo "  --force"
+                  echo
+                  echo "p2p-vpn bootstrap-check \\"
+                  printf "  --config %q \\\\\n" "$membership_installed_config"
+                  printf "  --timeout-seconds %q \\\\\n" "$membership_dht_timeout"
+                  echo "  --require-membership-records \\"
+                  printf "  --write-report %q \\\\\n" "$membership_dht_report"
+                  echo "  --force"
+                  echo
+                fi
                 printf "%q\n" "$dcutr_listen_script"
                 printf "%q\n" "$dcutr_dial_script"
                 printf "jq . %q\n" "$summary_json"
@@ -447,6 +490,67 @@
               } >> "$summary"
             }
 
+            append_membership_dht_summary() {
+              if [[ "$membership_dht" != 1 ]]; then
+                echo "membership-dht report: disabled" >> "$summary"
+                return
+              fi
+
+              if [[ ! -s "$membership_dht_report" ]]; then
+                echo "membership-dht report: missing" >> "$summary"
+                return
+              fi
+
+              echo "membership-dht report: $membership_dht_report" >> "$summary"
+              jq -r '
+                "  succeeded=" + ((.succeeded // false) | tostring),
+                "  timeout_seconds=" + ((.timeout_seconds // "n/a") | tostring),
+                "  configured_bootstrap_peers=" + ((.bootstrap.configured_bootstrap_peers // "n/a") | tostring),
+                "  connected_bootstrap_peers=" + ((.bootstrap.connected_bootstrap_peers // "n/a") | tostring),
+                "  membership_records_configured=" + ((.bootstrap.membership_records.configured_records // "n/a") | tostring),
+                "  membership_records_publish_succeeded=" + ((.bootstrap.membership_records.publish_succeeded // false) | tostring),
+                "  membership_records_found=" + ((.bootstrap.membership_records.found_records // 0) | tostring),
+                "  membership_records_verified=" + ((.bootstrap.membership_records.verified_records // 0) | tostring),
+                "  membership_records_accepted=" + ((.bootstrap.membership_records.accepted_records // 0) | tostring),
+                "  membership_records_invalid=" + ((.bootstrap.membership_records.invalid_records // 0) | tostring),
+                "  membership_records_last_error=" + ((.bootstrap.membership_records.last_error // "none") | tostring)
+              ' "$membership_dht_report" >> "$summary"
+            }
+
+            # shellcheck disable=SC2329
+            setup_membership_dht_config() {
+              p2p-vpn init-config \
+                --output "$membership_config" \
+                --network "$membership_network" \
+                --ipfs-kademlia \
+                --ipfs-bootstrap-peers \
+                --disable-mdns \
+                --disable-dcutr \
+                --force
+
+              p2p-vpn membership-record-issue \
+                --issuer-config "$membership_config" \
+                --issuer-as-member \
+                --output "$membership_root_record" \
+                --force
+
+              p2p-vpn membership-record-install \
+                --config "$membership_config" \
+                --record "$membership_root_record" \
+                --output "$membership_installed_config" \
+                --force
+            }
+
+            # shellcheck disable=SC2329
+            check_membership_dht() {
+              p2p-vpn bootstrap-check \
+                --config "$membership_installed_config" \
+                --timeout-seconds "$membership_dht_timeout" \
+                --require-membership-records \
+                --write-report "$membership_dht_report" \
+                --force
+            }
+
             write_report_summary_json() {
               label="$1"
               report="$2"
@@ -540,11 +644,33 @@
               scan_summary="$artifact_dir/.repro-scan-summary.json"
               relay_summary="$artifact_dir/.repro-relay-check-summary.json"
               dcutr_summary="$artifact_dir/.repro-dcutr-summary.json"
+              membership_dht_summary="$artifact_dir/.repro-membership-dht-summary.json"
               phase_summary="$artifact_dir/.repro-phase-results.json"
 
               write_report_summary_json "scan" "$scan_report" "$scan_summary"
               write_report_summary_json "relay-check" "$relay_report" "$relay_summary"
               write_report_summary_json "dcutr" "$dcutr_report" "$dcutr_summary"
+              if [[ -s "$membership_dht_report" ]]; then
+                jq \
+                  --arg path "$membership_dht_report" '
+                    {
+                      label: "membership-dht",
+                      path: $path,
+                      present: true,
+                      succeeded: (.succeeded // false),
+                      timeout_seconds: (.timeout_seconds // null),
+                      configured_bootstrap_peers: (.bootstrap.configured_bootstrap_peers // null),
+                      connected_bootstrap_peers: (.bootstrap.connected_bootstrap_peers // null),
+                      membership_records: (.bootstrap.membership_records // null),
+                      kademlia: (.bootstrap.kademlia // null),
+                      autonat_status: (.bootstrap.autonat_status // null)
+                    }
+                  ' "$membership_dht_report" > "$membership_dht_summary"
+              else
+                jq -n \
+                  --arg path "$membership_dht_report" \
+                  '{label: "membership-dht", path: $path, present: false}' > "$membership_dht_summary"
+              fi
               if [[ "''${#phase_results[@]}" -eq 0 ]]; then
                 jq -n '[]' > "$phase_summary"
               else
@@ -558,6 +684,10 @@
                 --arg commands "$commands" \
                 --arg candidate_file "$candidates" \
                 --arg relay_assisted_config "$relay_config" \
+                --arg membership_config "$membership_config" \
+                --arg membership_installed_config "$membership_installed_config" \
+                --arg membership_root_record "$membership_root_record" \
+                --arg membership_dht_report "$membership_dht_report" \
                 --arg dcutr_listen_script "$dcutr_listen_script" \
                 --arg dcutr_dial_script "$dcutr_dial_script" \
                 --arg listener_descriptor "$dcutr_listener_descriptor" \
@@ -571,6 +701,7 @@
                 --slurpfile scan "$scan_summary" \
                 --slurpfile relay "$relay_summary" \
                 --slurpfile dcutr "$dcutr_summary" \
+                --slurpfile membership_dht "$membership_dht_summary" \
                 '{
                   schema_version: 1,
                   artifact_dir: $artifact_dir,
@@ -579,7 +710,11 @@
                     host_network: $host_network,
                     commands: $commands,
                     candidate_file: $candidate_file,
-                    relay_assisted_config: $relay_assisted_config
+                    relay_assisted_config: $relay_assisted_config,
+                    membership_config: $membership_config,
+                    membership_installed_config: $membership_installed_config,
+                    membership_root_record: $membership_root_record,
+                    membership_dht_report: $membership_dht_report
                   },
                   host: {
                     ipv4_route_to_1_1_1_1: $ipv4_route_to_1_1_1_1,
@@ -589,7 +724,8 @@
                   reports: {
                     scan: $scan[0],
                     relay_check: $relay[0],
-                    dcutr: $dcutr[0]
+                    dcutr: $dcutr[0],
+                    membership_dht: $membership_dht[0]
                   },
                   two_host_dcutr_handoff: {
                     selected_relay_candidate: (if $selected_relay_candidate == "" then null else $selected_relay_candidate end),
@@ -602,7 +738,7 @@
                   }
                 }' > "$summary_json"
 
-              rm -f "$scan_summary" "$relay_summary" "$dcutr_summary" "$phase_summary"
+              rm -f "$scan_summary" "$relay_summary" "$dcutr_summary" "$membership_dht_summary" "$phase_summary"
             }
 
             write_summary() {
@@ -617,6 +753,7 @@
                 echo "dcutr_dial_script=$dcutr_dial_script"
                 echo "candidate_file=$candidates"
                 echo "relay_assisted_config=$relay_config"
+                echo "membership_dht_report=$membership_dht_report"
                 echo
                 echo "phase results:"
                 if [[ "''${#phase_results[@]}" -eq 0 ]]; then
@@ -629,6 +766,7 @@
               append_report_summary "scan" "$scan_report"
               append_report_summary "relay-check" "$relay_report"
               append_report_summary "dcutr" "$dcutr_report"
+              append_membership_dht_summary
               append_handoff_summary
               write_machine_summary
             }
@@ -655,6 +793,19 @@
             write_metadata
             write_host_network
             write_commands
+            if [[ "$membership_dht" == 1 ]]; then
+              run_phase "creating signed membership-record DHT repro config" \
+                setup_membership_dht_config
+              if [[ -s "$membership_installed_config" ]]; then
+                run_phase "checking public Kademlia membership-record propagation" \
+                  check_membership_dht
+              else
+                echo "membership DHT config was not created; skipping membership-record bootstrap-check" >&2
+                status=1
+              fi
+            else
+              phase_results+=("membership-record DHT repro disabled status=0 elapsed_seconds=0")
+            fi
             if [[ -n "$repro_candidates_file" ]]; then
               if [[ ! -s "$repro_candidates_file" ]]; then
                 echo "P2P_VPN_REPRO_CANDIDATES_FILE must point to a nonempty relay candidate file" >&2
@@ -703,6 +854,7 @@
             echo "relay-check report: $relay_report" >&2
             echo "relay-assisted config: $relay_config" >&2
             echo "DCUtR report: $dcutr_report" >&2
+            echo "membership DHT report: $membership_dht_report" >&2
             write_public_dcutr_handoff_scripts
             write_summary
             echo "metadata: $metadata" >&2
@@ -1568,6 +1720,10 @@ EOF
             grep -q 'write_machine_summary' "$script"
             grep -q 'relay_diagnostics' "$script"
             grep -q 'accepted_relay_reservations=' "$script"
+            grep -q 'P2P_VPN_REPRO_MEMBERSHIP_DHT' "$script"
+            grep -q 'public-membership-dht-bootstrap-check.json' "$script"
+            grep -q -- '--require-membership-records' "$script"
+            grep -q 'membership_dht' "$script"
 
             touch $out
           '';

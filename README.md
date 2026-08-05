@@ -1164,15 +1164,23 @@ nix run .#public-relay-repro
 ```
 
 In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
-`repro-metadata.txt`, `repro-host-network.txt`, `repro-commands.sh`,
+`public-membership-dht-bootstrap-check.json`, `repro-metadata.txt`,
+`repro-host-network.txt`, `repro-commands.sh`,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
-`repro-summary.txt`. It also writes `repro-summary.json`, a machine-readable
-index of artifact paths, phase results, host IPv4/IPv6 route availability,
-per-report candidate/failure/elapsed summaries, relay reservation and relayed
-circuit diagnostic counts, observed relayed/direct address counts, and the
-two-host DCUtR handoff files. The metadata records source
-revision and dirty status when the app is run from a Git checkout. The two host
-scripts use the first
+`repro-summary.txt`. By default, the membership DHT phase creates a disposable
+IPFS-compatible config, issues and installs a self-signed trust-root membership
+record, and runs `bootstrap-check --require-membership-records` so public
+Kademlia membership-record propagation is captured beside relay/DCUtR evidence.
+Set `P2P_VPN_REPRO_MEMBERSHIP_DHT=0` to skip that phase for relay-only
+debugging, `P2P_VPN_REPRO_MEMBERSHIP_NETWORK` to choose the disposable network
+name, and `P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS` to tune the bootstrap
+check budget. It also writes `repro-summary.json`, a machine-readable index of
+artifact paths, phase results, host IPv4/IPv6 route availability, per-report
+candidate/failure/elapsed summaries, relay reservation and relayed circuit
+diagnostic counts, membership-record DHT publish/lookup/verification counts,
+observed relayed/direct address counts, and the two-host DCUtR handoff files.
+The metadata records source revision and dirty status when the app is run from
+a Git checkout. The two host scripts use the first
 successful relay-check candidate, or `P2P_VPN_REPRO_RELAY_CANDIDATE` when
 supplied, to turn the manual Host A/Host B DCUtR proof into a repeatable
 handoff. Tune those scripts with

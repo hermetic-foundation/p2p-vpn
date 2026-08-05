@@ -119,12 +119,17 @@ path.
    per-phase elapsed seconds, per-report candidate elapsed ranges, and observed
    relayed/direct connection address counts so public topology failures can be
    triaged without hand-parsing each JSON artifact.
-   The repro writes a runnable relay-assisted config when the relay-circuit phase
-   succeeds and a machine-readable `repro-summary.json` index for comparing
-   artifact paths, phase status, route availability, report-level failure stages,
-   elapsed ranges, relay reservation and relayed-circuit diagnostic counts,
-   observed path addresses, and two-host handoff files across machines, and the
-   packaged `public-vpn-repro` command turns that config into
+   The repro also generates a disposable signed membership-record config and
+   captures `bootstrap-check --require-membership-records` as
+   `public-membership-dht-bootstrap-check.json` by default, so public Kademlia
+   membership-record publish/lookup/verification evidence is preserved with the
+   same run. The repro writes a runnable relay-assisted config when the
+   relay-circuit phase succeeds and a machine-readable `repro-summary.json`
+   index for comparing artifact paths, phase status, route availability,
+   report-level failure stages, elapsed ranges, relay reservation and
+   relayed-circuit diagnostic counts, membership-record DHT counts, observed
+   path addresses, and two-host handoff files across machines, and the packaged
+   `public-vpn-repro` command turns that config into
    two-host daemon start, health-gate, status/path/metrics collection, ping, and
    shutdown scripts. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that
    relay-assisted config preserves the supplied overlay.

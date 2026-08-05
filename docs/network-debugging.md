@@ -206,6 +206,9 @@ phase fails without deleting earlier evidence.
    Add `P2P_VPN_REPRO_BASE_CONFIG=/path/to/p2p-vpn.json` when the generated
    relay-assisted config must preserve an existing overlay identity,
    membership, routes, peers, and packet-plane settings.
+   The repro also runs a membership-record DHT bootstrap check by default and
+   writes `public-membership-dht-bootstrap-check.json`; set
+   `P2P_VPN_REPRO_MEMBERSHIP_DHT=0` when replaying relay-only failures.
 
 2. Start triage from the preserved summary:
 
@@ -226,7 +229,11 @@ phase fails without deleting earlier evidence.
    machines. When DCUtR does not succeed, compare each relay-check/DCUtR
    candidate's `bootstrap.peer_results`, `bootstrap.relay_results`, and
    `bootstrap.relayed_peer_results` arrays before changing relay candidates or
-   timeout budgets.
+   timeout budgets. Compare
+   `reports.membership_dht.membership_records.publish_succeeded`,
+   `found_records`, `verified_records`, `accepted_records`, `invalid_records`,
+   and `last_error` to separate public Kademlia reachability problems from
+   signature or trust-root validation problems.
 
 3. Replay the same candidate set without public discovery when iterating:
 
