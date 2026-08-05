@@ -53,9 +53,10 @@ membership-key rotation is in progress.
 Configs can also carry optional `network.member_records` entries. These are
 signed membership records that bind an issuer peer ID and public key to a
 member peer ID and public key, membership epoch, sequence, roles, optional
-route grants, and optional expiry. Runtime config validation verifies the
-signatures, peer ID/public-key bindings, route-grant syntax, expiry, and
-network name before startup. Valid local records are an additional
+route grants, optional expiry, and optional revocation tombstones. Runtime
+config validation verifies the signatures, peer ID/public-key bindings,
+route-grant syntax, expiry, and network name before startup. Valid local records
+are an additional
 authorization source: `overlay_member` admits the peer for overlay control and
 packet traffic, while `route_authority` grants the listed route prefixes when
 the same latest record also carries `overlay_member`. `peers[]` and configured
@@ -66,10 +67,10 @@ for the current network and be signed by an issuer already trusted from local
 `network.member_records` before they are merged; newer `(membership_epoch,
 sequence)` records replace older records for the same member, stale records are
 ignored, retained records are capped, expired records are pruned by runtime
-maintenance, and accepted records update live overlay membership, packet
-authorization, and route-grant ownership in memory. Explicit revocation records
-and broader record gossip beyond connected overlay peers are still follow-up
-work.
+maintenance, newer revocation records remove record-derived live overlay
+membership, packet authorization, and route-grant ownership in memory, and newer
+grant records can re-admit the member. Broader record gossip beyond connected
+overlay peers is still follow-up work.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
@@ -458,6 +459,17 @@ cargo run -- membership-record-verify \
   --network lab
 ```
 
+To revoke a record-derived member, issue a newer tombstone for the same subject:
+
+```sh
+cargo run -- membership-record-issue \
+  --issuer-config node-a.json \
+  --member-identity node-b.identity.json \
+  --output node-b.revoked.json \
+  --sequence 2 \
+  --revoked
+```
+
 `identity-public` writes only the peer ID and public key for a node identity.
 `membership-record-issue` signs that subject with the issuer identity from
 `--issuer-config`, defaults the record network to the issuer config's network,
@@ -465,7 +477,7 @@ and automatically adds the `route_authority` role when `--route-grant` is used.
 Place valid records in `network.member_records` on nodes that should trust them.
 Those configured records also define the trusted issuer peer IDs for dynamic
 record exchange over the authenticated control plane. The record is not a
-secret, but explicit revocation is still follow-up work.
+secret.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to

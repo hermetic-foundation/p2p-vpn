@@ -400,6 +400,8 @@ enum Command {
         #[arg(long = "route-grant")]
         route_grants: Vec<LocalRouteArg>,
         #[arg(long)]
+        revoked: bool,
+        #[arg(long)]
         expires_at_unix_seconds: Option<u64>,
         #[arg(long)]
         force: bool,
@@ -829,6 +831,7 @@ async fn main() -> Result<(), String> {
             sequence,
             roles,
             route_grants,
+            revoked,
             expires_at_unix_seconds,
             force,
         } => membership_record_issue(MembershipRecordIssueArgs {
@@ -842,6 +845,7 @@ async fn main() -> Result<(), String> {
             sequence,
             roles,
             route_grants,
+            revoked,
             expires_at_unix_seconds,
             force,
         }),
@@ -1038,6 +1042,7 @@ struct MembershipRecordIssueArgs {
     sequence: u64,
     roles: Vec<MembershipRecordRoleArg>,
     route_grants: Vec<LocalRouteArg>,
+    revoked: bool,
     expires_at_unix_seconds: Option<u64>,
     force: bool,
 }
@@ -1267,7 +1272,19 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
         .into_iter()
         .map(|route| route.route)
         .collect::<Vec<_>>();
-    let roles = membership_record_roles(args.roles, !route_grants.is_empty());
+    let roles = if args.revoked {
+        if !args.roles.is_empty()
+            || !route_grants.is_empty()
+            || args.expires_at_unix_seconds.is_some()
+        {
+            return Err(
+                "revoked membership records cannot carry roles, route grants, or expiry".to_owned(),
+            );
+        }
+        Vec::new()
+    } else {
+        membership_record_roles(args.roles, !route_grants.is_empty())
+    };
     let network_name = args
         .network
         .unwrap_or_else(|| issuer_config.network.name.clone());
@@ -1278,6 +1295,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
             member,
             membership_epoch: args.membership_epoch,
             sequence: args.sequence,
+            revoked: args.revoked,
             roles,
             route_grants,
             expires_at_unix_seconds: args.expires_at_unix_seconds,
@@ -1292,6 +1310,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
         println!("issuer peer: {}", record.payload.issuer_peer);
         println!("membership epoch: {}", record.payload.membership_epoch);
         println!("sequence: {}", record.payload.sequence);
+        println!("revoked: {}", record.payload.revoked);
     }
     Ok(())
 }
@@ -1371,6 +1390,7 @@ fn membership_record_verify(input: &Path, network: Option<&str>) -> Result<(), S
     println!("issuer peer: {}", record.payload.issuer_peer);
     println!("membership epoch: {}", record.payload.membership_epoch);
     println!("sequence: {}", record.payload.sequence);
+    println!("revoked: {}", record.payload.revoked);
     Ok(())
 }
 
@@ -7850,6 +7870,7 @@ mod tests {
             "overlay-member",
             "--route-grant",
             "10.77.0.0/24,55",
+            "--revoked",
             "--force",
         ])
         .expect("issue cli");
@@ -7862,6 +7883,7 @@ mod tests {
             sequence,
             roles,
             route_grants,
+            revoked,
             force,
             ..
         } = issue.command
@@ -7878,6 +7900,7 @@ mod tests {
         assert_eq!(roles, vec![MembershipRecordRoleArg::OverlayMember]);
         assert_eq!(route_grants[0].route.prefix, "10.77.0.0/24");
         assert_eq!(route_grants[0].route.metric, 55);
+        assert!(revoked);
         assert!(force);
 
         let verify = Cli::try_parse_from([
@@ -7945,6 +7968,7 @@ mod tests {
                     metric: 55,
                 },
             }],
+            revoked: false,
             expires_at_unix_seconds: None,
             force: false,
         })
@@ -7956,6 +7980,7 @@ mod tests {
                 .expect("record json");
         assert_eq!(record.payload.membership_epoch, 7);
         assert_eq!(record.payload.sequence, 42);
+        assert!(!record.payload.revoked);
         assert!(
             record
                 .payload
@@ -7974,6 +7999,85 @@ mod tests {
         fs::write(&record_path, format!("{rendered}\n")).expect("write tampered record");
 
         assert!(membership_record_verify(&record_path, Some("lab")).is_err());
+
+        let _ = fs::remove_file(&issuer_config);
+        let _ = fs::remove_file(&member_public);
+        let _ = fs::remove_file(&record_path);
+    }
+
+    #[test]
+    fn membership_record_issue_revocation_round_trip() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer_config = temp_config_path("p2p-vpn-revocation-issuer");
+        let member_public = temp_config_path("p2p-vpn-revocation-member-public");
+        let record_path = temp_config_path("p2p-vpn-revocation-record");
+        let issuer_config_value = InitConfigTemplate {
+            identity: issuer,
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        write_config_output(&issuer_config_value, &issuer_config, false).expect("issuer config");
+        identity_public(IdentityPublicArgs {
+            config: None,
+            private_key: Some(member.private_key),
+            output: member_public.clone(),
+            force: false,
+        })
+        .expect("member public identity");
+
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            output: record_path.clone(),
+            network: None,
+            membership_epoch: 7,
+            sequence: 43,
+            roles: Vec::new(),
+            route_grants: Vec::new(),
+            revoked: true,
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue revocation");
+        membership_record_verify(&record_path, Some("lab")).expect("verify revocation");
+
+        let record: SignedMembershipRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("record file"))
+                .expect("record json");
+        assert!(record.payload.revoked);
+        assert!(record.payload.roles.is_empty());
+        assert!(record.payload.route_grants.is_empty());
+
+        let rejected = membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            output: record_path.clone(),
+            network: None,
+            membership_epoch: 7,
+            sequence: 44,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: Vec::new(),
+            revoked: true,
+            expires_at_unix_seconds: None,
+            force: true,
+        });
+        assert!(rejected.is_err());
 
         let _ = fs::remove_file(&issuer_config);
         let _ = fs::remove_file(&member_public);

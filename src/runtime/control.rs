@@ -597,6 +597,7 @@ mod tests {
                     issuer_public_key: String::new(),
                     membership_epoch: 1,
                     sequence: 1,
+                    revoked: false,
                     roles: vec![crate::membership::MembershipRole::OverlayMember],
                     route_grants: Vec::new(),
                     issued_at_unix_seconds: 1,

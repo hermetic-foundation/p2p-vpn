@@ -10505,6 +10505,134 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn capability_response_learns_revocation_and_removes_live_member_authorization() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let trusted = peer_id();
+        let trusted_subject = NodeIdentity::generate_ed25519().expect("trusted subject");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let trust_root_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: trusted_subject,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("trust root");
+        let member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("record");
+        let revocation = crate::membership::issue_membership_record_for_subject_at(
+            &issuer,
+            crate::membership::MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: crate::membership::MembershipRecordSubject::from_identity(&member)
+                    .expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("revocation");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: vec![trust_root_record],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: trusted.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let trusted_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_member_records(vec![member_record, revocation]);
+
+        let response = capability_response_for_peer_with_membership_records(
+            &mut forwarder,
+            &mut membership,
+            trusted,
+            &trusted_capabilities,
+            &local_capabilities,
+            &[],
+        );
+        let ControlResponse::CapabilitiesAccepted(accepted) = response else {
+            panic!("expected accepted capabilities");
+        };
+
+        assert_eq!(accepted.member_records.len(), 2);
+        assert!(
+            accepted
+                .member_records
+                .iter()
+                .any(
+                    |record| record.payload.member_peer == member_peer.to_string()
+                        && record.payload.revoked
+                )
+        );
+        assert!(!membership.allows(member_peer));
+        assert!(!forwarder.is_configured_transport_peer(member_peer));
+        assert!(
+            !forwarder
+                .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.77.0.0/24", 1)])
+        );
+    }
+
+    #[test]
     fn capability_response_rejects_untrusted_member_record_issuers() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let trusted = peer_id();

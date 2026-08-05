@@ -1644,6 +1644,57 @@ mod tests {
     }
 
     #[test]
+    fn compile_routes_omits_revoked_member_record_routes() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_str(&member.peer_id).expect("member peer");
+        let grant = signed_member_record_with_roles(
+            &issuer,
+            member.clone(),
+            "lab",
+            vec![
+                crate::membership::MembershipRole::OverlayMember,
+                crate::membership::MembershipRole::RouteAuthority,
+            ],
+            vec![RouteConfig {
+                prefix: "10.77.0.0/24".to_owned(),
+                metric: 44,
+            }],
+            1,
+        );
+        let revocation = crate::membership::issue_membership_record_for_subject_at(
+            &issuer,
+            crate::membership::MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: crate::membership::MembershipRecordSubject::from_identity(&member)
+                    .expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("revocation");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.network.member_records = vec![grant, revocation];
+
+        let routes = config.compile_routes().expect("routes");
+
+        assert!(!routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(builtin_ipv4(member_peer)), 32).expect("cidr")
+        ));
+        assert!(!routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 77, 0, 0)), 24).expect("cidr")
+        ));
+    }
+
+    #[test]
     fn compile_routes_rejects_conflicting_member_record_grants() {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
