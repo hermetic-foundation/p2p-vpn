@@ -125,8 +125,13 @@ path.
    candidate that accepted a reservation, carried a relayed circuit, and wrote
    a relay-assisted config; the paired DCUtR-required report tested eight
    host-reachable candidates, with four reservation timeouts and four
-   direct-dial timeouts after relayed-circuit setup. The long-running daemon
-   also reports currently admitted relay-only infrastructure peers in
+   direct-dial timeouts after relayed-circuit setup. A packaged repro run on
+   2026-08-05 again proved public IPFS bootstrap discovery, one public
+   relay-circuit success, relay-assisted config generation, and four
+   DCUtR-stage relayed circuits; it also recorded one non-relayed private
+   `/ip4/192.168.0.180/...` direct connection, but no libp2p DCUtR success
+   event. The long-running daemon also reports currently admitted relay-only
+   infrastructure peers in
    `daemon-state`, including the candidate address and live swarm connection
    flag, so public DHT/IPFS reachability attempts are inspectable without
    scraping logs. The project still needs recorded public-relay-assisted DCUtR

@@ -389,3 +389,41 @@ relay-assisted config generation in one repeatable flow. The DCUtR report
 proved four candidates reached the DCUtR proof stage after relayed-circuit
 setup, but each direct dial timed out from this host; public-relay-assisted
 DCUtR success remains the outstanding live evidence gap.
+
+Packaged public relay repro evidence on 2026-08-05:
+
+```text
+$ P2P_VPN_REPRO_DIR=/tmp/p2p-vpn-public-relay-repro-2026-08-05T0145 \
+  P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=30 \
+  P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=45 \
+  P2P_VPN_RELAY_MAX_CANDIDATES=8 \
+  P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=8 \
+  nix run .#public-relay-repro
+public relay scan: ok
+public relay scan peers: 5
+public relay scan total_peers: 16
+public relay scan routing_peers: 11 dialed 0
+public relay scan connected: 5
+public relay scan relay_capable: 10
+public relay candidates: 8
+public relay probe mode: relayed_peer_circuit
+public relay candidates: 4 succeeded 1
+public relay candidate failure stages: candidate_setup 0 relay_reservation 3 relayed_peer_circuit 0 dcutr_success 0
+wrote /tmp/p2p-vpn-public-relay-repro-2026-08-05T0145/public-relay-check-report.json
+wrote /tmp/p2p-vpn-public-relay-repro-2026-08-05T0145/public-relay-config.json
+public relay probe mode: dcutr_success
+public relay candidates: 8 succeeded 0
+public relay candidate failure stages: candidate_setup 0 relay_reservation 4 relayed_peer_circuit 0 dcutr_success 4
+wrote /tmp/p2p-vpn-public-relay-repro-2026-08-05T0145/public-relay-dcutr-report.json
+```
+
+The generated `repro-summary.txt` reported a 1-second scan, 136-second
+relay-circuit validation, and 360-second DCUtR validation. The relay-circuit
+phase proved one public QUIC relay candidate
+(`/ip4/45.32.205.244/udp/4001/quic-v1/...`) and wrote a runnable
+relay-assisted config. The DCUtR-required phase reached four relayed circuits
+and recorded one non-relayed direct connection address, but that address was a
+private `/ip4/192.168.0.180/...` address and no libp2p DCUtR success event was
+observed. Public-relay-assisted DCUtR therefore remains unproven from this host;
+the new summary path-evidence fields make the distinction visible without
+hand-parsing the JSON reports.
