@@ -708,7 +708,9 @@ nix run .#tun-e2e -- tun_namespace_ping_crosses_owned_quic_packet_plane -- --ign
 Set `P2P_VPN_TUN_E2E_KEEP_TEMP=1` to preserve generated configs and per-node
 logs after successful namespace runs. Preserved namespace directories include
 `repro-commands.sh` for focused replay and `repro-metadata.txt` with host,
-source revision, binary, and timeout context. Set `P2P_VPN_TUN_E2E_WAIT_SCALE` to multiply
+source revision, binary, and timeout context. The replay script preserves any
+active namespace wait scale or orchestrator timeout overrides from the original
+run. Set `P2P_VPN_TUN_E2E_WAIT_SCALE` to multiply
 namespace harness waits on slow hosts, or
 `P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS` to override the outer `unshare`
 timeout. See

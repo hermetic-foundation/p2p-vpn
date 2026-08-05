@@ -169,6 +169,50 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
     assert!(metadata.contains(DIRECT_TEST_NAME));
     assert!(metadata.contains("temp_dir:"));
     assert!(metadata.contains("current_exe:"));
+    let replay_commands = namespace_repro_commands(
+        "'focused-test'",
+        "'/tmp/p2p-vpn-artifacts'",
+        "'/tmp/p2p-vpn-test-bin'",
+        &namespace_replay_env_exports_from([
+            (ORCHESTRATOR_TIMEOUT_ENV, Some("240".to_owned())),
+            (WAIT_TIMEOUT_SCALE_ENV, Some("2.5".to_owned())),
+        ]),
+    );
+    assert!(replay_commands.contains(
+        "export P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS='240'\n\
+         export P2P_VPN_TUN_E2E_WAIT_SCALE='2.5'\n\
+         nix run .#tun-e2e"
+    ));
+    assert!(replay_commands.contains(
+        "P2P_VPN_TUN_E2E_WAIT_SCALE='2.5'\n\
+         nix run .#tun-e2e"
+    ));
+    let exports_index = replay_commands
+        .find("export P2P_VPN_TUN_E2E_WAIT_SCALE='2.5'")
+        .expect("wait scale export");
+    let nix_replay_index = replay_commands
+        .find("nix run .#tun-e2e")
+        .expect("nix replay command");
+    let direct_replay_index = replay_commands
+        .find(&format!("{CHILD_ENV}=orchestrator unshare"))
+        .expect("direct unshare replay command");
+    assert!(exports_index < nix_replay_index);
+    assert!(exports_index < direct_replay_index);
+    assert_eq!(
+        namespace_replay_env_exports_from([
+            (ORCHESTRATOR_TIMEOUT_ENV, Some("240".to_owned())),
+            (WAIT_TIMEOUT_SCALE_ENV, Some("2.5".to_owned())),
+        ]),
+        "export P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS='240'\n\
+         export P2P_VPN_TUN_E2E_WAIT_SCALE='2.5'\n"
+    );
+    assert_eq!(
+        namespace_replay_env_exports_from([
+            (ORCHESTRATOR_TIMEOUT_ENV, None),
+            (WAIT_TIMEOUT_SCALE_ENV, Some("two's".to_owned())),
+        ]),
+        "export P2P_VPN_TUN_E2E_WAIT_SCALE='two'\\''s'\n"
+    );
 
     let _ = fs::remove_dir_all(temp_dir);
 }
@@ -812,19 +856,13 @@ fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Resu
         |path| path.display().to_string(),
     );
     let current_exe_quoted = shell_quote(&current_exe);
+    let replay_env_exports = namespace_replay_env_exports();
 
-    let commands = format!(
-        "#!/usr/bin/env sh\n\
-         set -eu\n\
-         # Re-run the focused namespace E2E test and preserve artifacts.\n\
-         export {KEEP_TEMP_ENV}=1\n\
-         nix run .#tun-e2e -- {test_name_quoted} -- --ignored --exact --nocapture\n\
-         \n\
-         # Re-run the same already-built test binary inside unshare.\n\
-         {CHILD_ENV}=orchestrator unshare --user --map-root-user --mount --net {current_exe_quoted} --ignored {test_name_quoted} --exact --nocapture\n\
-         \n\
-         # Inspect this artifact directory.\n\
-         ls -la {temp_dir_quoted}\n",
+    let commands = namespace_repro_commands(
+        &test_name_quoted,
+        &temp_dir_quoted,
+        &current_exe_quoted,
+        &replay_env_exports,
     );
     fs::write(&commands_path, commands)?;
     make_executable(&commands_path)?;
@@ -862,6 +900,47 @@ fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Resu
     fs::write(metadata_path, metadata)?;
 
     Ok(())
+}
+
+fn namespace_repro_commands(
+    test_name_quoted: &str,
+    temp_dir_quoted: &str,
+    current_exe_quoted: &str,
+    replay_env_exports: &str,
+) -> String {
+    format!(
+        "#!/usr/bin/env sh\n\
+         set -eu\n\
+         # Re-run the focused namespace E2E test and preserve artifacts.\n\
+         export {KEEP_TEMP_ENV}=1\n\
+         {replay_env_exports}\
+         nix run .#tun-e2e -- {test_name_quoted} -- --ignored --exact --nocapture\n\
+         \n\
+         # Re-run the same already-built test binary inside unshare.\n\
+         {CHILD_ENV}=orchestrator unshare --user --map-root-user --mount --net {current_exe_quoted} --ignored {test_name_quoted} --exact --nocapture\n\
+         \n\
+         # Inspect this artifact directory.\n\
+         ls -la {temp_dir_quoted}\n",
+    )
+}
+
+fn namespace_replay_env_exports() -> String {
+    namespace_replay_env_exports_from(
+        [ORCHESTRATOR_TIMEOUT_ENV, WAIT_TIMEOUT_SCALE_ENV]
+            .into_iter()
+            .map(|name| (name, env::var(name).ok())),
+    )
+}
+
+fn namespace_replay_env_exports_from<'a>(
+    values: impl IntoIterator<Item = (&'a str, Option<String>)>,
+) -> String {
+    values
+        .into_iter()
+        .filter_map(|(name, value)| {
+            value.map(|value| format!("export {name}={}\n", shell_quote(&value)))
+        })
+        .collect()
 }
 
 fn command_metadata(program: &str, args: &[&str]) -> String {

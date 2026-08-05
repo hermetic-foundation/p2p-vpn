@@ -113,10 +113,12 @@ The preserved directory is printed on stderr. It contains `node-a.log`,
 `node-b.log`, and, for relay or bootstrap scenarios, `node-relay.log` or
 `node-bootstrap.log`. Each namespace orchestrator also writes
 `repro-commands.sh` and `repro-metadata.txt` at startup. The command script
-replays the focused test with `P2P_VPN_TUN_E2E_KEEP_TEMP=1` and includes a
-direct `unshare` invocation for the already-built test binary. The metadata
-records the test name, artifact directory, current test binary, timeout knobs,
-Git revision, dirty status, kernel, `unshare`, and `ip` versions.
+replays the focused test with `P2P_VPN_TUN_E2E_KEEP_TEMP=1`, preserves any
+active namespace wait scale or orchestrator timeout overrides from the original
+run, and includes a direct `unshare` invocation for the already-built test
+binary. The metadata records the test name, artifact directory, current test
+binary, timeout knobs, Git revision, dirty status, kernel, `unshare`, and `ip`
+versions.
 
 To triage an existing preserved run, start by listing the directory and reading
 the metadata:
