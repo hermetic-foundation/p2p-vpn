@@ -164,6 +164,7 @@
             dcutr_listen_script="$artifact_dir/repro-dcutr-listen-host-a.sh"
             dcutr_dial_script="$artifact_dir/repro-dcutr-dial-host-b.sh"
             summary="$artifact_dir/repro-summary.txt"
+            summary_json="$artifact_dir/repro-summary.json"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
@@ -311,6 +312,7 @@
                 echo
                 printf "%q\n" "$dcutr_listen_script"
                 printf "%q\n" "$dcutr_dial_script"
+                printf "jq . %q\n" "$summary_json"
               } > "$commands"
               chmod +x "$commands"
             }
@@ -406,9 +408,24 @@
                     else "count=\(length),first=\(.[0])"
                     end
                 ),
+                "  accepted_relay_reservations=" + (
+                  [(.candidates // [])[].bootstrap.relay_results[]? | select(.accepted == true)]
+                  | length
+                  | tostring
+                ),
+                "  relayed_peer_outbound_circuits=" + (
+                  [(.candidates // [])[].bootstrap.relayed_peer_results[]? | select(.outbound_circuit == true)]
+                  | length
+                  | tostring
+                ),
                 "  first_error=" + (
                   (
-                    [(.candidates // [])[].error, (.peer_results // [])[].last_error]
+                    [
+                      (.candidates // [])[].error,
+                      (.peer_results // [])[].last_error,
+                      (.candidates // [])[].bootstrap.peer_results[]?.last_error,
+                      (.candidates // [])[].bootstrap.relayed_peer_results[]?.last_error
+                    ]
                     | map(select(. != null and . != ""))
                     | first
                   ) // "none"
@@ -430,6 +447,164 @@
               } >> "$summary"
             }
 
+            write_report_summary_json() {
+              label="$1"
+              report="$2"
+              output="$3"
+              if [[ ! -s "$report" ]]; then
+                jq -n \
+                  --arg label "$label" \
+                  --arg path "$report" \
+                  '{label: $label, path: $path, present: false}' > "$output"
+                return
+              fi
+
+              jq \
+                --arg label "$label" \
+                --arg path "$report" '
+                  def candidate_values($field):
+                    [(.candidates // [])[].bootstrap[$field][]?];
+                  def elapsed_values:
+                    [(.candidates // [])[].elapsed_millis | select(. != null)];
+                  {
+                    label: $label,
+                    path: $path,
+                    present: true,
+                    succeeded: (.succeeded // false),
+                    candidates: ((.candidates // []) | length),
+                    skipped_candidates: ((.skipped_candidates // []) | length),
+                    host_reachable_candidates: ((.host_reachable_candidates // []) | length),
+                    discovered_routing_peers: (.discovered_routing_peers // null),
+                    dialed_routing_peers: (.dialed_routing_peers // null),
+                    closest_peer_results: (.closest_peer_results // null),
+                    failure_stages: (
+                      reduce [(.candidates // [])[].failure_stage | select(. != null)][] as $stage
+                        ({}; .[$stage] = ((.[$stage] // 0) + 1))
+                    ),
+                    elapsed_millis: (
+                      elapsed_values as $values
+                      | {
+                          count: ($values | length),
+                          min: (if ($values | length) == 0 then null else ($values | min) end),
+                          max: (if ($values | length) == 0 then null else ($values | max) end)
+                        }
+                    ),
+                    relayed_connection_addresses: (
+                      candidate_values("relayed_connection_addresses") as $values
+                      | {
+                          count: ($values | length),
+                          first: (if ($values | length) == 0 then null else $values[0] end)
+                        }
+                    ),
+                    direct_connection_addresses: (
+                      candidate_values("direct_connection_addresses") as $values
+                      | {
+                          count: ($values | length),
+                          first: (if ($values | length) == 0 then null else $values[0] end)
+                        }
+                    ),
+                    relay_diagnostics: {
+                      accepted_reservations: (
+                        [(.candidates // [])[].bootstrap.relay_results[]? | select(.accepted == true)]
+                        | length
+                      ),
+                      relayed_listen_addresses: (
+                        [(.candidates // [])[].bootstrap.relay_results[]? | select(.relayed_listen_address == true)]
+                        | length
+                      ),
+                      outbound_circuits: (
+                        [(.candidates // [])[].bootstrap.relayed_peer_results[]? | select(.outbound_circuit == true)]
+                        | length
+                      ),
+                      connected_relayed_peers: (
+                        [(.candidates // [])[].bootstrap.relayed_peer_results[]? | select(.connected == true)]
+                        | length
+                      )
+                    },
+                    first_error: (
+                      [
+                        (.candidates // [])[].error,
+                        (.peer_results // [])[].last_error,
+                        (.candidates // [])[].bootstrap.peer_results[]?.last_error,
+                        (.candidates // [])[].bootstrap.relayed_peer_results[]?.last_error
+                      ]
+                      | map(select(. != null and . != ""))
+                      | first // null
+                    )
+                  }
+                ' "$report" > "$output"
+            }
+
+            write_machine_summary() {
+              selected_relay_candidate="$(selected_public_dcutr_candidate)"
+              scan_summary="$artifact_dir/.repro-scan-summary.json"
+              relay_summary="$artifact_dir/.repro-relay-check-summary.json"
+              dcutr_summary="$artifact_dir/.repro-dcutr-summary.json"
+              phase_summary="$artifact_dir/.repro-phase-results.json"
+
+              write_report_summary_json "scan" "$scan_report" "$scan_summary"
+              write_report_summary_json "relay-check" "$relay_report" "$relay_summary"
+              write_report_summary_json "dcutr" "$dcutr_report" "$dcutr_summary"
+              if [[ "''${#phase_results[@]}" -eq 0 ]]; then
+                jq -n '[]' > "$phase_summary"
+              else
+                printf "%s\n" "''${phase_results[@]}" | jq -R . | jq -s . > "$phase_summary"
+              fi
+
+              jq -n \
+                --arg artifact_dir "$artifact_dir" \
+                --arg metadata "$metadata" \
+                --arg host_network "$host_network" \
+                --arg commands "$commands" \
+                --arg candidate_file "$candidates" \
+                --arg relay_assisted_config "$relay_config" \
+                --arg dcutr_listen_script "$dcutr_listen_script" \
+                --arg dcutr_dial_script "$dcutr_dial_script" \
+                --arg listener_descriptor "$dcutr_listener_descriptor" \
+                --arg dcutr_dial_report "$dcutr_dial_report" \
+                --arg selected_relay_candidate "$selected_relay_candidate" \
+                --arg dcutr_serve_seconds "$dcutr_serve_seconds" \
+                --arg dcutr_dial_timeout_seconds "$dcutr_dial_timeout" \
+                --arg ipv4_route_to_1_1_1_1 "$(route_available -4 1.1.1.1)" \
+                --arg ipv6_route_to_2606_4700_4700_1111 "$(route_available -6 2606:4700:4700::1111)" \
+                --slurpfile phases "$phase_summary" \
+                --slurpfile scan "$scan_summary" \
+                --slurpfile relay "$relay_summary" \
+                --slurpfile dcutr "$dcutr_summary" \
+                '{
+                  schema_version: 1,
+                  artifact_dir: $artifact_dir,
+                  artifacts: {
+                    metadata: $metadata,
+                    host_network: $host_network,
+                    commands: $commands,
+                    candidate_file: $candidate_file,
+                    relay_assisted_config: $relay_assisted_config
+                  },
+                  host: {
+                    ipv4_route_to_1_1_1_1: $ipv4_route_to_1_1_1_1,
+                    ipv6_route_to_2606_4700_4700_1111: $ipv6_route_to_2606_4700_4700_1111
+                  },
+                  phase_results: $phases[0],
+                  reports: {
+                    scan: $scan[0],
+                    relay_check: $relay[0],
+                    dcutr: $dcutr[0]
+                  },
+                  two_host_dcutr_handoff: {
+                    selected_relay_candidate: (if $selected_relay_candidate == "" then null else $selected_relay_candidate end),
+                    listen_script: $dcutr_listen_script,
+                    dial_script: $dcutr_dial_script,
+                    listener_descriptor: $listener_descriptor,
+                    dial_report: $dcutr_dial_report,
+                    serve_seconds: ($dcutr_serve_seconds | tonumber),
+                    dial_timeout_seconds: ($dcutr_dial_timeout_seconds | tonumber)
+                  }
+                }' > "$summary_json"
+
+              rm -f "$scan_summary" "$relay_summary" "$dcutr_summary" "$phase_summary"
+            }
+
             write_summary() {
               {
                 echo "p2p-vpn public relay repro summary"
@@ -437,6 +612,7 @@
                 echo "metadata=$metadata"
                 echo "host_network=$host_network"
                 echo "commands=$commands"
+                echo "summary_json=$summary_json"
                 echo "dcutr_listen_script=$dcutr_listen_script"
                 echo "dcutr_dial_script=$dcutr_dial_script"
                 echo "candidate_file=$candidates"
@@ -454,6 +630,7 @@
               append_report_summary "relay-check" "$relay_report"
               append_report_summary "dcutr" "$dcutr_report"
               append_handoff_summary
+              write_machine_summary
             }
 
             run_phase() {
@@ -1380,6 +1557,11 @@ EOF
             grep -Fq 'git status --short 2>&1 || true' "$script"
             grep -q 'repro-dcutr-listen-host-a.sh' "$script"
             grep -q 'repro-dcutr-dial-host-b.sh' "$script"
+            grep -q 'repro-summary.json' "$script"
+            grep -Fq 'printf "jq . %q\n" "$summary_json"' "$script"
+            grep -q 'write_machine_summary' "$script"
+            grep -q 'relay_diagnostics' "$script"
+            grep -q 'accepted_relay_reservations=' "$script"
 
             touch $out
           '';

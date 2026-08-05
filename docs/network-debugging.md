@@ -211,6 +211,7 @@ phase fails without deleting earlier evidence.
 
    ```sh
    sed -n '1,220p' "$P2P_VPN_REPRO_DIR/repro-summary.txt"
+   jq . "$P2P_VPN_REPRO_DIR/repro-summary.json"
    sed -n '1,160p' "$P2P_VPN_REPRO_DIR/repro-host-network.txt"
    ```
 
@@ -218,7 +219,14 @@ phase fails without deleting earlier evidence.
    `relayed_connection_addresses`, and `first_error` between hosts. A useful
    relay fallback proof has a successful relay-check phase and relayed
    connection addresses. A public DCUtR proof also needs a successful DCUtR
-   phase with a direct non-relayed connection address.
+   phase with a direct non-relayed connection address. `repro-summary.json`
+   provides a stable top-level index for comparing phase status, candidate
+   counts, failure stages, elapsed ranges, route availability, relay
+   reservation and relayed-circuit diagnostic counts, and handoff scripts across
+   machines. When DCUtR does not succeed, compare each relay-check/DCUtR
+   candidate's `bootstrap.peer_results`, `bootstrap.relay_results`, and
+   `bootstrap.relayed_peer_results` arrays before changing relay candidates or
+   timeout budgets.
 
 3. Replay the same candidate set without public discovery when iterating:
 

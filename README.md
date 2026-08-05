@@ -1137,8 +1137,9 @@ hole-punch failure. Pass `--write-report PATH` to save a pretty-printed JSON
 artifact with schema version, probe mode, timeout, validation cap,
 host-reachable candidates, skipped candidates with reasons, per-candidate
 success, failure stage, elapsed milliseconds, error, bootstrap/DCUtR summary,
-and observed relayed/direct connection addresses for each candidate that reached
-the bootstrap-check phase.
+observed relayed/direct connection addresses, per-bootstrap-peer dial results,
+per-relay reservation results, and per-relayed-peer circuit results for each
+candidate that reached the bootstrap-check phase.
 Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
@@ -1164,8 +1165,13 @@ nix run .#public-relay-repro
 In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
 `repro-metadata.txt`, `repro-host-network.txt`, `repro-commands.sh`,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
-`repro-summary.txt`. The metadata records source revision and dirty status when
-the app is run from a Git checkout. The two host scripts use the first
+`repro-summary.txt`. It also writes `repro-summary.json`, a machine-readable
+index of artifact paths, phase results, host IPv4/IPv6 route availability,
+per-report candidate/failure/elapsed summaries, relay reservation and relayed
+circuit diagnostic counts, observed relayed/direct address counts, and the
+two-host DCUtR handoff files. The metadata records source
+revision and dirty status when the app is run from a Git checkout. The two host
+scripts use the first
 successful relay-check candidate, or `P2P_VPN_REPRO_RELAY_CANDIDATE` when
 supplied, to turn the manual Host A/Host B DCUtR proof into a repeatable
 handoff. Tune those scripts with

@@ -3661,6 +3661,9 @@ struct BootstrapCheckReportJson<'a> {
     autonat_status: &'static str,
     kademlia: BootstrapKademliaJson,
     membership_records: BootstrapMembershipRecordDhtJson<'a>,
+    peer_results: Vec<BootstrapPeerCheckJson<'a>>,
+    relay_results: Vec<RelayReservationCheckJson<'a>>,
+    relayed_peer_results: Vec<RelayedPeerCircuitCheckJson<'a>>,
 }
 
 #[derive(Serialize)]
@@ -3705,12 +3708,39 @@ struct BootstrapMembershipRecordDhtJson<'a> {
     last_error: Option<&'a str>,
 }
 
+#[derive(Serialize)]
+struct BootstrapPeerCheckJson<'a> {
+    peer_id: String,
+    address: &'a str,
+    connected: bool,
+    dial_failures: usize,
+    last_error: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RelayReservationCheckJson<'a> {
+    relay_peer_id: String,
+    address: &'a str,
+    accepted: bool,
+    relayed_listen_address: bool,
+}
+
+#[derive(Serialize)]
+struct RelayedPeerCircuitCheckJson<'a> {
+    peer_id: String,
+    address: &'a str,
+    connected: bool,
+    outbound_circuit: bool,
+    dial_failures: usize,
+    last_error: Option<&'a str>,
+}
+
 fn bootstrap_check_report_file_json<'a>(
     args: &BootstrapCheckArgs,
     report: &'a p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
 ) -> BootstrapCheckReportFileJson<'a> {
     BootstrapCheckReportFileJson {
-        schema_version: 1,
+        schema_version: 2,
         mode: "bootstrap_check",
         succeeded: report.succeeded(),
         timeout_seconds: args.timeout_seconds.max(1),
@@ -3726,7 +3756,7 @@ fn public_relay_probe_report_json<'a>(
     report: &'a p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
 ) -> PublicRelayProbeReportJson<'a> {
     PublicRelayProbeReportJson {
-        schema_version: 3,
+        schema_version: 4,
         mode: public_relay_probe_mode_name(args.mode),
         succeeded: report.succeeded(),
         timeout_seconds: args.timeout_seconds.max(1),
@@ -3810,6 +3840,39 @@ fn bootstrap_check_report_json(
             invalid_records: report.membership_records.invalid_records,
             last_error: report.membership_records.last_error.as_deref(),
         },
+        peer_results: report
+            .peer_results
+            .iter()
+            .map(|peer| BootstrapPeerCheckJson {
+                peer_id: peer.peer_id.to_string(),
+                address: &peer.address,
+                connected: peer.connected,
+                dial_failures: peer.dial_failures,
+                last_error: peer.last_error.as_deref(),
+            })
+            .collect(),
+        relay_results: report
+            .relay_results
+            .iter()
+            .map(|relay| RelayReservationCheckJson {
+                relay_peer_id: relay.relay_peer_id.to_string(),
+                address: &relay.address,
+                accepted: relay.accepted,
+                relayed_listen_address: relay.relayed_listen_address,
+            })
+            .collect(),
+        relayed_peer_results: report
+            .relayed_peer_results
+            .iter()
+            .map(|peer| RelayedPeerCircuitCheckJson {
+                peer_id: peer.peer_id.to_string(),
+                address: &peer.address,
+                connected: peer.connected,
+                outbound_circuit: peer.outbound_circuit,
+                dial_failures: peer.dial_failures,
+                last_error: peer.last_error.as_deref(),
+            })
+            .collect(),
     }
 }
 
@@ -6993,7 +7056,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
 
-        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["schema_version"], 2);
         assert_eq!(value["mode"], "bootstrap_check");
         assert_eq!(value["succeeded"], false);
         assert_eq!(value["timeout_seconds"], 1);
@@ -7473,7 +7536,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
 
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert_eq!(value["mode"], "dcutr_success");
         assert_eq!(value["succeeded"], false);
         assert_eq!(value["timeout_seconds"], 45);
@@ -7562,6 +7625,21 @@ mod tests {
 
     fn failed_public_dcutr_bootstrap_report()
     -> p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
+        let bootstrap_peer = NodeIdentity::generate_ed25519()
+            .expect("bootstrap peer")
+            .peer_id
+            .parse()
+            .expect("bootstrap peer id");
+        let relay_peer = NodeIdentity::generate_ed25519()
+            .expect("relay peer")
+            .peer_id
+            .parse()
+            .expect("relay peer id");
+        let relayed_peer = NodeIdentity::generate_ed25519()
+            .expect("relayed peer")
+            .peer_id
+            .parse()
+            .expect("relayed peer id");
         p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::Any,
             requirements: BootstrapCheckRequirements {
@@ -7603,9 +7681,30 @@ mod tests {
             },
             membership_records:
                 p2p_vpn::runtime::bootstrap_check::BootstrapMembershipRecordDhtCheck::default(),
-            peer_results: Vec::new(),
-            relay_results: Vec::new(),
-            relayed_peer_results: Vec::new(),
+            peer_results: vec![p2p_vpn::runtime::bootstrap_check::BootstrapPeerCheck {
+                peer_id: bootstrap_peer,
+                address: "/dns4/bootstrap.example.net/tcp/4001".to_owned(),
+                connected: false,
+                dial_failures: 1,
+                last_error: Some("TransportError".to_owned()),
+            }],
+            relay_results: vec![p2p_vpn::runtime::bootstrap_check::RelayReservationCheck {
+                relay_peer_id: relay_peer,
+                address: "/ip4/203.0.113.10/tcp/4001".to_owned(),
+                accepted: true,
+                relayed_listen_address: true,
+            }],
+            relayed_peer_results: vec![
+                p2p_vpn::runtime::bootstrap_check::RelayedPeerCircuitCheck {
+                    peer_id: relayed_peer,
+                    address: "/ip4/203.0.113.10/tcp/4001/p2p/relay/p2p-circuit/p2p/listener"
+                        .to_owned(),
+                    connected: true,
+                    outbound_circuit: true,
+                    dial_failures: 0,
+                    last_error: None,
+                },
+            ],
         }
     }
 
@@ -7677,6 +7776,39 @@ mod tests {
         assert_eq!(bootstrap["membership_records"]["invalid_records"], 0);
         assert_eq!(
             bootstrap["membership_records"]["last_error"],
+            serde_json::Value::Null
+        );
+        assert!(bootstrap["peer_results"][0]["peer_id"].is_string());
+        assert_eq!(
+            bootstrap["peer_results"][0]["address"],
+            "/dns4/bootstrap.example.net/tcp/4001"
+        );
+        assert_eq!(bootstrap["peer_results"][0]["connected"], false);
+        assert_eq!(bootstrap["peer_results"][0]["dial_failures"], 1);
+        assert_eq!(bootstrap["peer_results"][0]["last_error"], "TransportError");
+        assert!(bootstrap["relay_results"][0]["relay_peer_id"].is_string());
+        assert_eq!(
+            bootstrap["relay_results"][0]["address"],
+            "/ip4/203.0.113.10/tcp/4001"
+        );
+        assert_eq!(bootstrap["relay_results"][0]["accepted"], true);
+        assert_eq!(
+            bootstrap["relay_results"][0]["relayed_listen_address"],
+            true
+        );
+        assert!(bootstrap["relayed_peer_results"][0]["peer_id"].is_string());
+        assert_eq!(
+            bootstrap["relayed_peer_results"][0]["address"],
+            "/ip4/203.0.113.10/tcp/4001/p2p/relay/p2p-circuit/p2p/listener"
+        );
+        assert_eq!(bootstrap["relayed_peer_results"][0]["connected"], true);
+        assert_eq!(
+            bootstrap["relayed_peer_results"][0]["outbound_circuit"],
+            true
+        );
+        assert_eq!(bootstrap["relayed_peer_results"][0]["dial_failures"], 0);
+        assert_eq!(
+            bootstrap["relayed_peer_results"][0]["last_error"],
             serde_json::Value::Null
         );
     }

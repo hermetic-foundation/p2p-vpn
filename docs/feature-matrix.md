@@ -90,7 +90,9 @@ path.
    a stable public relay candidate `failure_stage` plus the most recent libp2p
    DCUtR failure as `dcutr last_error`, so future public relay runs can
    distinguish setup, reservation, relayed-circuit, DCUtR prerequisite, and
-   direct handshake failures. `relay-scan --write-report` persists scan
+   direct handshake failures. The JSON report also preserves per-bootstrap-peer,
+   per-relay-reservation, and per-relayed-peer-circuit rows for cross-host
+   comparison. `relay-scan --write-report` persists scan
    discovery as JSON with timeout knobs, public routing counts, peer identify
    results, relay-hop capability, dial failures, and candidate addresses before
    validation starts, so failed public scans still leave a reproducible
@@ -118,7 +120,11 @@ path.
    relayed/direct connection address counts so public topology failures can be
    triaged without hand-parsing each JSON artifact.
    The repro writes a runnable relay-assisted config when the relay-circuit phase
-   succeeds, and the packaged `public-vpn-repro` command turns that config into
+   succeeds and a machine-readable `repro-summary.json` index for comparing
+   artifact paths, phase status, route availability, report-level failure stages,
+   elapsed ranges, relay reservation and relayed-circuit diagnostic counts,
+   observed path addresses, and two-host handoff files across machines, and the
+   packaged `public-vpn-repro` command turns that config into
    two-host daemon start, health-gate, status/path/metrics collection, ping, and
    shutdown scripts. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that
    relay-assisted config preserves the supplied overlay.
