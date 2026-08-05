@@ -129,11 +129,17 @@ fn daemon_snapshot_capture_records_missing_control_sockets() {
 
     let state =
         fs::read_to_string(temp_dir.join("daemon-state-a.txt")).expect("daemon state snapshot");
+    let state_json = fs::read_to_string(temp_dir.join("daemon-state-a.json"))
+        .expect("daemon state JSON snapshot");
     let status =
         fs::read_to_string(temp_dir.join("daemon-status-a.txt")).expect("daemon status snapshot");
     let summary = daemon_snapshot_summary(&temp_dir, &["a"]);
+    let parsed_state: serde_json::Value =
+        serde_json::from_str(&state_json).expect("parse missing socket JSON snapshot");
 
     assert!(state.contains("socket missing:"));
+    assert_eq!(parsed_state["view"], "state");
+    assert_eq!(parsed_state["error"], state.trim_end());
     assert!(status.contains("socket missing:"));
     assert!(summary.contains("daemon-state-a.txt"));
     assert!(summary.contains("socket missing:"));
@@ -1131,6 +1137,38 @@ fn capture_daemon_snapshots_for_role(temp_dir: &Path, role: &str) {
         };
         let _ = fs::write(artifact_path, output);
     }
+    for (command, artifact, view) in DAEMON_VIEW_SNAPSHOT_COMMANDS {
+        let artifact_path = temp_dir.join(format!("{artifact}-{role}.json"));
+        let output = if socket.exists() {
+            let socket_arg = socket.to_string_lossy().into_owned();
+            command_output(
+                current_test_binary(),
+                &[
+                    *command,
+                    "--socket",
+                    &socket_arg,
+                    "--timeout-seconds",
+                    "1",
+                    "--format",
+                    "json",
+                ],
+                &[],
+                scaled_wait_timeout(Duration::from_secs(3)),
+            )
+            .map_or_else(
+                |error| {
+                    daemon_snapshot_error_json(
+                        view,
+                        &format!("failed to execute {command}: {error}"),
+                    )
+                },
+                |output| format_snapshot_json_output(view, &output),
+            )
+        } else {
+            daemon_snapshot_error_json(view, &format!("socket missing: {}", socket.display()))
+        };
+        let _ = fs::write(artifact_path, output);
+    }
 }
 
 fn daemon_snapshot_summary(temp_dir: &Path, roles: &[&str]) -> String {
@@ -1160,6 +1198,33 @@ fn format_snapshot_output(output: &Output) -> String {
     )
 }
 
+fn format_snapshot_json_output(view: &str, output: &Output) -> String {
+    if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    } else {
+        daemon_snapshot_error_json(
+            view,
+            &format!(
+                "status: {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        )
+    }
+}
+
+fn daemon_snapshot_error_json(view: &str, error: &str) -> String {
+    serde_json::json!({
+        "schema_version": 1,
+        "view": view,
+        "lines": [],
+        "error": error,
+    })
+    .to_string()
+        + "\n"
+}
+
 fn current_test_binary() -> &'static str {
     env!("CARGO_BIN_EXE_p2p-vpn")
 }
@@ -1172,6 +1237,15 @@ const DAEMON_SNAPSHOT_COMMANDS: &[(&str, &str)] = &[
     ("daemon-paths", "daemon-paths"),
     ("daemon-mtu", "daemon-mtu"),
     ("daemon-capabilities", "daemon-capabilities"),
+];
+
+const DAEMON_VIEW_SNAPSHOT_COMMANDS: &[(&str, &str, &str)] = &[
+    ("daemon-state", "daemon-state", "state"),
+    ("daemon-peers", "daemon-peers", "peers"),
+    ("daemon-routes", "daemon-routes", "routes"),
+    ("daemon-paths", "daemon-paths", "paths"),
+    ("daemon-mtu", "daemon-mtu", "mtu"),
+    ("daemon-capabilities", "daemon-capabilities", "capabilities"),
 ];
 
 fn node_control_socket(temp_dir: &Path, role: &str) -> PathBuf {

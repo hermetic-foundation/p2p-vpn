@@ -435,36 +435,48 @@ enum Command {
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonPeers {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonRoutes {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonPaths {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonMtu {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonCapabilities {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     DaemonHealth {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -876,27 +888,33 @@ async fn main() -> Result<(), String> {
         Command::DaemonState {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_state(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_state(&socket, timeout_seconds, format)).await,
         Command::DaemonPeers {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_peers(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_peers(&socket, timeout_seconds, format)).await,
         Command::DaemonRoutes {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_routes(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_routes(&socket, timeout_seconds, format)).await,
         Command::DaemonPaths {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_paths(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_paths(&socket, timeout_seconds, format)).await,
         Command::DaemonMtu {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_mtu(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_mtu(&socket, timeout_seconds, format)).await,
         Command::DaemonCapabilities {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_capabilities(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_capabilities(&socket, timeout_seconds, format)).await,
         Command::DaemonHealth {
             socket,
             timeout_seconds,
@@ -1150,6 +1168,12 @@ struct SkippedRelayCandidate {
 enum MetricsFormat {
     Text,
     Prometheus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DaemonViewFormat {
+    Text,
+    Json,
 }
 
 impl From<MembershipRecordRoleArg> for MembershipRole {
@@ -4294,7 +4318,11 @@ async fn daemon_status(
     Ok(())
 }
 
-async fn daemon_state(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_state(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_state(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4302,14 +4330,14 @@ async fn daemon_state(socket: &Path, timeout_seconds: u64) -> Result<(), String>
     .await
     .map_err(|error| format!("daemon state query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    Ok(())
+    write_daemon_view_output("state", &lines, format)
 }
 
-async fn daemon_peers(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_peers(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_peers(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4317,14 +4345,14 @@ async fn daemon_peers(socket: &Path, timeout_seconds: u64) -> Result<(), String>
     .await
     .map_err(|error| format!("daemon peers query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    Ok(())
+    write_daemon_view_output("peers", &lines, format)
 }
 
-async fn daemon_routes(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_routes(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_routes(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4332,14 +4360,14 @@ async fn daemon_routes(socket: &Path, timeout_seconds: u64) -> Result<(), String
     .await
     .map_err(|error| format!("daemon routes query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    Ok(())
+    write_daemon_view_output("routes", &lines, format)
 }
 
-async fn daemon_paths(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_paths(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_paths(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4347,14 +4375,14 @@ async fn daemon_paths(socket: &Path, timeout_seconds: u64) -> Result<(), String>
     .await
     .map_err(|error| format!("daemon paths query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    Ok(())
+    write_daemon_view_output("paths", &lines, format)
 }
 
-async fn daemon_mtu(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_mtu(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_mtu(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4362,14 +4390,14 @@ async fn daemon_mtu(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
     .await
     .map_err(|error| format!("daemon mtu query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
-
-    Ok(())
+    write_daemon_view_output("mtu", &lines, format)
 }
 
-async fn daemon_capabilities(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_capabilities(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_capabilities(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -4377,11 +4405,41 @@ async fn daemon_capabilities(socket: &Path, timeout_seconds: u64) -> Result<(), 
     .await
     .map_err(|error| format!("daemon capabilities query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
-    }
+    write_daemon_view_output("capabilities", &lines, format)
+}
 
+fn write_daemon_view_output(
+    view: &'static str,
+    lines: &[String],
+    format: DaemonViewFormat,
+) -> Result<(), String> {
+    match format {
+        DaemonViewFormat::Text => {
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        DaemonViewFormat::Json => {
+            println!("{}", daemon_view_json(view, lines)?);
+        }
+    }
     Ok(())
+}
+
+fn daemon_view_json(view: &'static str, lines: &[String]) -> Result<String, String> {
+    serde_json::to_string_pretty(&DaemonViewJson {
+        schema_version: 1,
+        view,
+        lines,
+    })
+    .map_err(|error| format!("failed to render daemon {view} JSON: {error}"))
+}
+
+#[derive(Serialize)]
+struct DaemonViewJson<'a> {
+    schema_version: u8,
+    view: &'static str,
+    lines: &'a [String],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -6265,6 +6323,7 @@ mod tests {
         let Command::DaemonState {
             socket,
             timeout_seconds,
+            format,
         } = cli.command
         else {
             panic!("expected daemon-state command");
@@ -6272,16 +6331,17 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+        assert_eq!(format, DaemonViewFormat::Text);
     }
 
     #[test]
     fn cli_parses_daemon_view_commands() {
-        for command in [
-            "daemon-peers",
-            "daemon-routes",
-            "daemon-paths",
-            "daemon-mtu",
-            "daemon-capabilities",
+        for (command, expected_format) in [
+            ("daemon-peers", DaemonViewFormat::Json),
+            ("daemon-routes", DaemonViewFormat::Json),
+            ("daemon-paths", DaemonViewFormat::Json),
+            ("daemon-mtu", DaemonViewFormat::Json),
+            ("daemon-capabilities", DaemonViewFormat::Json),
         ] {
             let cli = Cli::try_parse_from([
                 "p2p-vpn",
@@ -6290,36 +6350,59 @@ mod tests {
                 "/run/p2p-vpn-node-a/control.sock",
                 "--timeout-seconds",
                 "3",
+                "--format",
+                "json",
             ])
             .expect("cli");
 
-            let (socket, timeout_seconds) = match cli.command {
+            let (socket, timeout_seconds, format) = match cli.command {
                 Command::DaemonPeers {
                     socket,
                     timeout_seconds,
+                    format,
                 }
                 | Command::DaemonRoutes {
                     socket,
                     timeout_seconds,
+                    format,
                 }
                 | Command::DaemonPaths {
                     socket,
                     timeout_seconds,
+                    format,
                 }
                 | Command::DaemonMtu {
                     socket,
                     timeout_seconds,
+                    format,
                 }
                 | Command::DaemonCapabilities {
                     socket,
                     timeout_seconds,
-                } => (socket, timeout_seconds),
+                    format,
+                } => (socket, timeout_seconds, format),
                 other => panic!("expected daemon view command, got {other:?}"),
             };
 
             assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
             assert_eq!(timeout_seconds, 3);
+            assert_eq!(format, expected_format);
         }
+    }
+
+    #[test]
+    fn daemon_view_json_wraps_line_output() {
+        let lines = vec![
+            "daemon state: running".to_owned(),
+            "packet_plane_sessions 1".to_owned(),
+        ];
+        let rendered = daemon_view_json("state", &lines).expect("daemon view json");
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("parse json");
+
+        assert_eq!(parsed["schema_version"], 1);
+        assert_eq!(parsed["view"], "state");
+        assert_eq!(parsed["lines"][0], "daemon state: running");
+        assert_eq!(parsed["lines"][1], "packet_plane_sessions 1");
     }
 
     #[test]

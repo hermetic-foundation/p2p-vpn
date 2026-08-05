@@ -1366,6 +1366,7 @@ cargo run -- daemon-state --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-peers --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-routes --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-paths --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-paths --socket /run/p2p-vpn/control.sock --format json
 cargo run -- daemon-mtu --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-capabilities --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-health --socket /run/p2p-vpn/control.sock
@@ -1393,7 +1394,9 @@ AutoNAT, relay-only infrastructure peers admitted from public or shared
 reachability discovery, and stream-fallback in-flight shard counters. The
 narrower `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`, and
 `daemon-capabilities` commands expose those live daemon views directly for
-scripts and operators that do not want to parse the full state dump.
+scripts and operators that do not want to parse the full state dump. Those view
+commands accept `--format json` to wrap the same lines in a stable
+machine-readable envelope for repro artifacts and automated diagnostics.
 `daemon-shutdown` asks the daemon to acknowledge the request, print the final
 metrics snapshot, remove the control socket, and exit through the same orderly
 shutdown path used for Ctrl-C and systemd SIGTERM.

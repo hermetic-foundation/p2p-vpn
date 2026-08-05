@@ -74,7 +74,12 @@ best-effort daemon snapshots next to the logs: `daemon-status-ROLE.txt`,
 `daemon-paths-ROLE.txt`, `daemon-mtu-ROLE.txt`, and
 `daemon-capabilities-ROLE.txt`. These files capture stdout, stderr, and command
 status for each reachable control socket so path selection, MTU, route, and
-capability state can be compared after the failed run exits.
+capability state can be compared after the failed run exits. For the daemon
+view commands, the orchestrator also writes machine-readable
+`daemon-state-ROLE.json`, `daemon-peers-ROLE.json`, `daemon-routes-ROLE.json`,
+`daemon-paths-ROLE.json`, `daemon-mtu-ROLE.json`, and
+`daemon-capabilities-ROLE.json` artifacts with a stable schema version, view
+name, and line array.
 
 On slower or heavily loaded hosts, keep the default timings for comparable
 results and scale them only when diagnosing infrastructure latency:
@@ -112,7 +117,8 @@ For packet-plane failures, check for `event=packet_plane_session_established`,
 `backend=owned_quic` when testing owned QUIC, positive
 `path_healthy_direct_quic_datagram_paths`, and positive packet counters such as
 `outbound_quic_datagram_packets` or `inbound_accepted_packets`. Use
-`p2p-vpn daemon-paths --socket ...` or `p2p-vpn daemon-state --socket ...` to
+`p2p-vpn daemon-paths --socket ... --format json` or
+`p2p-vpn daemon-state --socket ... --format json` to
 compare `observed_rtt_ms` across healthy path candidates after packet-plane
 path probes have started flowing. From another configured peer, use
 `p2p-vpn peer-live-paths --config ...` to compare the remote daemon's reported
