@@ -61,6 +61,13 @@ Namespace peer nodes also expose per-role daemon control sockets in that
 directory as `control-a.sock` and `control-b.sock`. The orchestrator uses those
 sockets to wait for validated peers, supported paths, and packet-plane sessions
 instead of relying on fixed post-start sleeps.
+When readiness waits or ping assertions fail, the orchestrator also writes
+best-effort daemon snapshots next to the logs: `daemon-status-ROLE.txt`,
+`daemon-state-ROLE.txt`, `daemon-peers-ROLE.txt`, `daemon-routes-ROLE.txt`,
+`daemon-paths-ROLE.txt`, `daemon-mtu-ROLE.txt`, and
+`daemon-capabilities-ROLE.txt`. These files capture stdout, stderr, and command
+status for each reachable control socket so path selection, MTU, route, and
+capability state can be compared after the failed run exits.
 
 ## What To Inspect
 

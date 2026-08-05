@@ -112,6 +112,31 @@ fn tun_namespace_ping_crosses_dht_discovered_overlay() {
     }
 }
 
+#[test]
+fn daemon_snapshot_capture_records_missing_control_sockets() {
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-daemon-snapshot-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+    capture_daemon_snapshots(&temp_dir, &["a"]);
+
+    let state =
+        fs::read_to_string(temp_dir.join("daemon-state-a.txt")).expect("daemon state snapshot");
+    let status =
+        fs::read_to_string(temp_dir.join("daemon-status-a.txt")).expect("daemon status snapshot");
+    let summary = daemon_snapshot_summary(&temp_dir, &["a"]);
+
+    assert!(state.contains("socket missing:"));
+    assert!(status.contains("socket missing:"));
+    assert!(summary.contains("daemon-state-a.txt"));
+    assert!(summary.contains("socket missing:"));
+
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
     let timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
@@ -705,9 +730,12 @@ fn assert_ping_success(
     responder_addresses: &Output,
     responder_routes: &Output,
 ) {
+    if !ping.status.success() {
+        capture_daemon_snapshots(temp_dir, &["a", "b"]);
+    }
     assert!(
         ping.status.success(),
-        "{context} failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a ip addr:\n{}\nnode-a routes:\n{}\nnode-b ip addr:\n{}\nnode-b routes:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
+        "{context} failed with {}\nstdout:\n{}\nstderr:\n{}\nnode-a ip addr:\n{}\nnode-a routes:\n{}\nnode-b ip addr:\n{}\nnode-b routes:\n{}\ndaemon snapshots:\n{}\nnode-a log:\n{}\nnode-b log:\n{}",
         ping.status,
         String::from_utf8_lossy(&ping.stdout),
         String::from_utf8_lossy(&ping.stderr),
@@ -715,6 +743,7 @@ fn assert_ping_success(
         String::from_utf8_lossy(&initiator_routes.stdout),
         String::from_utf8_lossy(&responder_addresses.stdout),
         String::from_utf8_lossy(&responder_routes.stdout),
+        daemon_snapshot_summary(temp_dir, &["a", "b"]),
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log")),
     );
@@ -899,18 +928,90 @@ where
             }
         }
         if Instant::now() >= deadline {
+            capture_daemon_snapshots(temp_dir, &[role]);
             let log = read_log(&temp_dir.join(format!("node-{role}.log")));
             panic!(
-                "timed out waiting for {context} on node {role} via {}\nlast_error: {}\nlast_state:\n{}\nnode log tail:\n{}",
+                "timed out waiting for {context} on node {role} via {}\nlast_error: {}\nlast_state:\n{}\ndaemon snapshots:\n{}\nnode log tail:\n{}",
                 socket.display(),
                 last_error.unwrap_or_else(|| "none".to_owned()),
                 last_lines.join("\n"),
+                daemon_snapshot_summary(temp_dir, &[role]),
                 log_tail(&log, 100),
             );
         }
         thread::sleep(Duration::from_millis(250));
     }
 }
+
+fn capture_daemon_snapshots(temp_dir: &Path, roles: &[&str]) {
+    for role in roles {
+        capture_daemon_snapshots_for_role(temp_dir, role);
+    }
+}
+
+fn capture_daemon_snapshots_for_role(temp_dir: &Path, role: &str) {
+    let socket = node_control_socket(temp_dir, role);
+    for (command, artifact) in DAEMON_SNAPSHOT_COMMANDS {
+        let artifact_path = temp_dir.join(format!("{artifact}-{role}.txt"));
+        let output = if socket.exists() {
+            let socket_arg = socket.to_string_lossy().into_owned();
+            command_output(
+                current_test_binary(),
+                &[*command, "--socket", &socket_arg, "--timeout-seconds", "1"],
+                &[],
+                Duration::from_secs(3),
+            )
+            .map_or_else(
+                |error| format!("failed to execute {command}: {error}\n"),
+                |output| format_snapshot_output(&output),
+            )
+        } else {
+            format!("socket missing: {}\n", socket.display())
+        };
+        let _ = fs::write(artifact_path, output);
+    }
+}
+
+fn daemon_snapshot_summary(temp_dir: &Path, roles: &[&str]) -> String {
+    let mut lines = Vec::new();
+    for role in roles {
+        for (_, artifact) in DAEMON_SNAPSHOT_COMMANDS {
+            let path = temp_dir.join(format!("{artifact}-{role}.txt"));
+            let summary = if path.exists() {
+                let body = fs::read_to_string(&path)
+                    .unwrap_or_else(|error| format!("failed to read snapshot: {error}"));
+                format!("{}:\n{}", path.display(), log_tail(&body, 40))
+            } else {
+                format!("{}: not captured", path.display())
+            };
+            lines.push(summary);
+        }
+    }
+    lines.join("\n")
+}
+
+fn format_snapshot_output(output: &Output) -> String {
+    format!(
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn current_test_binary() -> &'static str {
+    env!("CARGO_BIN_EXE_p2p-vpn")
+}
+
+const DAEMON_SNAPSHOT_COMMANDS: &[(&str, &str)] = &[
+    ("daemon-status", "daemon-status"),
+    ("daemon-state", "daemon-state"),
+    ("daemon-peers", "daemon-peers"),
+    ("daemon-routes", "daemon-routes"),
+    ("daemon-paths", "daemon-paths"),
+    ("daemon-mtu", "daemon-mtu"),
+    ("daemon-capabilities", "daemon-capabilities"),
+];
 
 fn node_control_socket(temp_dir: &Path, role: &str) -> PathBuf {
     temp_dir.join(format!("control-{role}.sock"))
