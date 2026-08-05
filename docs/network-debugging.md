@@ -35,7 +35,10 @@ nix run .#debug-bundle
 ```
 
 This also writes `daemon-health.txt`, text and JSON daemon views, Prometheus
-status output, and `daemon-control-summary.txt`. Set
+status output, `daemon-control-summary.txt`, and
+`daemon-packet-plane-summary.txt` with the readiness, backend-specific path
+health, packet-plane counters, path candidates, and advertised packet-plane
+capability lines most useful during UDP/QUIC data-plane triage. Set
 `P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` when the daemon is still
 converging, and enable readiness gates such as
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=1`,

@@ -148,6 +148,7 @@
         debugBundle = pkgs.writeShellApplication {
           name = "p2p-vpn-debug-bundle";
           runtimeInputs = [
+            package
             cargo
             rust
             checkFast
@@ -2164,6 +2165,23 @@ EOF
             grep -q 'vpn_host_a_config' "$script"
             grep -q 'P2P_VPN_REPRO_VPN_HOST_A_ROUTE' "$script"
 
+            touch $out
+          '';
+          debug-bundle-structure = pkgs.runCommand "p2p-vpn-debug-bundle-structure" {
+            nativeBuildInputs = [
+              debugBundle
+              pkgs.jq
+            ];
+          } ''
+            artifact_dir="$TMPDIR/debug-bundle"
+            cd ${./.}
+            P2P_VPN_DEBUG_BUNDLE_DIR="$artifact_dir" p2p-vpn-debug-bundle > "$TMPDIR/stdout" 2> "$TMPDIR/stderr"
+            test -s "$artifact_dir/debug-summary.json"
+            jq -e '.schema_version == 1 and .artifacts.daemon_packet_plane_summary != null' "$artifact_dir/debug-summary.json"
+            grep -Fq '[p2p-vpn]' "$artifact_dir/debug-toolchain.txt"
+            grep -Fq '/bin/p2p-vpn' "$artifact_dir/debug-toolchain.txt"
+            grep -Fq 'daemon-packet-plane-summary.txt' "$artifact_dir/debug-summary.txt"
+            grep -Fq 'enabled=false' "$artifact_dir/daemon-packet-plane-summary.txt"
             touch $out
           '';
           public-vpn-repro-structure = pkgs.runCommand "p2p-vpn-public-vpn-repro-structure" {

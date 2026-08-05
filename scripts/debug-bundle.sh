@@ -36,6 +36,7 @@ daemon_mtu_json="$artifact_dir/daemon-mtu.json"
 daemon_capabilities="$artifact_dir/daemon-capabilities.txt"
 daemon_capabilities_json="$artifact_dir/daemon-capabilities.json"
 daemon_control_summary="$artifact_dir/daemon-control-summary.txt"
+daemon_packet_plane_summary="$artifact_dir/daemon-packet-plane-summary.txt"
 
 command_metadata() {
   local label="$1"
@@ -88,11 +89,12 @@ capture_toolchain() {
   {
     echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo
-    for tool in nix cargo rustc rustfmt clippy-driver jq jj git ip ss unshare; do
+    for tool in p2p-vpn nix cargo rustc rustfmt clippy-driver jq jj git ip ss unshare; do
       if command -v "$tool" >/dev/null 2>&1; then
         echo "[$tool]"
         command -v "$tool"
         case "$tool" in
+          p2p-vpn) p2p-vpn --version || p2p-vpn --help | sed -n '1,12p' || true ;;
           nix) nix --version || true ;;
           cargo) cargo --version || true ;;
           rustc) rustc --version --verbose || true ;;
@@ -197,6 +199,40 @@ capture_daemon_control() {
   p2p-vpn daemon-capabilities --socket "$control_socket" --format json >"$daemon_capabilities_json" 2>"$daemon_capabilities_json.stderr" || true
 }
 
+write_daemon_packet_plane_summary() {
+  {
+    echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "control_socket=$control_socket"
+    if [[ -z "$control_socket" ]]; then
+      echo "enabled=false"
+      echo "reason=P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET unset"
+      return 0
+    fi
+    echo "enabled=true"
+    if [[ ! -S "$control_socket" ]]; then
+      echo "socket_present=false"
+      echo "reason=control socket is missing or is not a socket"
+      return 0
+    fi
+    echo "socket_present=true"
+    echo
+    echo "[readiness]"
+    sed -n '1,80p' "$daemon_health" 2>/dev/null || true
+    echo
+    echo "[packet-plane metrics]"
+    grep -E '^(p2p_vpn_)?(path_healthy_direct_udp_datagram_paths|path_healthy_direct_quic_datagram_paths|outbound_quic_datagram_packets|outbound_stream_fallback_packets|outbound_quic_datagram_unavailable_packets|packet_plane_sessions_expired|packet_plane_path_demotions|packet_plane_path_recovery_dial_attempts|packet_plane_path_recovery_dial_failures|observed_packet_plane_external_addresses|observed_packet_plane_udp_endpoint_candidates|observed_packet_plane_quic_endpoint_candidates|inbound_accepted_packets|outbound_sent_packets|outbound_dropped_packets)( |$)' "$daemon_status_prometheus" 2>/dev/null || true
+    echo
+    echo "[state packet-plane lines]"
+    grep -E 'packet_plane|owned_quic|observed_packet_plane|healthy_direct_.*datagram|path_probe|selected_path' "$daemon_state" 2>/dev/null || true
+    echo
+    echo "[path candidates]"
+    grep -E 'peer |path |kind |healthy |selected|mtu|observed_rtt_ms|direct_udp_datagram|direct_quic_datagram|relay' "$daemon_paths" 2>/dev/null || true
+    echo
+    echo "[capability packet-plane lines]"
+    grep -E 'packet_plane|quic_datagram|owned_udp|owned_quic|preferred_path|endpoint' "$daemon_capabilities" 2>/dev/null || true
+  } >"$daemon_packet_plane_summary"
+}
+
 write_commands() {
   {
     echo "#!/usr/bin/env bash"
@@ -221,6 +257,7 @@ write_commands() {
     echo "sed -n '1,220p' \"$host\""
     echo "sed -n '1,220p' \"$daemon_control_summary\""
     echo "sed -n '1,220p' \"$daemon_health\""
+    echo "sed -n '1,220p' \"$daemon_packet_plane_summary\""
     echo "sed -n '1,220p' \"$summary\""
     echo "jq . \"$summary_json\""
   } >"$commands"
@@ -260,6 +297,7 @@ capture_host
 capture_toolchain
 capture_flake_show
 capture_daemon_control
+write_daemon_packet_plane_summary
 write_commands
 
 set +e
@@ -277,6 +315,7 @@ set -e
   echo "commands=$commands"
   echo "summary_json=$summary_json"
   echo "daemon_control_summary=$daemon_control_summary"
+  echo "daemon_packet_plane_summary=$daemon_packet_plane_summary"
   if [[ -n "$control_socket" ]]; then
     echo "daemon_health=$daemon_health"
     echo "daemon_status=$daemon_status"
@@ -308,6 +347,7 @@ jq -n \
   --arg summary "$summary" \
   --arg control_socket "$control_socket" \
   --arg daemon_control_summary "$daemon_control_summary" \
+  --arg daemon_packet_plane_summary "$daemon_packet_plane_summary" \
   --arg daemon_health "$daemon_health" \
   --arg daemon_status "$daemon_status" \
   --arg daemon_status_prometheus "$daemon_status_prometheus" \
@@ -336,6 +376,7 @@ jq -n \
       replay_commands: $commands,
       summary: $summary,
       daemon_control_summary: $daemon_control_summary,
+      daemon_packet_plane_summary: $daemon_packet_plane_summary,
       daemon_health: (if $daemon_control_enabled then $daemon_health else null end),
       daemon_status: (if $daemon_control_enabled then $daemon_status else null end),
       daemon_status_prometheus: (if $daemon_control_enabled then $daemon_status_prometheus else null end),

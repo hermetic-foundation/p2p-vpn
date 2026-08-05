@@ -605,7 +605,10 @@ set `P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=1` to include the `check-fast` output
 and exit status in the same bundle.
 Set `P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET=/run/p2p-vpn/control.sock` to also
 capture daemon health, text and JSON daemon views, Prometheus status, and a
-control summary. Use `P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` plus
+control summary. The bundle also writes `daemon-packet-plane-summary.txt`,
+which distills readiness, backend-specific datagram path health, packet-plane
+counters, path candidates, and advertised packet-plane capability lines for
+faster UDP/QUIC triage. Use `P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` plus
 readiness gates such as `P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=1`,
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION=1`, or
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=1` when collecting
