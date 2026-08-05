@@ -898,8 +898,10 @@ temporary node through the relay. With `--require-dcutr-success`, it also gives
 both temporary nodes TCP and QUIC direct listen sockets and fails unless libp2p
 reports a successful DCUtR hole-punch event and the probe observes a direct
 non-relayed connection to the target peer. Repeat `--relay-candidate` to try a small
-candidate set; the command stops after the first usable relay and prints
-candidate-level failures when none work. Each candidate line includes a stable
+candidate set; the command tries candidates round-robin by relay peer, with
+QUIC-capable addresses before TCP alternates for the same relay, then stops
+after the first usable relay and prints candidate-level failures when none
+work. Each candidate line includes a stable
 `failure_stage` value: `candidate_setup`, `relay_reservation`,
 `relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
 The report also prints a `public relay candidate failure stages:` summary with

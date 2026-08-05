@@ -2177,8 +2177,7 @@ async fn bootstrap_check(
 
 async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     let raw = args.relay_candidates.join("\n");
-    let addresses = parse_public_relay_addresses(&raw)
-        .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
+    let addresses = relay_check_candidate_multiaddrs(&raw)?;
     let report = check_public_relay_candidates(
         &addresses,
         args.mode,
@@ -2199,6 +2198,12 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
     }
+}
+
+fn relay_check_candidate_multiaddrs(raw: &str) -> Result<Vec<libp2p::Multiaddr>, String> {
+    let addresses = parse_public_relay_addresses(raw)
+        .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
+    order_relay_validation_candidates(addresses, "relay-check candidate")
 }
 
 fn write_public_relay_config_from_probe(
@@ -2432,19 +2437,15 @@ fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
 fn relay_scan_candidate_multiaddrs(
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayScanReport,
 ) -> Result<Vec<libp2p::Multiaddr>, String> {
-    let parsed = report
+    let addresses = report
         .candidates
         .iter()
         .map(|candidate| {
             parse_public_relay_addresses(&candidate.address)
                 .and_then(|mut addresses| {
-                    let address = addresses
+                    addresses
                         .pop()
-                        .ok_or_else(|| "empty scanned relay candidate".to_owned())?;
-                    let peer = relay_peer_target(&address).ok_or_else(|| {
-                        format!("scanned relay candidate {address} is missing /p2p/RELAY")
-                    })?;
-                    Ok((peer, address))
+                        .ok_or_else(|| "empty scanned relay candidate".to_owned())
                 })
                 .map_err(|error| {
                     format!(
@@ -2454,6 +2455,22 @@ fn relay_scan_candidate_multiaddrs(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    order_relay_validation_candidates(addresses, "scanned relay candidate")
+}
+
+fn order_relay_validation_candidates(
+    candidates: Vec<libp2p::Multiaddr>,
+    context: &str,
+) -> Result<Vec<libp2p::Multiaddr>, String> {
+    let parsed = candidates
+        .into_iter()
+        .map(|address| {
+            let peer = relay_peer_target(&address)
+                .ok_or_else(|| format!("{context} {address} is missing /p2p/RELAY"))?;
+            Ok((peer, address))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     Ok(round_robin_candidates_by_peer(parsed))
 }
@@ -4380,6 +4397,46 @@ mod tests {
         assert_eq!(max_validation_candidates, Some(3));
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
+    }
+
+    #[test]
+    fn relay_check_candidate_multiaddrs_prioritize_quic_with_peer_round_robin() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let peer_c = "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb";
+        let addresses = [
+            format!("/dns4/relay-a.example.net/tcp/4001/p2p/{peer_a}"),
+            format!("/dns4/relay-a.example.net/udp/4001/quic-v1/p2p/{peer_a}"),
+            format!("/dns4/relay-b.example.net/tcp/4001/p2p/{peer_b}"),
+            format!("/dns4/relay-c.example.net/tcp/4001/p2p/{peer_c}"),
+            format!("/dns4/relay-b.example.net/udp/4001/quic-v1/p2p/{peer_b}"),
+        ];
+        let raw = addresses.join("\n");
+
+        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+        let ordered = candidates
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ordered,
+            vec![
+                addresses[1].clone(),
+                addresses[4].clone(),
+                addresses[3].clone(),
+                addresses[0].clone(),
+                addresses[2].clone(),
+            ]
+        );
+    }
+
+    #[test]
+    fn relay_check_candidate_multiaddrs_reject_missing_peer_id() {
+        let error = relay_check_candidate_multiaddrs("/dns4/relay.example.net/tcp/4001")
+            .expect_err("missing peer id should fail");
+
+        assert!(error.contains("missing /p2p/RELAY"));
     }
 
     #[test]

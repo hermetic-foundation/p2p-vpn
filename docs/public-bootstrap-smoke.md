@@ -141,10 +141,12 @@ nix develop -c cargo run -- relay-check \
 
 The command tries candidates until one works, reports per-candidate failures,
 and requires direct relay multiaddrs with `/p2p/RELAY` but without
-`/p2p-circuit`. Reservation setup failures identify whether the probe connected
-directly to the relay, whether relay reservation acceptance or relayed
-listen-address publication timed out, and the last direct relay dial error when
-one was observed. Candidate lines also include a stable `failure_stage` value:
+`/p2p-circuit`. Repeated candidates are ordered round-robin by relay peer, with
+QUIC-capable addresses before TCP alternates for the same relay, matching
+`relay-scan --check-candidates`. Reservation setup failures identify whether
+the probe connected directly to the relay, whether relay reservation acceptance
+or relayed listen-address publication timed out, and the last direct relay dial
+error when one was observed. Candidate lines also include a stable `failure_stage` value:
 `candidate_setup`, `relay_reservation`, `relayed_peer_circuit`,
 `dcutr_success`, or `none` for a usable candidate. Probe output also includes a
 `public relay candidate failure stages:` summary with per-stage counts across
