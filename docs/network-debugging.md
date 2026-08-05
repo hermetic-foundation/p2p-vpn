@@ -82,6 +82,93 @@ selected path, score, MTU, and RTT without direct access to its control socket.
 
 ## Public Relay Smoke
 
+Use the packaged repro when the goal is to compare public relay, DCUtR, and
+bootstrap behaviour across hosts or NATs. It keeps every phase in one artifact
+directory, writes the exact replay commands, and exits nonzero when a later
+phase fails without deleting earlier evidence.
+
+### Live Public Relay/DCUtR Checklist
+
+1. Pick a stable artifact directory per host and run the full public repro:
+
+   ```sh
+   export P2P_VPN_REPRO_DIR="/tmp/p2p-vpn-public-relay-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)"
+   export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=30
+   export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=45
+   export P2P_VPN_RELAY_MAX_CANDIDATES=8
+   export P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=8
+   nix run .#public-relay-repro
+   ```
+
+   Add `P2P_VPN_REPRO_BASE_CONFIG=/path/to/p2p-vpn.json` when the generated
+   relay-assisted config must preserve an existing overlay identity,
+   membership, routes, peers, and packet-plane settings.
+
+2. Start triage from the preserved summary:
+
+   ```sh
+   sed -n '1,220p' "$P2P_VPN_REPRO_DIR/repro-summary.txt"
+   sed -n '1,160p' "$P2P_VPN_REPRO_DIR/repro-host-network.txt"
+   ```
+
+   Compare `phase results`, `failure_stages`, `direct_connection_addresses`,
+   `relayed_connection_addresses`, and `first_error` between hosts. A useful
+   relay fallback proof has a successful relay-check phase and relayed
+   connection addresses. A public DCUtR proof also needs a successful DCUtR
+   phase with a direct non-relayed connection address.
+
+3. Replay the same candidate set without public discovery when iterating:
+
+   ```sh
+   export P2P_VPN_REPRO_DIR="/tmp/p2p-vpn-public-relay-replay-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)"
+   export P2P_VPN_REPRO_CANDIDATES_FILE=/tmp/previous-public-relay-candidates.txt
+   export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=60
+   export P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=8
+   nix run .#public-relay-repro
+   ```
+
+   The previous candidate file can be
+   `public-relay-candidates.txt` from another repro directory. This keeps
+   repeated NAT/DCUtR runs comparable because only the local topology and
+   timeout budget changed.
+
+4. For a two-host public hole-punch proof, run the generated Host A listener
+   while Host B dials the descriptor:
+
+   ```sh
+   "$P2P_VPN_REPRO_DIR/repro-dcutr-listen-host-a.sh"
+   ```
+
+   Copy `public-dcutr-listener.json` from Host A to the same path inside Host
+   B's repro directory, then run:
+
+   ```sh
+   "$P2P_VPN_REPRO_DIR/repro-dcutr-dial-host-b.sh"
+   sed -n '1,220p' "$P2P_VPN_REPRO_DIR/public-relay-dcutr-dial-report.json"
+   ```
+
+   If the generated listener script does not contain a selected relay, set
+   `P2P_VPN_REPRO_RELAY_CANDIDATE` to a direct `/p2p/RELAY` multiaddr and
+   rerun `nix run .#public-relay-repro` or the generated listener script.
+
+5. When a relay-assisted config is produced, inspect a live daemon through the
+   control socket instead of scraping logs:
+
+   ```sh
+   p2p-vpn daemon-health \
+     --socket /run/p2p-vpn/control.sock \
+     --wait-seconds 30 \
+     --require-validated-peers \
+     --require-supported-paths
+
+   p2p-vpn daemon-state --socket /run/p2p-vpn/control.sock
+   p2p-vpn daemon-paths --socket /run/p2p-vpn/control.sock
+   ```
+
+   For owned packet-plane diagnostics, add
+   `--require-packet-plane-session` or
+   `--require-packet-plane-quic-session` to `daemon-health`.
+
 Scan public IPFS-compatible bootstrap peers and write candidates:
 
 ```sh
