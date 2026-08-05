@@ -4904,7 +4904,7 @@ mod tests {
                     failure_stage:
                         p2p_vpn::runtime::bootstrap_check::PublicRelayCandidateFailureStage::DcutrSuccess,
                     error: Some("dcutr success check did not meet success threshold".to_owned()),
-                    bootstrap: None,
+                    bootstrap: Some(failed_public_dcutr_bootstrap_report()),
                 },
             ],
         };
@@ -4948,12 +4948,86 @@ mod tests {
             value["candidates"][0]["error"],
             "dcutr success check did not meet success threshold"
         );
+        assert_failed_public_dcutr_bootstrap_json(&value["candidates"][0]["bootstrap"]);
         assert!(
             write_public_relay_probe_report(&args, &[candidate], &[skipped], &report, &output)
                 .expect_err("overwrite should require force")
                 .contains("pass --force")
         );
         fs::remove_file(&output).expect("remove report");
+    }
+
+    fn failed_public_dcutr_bootstrap_report()
+    -> p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
+        p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport {
+            threshold: BootstrapCheckThreshold::Any,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: true,
+                autonat_status: true,
+                dcutr_ready: true,
+                dcutr_success: true,
+                relayed_peer_circuits: true,
+            },
+            kademlia_protocol: IPFS_KADEMLIA_PROTOCOL.to_owned(),
+            ipfs_compatible: true,
+            dcutr: p2p_vpn::runtime::bootstrap_check::BootstrapDcutrCheck {
+                enabled: true,
+                ready: true,
+                successes: 0,
+                direct_connections: 0,
+                failures: 1,
+                last_error: Some("NoDirectConnection".to_owned()),
+            },
+            configured_bootstrap_peers: 4,
+            connected_bootstrap_peers: 3,
+            dial_failures: 1,
+            configured_relay_reservations: 1,
+            accepted_relay_reservations: 1,
+            relayed_listen_addresses: 1,
+            configured_relayed_peer_circuits: 1,
+            connected_relayed_peer_circuits: 1,
+            autonat_probe_servers_registered: 1,
+            autonat_status: p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus::Private,
+            kademlia: p2p_vpn::runtime::bootstrap_check::BootstrapKademliaCheck {
+                bootstrap_started: true,
+                rendezvous_lookup_started: true,
+                rendezvous_advertise_started: true,
+            },
+            peer_results: Vec::new(),
+            relay_results: Vec::new(),
+            relayed_peer_results: Vec::new(),
+        }
+    }
+
+    fn assert_failed_public_dcutr_bootstrap_json(bootstrap: &serde_json::Value) {
+        assert_eq!(bootstrap["succeeded"], false);
+        assert_eq!(bootstrap["threshold"], "any");
+        assert_eq!(bootstrap["requirements"]["relay_reservations"], true);
+        assert_eq!(bootstrap["requirements"]["autonat_status"], true);
+        assert_eq!(bootstrap["requirements"]["dcutr_ready"], true);
+        assert_eq!(bootstrap["requirements"]["dcutr_success"], true);
+        assert_eq!(bootstrap["requirements"]["relayed_peer_circuits"], true);
+        assert_eq!(bootstrap["kademlia_protocol"], IPFS_KADEMLIA_PROTOCOL);
+        assert_eq!(bootstrap["ipfs_compatible"], true);
+        assert_eq!(bootstrap["dcutr"]["enabled"], true);
+        assert_eq!(bootstrap["dcutr"]["ready"], true);
+        assert_eq!(bootstrap["dcutr"]["successes"], 0);
+        assert_eq!(bootstrap["dcutr"]["direct_connections"], 0);
+        assert_eq!(bootstrap["dcutr"]["failures"], 1);
+        assert_eq!(bootstrap["dcutr"]["last_error"], "NoDirectConnection");
+        assert_eq!(bootstrap["configured_bootstrap_peers"], 4);
+        assert_eq!(bootstrap["connected_bootstrap_peers"], 3);
+        assert_eq!(bootstrap["dial_failures"], 1);
+        assert_eq!(bootstrap["configured_relay_reservations"], 1);
+        assert_eq!(bootstrap["accepted_relay_reservations"], 1);
+        assert_eq!(bootstrap["relayed_listen_addresses"], 1);
+        assert_eq!(bootstrap["configured_relayed_peer_circuits"], 1);
+        assert_eq!(bootstrap["connected_relayed_peer_circuits"], 1);
+        assert_eq!(bootstrap["autonat_probe_servers_registered"], 1);
+        assert_eq!(bootstrap["autonat_status"], "private");
+        assert_eq!(bootstrap["kademlia"]["bootstrap_started"], true);
+        assert_eq!(bootstrap["kademlia"]["rendezvous_lookup_started"], true);
+        assert_eq!(bootstrap["kademlia"]["rendezvous_advertise_started"], true);
     }
 
     #[test]
