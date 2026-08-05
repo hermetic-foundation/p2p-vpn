@@ -72,6 +72,8 @@ const PATH_PROBE_ACK_PAYLOAD: &[u8] = b"path-probe-ack-v1";
 const PATH_PROBE_MTU_STEP: u16 = 64;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+const AUTO_RELAY_MAX_CANDIDATES: usize = 16;
+const AUTO_RELAY_MAX_RESERVATIONS: usize = 2;
 
 const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
     LocalPacketDataPlane::identity_keyed_streams();
@@ -411,6 +413,7 @@ where
     let mut peer_capabilities = PeerCapabilities::default();
     let mut packet_plane_negotiator = PacketPlaneNegotiator::default();
     let mut relay_readiness = RelayReadiness::default();
+    let mut auto_relay = AutoRelayState::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
@@ -538,6 +541,7 @@ where
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
                         relay_readiness: &mut relay_readiness,
+                        auto_relay: &mut auto_relay,
                         configured_peer_addresses: &node.configured_peer_addresses,
                         discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
@@ -1570,6 +1574,15 @@ fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &Ru
         format!("autonat_status_unknown {}", snapshot.autonat_status_unknown),
         format!("autonat_status_public {}", snapshot.autonat_status_public),
         format!("autonat_status_private {}", snapshot.autonat_status_private),
+        format!("auto_relay_candidates {}", snapshot.auto_relay_candidates),
+        format!(
+            "auto_relay_reservation_attempts {}",
+            snapshot.auto_relay_reservation_attempts
+        ),
+        format!(
+            "auto_relay_reservation_failures {}",
+            snapshot.auto_relay_reservation_failures
+        ),
         format!(
             "autonat_status_changes_to_public {}",
             snapshot.autonat_status_changes_to_public
@@ -2056,6 +2069,181 @@ struct RelayReadiness {
     accepted_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashSet<Libp2pPeerId>,
     attempted_ready_dials: HashSet<(Libp2pPeerId, Libp2pPeerId, Multiaddr)>,
+}
+
+#[derive(Debug, Default)]
+struct AutoRelayState {
+    private_reachability: bool,
+    candidates: Vec<(Libp2pPeerId, Multiaddr)>,
+    attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
+    reservation_peers: HashSet<Libp2pPeerId>,
+}
+
+impl AutoRelayState {
+    fn record_reachability(&mut self, reachability: AutoNatReachability) {
+        self.private_reachability = reachability == AutoNatReachability::Private;
+    }
+
+    fn record_candidate(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
+        if self
+            .candidates
+            .iter()
+            .any(|candidate| candidate == &(peer, address.clone()))
+        {
+            return false;
+        }
+        if self.candidates.len() >= AUTO_RELAY_MAX_CANDIDATES
+            && !self
+                .candidates
+                .iter()
+                .any(|(candidate_peer, _)| *candidate_peer == peer)
+        {
+            return false;
+        }
+        if self.candidates.len() >= AUTO_RELAY_MAX_CANDIDATES {
+            return false;
+        }
+
+        self.candidates.push((peer, address));
+        true
+    }
+
+    fn next_reservation_targets(&mut self) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        if !self.private_reachability || self.reservation_peers.len() >= AUTO_RELAY_MAX_RESERVATIONS
+        {
+            return Vec::new();
+        }
+
+        let mut targets = Vec::new();
+        for (peer, address) in &self.candidates {
+            if self.reservation_peers.contains(peer) {
+                continue;
+            }
+            if !self.attempted_reservations.insert((*peer, address.clone())) {
+                continue;
+            }
+            self.reservation_peers.insert(*peer);
+            targets.push((*peer, address.clone()));
+            if self.reservation_peers.len() >= AUTO_RELAY_MAX_RESERVATIONS {
+                break;
+            }
+        }
+
+        targets
+    }
+}
+
+fn record_auto_relay_candidates(
+    auto_relay: &mut AutoRelayState,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = Multiaddr>,
+) {
+    for address in addresses {
+        if auto_relay.record_candidate(peer, address.clone()) {
+            metrics.record_auto_relay_candidate();
+            log_runtime_event(
+                LogLevel::Info,
+                "auto_relay_candidate",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("address", &address.to_string()),
+                ],
+            );
+        }
+    }
+}
+
+fn attempt_auto_relay_reservations(
+    swarm: &mut Swarm<Behaviour>,
+    auto_relay: &mut AutoRelayState,
+    metrics: &RuntimeMetrics,
+) {
+    let local_peer = *swarm.local_peer_id();
+    for (relay_peer, relay_address) in auto_relay.next_reservation_targets() {
+        let reservation_address =
+            peer_dial_address(local_peer, relay_address.clone().with(Protocol::P2pCircuit));
+        metrics.record_auto_relay_reservation_attempt();
+        log_runtime_event(
+            LogLevel::Info,
+            "auto_relay_reservation_attempt",
+            &[
+                ("relay", &relay_peer.to_string()),
+                ("address", &reservation_address.to_string()),
+            ],
+        );
+        if let Err(error) = swarm.listen_on(reservation_address.clone()) {
+            metrics.record_auto_relay_reservation_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "auto_relay_reservation_failed",
+                &[
+                    ("relay", &relay_peer.to_string()),
+                    ("address", &reservation_address.to_string()),
+                    ("error", &error.to_string()),
+                ],
+            );
+        }
+    }
+}
+
+fn auto_relay_candidate_addresses(peer: Libp2pPeerId, info: &identify::Info) -> Vec<Multiaddr> {
+    if !identify_protocols_include_relay_hop(&info.protocols) {
+        return Vec::new();
+    }
+
+    info.listen_addrs
+        .iter()
+        .filter_map(|address| auto_relay_candidate_address(peer, address))
+        .fold(Vec::new(), |mut addresses, address| {
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+            addresses
+        })
+}
+
+fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
+    protocols
+        .iter()
+        .any(|protocol| protocol.as_ref() == relay::HOP_PROTOCOL_NAME.as_ref())
+}
+
+fn auto_relay_candidate_address(peer: Libp2pPeerId, address: &Multiaddr) -> Option<Multiaddr> {
+    if relayed_address_relay_peer(address).is_some() {
+        return None;
+    }
+    if !supports_auto_relay_candidate_transport(address) {
+        return None;
+    }
+    if discovered_address_target(address).is_some_and(|target| target != peer) {
+        return None;
+    }
+
+    Some(peer_dial_address(peer, address.clone()))
+}
+
+fn supports_auto_relay_candidate_transport(address: &Multiaddr) -> bool {
+    let mut supported = false;
+    for protocol in address {
+        match protocol {
+            Protocol::Tcp(_) | Protocol::Quic | Protocol::QuicV1 => supported = true,
+            Protocol::Http
+            | Protocol::Https
+            | Protocol::P2pWebRtcDirect
+            | Protocol::P2pWebRtcStar
+            | Protocol::P2pWebSocketStar
+            | Protocol::Tls
+            | Protocol::WebRTC
+            | Protocol::WebRTCDirect
+            | Protocol::WebTransport
+            | Protocol::Ws(_)
+            | Protocol::Wss(_) => return false,
+            _ => {}
+        }
+    }
+
+    supported
 }
 
 impl RelayReadiness {
@@ -3043,6 +3231,7 @@ struct SwarmEventContext<'a> {
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
     relay_readiness: &'a mut RelayReadiness,
+    auto_relay: &'a mut AutoRelayState,
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
@@ -3099,6 +3288,7 @@ async fn handle_swarm_event(
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
                 relay_readiness: context.relay_readiness,
+                auto_relay: context.auto_relay,
                 configured_peer_addresses: context.configured_peer_addresses,
                 discovered_peer_addresses: context.discovered_peer_addresses,
                 metrics: context.metrics,
@@ -5013,6 +5203,7 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
 struct BehaviourEventContext<'a> {
     forwarder: &'a Forwarder,
     relay_readiness: &'a mut RelayReadiness,
+    auto_relay: &'a mut AutoRelayState,
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
@@ -5048,6 +5239,7 @@ fn handle_behaviour_event(
         }
         BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             let observed_addr = info.observed_addr.clone();
+            let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info);
             for address in info.listen_addrs {
                 learn_peer_address(
                     swarm,
@@ -5059,6 +5251,13 @@ fn handle_behaviour_event(
                     context.discovery,
                 );
             }
+            record_auto_relay_candidates(
+                context.auto_relay,
+                context.metrics,
+                peer_id,
+                auto_relay_candidates,
+            );
+            attempt_auto_relay_reservations(swarm, context.auto_relay, context.metrics);
             if context.discovery.autonat && observed_addr.iter().next().is_some() {
                 schedule_autonat_probe(swarm, context.metrics, &observed_addr);
             }
@@ -5097,7 +5296,7 @@ fn handle_behaviour_event(
             );
         }
         BehaviourEvent::Autonat(event) if context.discovery.autonat => {
-            handle_autonat_event(swarm, context.metrics, event);
+            handle_autonat_event(swarm, context.auto_relay, context.metrics, event);
         }
         _ => {}
     }
@@ -5119,6 +5318,7 @@ fn schedule_autonat_probe(
 
 fn handle_autonat_event(
     swarm: &mut Swarm<Behaviour>,
+    auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
     event: autonat::Event,
 ) {
@@ -5127,14 +5327,17 @@ fn handle_autonat_event(
             if let autonat::NatStatus::Public(address) = &new {
                 swarm.add_external_address(address.clone());
             }
-            metrics.record_autonat_status(autonat_reachability(&new));
+            let reachability = autonat_reachability(&new);
+            auto_relay.record_reachability(reachability);
+            metrics.record_autonat_status(reachability);
+            attempt_auto_relay_reservations(swarm, auto_relay, metrics);
             log_runtime_event(
                 LogLevel::Info,
                 "autonat_status_changed",
                 &[
                     ("old", &format!("{old:?}")),
                     ("new", &format!("{new:?}")),
-                    ("reachability", autonat_reachability(&new).as_str()),
+                    ("reachability", reachability.as_str()),
                 ],
             );
         }
@@ -7306,6 +7509,83 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_candidate_address_accepts_supported_direct_transports() {
+        let peer = peer_id();
+        let tcp: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("tcp address");
+        let quic_without_peer: Multiaddr = "/ip4/127.0.0.1/udp/4001/quic-v1"
+            .parse()
+            .expect("quic address");
+
+        assert_eq!(auto_relay_candidate_address(peer, &tcp), Some(tcp));
+        assert_eq!(
+            auto_relay_candidate_address(peer, &quic_without_peer),
+            Some(peer_dial_address(peer, quic_without_peer))
+        );
+    }
+
+    #[test]
+    fn auto_relay_candidate_address_rejects_unsupported_or_relayed_addresses() {
+        let peer = peer_id();
+        let other = peer_id();
+        let wrong_peer: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}")
+            .parse()
+            .expect("wrong peer address");
+        let websocket: Multiaddr = format!("/dns4/relay.example.test/tcp/443/wss/p2p/{peer}")
+            .parse()
+            .expect("websocket address");
+        let relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+
+        assert_eq!(auto_relay_candidate_address(peer, &wrong_peer), None);
+        assert_eq!(auto_relay_candidate_address(peer, &websocket), None);
+        assert_eq!(auto_relay_candidate_address(peer, &relayed), None);
+    }
+
+    #[test]
+    fn auto_relay_state_attempts_candidates_only_when_private() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let mut state = AutoRelayState::default();
+
+        assert!(state.record_candidate(relay, address.clone()));
+        assert!(!state.record_candidate(relay, address.clone()));
+        assert!(state.next_reservation_targets().is_empty());
+
+        state.record_reachability(AutoNatReachability::Private);
+
+        assert_eq!(state.next_reservation_targets(), vec![(relay, address)]);
+        assert!(state.next_reservation_targets().is_empty());
+    }
+
+    #[test]
+    fn auto_relay_state_caps_reservation_targets() {
+        let mut state = AutoRelayState::default();
+        state.record_reachability(AutoNatReachability::Private);
+        let candidates = (0..AUTO_RELAY_MAX_RESERVATIONS + 2)
+            .map(|port| {
+                let relay = peer_id();
+                let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}/p2p/{relay}", 4001 + port)
+                    .parse()
+                    .expect("relay address");
+                (relay, address)
+            })
+            .collect::<Vec<_>>();
+        for (relay, address) in &candidates {
+            assert!(state.record_candidate(*relay, address.clone()));
+        }
+
+        let targets = state.next_reservation_targets();
+
+        assert_eq!(targets.len(), AUTO_RELAY_MAX_RESERVATIONS);
+    }
+
+    #[test]
     fn packet_plane_recovery_targets_include_configured_and_discovered_peer_addresses() {
         let local = peer_id();
         let peer = peer_id();
@@ -7762,10 +8042,12 @@ mod tests {
         })
         .expect("node");
         let metrics = RuntimeMetrics::default();
+        let mut auto_relay = AutoRelayState::default();
         let public_address: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().expect("address");
 
         handle_autonat_event(
             &mut node.swarm,
+            &mut auto_relay,
             &metrics,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Unknown,
@@ -7780,6 +8062,7 @@ mod tests {
 
         handle_autonat_event(
             &mut node.swarm,
+            &mut auto_relay,
             &metrics,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Public(
