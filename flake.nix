@@ -145,6 +145,27 @@
             exec bash ${./scripts/membership-record-repro.sh} "$@"
           '';
         };
+        debugBundle = pkgs.writeShellApplication {
+          name = "p2p-vpn-debug-bundle";
+          runtimeInputs = [
+            cargo
+            rust
+            checkFast
+            pkgs.bash
+            pkgs.coreutils
+            pkgs.git
+            pkgs.jq
+            pkgs.jujutsu
+            pkgs.nix
+          ] ++ lib.optionals pkgs.stdenv.isLinux [
+            pkgs.iproute2
+            pkgs.procps
+            pkgs.util-linux
+          ];
+          text = ''
+            exec bash ${./scripts/debug-bundle.sh} "$@"
+          '';
+        };
         publicRelayRepro = pkgs.writeShellApplication {
           name = "p2p-vpn-public-relay-repro";
           runtimeInputs = [
@@ -1827,6 +1848,7 @@ EOF
         packages = {
           default = package;
           check-fast = checkFast;
+          debug-bundle = debugBundle;
           membership-record-repro = membershipRecordRepro;
 
           releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
@@ -1845,7 +1867,9 @@ EOF
           cp ${./Cargo.toml} "$release_dir/Cargo.toml"
           cp -R ${./examples/nixos-mesh} "$release_dir/examples/nixos-mesh"
           cp ${./nix/nixos-module.nix} "$release_dir/nix/nixos-module.nix"
+          cp ${./scripts/debug-bundle.sh} "$release_dir/scripts/debug-bundle.sh"
           cp ${./scripts/membership-record-repro.sh} "$release_dir/scripts/membership-record-repro.sh"
+          chmod +x "$release_dir/scripts/debug-bundle.sh"
           chmod +x "$release_dir/scripts/membership-record-repro.sh"
           tar --sort=name --mtime="UTC 1970-01-01" \
             --owner=0 --group=0 --numeric-owner \
@@ -1878,6 +1902,13 @@ EOF
             program = "${membershipRecordRepro}/bin/p2p-vpn-membership-record-repro";
             meta = {
               description = "Generate signed membership-record repro artifacts";
+            };
+          };
+          debug-bundle = {
+            type = "app";
+            program = "${debugBundle}/bin/p2p-vpn-debug-bundle";
+            meta = {
+              description = "Capture local debug metadata and optional fast-check artifacts";
             };
           };
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
@@ -1957,6 +1988,7 @@ EOF
               "$root/docs/public-bootstrap-smoke.md" \
               "$root/examples/nixos-mesh/flake.nix" \
               "$root/nix/nixos-module.nix" \
+              "$root/scripts/debug-bundle.sh" \
               "$root/scripts/membership-record-repro.sh"
             do
               grep -Fx "$path" entries >/dev/null || {
@@ -1965,6 +1997,8 @@ EOF
               }
             done
 
+            tar -xzf "$archive" "$root/scripts/debug-bundle.sh"
+            test -x "$root/scripts/debug-bundle.sh"
             tar -xzf "$archive" "$root/scripts/membership-record-repro.sh"
             test -x "$root/scripts/membership-record-repro.sh"
 

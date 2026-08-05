@@ -588,10 +588,18 @@ Relay-capable nodes can also set `--relay-max-reservations`,
 Run local checks:
 
 ```sh
+nix run .#debug-bundle
 nix run .#check-fast
 nix flake check
 nix build .#default
 ```
+
+`debug-bundle` captures Git and jj status, Cargo metadata, flake outputs,
+toolchain versions, host network state, open sockets, running `p2p-vpn`
+processes, a machine-readable summary, and replay commands into a temporary
+artifact directory. Set `P2P_VPN_DEBUG_BUNDLE_DIR` to choose the directory, or
+set `P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=1` to include the `check-fast` output
+and exit status in the same bundle.
 
 `check-fast` runs `cargo fmt -- --check`, `cargo test`, and
 `cargo clippy --all-targets -- -D warnings` with the Rust toolchain and native

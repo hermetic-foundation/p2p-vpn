@@ -5,6 +5,27 @@ fails and you need artifacts that can be inspected after the command exits.
 
 ## Fast Local Checks
 
+When a failure is hard to reproduce, capture a local debug bundle before
+changing the environment:
+
+```sh
+nix run .#debug-bundle
+```
+
+The bundle writes Git and jj status, Cargo metadata, flake outputs, toolchain
+versions, host network state, open UDP/TCP sockets, running `p2p-vpn` processes,
+`debug-summary.txt`, `debug-summary.json`, and replay commands into a temporary
+artifact directory. Set `P2P_VPN_DEBUG_BUNDLE_DIR` to choose the directory.
+
+To include the normal fast verification loop in the same artifact directory:
+
+```sh
+P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=1 nix run .#debug-bundle
+```
+
+That mode records `check-fast.stdout` and `check-fast.stderr`, then exits with
+the fast-check status.
+
 Before running slower namespace or public relay repros, run the reproducible
 local feedback loop:
 
