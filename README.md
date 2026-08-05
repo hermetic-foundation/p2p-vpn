@@ -1101,9 +1101,10 @@ budget. Add `--require-dcutr-success` with `--check-candidates` when the scan
 should only pass after a successful public-relay-assisted hole punch. Pass
 `--write-config PATH` with
 `--check-candidates` to write the same default relay-assisted config that
-`relay-check --write-config` writes from the first validated scanned candidate.
-When `relay-scan` also receives `--config p2p-vpn.json`, the written config
-preserves that overlay's identity, membership, peers, routes, queue limits, and
+`relay-check --write-config` writes from the first validated scanned candidate:
+public IPFS profile plus the validated relay shortcut. When `relay-scan` also
+receives `--config p2p-vpn.json`, the written config preserves that overlay's
+identity, discovery policy, membership, peers, routes, queue limits, and
 packet-plane settings while adding only the validated relay bootstrap and
 reservation infrastructure.
 
@@ -1153,10 +1154,12 @@ Successful candidates also print a
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
 `--relay-reservation .../p2p-circuit` address for `init-config`. Pass
 `--write-config PATH` to write a runtime-valid config from the first validated
-relay candidate; add `--config p2p-vpn.json` when that output should preserve
-an existing overlay's identity, membership, peers, routes, queue limits, and
-packet-plane settings. The relay is added as bootstrap/AutoNAT/relay
-infrastructure only and is not added as a VPN peer or route owner. Use
+relay candidate. Without `--config`, the generated config uses the public IPFS
+profile plus the validated relay shortcut. Add `--config p2p-vpn.json` when that
+output should preserve an existing overlay's identity, discovery policy,
+membership, peers, routes, queue limits, and packet-plane settings. The relay is
+added as bootstrap/AutoNAT/relay infrastructure only and is not added as a VPN
+peer or route owner. Use
 `--force` to overwrite an existing output file. Each supplied relay multiaddr
 must be the relay's direct address with its `/p2p/RELAY` peer ID and without
 `/p2p-circuit`.

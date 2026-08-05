@@ -379,9 +379,11 @@ validation, and DCUtR validation as separate phases and preserves
 `public-relay-scan-report.json`, `public-relay-check-report.json`, and
 `public-relay-dcutr-report.json` when those phases can run. If relay-circuit
 validation succeeds, it also writes `public-relay-config.json`, a runnable
-relay-assisted config generated from the validated public relay. It exits
-nonzero if any phase fails, but earlier artifacts remain in the repro
-directory.
+relay-assisted config generated from the validated public relay. Without
+`P2P_VPN_REPRO_BASE_CONFIG`, that config uses the public IPFS profile plus the
+validated relay shortcut; with a base config, it preserves the supplied overlay
+and adds only relay infrastructure. It exits nonzero if any phase fails, but
+earlier artifacts remain in the repro directory.
 Probe reports use schema version 3 and include per-candidate
 `elapsed_millis`, plus bootstrap-level `direct_connection_addresses` and
 `relayed_connection_addresses` when a candidate reaches the bootstrap-check

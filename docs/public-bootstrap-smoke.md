@@ -115,10 +115,12 @@ Use `--max-validation-candidates N` to bound each validation pass after host
 reachability filtering; this is especially useful with `--require-dcutr-success`
 because each public relay has a single end-to-end reservation plus circuit/DCUtR
 timeout budget. Add `--write-config PATH` with `--check-candidates` to write a
-default relay-assisted config from the first validated scanned candidate. When the scan
-uses `--config p2p-vpn.json`, the output preserves that config's overlay
-identity, membership, peers, routes, queue limits, and packet-plane settings and
-adds only the validated relay bootstrap and reservation infrastructure.
+default relay-assisted config from the first validated scanned candidate; without
+`--config`, that config uses the public IPFS profile plus the validated relay
+shortcut. When the scan uses `--config p2p-vpn.json`, the output preserves that
+config's overlay identity, discovery policy, membership, peers, routes, queue
+limits, and packet-plane settings and adds only the validated relay bootstrap and
+reservation infrastructure.
 
 Then run the live relay smokes with a known-good relay or the scanned candidate
 set. The preferred rootless operator command is:

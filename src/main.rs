@@ -4016,12 +4016,19 @@ fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) ->
         packet_plane: PacketPlaneConfig::default(),
         bootstrap_peers: Vec::new(),
         relay_peers: vec![relay],
-        ipfs_bootstrap_peers: false,
-        public_ipfs_profile: false,
+        ipfs_bootstrap_peers: true,
+        public_ipfs_profile: true,
         peers: Vec::new(),
         local_routes: Vec::new(),
         peer_routes: Vec::new(),
-        discovery: DiscoveryConfig::default(),
+        discovery: InitDiscoveryFlags {
+            disable_mdns: false,
+            disable_kademlia: false,
+            disable_kademlia_provider_advertisement: false,
+            disable_dcutr: false,
+            disable_autonat: false,
+        }
+        .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), false, true),
         relay: RelayConfig::default(),
         queue: QueueConfig::default(),
         resources: ResourceConfig::default(),
@@ -9969,6 +9976,8 @@ mod tests {
         let relay = NodeIdentity::generate_ed25519().expect("relay identity");
         let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
         let relay = relay_candidate_endpoint_arg(&relay_address).expect("relay endpoint arg");
+        let relay_id = relay.id.clone();
+        let relay_direct_address = relay.address.clone();
 
         init_config(public_relay_config_args(output.clone(), relay, true)).expect("init config");
 
@@ -9981,8 +9990,21 @@ mod tests {
             config.network.relay.reservations[0],
             format!("{relay_address}/p2p-circuit")
         );
-        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(
+            config.network.bootstrap_peers.len(),
+            IPFS_BOOTSTRAP_PEERS.len() + 1
+        );
+        assert!(config.network.bootstrap_peers.iter().any(|peer| {
+            peer.id == relay_id && Some(peer.address.as_str()) == relay_direct_address.as_deref()
+        }));
         assert_eq!(config.peers.len(), 0);
+        assert!(!config.network.discovery.mdns);
+        assert!(config.network.discovery.kademlia);
+        assert!(!config.network.discovery.kademlia_provider_advertisement);
+        assert_eq!(
+            config.network.discovery.kademlia_protocol,
+            IPFS_KADEMLIA_PROTOCOL
+        );
         assert!(config.network.discovery.dcutr);
         assert!(config.network.discovery.autonat);
     }
@@ -10171,7 +10193,19 @@ mod tests {
 
         add_public_relay_infrastructure(&mut config, &relay_arg).expect("add relay");
 
-        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(
+            config.network.bootstrap_peers.len(),
+            IPFS_BOOTSTRAP_PEERS.len() + 1
+        );
+        assert_eq!(
+            config
+                .network
+                .bootstrap_peers
+                .iter()
+                .filter(|peer| peer.id == relay.peer_id && peer.address == relay_address)
+                .count(),
+            1
+        );
         assert_eq!(config.network.relay.reservations.len(), 1);
     }
 
