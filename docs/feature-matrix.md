@@ -93,12 +93,14 @@ path.
    against a routing-table relay candidate. A follow-up `--require-dcutr-success`
    run against that relay connected the relayed circuit but timed out during the
    direct QUIC hole-punch attempt. Bootstrap and relay-check reports now expose
-   a stable public relay candidate `failure_stage` plus the most recent libp2p
-   DCUtR failure as `dcutr last_error`, so future public relay runs can
-   distinguish setup, reservation, relayed-circuit, DCUtR prerequisite, and
-   direct handshake failures. The JSON report also preserves per-bootstrap-peer,
-   per-relay-reservation, and per-relayed-peer-circuit rows for cross-host
-   comparison. `relay-scan --write-report` persists scan
+   a stable public relay candidate `failure_stage`, a more specific
+   machine-readable `diagnosis`, and the most recent libp2p DCUtR failure as
+   `dcutr last_error`, so future public relay runs can distinguish setup,
+   reservation, relayed-circuit, missing hole-punch event, missing direct
+   connection evidence, and direct handshake failures. The JSON report also
+   preserves per-bootstrap-peer, per-relay-reservation, and
+   per-relayed-peer-circuit rows for cross-host comparison.
+   `relay-scan --write-report` persists scan
    discovery as JSON with timeout knobs, public routing counts, peer identify
    results, relay-hop capability, dial failures, and candidate addresses before
    validation starts, so failed public scans still leave a reproducible

@@ -493,6 +493,38 @@ pub struct PublicRelayCandidateReport {
     pub elapsed_millis: u64,
 }
 
+impl PublicRelayCandidateReport {
+    #[must_use]
+    pub fn diagnosis(&self) -> PublicRelayCandidateDiagnosis {
+        if self.succeeded {
+            return PublicRelayCandidateDiagnosis::Success;
+        }
+
+        let Some(bootstrap) = &self.bootstrap else {
+            return match self.failure_stage {
+                PublicRelayCandidateFailureStage::CandidateSetup => {
+                    PublicRelayCandidateDiagnosis::CandidateSetupFailed
+                }
+                _ => PublicRelayCandidateDiagnosis::UnknownFailure,
+            };
+        };
+
+        match self.failure_stage {
+            PublicRelayCandidateFailureStage::None => PublicRelayCandidateDiagnosis::UnknownFailure,
+            PublicRelayCandidateFailureStage::CandidateSetup => {
+                PublicRelayCandidateDiagnosis::CandidateSetupFailed
+            }
+            PublicRelayCandidateFailureStage::RelayReservation => {
+                diagnose_relay_reservation_failure(bootstrap)
+            }
+            PublicRelayCandidateFailureStage::RelayedPeerCircuit => {
+                diagnose_relayed_peer_circuit_failure(bootstrap)
+            }
+            PublicRelayCandidateFailureStage::DcutrSuccess => diagnose_dcutr_failure(bootstrap),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicRelayCandidateFailureStage {
     None,
@@ -500,6 +532,75 @@ pub enum PublicRelayCandidateFailureStage {
     RelayReservation,
     RelayedPeerCircuit,
     DcutrSuccess,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublicRelayCandidateDiagnosis {
+    Success,
+    CandidateSetupFailed,
+    RelayReservationNotAccepted,
+    RelayRelayedListenAddressMissing,
+    RelayedPeerCircuitNotConnected,
+    DcutrDisabled,
+    DcutrNotReady,
+    DcutrNoHolePunchSuccess,
+    DcutrMissingDirectConnection,
+    UnknownFailure,
+}
+
+impl PublicRelayCandidateDiagnosis {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::CandidateSetupFailed => "candidate_setup_failed",
+            Self::RelayReservationNotAccepted => "relay_reservation_not_accepted",
+            Self::RelayRelayedListenAddressMissing => "relay_relayed_listen_address_missing",
+            Self::RelayedPeerCircuitNotConnected => "relayed_peer_circuit_not_connected",
+            Self::DcutrDisabled => "dcutr_disabled",
+            Self::DcutrNotReady => "dcutr_not_ready",
+            Self::DcutrNoHolePunchSuccess => "dcutr_no_hole_punch_success",
+            Self::DcutrMissingDirectConnection => "dcutr_missing_direct_connection",
+            Self::UnknownFailure => "unknown_failure",
+        }
+    }
+}
+
+fn diagnose_relay_reservation_failure(
+    bootstrap: &BootstrapCheckReport,
+) -> PublicRelayCandidateDiagnosis {
+    if bootstrap.accepted_relay_reservations < bootstrap.configured_relay_reservations {
+        return PublicRelayCandidateDiagnosis::RelayReservationNotAccepted;
+    }
+    if bootstrap.relays_with_listen_addresses() < bootstrap.configured_relay_reservations {
+        return PublicRelayCandidateDiagnosis::RelayRelayedListenAddressMissing;
+    }
+    PublicRelayCandidateDiagnosis::UnknownFailure
+}
+
+fn diagnose_relayed_peer_circuit_failure(
+    bootstrap: &BootstrapCheckReport,
+) -> PublicRelayCandidateDiagnosis {
+    if bootstrap.connected_relayed_peer_circuits < bootstrap.configured_relayed_peer_circuits {
+        return PublicRelayCandidateDiagnosis::RelayedPeerCircuitNotConnected;
+    }
+    PublicRelayCandidateDiagnosis::UnknownFailure
+}
+
+fn diagnose_dcutr_failure(bootstrap: &BootstrapCheckReport) -> PublicRelayCandidateDiagnosis {
+    if !bootstrap.dcutr.enabled {
+        return PublicRelayCandidateDiagnosis::DcutrDisabled;
+    }
+    if bootstrap.dcutr.successes == 0 {
+        return PublicRelayCandidateDiagnosis::DcutrNoHolePunchSuccess;
+    }
+    if bootstrap.dcutr.direct_connections == 0 {
+        return PublicRelayCandidateDiagnosis::DcutrMissingDirectConnection;
+    }
+    if !bootstrap.dcutr.ready {
+        return PublicRelayCandidateDiagnosis::DcutrNotReady;
+    }
+    PublicRelayCandidateDiagnosis::UnknownFailure
 }
 
 #[derive(Debug)]
@@ -791,10 +892,11 @@ impl PublicRelayProbeReport {
 
         for candidate in &self.candidates {
             lines.push(format!(
-                "public relay candidate: {} succeeded {} failure_stage {} error {}",
+                "public relay candidate: {} succeeded {} failure_stage {} diagnosis {} error {}",
                 candidate.address,
                 candidate.succeeded,
                 candidate.failure_stage.as_str(),
+                candidate.diagnosis().as_str(),
                 candidate.error.as_deref().unwrap_or("none")
             ));
             if candidate.succeeded
@@ -3035,6 +3137,7 @@ mod tests {
         ));
         assert!(lines.iter().any(|line| {
             line.contains("failure_stage dcutr_success")
+                && line.contains("diagnosis dcutr_no_hole_punch_success")
                 && line.contains("dcutr success check did not meet success threshold")
         }));
         assert!(lines.iter().any(|line| line
@@ -3082,6 +3185,58 @@ mod tests {
         assert!(lines.contains(&format!(
             "public relay candidate config: relay_peer {relay}={address} relay_reservation {address}/p2p-circuit"
         )));
+    }
+
+    #[test]
+    fn public_relay_candidate_diagnosis_classifies_bootstrap_failures() {
+        let relay = peer_id();
+        let address = format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}");
+        let failed_candidate = |failure_stage, bootstrap| PublicRelayCandidateReport {
+            address: address.clone(),
+            succeeded: false,
+            failure_stage,
+            error: Some("probe failed".to_owned()),
+            bootstrap: Some(bootstrap),
+            elapsed_millis: 1000,
+        };
+
+        assert_eq!(
+            failed_candidate(
+                PublicRelayCandidateFailureStage::RelayReservation,
+                relay_report(vec![RelayReservationCheck {
+                    relay_peer_id: relay,
+                    address: address.clone(),
+                    accepted: false,
+                    relayed_listen_address: false,
+                }]),
+            )
+            .diagnosis(),
+            PublicRelayCandidateDiagnosis::RelayReservationNotAccepted
+        );
+        assert_eq!(
+            failed_candidate(
+                PublicRelayCandidateFailureStage::RelayedPeerCircuit,
+                relayed_peer_report(1, 0),
+            )
+            .diagnosis(),
+            PublicRelayCandidateDiagnosis::RelayedPeerCircuitNotConnected
+        );
+        assert_eq!(
+            failed_candidate(
+                PublicRelayCandidateFailureStage::DcutrSuccess,
+                dcutr_success_report(true, 0, 0, 1, Some("NoDirectConnection".to_owned())),
+            )
+            .diagnosis(),
+            PublicRelayCandidateDiagnosis::DcutrNoHolePunchSuccess
+        );
+        assert_eq!(
+            failed_candidate(
+                PublicRelayCandidateFailureStage::DcutrSuccess,
+                dcutr_success_report(true, 1, 0, 0, None),
+            )
+            .diagnosis(),
+            PublicRelayCandidateDiagnosis::DcutrMissingDirectConnection
+        );
     }
 
     #[test]

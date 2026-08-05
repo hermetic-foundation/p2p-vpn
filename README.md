@@ -1150,7 +1150,9 @@ accepts a larger bounded scan artifact and applies ordering, host reachability
 filtering, and truncation before it opens public relay probes. Each candidate
 line includes a stable `failure_stage` value: `candidate_setup`,
 `relay_reservation`, `relayed_peer_circuit`, `dcutr_success`, or `none` for a
-usable candidate.
+usable candidate, plus a more specific `diagnosis` value such as
+`relay_reservation_not_accepted`, `relayed_peer_circuit_not_connected`,
+`dcutr_no_hole_punch_success`, or `dcutr_missing_direct_connection`.
 The report also prints a `public relay candidate failure stages:` summary with
 per-stage counts across the attempted candidate set, which is useful for
 comparing bounded public scans.
@@ -1163,10 +1165,11 @@ same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
 hole-punch failure. Pass `--write-report PATH` to save a pretty-printed JSON
 artifact with schema version, probe mode, timeout, validation cap,
 host-reachable candidates, skipped candidates with reasons, per-candidate
-success, failure stage, elapsed milliseconds, error, bootstrap/DCUtR summary,
-observed relayed/direct connection addresses, per-bootstrap-peer dial results,
-per-relay reservation results, and per-relayed-peer circuit results for each
-candidate that reached the bootstrap-check phase.
+success, failure stage, diagnosis, elapsed milliseconds, error,
+bootstrap/DCUtR summary, observed relayed/direct connection addresses,
+per-bootstrap-peer dial results, per-relay reservation results, and
+per-relayed-peer circuit results for each candidate that reached the
+bootstrap-check phase.
 Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full

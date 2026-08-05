@@ -268,13 +268,14 @@ phase fails without deleting earlier evidence.
    sed -n '1,160p' "$P2P_VPN_REPRO_DIR/repro-host-network.txt"
    ```
 
-   Compare `phase results`, `failure_stages`, `direct_connection_addresses`,
-   `relayed_connection_addresses`, and `first_error` between hosts. A useful
+   Compare `phase results`, `failure_stages`, `diagnoses`,
+   `direct_connection_addresses`, `relayed_connection_addresses`, and
+   `first_error` between hosts. A useful
    relay fallback proof has a successful relay-check phase and relayed
    connection addresses. A public DCUtR proof also needs a successful DCUtR
    phase with a direct non-relayed connection address. `repro-summary.json`
    provides a stable top-level index for comparing phase status, candidate
-   counts, failure stages, elapsed ranges, route availability, relay
+   counts, failure stages, diagnoses, elapsed ranges, route availability, relay
    reservation and relayed-circuit diagnostic counts, and handoff scripts across
    machines. When DCUtR does not succeed, compare each relay-check/DCUtR
    candidate's `bootstrap.peer_results`, `bootstrap.relay_results`, and
@@ -449,12 +450,12 @@ addresses route through the validated relay. Use those with `public-vpn-repro`
 to prove relay stream fallback before DCUtR or the owned UDP/QUIC packet plane
 is available. It exits nonzero if any phase fails, but earlier artifacts remain
 in the repro directory.
-Probe reports use schema version 3 and include per-candidate
+Probe reports use schema version 5 and include per-candidate `diagnosis`,
 `elapsed_millis`, plus bootstrap-level `direct_connection_addresses` and
 `relayed_connection_addresses` when a candidate reaches the bootstrap-check
 phase. These fields help distinguish fast setup failures from full-budget
-reservation, relayed-circuit, or DCUtR timeouts, and confirm which concrete path
-type was observed.
+reservation, relayed-circuit, missing hole-punch event, or missing direct
+connection evidence, and confirm which concrete path type was observed.
 
 Every repro directory also contains `repro-metadata.txt`,
 `repro-host-network.txt`, `repro-commands.sh`, `repro-phases.tsv`,

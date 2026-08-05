@@ -518,6 +518,12 @@
                     else group_by(.) | map("\(.[0])=\(length)") | join(",")
                     end
                 ),
+                "  diagnoses=" + (
+                  [(.candidates // [])[].diagnosis | select(. != null)]
+                  | if length == 0 then "none"
+                    else group_by(.) | map("\(.[0])=\(length)") | join(",")
+                    end
+                ),
                 "  elapsed_millis=" + (
                   [(.candidates // [])[].elapsed_millis | select(. != null)]
                   | if length == 0 then "none"
@@ -667,6 +673,10 @@
                     failure_stages: (
                       reduce [(.candidates // [])[].failure_stage | select(. != null)][] as $stage
                         ({}; .[$stage] = ((.[$stage] // 0) + 1))
+                    ),
+                    diagnoses: (
+                      reduce [(.candidates // [])[].diagnosis | select(. != null)][] as $diagnosis
+                        ({}; .[$diagnosis] = ((.[$diagnosis] // 0) + 1))
                     ),
                     elapsed_millis: (
                       elapsed_values as $values
@@ -2140,6 +2150,8 @@ EOF
             grep -Fq 'printf "jq . %q\n" "$summary_json"' "$script"
             grep -q 'write_machine_summary' "$script"
             grep -q 'relay_diagnostics' "$script"
+            grep -q 'diagnoses=' "$script"
+            grep -q 'diagnoses:' "$script"
             grep -q 'accepted_relay_reservations=' "$script"
             grep -q 'P2P_VPN_REPRO_MEMBERSHIP_DHT' "$script"
             grep -q 'public-membership-dht-bootstrap-check.json' "$script"

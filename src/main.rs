@@ -3708,6 +3708,7 @@ struct PublicRelayCandidateReportJson<'a> {
     address: &'a str,
     succeeded: bool,
     failure_stage: &'static str,
+    diagnosis: &'static str,
     elapsed_millis: u64,
     error: Option<&'a str>,
     bootstrap: Option<BootstrapCheckReportJson<'a>>,
@@ -3840,7 +3841,7 @@ fn public_relay_probe_report_json<'a>(
     report: &'a p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
 ) -> PublicRelayProbeReportJson<'a> {
     PublicRelayProbeReportJson {
-        schema_version: 4,
+        schema_version: 5,
         mode: public_relay_probe_mode_name(args.mode),
         succeeded: report.succeeded(),
         timeout_seconds: args.timeout_seconds.max(1),
@@ -3860,6 +3861,7 @@ fn public_relay_probe_report_json<'a>(
                 address: &candidate.address,
                 succeeded: candidate.succeeded,
                 failure_stage: public_relay_failure_stage_name(candidate.failure_stage),
+                diagnosis: candidate.diagnosis().as_str(),
                 elapsed_millis: candidate.elapsed_millis,
                 error: candidate.error.as_deref(),
                 bootstrap: candidate
@@ -8213,7 +8215,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
 
-        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["schema_version"], 5);
         assert_eq!(value["mode"], "dcutr_success");
         assert_eq!(value["succeeded"], false);
         assert_eq!(value["timeout_seconds"], 45);
@@ -8221,6 +8223,10 @@ mod tests {
         assert_eq!(value["host_reachable_candidates"][0], candidate);
         assert_eq!(value["skipped_candidates"][0]["reason"], "ipv4_unreachable");
         assert_eq!(value["candidates"][0]["failure_stage"], "dcutr_success");
+        assert_eq!(
+            value["candidates"][0]["diagnosis"],
+            "dcutr_no_hole_punch_success"
+        );
         assert_eq!(value["candidates"][0]["elapsed_millis"], 45_000);
         assert_eq!(
             value["candidates"][0]["error"],

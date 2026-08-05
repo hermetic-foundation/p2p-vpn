@@ -166,7 +166,10 @@ identify whether the probe connected directly to the relay, whether relay
 reservation acceptance or relayed listen-address publication timed out, and the
 last direct relay dial error when one was observed. Candidate lines also include
 a stable `failure_stage` value: `candidate_setup`, `relay_reservation`,
-`relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
+`relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate, and
+a more specific `diagnosis` value such as
+`relay_reservation_not_accepted`, `relayed_peer_circuit_not_connected`,
+`dcutr_no_hole_punch_success`, or `dcutr_missing_direct_connection`.
 Probe output also includes a
 `public relay candidate failure stages:` summary with per-stage counts across
 the attempted set. Failures after reservation setup include the same detailed
@@ -180,8 +183,8 @@ rejected relay prerequisites, or direct handshake timeouts.
 Use `--write-report PATH` to persist the same probe outcome as pretty-printed
 JSON, including schema version, probe mode, timeout, validation cap,
 host-reachable candidates, skipped candidates with reasons, per-candidate
-success, failure stage, error, and bootstrap/DCUtR summary fields for candidates
-that reached the bootstrap-check phase.
+success, failure stage, diagnosis, error, and bootstrap/DCUtR summary fields
+for candidates that reached the bootstrap-check phase.
 Successful candidates also print a `public relay candidate config:` line with
 the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`
