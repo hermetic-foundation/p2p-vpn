@@ -3672,10 +3672,17 @@ async fn handle_swarm_event(
                 peer_id,
                 num_established.get(),
             );
-            record_path_established(
+            record_path_established_and_maybe_send_packet_plane_hello(
+                swarm,
                 context.paths,
                 context.forwarder,
+                context.peer_capabilities,
                 context.metrics,
+                context.local_capabilities,
+                context.identity,
+                context.packet_plane,
+                context.packet_plane_quic.as_deref(),
+                context.packet_plane_negotiator,
                 peer_id,
                 &endpoint,
             );
@@ -5504,15 +5511,61 @@ fn send_service_status_request(
     metrics.record_service_request_sent();
 }
 
+#[allow(clippy::too_many_arguments)]
+fn record_path_established_and_maybe_send_packet_plane_hello(
+    swarm: &mut Swarm<Behaviour>,
+    paths: &mut PathSet,
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    metrics: &RuntimeMetrics,
+    local_capabilities: &ControlCapabilities,
+    identity: &NodeIdentity,
+    packet_plane: &PacketPlaneRuntime,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    packet_plane_negotiator: &mut PacketPlaneNegotiator,
+    peer: Libp2pPeerId,
+    endpoint: &ConnectedPoint,
+) {
+    let Some(change) = record_path_established(paths, forwarder, metrics, peer, endpoint) else {
+        return;
+    };
+    let kind = path_kind_for_endpoint(endpoint);
+    let remote_overlay = PeerId::from_libp2p(peer);
+    let selected_direct_negotiation_path = kind != PathKind::DirectQuicDatagram
+        && change
+            .current
+            .is_some_and(|current| current.peer == remote_overlay && current.is_direct());
+    if !(change.promoted_to_direct() || selected_direct_negotiation_path) {
+        return;
+    }
+
+    let Some(remote_capabilities) = peer_capabilities.get(remote_overlay).cloned() else {
+        return;
+    };
+    maybe_send_packet_plane_hello(
+        swarm,
+        forwarder,
+        paths,
+        packet_plane,
+        packet_plane_quic,
+        packet_plane_negotiator,
+        identity,
+        local_capabilities,
+        peer,
+        &remote_capabilities,
+        metrics,
+    );
+}
+
 fn record_path_established(
     paths: &mut PathSet,
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     endpoint: &ConnectedPoint,
-) {
+) -> Option<crate::path::PathSelectionChange> {
     if !forwarder.is_configured_transport_peer(peer) {
-        return;
+        return None;
     }
 
     let kind = path_kind_for_endpoint(endpoint);
@@ -5525,6 +5578,7 @@ fn record_path_established(
         )),
     );
     record_path_selection_change(metrics, change);
+    change
 }
 
 fn record_path_closed(
@@ -12012,6 +12066,128 @@ mod tests {
             &paths,
             remote_overlay
         ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn direct_path_promotion_retries_packet_plane_negotiation_with_cached_capabilities() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let local_peer = local_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("local peer");
+        let remote = loop {
+            let candidate = peer_id();
+            if PeerId::from_libp2p(local_peer).as_bytes()
+                <= PeerId::from_libp2p(candidate).as_bytes()
+            {
+                break candidate;
+            }
+        };
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let local_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("local socket")])
+                .await
+                .expect("local packet plane");
+        let remote_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("remote socket")])
+                .await
+                .expect("remote packet plane");
+        let mut local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_packet_endpoint_candidates(vec![
+                local_packet_plane
+                    .primary_listener()
+                    .expect("local listener")
+                    .to_string(),
+            ]);
+        local_capabilities = local_capabilities.with_owned_udp_packet_plane(true);
+        let mut remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_packet_endpoint_candidates(vec![
+                remote_packet_plane
+                    .primary_listener()
+                    .expect("remote listener")
+                    .to_string(),
+            ]);
+        remote_capabilities = remote_capabilities.with_owned_udp_packet_plane(true);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(remote_overlay, remote_capabilities);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let metrics = RuntimeMetrics::default();
+        let mut paths = PathSet::new();
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let relay_endpoint = ConnectedPoint::Dialer {
+            address: format!(
+                "/ip4/127.0.0.1/tcp/4001/p2p/{}/p2p-circuit/p2p/{remote}",
+                peer_id()
+            )
+            .parse()
+            .expect("relay endpoint"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let direct_endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4002".parse().expect("direct endpoint"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+
+        record_path_established_and_maybe_send_packet_plane_hello(
+            &mut node.swarm,
+            &mut paths,
+            &forwarder,
+            &peer_capabilities,
+            &metrics,
+            &local_capabilities,
+            &local_identity,
+            &local_packet_plane,
+            None,
+            &mut negotiator,
+            remote,
+            &relay_endpoint,
+        );
+        assert!(!negotiator.has_pending(remote_overlay));
+
+        record_path_established_and_maybe_send_packet_plane_hello(
+            &mut node.swarm,
+            &mut paths,
+            &forwarder,
+            &peer_capabilities,
+            &metrics,
+            &local_capabilities,
+            &local_identity,
+            &local_packet_plane,
+            None,
+            &mut negotiator,
+            remote,
+            &direct_endpoint,
+        );
+
+        assert!(negotiator.has_pending(remote_overlay));
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .control_requests_sent,
+            1
+        );
     }
 
     #[test]
