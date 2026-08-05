@@ -341,8 +341,9 @@ QUIC packet-plane session.
 
 The app writes `vpn-repro-host-a.sh`, `vpn-repro-host-b.sh`,
 `vpn-repro-collect.sh`, `vpn-repro-shutdown.sh`, `vpn-repro-metadata.txt`,
-`vpn-repro-host-network.txt`, and `vpn-repro-summary.txt`. Run the generated
-Host A and Host B scripts with the privileges needed to create the TUN device.
+`vpn-repro-host-network.txt`, `vpn-repro-summary.txt`, and
+`vpn-repro-evidence.json`. Run the generated Host A and Host B scripts with the
+privileges needed to create the TUN device.
 The metadata records source revision and dirty status when the app is run from
 a Git checkout, so artifact bundles can be compared against the exact code that
 produced them.
@@ -353,8 +354,11 @@ daemon log tail, records command exit statuses, starts `p2p-vpn up`, waits on
 `daemon-capabilities`, line-oriented metrics, Prometheus metrics, matching JSON
 view envelopes, and final post-ping status/path snapshots even when health or
 ping fails. It then pings `P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The
-artifact names are stable
-so two hosts can exchange directories and compare the selected path,
+evidence JSON condenses health readiness, ping status, direct and relay path
+lines, packet-plane counts, QUIC packet-plane counts, DCUtR successes, and
+direct promotion counters so failed two-host runs can be compared without
+hand-parsing every log. The artifact names are stable so two hosts can exchange
+directories and compare the selected path,
 packet-plane session state, drops, queue state, route ownership, MTU ceilings,
 capability negotiation, host topology, and ping result directly.
 

@@ -1222,7 +1222,10 @@ The generated Host A/Host B scripts start `p2p-vpn up`, wait on daemon health
 requirements, capture daemon state, peer, route, path, MTU, capability, status,
 Prometheus, JSON view, final post-ping, and host-network artifacts, run a ping
 proof when `P2P_VPN_VPN_REPRO_PING_TARGET` is set, and write stable logs for
-comparing the same public relay-assisted overlay across two machines.
+comparing the same public relay-assisted overlay across two machines. Each host
+also writes `vpn-repro-evidence.json`, a compact summary of health, ping,
+direct/relay path evidence, packet-plane session counts, QUIC session counts,
+DCUtR successes, and direct path promotions for quick machine comparison.
 
 The ignored tests run the same kind of probe from the test harness:
 
