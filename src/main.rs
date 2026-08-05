@@ -251,6 +251,10 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long)]
         require_relayed_peer_circuits: bool,
+        #[arg(long = "write-report")]
+        write_report: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
     },
     RelayCheck {
         #[arg(short, long)]
@@ -601,24 +605,28 @@ async fn main() -> Result<(), String> {
             require_dcutr_ready,
             require_dcutr_success,
             require_relayed_peer_circuits,
+            write_report,
+            force,
         } => {
             let threshold = if require_all {
                 BootstrapCheckThreshold::All
             } else {
                 BootstrapCheckThreshold::Any
             };
-            Box::pin(bootstrap_check(
-                &config,
+            Box::pin(bootstrap_check(BootstrapCheckArgs {
+                config_path: config,
                 timeout_seconds,
                 threshold,
-                BootstrapCheckRequirements {
+                requirements: BootstrapCheckRequirements {
                     relay_reservations: require_relay_reservations,
                     autonat_status: require_autonat_status,
                     dcutr_ready: require_dcutr_ready,
                     dcutr_success: require_dcutr_success,
                     relayed_peer_circuits: require_relayed_peer_circuits,
                 },
-            ))
+                write_report,
+                force,
+            }))
             .await
         }
         Command::RelayCheck {
@@ -946,6 +954,16 @@ struct RelayCheckArgs {
     max_validation_candidates: Option<usize>,
     write_report: Option<PathBuf>,
     write_config: Option<PathBuf>,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct BootstrapCheckArgs {
+    config_path: PathBuf,
+    timeout_seconds: u64,
+    threshold: BootstrapCheckThreshold,
+    requirements: BootstrapCheckRequirements,
+    write_report: Option<PathBuf>,
     force: bool,
 }
 
@@ -2487,18 +2505,14 @@ async fn peer_status(path: &PathBuf, peer: &str, timeout_seconds: u64) -> Result
     Ok(())
 }
 
-async fn bootstrap_check(
-    path: &Path,
-    timeout_seconds: u64,
-    threshold: BootstrapCheckThreshold,
-    requirements: BootstrapCheckRequirements,
-) -> Result<(), String> {
-    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+async fn bootstrap_check(args: BootstrapCheckArgs) -> Result<(), String> {
+    let config = Config::load(&args.config_path)
+        .map_err(|error| format!("failed to load config: {error:?}"))?;
     let report = Box::pin(check_config_bootstrap(
         &config,
-        Duration::from_secs(timeout_seconds.max(1)),
-        threshold,
-        requirements,
+        Duration::from_secs(args.timeout_seconds.max(1)),
+        args.threshold,
+        args.requirements,
     ))
     .await
     .map_err(|error| format!("bootstrap check failed to start: {error:?}"))?;
@@ -2508,11 +2522,36 @@ async fn bootstrap_check(
         println!("{line}");
     }
 
+    if let Some(output) = &args.write_report {
+        write_bootstrap_check_report(&args, &report, output)?;
+    }
+
     if succeeded {
         Ok(())
     } else {
         Err("bootstrap check did not meet success threshold".to_owned())
     }
+}
+
+fn write_bootstrap_check_report(
+    args: &BootstrapCheckArgs,
+    report: &p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
+    output: &Path,
+) -> Result<(), String> {
+    if !args.force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    let rendered = serde_json::to_string_pretty(&bootstrap_check_report_file_json(args, report))
+        .map_err(|error| format!("failed to encode bootstrap check report: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
+
+    Ok(())
 }
 
 async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
@@ -2841,6 +2880,16 @@ struct PublicRelayCandidateReportJson<'a> {
 }
 
 #[derive(Serialize)]
+struct BootstrapCheckReportFileJson<'a> {
+    schema_version: u8,
+    mode: &'static str,
+    succeeded: bool,
+    timeout_seconds: u64,
+    config_path: String,
+    bootstrap: BootstrapCheckReportJson<'a>,
+}
+
+#[derive(Serialize)]
 struct BootstrapCheckReportJson<'a> {
     succeeded: bool,
     threshold: &'static str,
@@ -2888,6 +2937,20 @@ struct BootstrapKademliaJson {
     bootstrap_started: bool,
     rendezvous_lookup_started: bool,
     rendezvous_advertise_started: bool,
+}
+
+fn bootstrap_check_report_file_json<'a>(
+    args: &BootstrapCheckArgs,
+    report: &'a p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
+) -> BootstrapCheckReportFileJson<'a> {
+    BootstrapCheckReportFileJson {
+        schema_version: 1,
+        mode: "bootstrap_check",
+        succeeded: report.succeeded(),
+        timeout_seconds: args.timeout_seconds.max(1),
+        config_path: args.config_path.display().to_string(),
+        bootstrap: bootstrap_check_report_json(report),
+    }
 }
 
 fn public_relay_probe_report_json<'a>(
@@ -5968,6 +6031,97 @@ mod tests {
         assert!(verdict.ready);
         responder.await.expect("responder");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cli_parses_bootstrap_check_report_options() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "bootstrap-check",
+            "--config",
+            "p2p-vpn-public.json",
+            "--timeout-seconds",
+            "90",
+            "--require-all",
+            "--require-relay-reservations",
+            "--require-autonat-status",
+            "--require-dcutr-ready",
+            "--require-dcutr-success",
+            "--require-relayed-peer-circuits",
+            "--write-report",
+            "bootstrap-report.json",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::BootstrapCheck {
+            config,
+            timeout_seconds,
+            require_all,
+            require_relay_reservations,
+            require_autonat_status,
+            require_dcutr_ready,
+            require_dcutr_success,
+            require_relayed_peer_circuits,
+            write_report,
+            force,
+        } = cli.command
+        else {
+            panic!("expected bootstrap-check command");
+        };
+
+        assert_eq!(config, PathBuf::from("p2p-vpn-public.json"));
+        assert_eq!(timeout_seconds, 90);
+        assert!(require_all);
+        assert!(require_relay_reservations);
+        assert!(require_autonat_status);
+        assert!(require_dcutr_ready);
+        assert!(require_dcutr_success);
+        assert!(require_relayed_peer_circuits);
+        assert_eq!(write_report, Some(PathBuf::from("bootstrap-report.json")));
+        assert!(force);
+    }
+
+    #[test]
+    fn bootstrap_check_writes_machine_readable_report() {
+        let report = failed_public_dcutr_bootstrap_report();
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-bootstrap-check-report-{}-{}.json",
+            std::process::id(),
+            "report"
+        ));
+        let _ = fs::remove_file(&output);
+        let args = BootstrapCheckArgs {
+            config_path: PathBuf::from("p2p-vpn-public.json"),
+            timeout_seconds: 0,
+            threshold: BootstrapCheckThreshold::Any,
+            requirements: BootstrapCheckRequirements {
+                relay_reservations: true,
+                autonat_status: true,
+                dcutr_ready: true,
+                dcutr_success: true,
+                relayed_peer_circuits: true,
+            },
+            write_report: Some(output.clone()),
+            force: false,
+        };
+
+        write_bootstrap_check_report(&args, &report, &output).expect("write report");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "bootstrap_check");
+        assert_eq!(value["succeeded"], false);
+        assert_eq!(value["timeout_seconds"], 1);
+        assert_eq!(value["config_path"], "p2p-vpn-public.json");
+        assert_failed_public_dcutr_bootstrap_json(&value["bootstrap"]);
+        assert!(
+            write_bootstrap_check_report(&args, &report, &output)
+                .expect_err("overwrite should require force")
+                .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove report");
     }
 
     #[test]

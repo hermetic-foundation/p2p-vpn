@@ -814,6 +814,7 @@ cargo run -- bootstrap-check --config p2p-vpn.json --require-autonat-status --ti
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-ready --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-success --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relayed-peer-circuits --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --write-report bootstrap-check.json --force
 ```
 
 `bootstrap-check` builds the same libp2p host used by the daemon, starts the
@@ -826,6 +827,8 @@ every configured bootstrap peer is expected to be reachable. The output reports
 the Kademlia protocol, whether it is IPFS-compatible, the success threshold,
 DCUtR enablement/readiness, Kademlia startup state, AutoNAT probe-server count,
 observed AutoNAT status, per-peer connection state, and dial-failure counts.
+Pass `--write-report PATH` to persist the same bootstrap/DCUtR/AutoNAT/relay
+state as JSON for later comparison; existing files require `--force`.
 Use `--require-autonat-status` to make the command fail unless AutoNAT has
 registered at least one probe server and observed a non-unknown `public` or
 `private` status before the timeout. When the config contains relay reservation
@@ -1066,8 +1069,10 @@ Use `P2P_VPN_LIVE_RELAY_MULTIADDRS` for up to eight comma, semicolon, or
 newline-separated candidate relay addresses. The single
 `P2P_VPN_LIVE_RELAY_MULTIADDR` variable is still accepted for one relay. Each
 supplied relay multiaddr must be the relay's direct address with its
-`/p2p/RELAY` peer ID and without `/p2p-circuit`. The tests try candidates until
-one succeeds and report all candidate failures if none work. The relayed-peer
+`/p2p/RELAY` peer ID and without `/p2p-circuit`. Set
+`P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS` to widen or shrink the per-candidate probe
+budget; it defaults to 45 seconds. The tests try candidates until one succeeds
+and report all candidate failures if none work. The relayed-peer
 smoke creates a temporary listener, reserves a circuit on that relay, then uses
 `bootstrap-check` against a second temporary node to prove the relayed target can
 be dialed. Use `--require-dcutr-success` only when the evidence target is

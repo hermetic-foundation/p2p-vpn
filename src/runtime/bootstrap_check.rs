@@ -2181,6 +2181,7 @@ mod tests {
 
     const LIVE_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
     const LIVE_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
+    const LIVE_RELAY_TIMEOUT_SECONDS_ENV: &str = "P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS";
 
     #[test]
     fn public_dcutr_listener_descriptor_validates_relayed_address() {
@@ -2835,12 +2836,13 @@ mod tests {
             return;
         }
 
+        let timeout = live_relay_timeout();
         let mut failures = Vec::new();
         for relay_address in relay_addresses {
             let report = check_public_relay_candidates(
                 std::slice::from_ref(&relay_address),
                 PublicRelayProbeMode::RelayedPeerCircuit,
-                Duration::from_secs(45),
+                timeout,
             )
             .await;
             if report.succeeded() {
@@ -2867,12 +2869,13 @@ mod tests {
             return;
         }
 
+        let timeout = live_relay_timeout();
         let mut failures = Vec::new();
         for relay_address in relay_addresses {
             let report = check_public_relay_candidates(
                 std::slice::from_ref(&relay_address),
                 PublicRelayProbeMode::DcutrSuccess,
-                Duration::from_secs(45),
+                timeout,
             )
             .await;
             if report.succeeded() {
@@ -3023,6 +3026,26 @@ mod tests {
             parse_public_relay_addresses(&too_many)
                 .expect_err("candidate limit should fail")
                 .contains("too many public relay candidates")
+        );
+    }
+
+    #[test]
+    fn live_relay_timeout_defaults_and_clamps() {
+        assert_eq!(
+            live_relay_timeout_from_env_value(None),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            live_relay_timeout_from_env_value(Some("not-a-number")),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            live_relay_timeout_from_env_value(Some("0")),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            live_relay_timeout_from_env_value(Some("120")),
+            Duration::from_mins(2)
         );
     }
 
@@ -3268,6 +3291,18 @@ mod tests {
 
         parse_public_relay_addresses(&raw)
             .expect("live relay multiaddr candidates must parse and include /p2p/RELAY")
+    }
+
+    fn live_relay_timeout() -> Duration {
+        live_relay_timeout_from_env_value(env::var(LIVE_RELAY_TIMEOUT_SECONDS_ENV).ok().as_deref())
+    }
+
+    fn live_relay_timeout_from_env_value(raw: Option<&str>) -> Duration {
+        let seconds = raw
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(45)
+            .max(1);
+        Duration::from_secs(seconds)
     }
 
     fn relay_test_discovery() -> DiscoveryConfig {

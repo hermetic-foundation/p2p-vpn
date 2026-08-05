@@ -21,7 +21,9 @@ nix develop -c cargo run --quiet -- init-config \
 nix develop -c cargo run --quiet -- bootstrap-check \
   --config /tmp/p2p-vpn-public-check/p2p-vpn.json \
   --timeout-seconds 45 \
-  --require-autonat-status
+  --require-autonat-status \
+  --write-report /tmp/p2p-vpn-public-check/bootstrap-check.json \
+  --force
 ```
 
 Result:
@@ -206,7 +208,9 @@ P2P_VPN_LIVE_RELAY_MULTIADDRS='/dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A,/d
 
 `P2P_VPN_LIVE_RELAY_MULTIADDRS` accepts up to eight comma, semicolon, or
 newline-separated direct relay multiaddrs. `P2P_VPN_LIVE_RELAY_MULTIADDR`
-remains supported for a single relay.
+remains supported for a single relay. Set
+`P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS` when public relay or DCUtR candidates need
+more or less than the default 45-second probe budget.
 
 Recorded public relay scan evidence on 2026-08-04:
 
