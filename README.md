@@ -846,6 +846,7 @@ cargo run -- relay-check \
 cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --require-dcutr-success \
+  --max-validation-candidates 4 \
   --timeout-seconds 45
 
 cargo run -- relay-check \
@@ -904,7 +905,10 @@ after the first usable relay and prints candidate-level failures when none
 work. Before probing, it skips relay candidates that require IPv4 or IPv6 when
 the local host has no usable route for that address family and prints each skip
 as `public relay check skipped: ... reason ipv4_unreachable` or
-`reason ipv6_unreachable`. Each candidate line includes a stable
+`reason ipv6_unreachable`. Use `--max-validation-candidates N` to bound the
+manual check after host reachability filtering; this is useful for public DCUtR
+searches where each candidate has a single end-to-end reservation plus
+circuit/DCUtR timeout budget. Each candidate line includes a stable
 `failure_stage` value: `candidate_setup`, `relay_reservation`,
 `relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
 The report also prints a `public relay candidate failure stages:` summary with

@@ -131,6 +131,7 @@ nix develop -c cargo run -- relay-check \
   --relay-candidate /dns4/relay-a.example.net/tcp/4001/p2p/RELAY_A \
   --relay-candidate /dns4/relay-b.example.net/tcp/4001/p2p/RELAY_B \
   --require-dcutr-success \
+  --max-validation-candidates 4 \
   --timeout-seconds 45
 
 nix develop -c cargo run -- relay-check \
@@ -146,13 +147,15 @@ QUIC-capable addresses before TCP alternates for the same relay, matching
 `relay-scan --check-candidates`. Before probing, it skips relay candidates that
 require IPv4 or IPv6 when the local host has no usable route for that address
 family and prints each skip as `public relay check skipped: ... reason
-ipv4_unreachable` or `reason ipv6_unreachable`. Reservation setup failures
-identify whether the probe connected directly to the relay, whether relay
-reservation acceptance or relayed listen-address publication timed out, and the
-last direct relay dial error when one was observed. Candidate lines also
-include a stable `failure_stage` value: `candidate_setup`,
-`relay_reservation`, `relayed_peer_circuit`, `dcutr_success`, or `none` for a
-usable candidate. Probe output also includes a
+ipv4_unreachable` or `reason ipv6_unreachable`. Use
+`--max-validation-candidates N` to bound the manual check after host
+reachability filtering. Reservation setup failures identify whether the probe
+connected directly to the relay, whether relay reservation acceptance or
+relayed listen-address publication timed out, and the last direct relay dial
+error when one was observed. Candidate lines also include a stable
+`failure_stage` value: `candidate_setup`, `relay_reservation`,
+`relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
+Probe output also includes a
 `public relay candidate failure stages:` summary with per-stage counts across
 the attempted set. Failures after reservation setup include the same detailed
 bootstrap-check lines that successful candidates print, so failed

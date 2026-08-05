@@ -71,7 +71,7 @@ path.
    immediately test scanned candidates with the same reservation/circuit/DCUtR
    proof path as `relay-check`, while both scan validation and manual
    `relay-check` skip IPv4-only or IPv6-only validation candidates on hosts
-   without a usable route for that address family. Scan validation can also
+   without a usable route for that address family. Both validation paths can
    bound how many host-reachable candidates a validation pass probes. Each validated candidate
    uses one end-to-end timeout budget across relay reservation setup and the
    subsequent relayed-circuit or DCUtR proof. Validation preserves relay-peer
