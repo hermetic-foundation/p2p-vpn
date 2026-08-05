@@ -826,6 +826,7 @@ cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
 
 cargo run -- relay-scan \
   --ipfs-bootstrap-peers \
+  --write-candidates public-relay-candidates.txt \
   --check-candidates \
   --max-validation-candidates 6 \
   --candidate-timeout-seconds 45 \
@@ -876,6 +877,8 @@ many addresses for one relay still gives other relays an early chance before
 cycling through alternate addresses. Within each relay peer, validation tries
 QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
 spend early attempts on the transports most likely to support hole punching.
+Pass `--write-candidates PATH` to write the ordered direct relay candidates as
+newline-separated multiaddrs for later `relay-check --relay-candidate` runs.
 Validation skips relay candidates that require IPv4 or IPv6 when the local host
 has no usable route for that address family and prints each skip as
 `public relay scan validation skipped: ... reason ipv4_unreachable` or

@@ -67,7 +67,9 @@ path.
    peers from the public `/ipfs/kad/1.0.0` routing table while filtering
    unsupported transport addresses, and its bounded candidate set prefers
    distinct relay peers when a newly identified relay can replace duplicate
-   addresses from an already represented relay. `relay-scan --check-candidates` can
+   addresses from an already represented relay. It can also write the ordered
+   direct relay candidate set as newline-separated multiaddrs for repeatable
+   follow-up `relay-check` runs. `relay-scan --check-candidates` can
    immediately test scanned candidates with the same reservation/circuit/DCUtR
    proof path as `relay-check`, while both scan validation and manual
    `relay-check` skip IPv4-only or IPv6-only validation candidates on hosts

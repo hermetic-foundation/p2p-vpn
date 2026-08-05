@@ -279,6 +279,8 @@ enum Command {
         candidate_timeout_seconds: u64,
         #[arg(long)]
         max_validation_candidates: Option<usize>,
+        #[arg(long = "write-candidates")]
+        write_candidates: Option<PathBuf>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
         #[arg(long)]
@@ -589,6 +591,7 @@ async fn main() -> Result<(), String> {
             require_dcutr_success,
             candidate_timeout_seconds,
             max_validation_candidates,
+            write_candidates,
             write_config,
             force,
         } => {
@@ -602,6 +605,7 @@ async fn main() -> Result<(), String> {
                 require_dcutr_success,
                 candidate_timeout_seconds,
                 max_validation_candidates,
+                write_candidates,
                 write_config,
                 force,
             }))
@@ -794,6 +798,7 @@ struct RelayScanArgs {
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
     max_validation_candidates: Option<usize>,
+    write_candidates: Option<PathBuf>,
     write_config: Option<PathBuf>,
     force: bool,
 }
@@ -2398,11 +2403,15 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
         return Err("public relay scan did not discover a relay-hop candidate".to_owned());
     }
 
+    let candidates = relay_scan_candidate_multiaddrs(&report)?;
+    if let Some(output) = &args.write_candidates {
+        write_public_relay_candidates(&candidates, output, args.force)?;
+    }
+
     if !args.check_candidates {
         return Ok(());
     }
 
-    let candidates = relay_scan_candidate_multiaddrs(&report)?;
     let (candidates, skipped_candidates) =
         filter_relay_validation_candidates(candidates, local_relay_candidate_reachability());
     for skipped in skipped_candidates {
@@ -2465,6 +2474,38 @@ fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
     if args.write_config.is_some() && !args.check_candidates {
         return Err("--write-config requires --check-candidates".to_owned());
     }
+    Ok(())
+}
+
+fn write_public_relay_candidates(
+    candidates: &[libp2p::Multiaddr],
+    output: &Path,
+    force: bool,
+) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    let rendered = candidates
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if output.to_string_lossy() == "-" {
+        if rendered.is_empty() {
+            println!();
+        } else {
+            println!("{rendered}");
+        }
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+    }
+
     Ok(())
 }
 
@@ -4401,6 +4442,8 @@ mod tests {
             "15",
             "--max-validation-candidates",
             "3",
+            "--write-candidates",
+            "relay-candidates.txt",
             "--write-config",
             "relay-scan-config.json",
             "--force",
@@ -4417,6 +4460,7 @@ mod tests {
             require_dcutr_success,
             candidate_timeout_seconds,
             max_validation_candidates,
+            write_candidates,
             write_config,
             force,
         } = cli.command
@@ -4433,6 +4477,10 @@ mod tests {
         assert!(require_dcutr_success);
         assert_eq!(candidate_timeout_seconds, 15);
         assert_eq!(max_validation_candidates, Some(3));
+        assert_eq!(
+            write_candidates,
+            Some(PathBuf::from("relay-candidates.txt"))
+        );
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
     }
@@ -4544,6 +4592,7 @@ mod tests {
             require_dcutr_success: false,
             candidate_timeout_seconds: 45,
             max_validation_candidates: None,
+            write_candidates: None,
             write_config: Some(PathBuf::from("relay-scan-config.json")),
             force: false,
         };
@@ -4569,6 +4618,7 @@ mod tests {
             require_dcutr_success: true,
             candidate_timeout_seconds: 45,
             max_validation_candidates: Some(0),
+            write_candidates: None,
             write_config: None,
             force: false,
         };
@@ -4671,6 +4721,38 @@ mod tests {
                 addresses[2].clone(),
             ]
         );
+    }
+
+    #[test]
+    fn public_relay_candidates_write_ordered_newline_file() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let addresses = [
+            format!("/dns4/relay-a.example.net/tcp/4001/p2p/{peer_a}"),
+            format!("/dns4/relay-a.example.net/udp/4001/quic-v1/p2p/{peer_a}"),
+            format!("/dns4/relay-b.example.net/tcp/4001/p2p/{peer_b}"),
+        ];
+        let refs = addresses.iter().map(String::as_str).collect::<Vec<_>>();
+        let report = relay_scan_report_with_candidates(&refs);
+        let candidates = relay_scan_candidate_multiaddrs(&report).expect("candidates");
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-relay-candidates-{}-{}.txt",
+            std::process::id(),
+            "ordered"
+        ));
+        let _ = fs::remove_file(&output);
+
+        write_public_relay_candidates(&candidates, &output, false).expect("write candidates");
+        let rendered = fs::read_to_string(&output).expect("read candidates");
+        let overwrite_error = write_public_relay_candidates(&candidates, &output, false)
+            .expect_err("existing file should require --force");
+        fs::remove_file(&output).expect("remove candidates");
+
+        assert_eq!(
+            rendered,
+            format!("{}\n{}\n{}\n", addresses[1], addresses[2], addresses[0])
+        );
+        assert!(overwrite_error.contains("pass --force"));
     }
 
     #[test]
