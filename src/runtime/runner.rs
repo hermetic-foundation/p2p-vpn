@@ -3577,7 +3577,15 @@ async fn handle_swarm_event(
             );
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-            handle_outgoing_connection_error(context.metrics, peer_id, &error);
+            let peer_connected = peer_id.is_some_and(|peer_id| swarm.is_connected(&peer_id));
+            handle_relay_infrastructure_outgoing_connection_error(
+                context.infrastructure_peers,
+                context.membership,
+                context.metrics,
+                peer_id,
+                peer_connected,
+                &error,
+            );
         }
         SwarmEvent::NewExternalAddrCandidate { address } => {
             context.metrics.record_external_address_candidate();
@@ -3639,6 +3647,33 @@ fn handle_outgoing_connection_error(
         Some(peer_id) => eprintln!("outgoing connection to {peer_id} failed: {error}"),
         None => eprintln!("outgoing connection failed: {error}"),
     }
+}
+
+fn handle_relay_infrastructure_outgoing_connection_error(
+    infrastructure_peers: &mut InfrastructurePeers,
+    membership: &OverlayMembership,
+    metrics: &RuntimeMetrics,
+    peer_id: Option<Libp2pPeerId>,
+    peer_connected: bool,
+    error: &impl std::fmt::Display,
+) {
+    handle_outgoing_connection_error(metrics, peer_id, error);
+    let Some(peer_id) = peer_id else {
+        return;
+    };
+    if peer_connected || membership.allows(peer_id) || !infrastructure_peers.remove(peer_id) {
+        return;
+    }
+
+    metrics.record_auto_relay_infrastructure_dial_failure();
+    log_runtime_event(
+        LogLevel::Warn,
+        "auto_relay_infrastructure_dial_failed_async",
+        &[
+            ("peer", &peer_id.to_string()),
+            ("error", &error.to_string()),
+        ],
+    );
 }
 
 async fn handle_control_event(
@@ -8272,6 +8307,84 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outgoing_connection_errors, 2);
+    }
+
+    #[test]
+    fn failed_relay_infrastructure_dials_are_removed_and_counted() {
+        let peer = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("infrastructure address");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        assert!(infrastructure_peers.insert(peer, address));
+        let metrics = RuntimeMetrics::default();
+
+        handle_relay_infrastructure_outgoing_connection_error(
+            &mut infrastructure_peers,
+            &OverlayMembership::default(),
+            &metrics,
+            Some(peer),
+            false,
+            &"dial failed",
+        );
+
+        assert!(!infrastructure_peers.contains(peer));
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outgoing_connection_errors, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
+    }
+
+    #[test]
+    fn failed_overlay_peer_dials_do_not_remove_infrastructure_records() {
+        let peer = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("infrastructure address");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        assert!(infrastructure_peers.insert(peer, address));
+        let membership = OverlayMembership {
+            peers: HashSet::from([peer]),
+        };
+        let metrics = RuntimeMetrics::default();
+
+        handle_relay_infrastructure_outgoing_connection_error(
+            &mut infrastructure_peers,
+            &membership,
+            &metrics,
+            Some(peer),
+            false,
+            &"dial failed",
+        );
+
+        assert!(infrastructure_peers.contains(peer));
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outgoing_connection_errors, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 0);
+    }
+
+    #[test]
+    fn failed_connected_infrastructure_dials_do_not_remove_relay_records() {
+        let peer = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("infrastructure address");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        assert!(infrastructure_peers.insert(peer, address));
+        let metrics = RuntimeMetrics::default();
+
+        handle_relay_infrastructure_outgoing_connection_error(
+            &mut infrastructure_peers,
+            &OverlayMembership::default(),
+            &metrics,
+            Some(peer),
+            true,
+            &"dial failed",
+        );
+
+        assert!(infrastructure_peers.contains(peer));
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outgoing_connection_errors, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 0);
     }
 
     #[tokio::test]

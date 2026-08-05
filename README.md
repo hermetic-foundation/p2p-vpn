@@ -278,7 +278,9 @@ admit direct TCP or QUIC candidates learned from routing-table updates or
 closest-peer results. Those peers remain relay-only infrastructure: Identify
 must confirm relay-hop support or the daemon disconnects them, and they do not
 gain VPN membership, packet forwarding, control-plane authority, service-plane
-authority, or route ownership.
+authority, or route ownership. Provisional relay-only candidates are also
+removed after asynchronous dial failures before connection, so failed public DHT
+hints do not stay admitted indefinitely.
 Discovered addresses that include an explicit `/p2p/<peer>` target are rejected
 when that target does not match the configured peer being learned, including
 relayed target addresses after `/p2p-circuit`.
