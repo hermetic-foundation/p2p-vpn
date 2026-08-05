@@ -162,6 +162,27 @@ audit configured trust roots, active grants, revocation tombstones, effective
 overlay members, and record-derived route grants without hand-reading
 `network.member_records` JSON.
 
+When a config has `network.member_records` and Kademlia enabled, use
+`bootstrap-check` to collect rootless DHT propagation evidence before starting
+the TUN daemon:
+
+```sh
+p2p-vpn bootstrap-check \
+  --config CONFIG \
+  --timeout-seconds 60 \
+  --require-membership-records \
+  --write-report membership-dht-bootstrap-check.json \
+  --force
+```
+
+The text and JSON report include configured record count, DHT publication
+start/success/failure state, lookup start state, found bundle count, verified
+record count, accepted record count, invalid bundle count, and the last lookup
+or validation error.
+A returned bundle still has to pass local network-name, membership-scope,
+signature, and trusted-issuer validation; public Kademlia peers only carry the
+value and do not become membership authority.
+
 ## Public Relay Smoke
 
 Use the packaged repro when the goal is to compare public relay, DCUtR, and

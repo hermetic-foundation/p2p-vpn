@@ -274,6 +274,8 @@ enum Command {
         require_dcutr_success: bool,
         #[arg(long)]
         require_relayed_peer_circuits: bool,
+        #[arg(long)]
+        require_membership_records: bool,
         #[arg(long = "write-report")]
         write_report: Option<PathBuf>,
         #[arg(long)]
@@ -711,6 +713,7 @@ async fn main() -> Result<(), String> {
             require_dcutr_ready,
             require_dcutr_success,
             require_relayed_peer_circuits,
+            require_membership_records,
             write_report,
             force,
         } => {
@@ -729,6 +732,7 @@ async fn main() -> Result<(), String> {
                     dcutr_ready: require_dcutr_ready,
                     dcutr_success: require_dcutr_success,
                     relayed_peer_circuits: require_relayed_peer_circuits,
+                    membership_records: require_membership_records,
                 },
                 write_report,
                 force,
@@ -3656,6 +3660,7 @@ struct BootstrapCheckReportJson<'a> {
     autonat_probe_servers_registered: usize,
     autonat_status: &'static str,
     kademlia: BootstrapKademliaJson,
+    membership_records: BootstrapMembershipRecordDhtJson<'a>,
 }
 
 #[derive(Serialize)]
@@ -3666,6 +3671,7 @@ struct BootstrapRequirementsJson {
     dcutr_ready: bool,
     dcutr_success: bool,
     relayed_peer_circuits: bool,
+    membership_records: bool,
 }
 
 #[derive(Serialize)]
@@ -3683,6 +3689,20 @@ struct BootstrapKademliaJson {
     bootstrap_started: bool,
     rendezvous_lookup_started: bool,
     rendezvous_advertise_started: bool,
+}
+
+#[derive(Serialize)]
+struct BootstrapMembershipRecordDhtJson<'a> {
+    configured_records: usize,
+    publish_started: bool,
+    publish_succeeded: bool,
+    publish_failures: usize,
+    lookup_started: bool,
+    found_records: usize,
+    verified_records: usize,
+    accepted_records: usize,
+    invalid_records: usize,
+    last_error: Option<&'a str>,
 }
 
 fn bootstrap_check_report_file_json<'a>(
@@ -3749,6 +3769,7 @@ fn bootstrap_check_report_json(
             dcutr_ready: report.requirements.dcutr_ready,
             dcutr_success: report.requirements.dcutr_success,
             relayed_peer_circuits: report.requirements.relayed_peer_circuits,
+            membership_records: report.requirements.membership_records,
         },
         kademlia_protocol: &report.kademlia_protocol,
         ipfs_compatible: report.ipfs_compatible,
@@ -3776,6 +3797,18 @@ fn bootstrap_check_report_json(
             bootstrap_started: report.kademlia.bootstrap_started,
             rendezvous_lookup_started: report.kademlia.rendezvous_lookup_started,
             rendezvous_advertise_started: report.kademlia.rendezvous_advertise_started,
+        },
+        membership_records: BootstrapMembershipRecordDhtJson {
+            configured_records: report.membership_records.configured_records,
+            publish_started: report.membership_records.publish_started,
+            publish_succeeded: report.membership_records.publish_succeeded,
+            publish_failures: report.membership_records.publish_failures,
+            lookup_started: report.membership_records.lookup_started,
+            found_records: report.membership_records.found_records,
+            verified_records: report.membership_records.verified_records,
+            accepted_records: report.membership_records.accepted_records,
+            invalid_records: report.membership_records.invalid_records,
+            last_error: report.membership_records.last_error.as_deref(),
         },
     }
 }
@@ -6894,6 +6927,7 @@ mod tests {
             "--require-dcutr-ready",
             "--require-dcutr-success",
             "--require-relayed-peer-circuits",
+            "--require-membership-records",
             "--write-report",
             "bootstrap-report.json",
             "--force",
@@ -6909,6 +6943,7 @@ mod tests {
             require_dcutr_ready,
             require_dcutr_success,
             require_relayed_peer_circuits,
+            require_membership_records,
             write_report,
             force,
         } = cli.command
@@ -6924,6 +6959,7 @@ mod tests {
         assert!(require_dcutr_ready);
         assert!(require_dcutr_success);
         assert!(require_relayed_peer_circuits);
+        assert!(require_membership_records);
         assert_eq!(write_report, Some(PathBuf::from("bootstrap-report.json")));
         assert!(force);
     }
@@ -6947,6 +6983,7 @@ mod tests {
                 dcutr_ready: true,
                 dcutr_success: true,
                 relayed_peer_circuits: true,
+                membership_records: false,
             },
             write_report: Some(output.clone()),
             force: false,
@@ -7533,6 +7570,7 @@ mod tests {
                 dcutr_ready: true,
                 dcutr_success: true,
                 relayed_peer_circuits: true,
+                membership_records: false,
             },
             kademlia_protocol: IPFS_KADEMLIA_PROTOCOL.to_owned(),
             ipfs_compatible: true,
@@ -7563,6 +7601,8 @@ mod tests {
                 rendezvous_lookup_started: true,
                 rendezvous_advertise_started: true,
             },
+            membership_records:
+                p2p_vpn::runtime::bootstrap_check::BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results: Vec::new(),
@@ -7593,6 +7633,7 @@ mod tests {
         assert_eq!(bootstrap["requirements"]["dcutr_ready"], true);
         assert_eq!(bootstrap["requirements"]["dcutr_success"], true);
         assert_eq!(bootstrap["requirements"]["relayed_peer_circuits"], true);
+        assert_eq!(bootstrap["requirements"]["membership_records"], false);
         assert_eq!(bootstrap["kademlia_protocol"], IPFS_KADEMLIA_PROTOCOL);
         assert_eq!(bootstrap["ipfs_compatible"], true);
         assert_eq!(bootstrap["dcutr"]["enabled"], true);
@@ -7625,6 +7666,19 @@ mod tests {
         assert_eq!(bootstrap["kademlia"]["bootstrap_started"], true);
         assert_eq!(bootstrap["kademlia"]["rendezvous_lookup_started"], true);
         assert_eq!(bootstrap["kademlia"]["rendezvous_advertise_started"], true);
+        assert_eq!(bootstrap["membership_records"]["configured_records"], 0);
+        assert_eq!(bootstrap["membership_records"]["publish_started"], false);
+        assert_eq!(bootstrap["membership_records"]["publish_succeeded"], false);
+        assert_eq!(bootstrap["membership_records"]["publish_failures"], 0);
+        assert_eq!(bootstrap["membership_records"]["lookup_started"], false);
+        assert_eq!(bootstrap["membership_records"]["found_records"], 0);
+        assert_eq!(bootstrap["membership_records"]["verified_records"], 0);
+        assert_eq!(bootstrap["membership_records"]["accepted_records"], 0);
+        assert_eq!(bootstrap["membership_records"]["invalid_records"], 0);
+        assert_eq!(
+            bootstrap["membership_records"]["last_error"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

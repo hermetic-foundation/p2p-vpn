@@ -16,7 +16,16 @@ use crate::{
         PeerConfig, QueueConfig, RelayConfig, ResourceConfig,
     },
     identity::{IdentityError, NodeIdentity},
-    runtime::p2p::{BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
+    membership::{
+        SignedMembershipRecord, merge_membership_records_at, trusted_membership_issuers_at,
+    },
+    runtime::{
+        control::MAX_CONTROL_MEMBERSHIP_RECORDS,
+        p2p::{
+            BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node,
+            kademlia_membership_records_key,
+        },
+    },
 };
 
 pub const PUBLIC_RELAY_CANDIDATE_LIMIT: usize = 8;
@@ -49,6 +58,7 @@ pub struct BootstrapCheckReport {
     pub autonat_probe_servers_registered: usize,
     pub autonat_status: BootstrapAutoNatStatus,
     pub kademlia: BootstrapKademliaCheck,
+    pub membership_records: BootstrapMembershipRecordDhtCheck,
     pub peer_results: Vec<BootstrapPeerCheck>,
     pub relay_results: Vec<RelayReservationCheck>,
     pub relayed_peer_results: Vec<RelayedPeerCircuitCheck>,
@@ -62,6 +72,7 @@ pub struct BootstrapCheckRequirements {
     pub dcutr_ready: bool,
     pub dcutr_success: bool,
     pub relayed_peer_circuits: bool,
+    pub membership_records: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -87,6 +98,20 @@ pub struct BootstrapKademliaCheck {
     pub bootstrap_started: bool,
     pub rendezvous_lookup_started: bool,
     pub rendezvous_advertise_started: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BootstrapMembershipRecordDhtCheck {
+    pub configured_records: usize,
+    pub publish_started: bool,
+    pub publish_succeeded: bool,
+    pub publish_failures: usize,
+    pub lookup_started: bool,
+    pub found_records: usize,
+    pub verified_records: usize,
+    pub accepted_records: usize,
+    pub invalid_records: usize,
+    pub last_error: Option<String>,
 }
 
 impl BootstrapCheckReport {
@@ -117,19 +142,26 @@ impl BootstrapCheckReport {
         let relayed_peer_circuits_ok = !self.requirements.relayed_peer_circuits
             || (self.configured_relayed_peer_circuits > 0
                 && self.connected_relayed_peer_circuits == self.configured_relayed_peer_circuits);
+        let membership_records_ok = !self.requirements.membership_records
+            || (self.membership_records.configured_records > 0
+                && self.membership_records.publish_succeeded
+                && self.membership_records.found_records > 0
+                && self.membership_records.verified_records > 0);
 
         (has_bootstrap_work
             || self.requirements.relay_reservations
             || self.requirements.autonat_status
             || self.requirements.dcutr_ready
             || self.requirements.dcutr_success
-            || self.requirements.relayed_peer_circuits)
+            || self.requirements.relayed_peer_circuits
+            || self.requirements.membership_records)
             && bootstrap_ok
             && relay_ok
             && autonat_ok
             && dcutr_ok
             && dcutr_success_ok
             && relayed_peer_circuits_ok
+            && membership_records_ok
     }
 
     #[must_use]
@@ -153,6 +185,10 @@ impl BootstrapCheckReport {
             format!(
                 "require relayed peer circuits: {}",
                 self.requirements.relayed_peer_circuits
+            ),
+            format!(
+                "require membership records: {}",
+                self.requirements.membership_records
             ),
             format!("kademlia protocol: {}", self.kademlia_protocol),
             format!("ipfs compatible: {}", self.ipfs_compatible),
@@ -201,43 +237,8 @@ impl BootstrapCheckReport {
             ),
         ];
 
-        for address in &self.relayed_connection_addresses {
-            lines.push(format!("relayed peer connection address: {address}"));
-        }
-
-        for address in &self.direct_connection_addresses {
-            lines.push(format!("direct peer connection address: {address}"));
-        }
-
-        for peer in &self.peer_results {
-            lines.push(format!(
-                "bootstrap peer: {} connected {} dial_failures {} last_error {} address {}",
-                peer.peer_id,
-                peer.connected,
-                peer.dial_failures,
-                peer.last_error.as_deref().unwrap_or("none"),
-                peer.address
-            ));
-        }
-
-        for relay in &self.relay_results {
-            lines.push(format!(
-                "relay reservation: {} accepted {} relayed_listen_address {} address {}",
-                relay.relay_peer_id, relay.accepted, relay.relayed_listen_address, relay.address
-            ));
-        }
-
-        for peer in &self.relayed_peer_results {
-            lines.push(format!(
-                "relayed peer circuit: {} connected {} outbound_circuit {} dial_failures {} last_error {} address {}",
-                peer.peer_id,
-                peer.connected,
-                peer.outbound_circuit,
-                peer.dial_failures,
-                peer.last_error.as_deref().unwrap_or("none"),
-                peer.address
-            ));
-        }
+        append_membership_record_lines(&mut lines, &self.membership_records);
+        append_bootstrap_peer_lines(&mut lines, self);
 
         lines
     }
@@ -248,6 +249,94 @@ impl BootstrapCheckReport {
             .filter(|relay| relay.relayed_listen_address)
             .count()
     }
+}
+
+fn append_bootstrap_peer_lines(lines: &mut Vec<String>, report: &BootstrapCheckReport) {
+    for address in &report.relayed_connection_addresses {
+        lines.push(format!("relayed peer connection address: {address}"));
+    }
+
+    for address in &report.direct_connection_addresses {
+        lines.push(format!("direct peer connection address: {address}"));
+    }
+
+    for peer in &report.peer_results {
+        lines.push(format!(
+            "bootstrap peer: {} connected {} dial_failures {} last_error {} address {}",
+            peer.peer_id,
+            peer.connected,
+            peer.dial_failures,
+            peer.last_error.as_deref().unwrap_or("none"),
+            peer.address
+        ));
+    }
+
+    for relay in &report.relay_results {
+        lines.push(format!(
+            "relay reservation: {} accepted {} relayed_listen_address {} address {}",
+            relay.relay_peer_id, relay.accepted, relay.relayed_listen_address, relay.address
+        ));
+    }
+
+    for peer in &report.relayed_peer_results {
+        lines.push(format!(
+            "relayed peer circuit: {} connected {} outbound_circuit {} dial_failures {} last_error {} address {}",
+            peer.peer_id,
+            peer.connected,
+            peer.outbound_circuit,
+            peer.dial_failures,
+            peer.last_error.as_deref().unwrap_or("none"),
+            peer.address
+        ));
+    }
+}
+
+fn append_membership_record_lines(
+    lines: &mut Vec<String>,
+    membership_records: &BootstrapMembershipRecordDhtCheck,
+) {
+    lines.extend([
+        format!(
+            "kademlia membership records configured: {}",
+            membership_records.configured_records
+        ),
+        format!(
+            "kademlia membership records publish started: {}",
+            membership_records.publish_started
+        ),
+        format!(
+            "kademlia membership records publish succeeded: {}",
+            membership_records.publish_succeeded
+        ),
+        format!(
+            "kademlia membership records publish failures: {}",
+            membership_records.publish_failures
+        ),
+        format!(
+            "kademlia membership records lookup started: {}",
+            membership_records.lookup_started
+        ),
+        format!(
+            "kademlia membership records found: {}",
+            membership_records.found_records
+        ),
+        format!(
+            "kademlia membership records verified: {}",
+            membership_records.verified_records
+        ),
+        format!(
+            "kademlia membership records accepted: {}",
+            membership_records.accepted_records
+        ),
+        format!(
+            "kademlia membership records invalid: {}",
+            membership_records.invalid_records
+        ),
+        format!(
+            "kademlia membership records last_error: {}",
+            membership_records.last_error.as_deref().unwrap_or("none")
+        ),
+    ]);
 }
 
 impl BootstrapCheckThreshold {
@@ -773,16 +862,18 @@ pub async fn check_config_bootstrap(
     let bootstrap_peers = node.bootstrap_peer_addresses.clone();
     let relay_reservations = node.relay_peer_addresses.clone();
     let relayed_peers = relayed_peer_addresses(&node.configured_peer_addresses);
-    let poll = poll_bootstrap_events(
-        &mut node,
-        &bootstrap_peers,
-        &relay_reservations,
-        &relayed_peers,
-        timeout,
-        threshold,
-        requirements,
-    )
-    .await;
+    let membership_tag = config.membership_tag()?;
+    let previous_membership_tags = config.previous_membership_tags()?;
+    let poll_context = BootstrapPollContext {
+        config,
+        membership_tag: membership_tag.as_deref(),
+        previous_membership_tags: &previous_membership_tags,
+        bootstrap_peers: &bootstrap_peers,
+        relay_reservations: &relay_reservations,
+        relayed_peers: &relayed_peers,
+    };
+    let poll =
+        poll_bootstrap_events(&mut node, &poll_context, timeout, threshold, requirements).await;
     let dcutr_ready = node.startup.dcutr_enabled
         && relay_reservations_ready(
             relay_reservations.len(),
@@ -826,6 +917,7 @@ pub async fn check_config_bootstrap(
             rendezvous_lookup_started: node.startup.kademlia.rendezvous_lookup_started,
             rendezvous_advertise_started: node.startup.kademlia.rendezvous_advertise_started,
         },
+        membership_records: poll.membership_records.clone(),
         peer_results: bootstrap_peer_results(bootstrap_peers, &poll),
         relay_results: relay_reservation_results(relay_reservations, &poll),
         relayed_peer_results: relayed_peer_results(relayed_peers, &poll),
@@ -1138,6 +1230,7 @@ async fn live_public_relayed_peer_circuit(
             dcutr_ready: false,
             dcutr_success: false,
             relayed_peer_circuits: true,
+            membership_records: false,
         },
     )
     .await
@@ -1236,6 +1329,7 @@ async fn live_public_dcutr_success(
             dcutr_ready: false,
             dcutr_success: true,
             relayed_peer_circuits: true,
+            membership_records: false,
         },
     )
     .await
@@ -1341,6 +1435,7 @@ pub async fn check_public_dcutr_descriptor(
             dcutr_ready: false,
             dcutr_success: true,
             relayed_peer_circuits: true,
+            membership_records: false,
         },
     )
     .await
@@ -1527,41 +1622,56 @@ fn bootstrap_check_host_config(config: &Config) -> Result<HostConfig, BootstrapC
     })
 }
 
+struct BootstrapPollContext<'a> {
+    config: &'a Config,
+    membership_tag: Option<&'a str>,
+    previous_membership_tags: &'a [String],
+    bootstrap_peers: &'a [(Libp2pPeerId, libp2p::Multiaddr)],
+    relay_reservations: &'a [(Libp2pPeerId, libp2p::Multiaddr)],
+    relayed_peers: &'a [(Libp2pPeerId, libp2p::Multiaddr)],
+}
+
 async fn poll_bootstrap_events(
     node: &mut P2pNode,
-    bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
-    relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
-    relayed_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    context: &BootstrapPollContext<'_>,
     timeout: Duration,
     threshold: BootstrapCheckThreshold,
     requirements: BootstrapCheckRequirements,
 ) -> BootstrapPollResult {
     let mut result = BootstrapPollResult {
-        connected_bootstrap_peers: bootstrap_peers
+        connected_bootstrap_peers: context
+            .bootstrap_peers
             .iter()
             .filter_map(|(peer, _)| node.swarm.is_connected(peer).then_some(*peer))
             .collect(),
         ..BootstrapPollResult::default()
     };
     if requirements.relayed_peer_circuits || requirements.dcutr_success {
-        dial_relayed_peer_targets(node, relayed_peers, &mut result);
+        dial_relayed_peer_targets(node, context.relayed_peers, &mut result);
     }
+    start_bootstrap_membership_record_dht(
+        node,
+        context.config,
+        context.membership_tag,
+        &mut result,
+    );
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
-    while should_continue_polling(PollingStatus {
+    while should_continue_polling(&PollingStatus {
         threshold,
-        configured_bootstrap_peers: bootstrap_peers.len(),
+        configured_bootstrap_peers: context.bootstrap_peers.len(),
         connected_bootstrap_peers: result.connected_bootstrap_peers.len(),
         requirements,
-        configured_relay_reservations: relay_reservations.len(),
+        configured_relay_reservations: context.relay_reservations.len(),
         accepted_relay_reservations: result.accepted_relay_reservations.len(),
         relayed_listen_addresses: result.relayed_listen_addresses.len(),
-        configured_relayed_peer_circuits: relayed_peers.len(),
+        configured_relayed_peer_circuits: context.relayed_peers.len(),
         connected_relayed_peer_circuits: result.connected_relayed_peers.len(),
         direct_connected_relayed_peer_circuits: result.direct_connected_relayed_peers.len(),
         dcutr_successes: result.dcutr_successes,
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: result.autonat_status,
+        membership_records: &result.membership_records,
         now: Instant::now(),
         deadline,
     }) {
@@ -1569,13 +1679,7 @@ async fn poll_bootstrap_events(
         let Ok(event) = tokio::time::timeout(remaining, node.swarm.select_next_some()).await else {
             break;
         };
-        record_bootstrap_event(
-            event,
-            bootstrap_peers,
-            relay_reservations,
-            relayed_peers,
-            &mut result,
-        );
+        record_bootstrap_event(event, context, &mut result);
     }
 
     result
@@ -1972,42 +2076,21 @@ fn dial_relayed_peer_targets(
 
 fn record_bootstrap_event(
     event: SwarmEvent<BehaviourEvent>,
-    bootstrap_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
-    relay_reservations: &[(Libp2pPeerId, libp2p::Multiaddr)],
-    relayed_peers: &[(Libp2pPeerId, libp2p::Multiaddr)],
+    context: &BootstrapPollContext<'_>,
     result: &mut BootstrapPollResult,
 ) {
     match event {
         SwarmEvent::ConnectionEstablished {
             peer_id, endpoint, ..
         } => {
-            if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
-                result.connected_bootstrap_peers.insert(peer_id);
-            }
-            if relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
-                let address = connected_point_address(&endpoint).clone();
-                if endpoint.is_relayed() {
-                    result.connected_relayed_peers.insert(peer_id, address);
-                } else {
-                    result
-                        .direct_connected_relayed_peers
-                        .insert(peer_id, address);
-                }
-            }
+            record_bootstrap_connection_established(peer_id, &endpoint, context, result);
         }
         SwarmEvent::OutgoingConnectionError {
             peer_id: Some(peer_id),
             error,
             ..
         } => {
-            if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
-                result.dial_failures.push((peer_id, format!("{error:?}")));
-            }
-            if relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
-                result
-                    .relayed_peer_dial_failures
-                    .push((peer_id, format!("{error:?}")));
-            }
+            record_bootstrap_connection_error(peer_id, &format!("{error:?}"), context, result);
         }
         SwarmEvent::Behaviour(BehaviourEvent::Relay(
             relay::client::Event::ReservationReqAccepted {
@@ -2015,7 +2098,8 @@ fn record_bootstrap_event(
                 renewal: false,
                 ..
             },
-        )) if relay_reservations
+        )) if context
+            .relay_reservations
             .iter()
             .any(|(peer, _)| *peer == relay_peer_id) =>
         {
@@ -2039,7 +2123,8 @@ fn record_bootstrap_event(
         }
         SwarmEvent::NewListenAddr { address, .. } => {
             if let Some(relay_peer) = relay_peer_from_relayed_address(&address)
-                && relay_reservations
+                && context
+                    .relay_reservations
                     .iter()
                     .any(|(peer, _)| *peer == relay_peer)
             {
@@ -2052,7 +2137,72 @@ fn record_bootstrap_event(
         })) => {
             result.autonat_status = BootstrapAutoNatStatus::from_nat_status(&new);
         }
+        SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed {
+            result: query_result,
+            ..
+        })) => {
+            record_membership_record_dht_result(
+                &query_result,
+                context.config,
+                context.membership_tag,
+                context.previous_membership_tags,
+                &mut result.membership_records,
+            );
+        }
         _ => {}
+    }
+}
+
+fn record_bootstrap_connection_established(
+    peer_id: Libp2pPeerId,
+    endpoint: &ConnectedPoint,
+    context: &BootstrapPollContext<'_>,
+    result: &mut BootstrapPollResult,
+) {
+    if context
+        .bootstrap_peers
+        .iter()
+        .any(|(peer, _)| *peer == peer_id)
+    {
+        result.connected_bootstrap_peers.insert(peer_id);
+    }
+    if context
+        .relayed_peers
+        .iter()
+        .any(|(peer, _)| *peer == peer_id)
+    {
+        let address = connected_point_address(endpoint).clone();
+        if endpoint.is_relayed() {
+            result.connected_relayed_peers.insert(peer_id, address);
+        } else {
+            result
+                .direct_connected_relayed_peers
+                .insert(peer_id, address);
+        }
+    }
+}
+
+fn record_bootstrap_connection_error(
+    peer_id: Libp2pPeerId,
+    error: &str,
+    context: &BootstrapPollContext<'_>,
+    result: &mut BootstrapPollResult,
+) {
+    if context
+        .bootstrap_peers
+        .iter()
+        .any(|(peer, _)| *peer == peer_id)
+    {
+        result.dial_failures.push((peer_id, error.to_owned()));
+    }
+    if context
+        .relayed_peers
+        .iter()
+        .any(|(peer, _)| *peer == peer_id)
+    {
+        result
+            .relayed_peer_dial_failures
+            .push((peer_id, error.to_owned()));
     }
 }
 
@@ -2061,6 +2211,184 @@ fn connected_point_address(endpoint: &ConnectedPoint) -> &Multiaddr {
         ConnectedPoint::Dialer { address, .. } => address,
         ConnectedPoint::Listener { local_addr, .. } => local_addr,
     }
+}
+
+fn current_unix_seconds_lossy() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+#[derive(Deserialize, Serialize)]
+struct BootstrapMembershipRecordBundle {
+    version: u8,
+    network_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    membership_tag: Option<String>,
+    records: Vec<SignedMembershipRecord>,
+}
+
+const MAX_BOOTSTRAP_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
+
+fn start_bootstrap_membership_record_dht(
+    node: &mut P2pNode,
+    config: &Config,
+    membership_tag: Option<&str>,
+    result: &mut BootstrapPollResult,
+) {
+    result.membership_records.configured_records = config.network.member_records.len();
+    if !config.network.discovery.kademlia || config.network.member_records.is_empty() {
+        return;
+    }
+
+    let record_key = kademlia_membership_records_key(&config.network.name, membership_tag);
+    result.membership_records.lookup_started = true;
+    node.swarm
+        .behaviour_mut()
+        .kad
+        .get_record(record_key.clone());
+
+    let records = config
+        .network
+        .member_records
+        .iter()
+        .take(MAX_CONTROL_MEMBERSHIP_RECORDS)
+        .cloned()
+        .collect::<Vec<_>>();
+    match encode_bootstrap_membership_records(&config.network.name, membership_tag, records) {
+        Ok(value) => {
+            result.membership_records.publish_started = true;
+            let record = kad::Record {
+                key: record_key,
+                value,
+                publisher: Some(*node.swarm.local_peer_id()),
+                expires: None,
+            };
+            if let Err(error) = node
+                .swarm
+                .behaviour_mut()
+                .kad
+                .put_record(record, kad::Quorum::One)
+            {
+                result.membership_records.publish_failures += 1;
+                result.membership_records.last_error = Some(format!("{error:?}"));
+            }
+        }
+        Err(error) => {
+            result.membership_records.publish_failures += 1;
+            result.membership_records.last_error = Some(format!("encode_failed:{error}"));
+        }
+    }
+}
+
+fn encode_bootstrap_membership_records(
+    network_name: &str,
+    membership_tag: Option<&str>,
+    records: Vec<SignedMembershipRecord>,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&BootstrapMembershipRecordBundle {
+        version: 1,
+        network_name: network_name.to_owned(),
+        membership_tag: membership_tag.map(str::to_owned),
+        records,
+    })
+}
+
+fn record_membership_record_dht_result(
+    query_result: &kad::QueryResult,
+    config: &Config,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+    result: &mut BootstrapMembershipRecordDhtCheck,
+) {
+    match query_result {
+        kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { .. })) => {
+            result.publish_succeeded = true;
+        }
+        kad::QueryResult::PutRecord(Err(error)) => {
+            result.publish_failures += 1;
+            result.last_error = Some(format!("{error:?}"));
+        }
+        kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) => {
+            match validate_bootstrap_membership_record_value(
+                config,
+                current_membership_tag,
+                previous_membership_tags,
+                &peer_record.record.value,
+            ) {
+                Ok((verified, accepted)) => {
+                    result.found_records += 1;
+                    result.verified_records += verified;
+                    result.accepted_records += accepted;
+                }
+                Err(error) => {
+                    result.invalid_records += 1;
+                    result.last_error = Some(error);
+                }
+            }
+        }
+        kad::QueryResult::GetRecord(Err(error)) => {
+            result.last_error = Some(format!("{error:?}"));
+        }
+        _ => {}
+    }
+}
+
+fn validate_bootstrap_membership_record_value(
+    config: &Config,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+    value: &[u8],
+) -> Result<(usize, usize), String> {
+    if value.len() > MAX_BOOTSTRAP_MEMBERSHIP_RECORD_BYTES {
+        return Err("too_large".to_owned());
+    }
+    let bundle: BootstrapMembershipRecordBundle =
+        serde_json::from_slice(value).map_err(|error| format!("decode_failed:{error}"))?;
+    if bundle.version != 1 {
+        return Err("unsupported_version".to_owned());
+    }
+    if bundle.network_name != config.network.name {
+        return Err("wrong_network".to_owned());
+    }
+    if !bootstrap_membership_tag_allowed(
+        bundle.membership_tag.as_deref(),
+        current_membership_tag,
+        previous_membership_tags,
+    ) {
+        return Err("wrong_membership_scope".to_owned());
+    }
+    if bundle.records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
+        return Err("too_many_records".to_owned());
+    }
+
+    let now = current_unix_seconds_lossy();
+    let mut records = config.network.member_records.clone();
+    let trusted_issuers = trusted_membership_issuers_at(&records, &config.network.name, now)
+        .map_err(|error| format!("invalid_trust_roots:{error:?}"))?;
+    let stats = merge_membership_records_at(
+        &mut records,
+        &bundle.records,
+        &config.network.name,
+        now,
+        &trusted_issuers,
+        MAX_CONTROL_MEMBERSHIP_RECORDS,
+    )
+    .map_err(|error| format!("invalid_record:{error:?}"))?;
+    Ok((bundle.records.len(), stats.accepted))
+}
+
+fn bootstrap_membership_tag_allowed(
+    tag: Option<&str>,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+) -> bool {
+    tag == current_membership_tag
+        || tag.is_some_and(|tag| {
+            previous_membership_tags
+                .iter()
+                .any(|previous_tag| previous_tag == tag)
+        })
 }
 
 #[derive(Debug, Default)]
@@ -2077,6 +2405,7 @@ struct BootstrapPollResult {
     dcutr_failures: usize,
     dcutr_last_error: Option<String>,
     autonat_status: BootstrapAutoNatStatus,
+    membership_records: BootstrapMembershipRecordDhtCheck,
 }
 
 #[derive(Debug, Default)]
@@ -2100,8 +2429,8 @@ struct PublicRelayIdentifyResult {
     candidate_addresses: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct PollingStatus {
+#[derive(Clone, Debug)]
+struct PollingStatus<'a> {
     threshold: BootstrapCheckThreshold,
     configured_bootstrap_peers: usize,
     connected_bootstrap_peers: usize,
@@ -2115,17 +2444,19 @@ struct PollingStatus {
     dcutr_successes: usize,
     autonat_probe_servers_registered: usize,
     autonat_status: BootstrapAutoNatStatus,
+    membership_records: &'a BootstrapMembershipRecordDhtCheck,
     now: Instant,
     deadline: Instant,
 }
 
-fn should_continue_polling(status: PollingStatus) -> bool {
+fn should_continue_polling(status: &PollingStatus<'_>) -> bool {
     if (status.configured_bootstrap_peers == 0
         && !status.requirements.relay_reservations
         && !status.requirements.autonat_status
         && !status.requirements.dcutr_ready
         && !status.requirements.dcutr_success
-        && !status.requirements.relayed_peer_circuits)
+        && !status.requirements.relayed_peer_circuits
+        && !status.requirements.membership_records)
         || status.now >= status.deadline
     {
         return false;
@@ -2150,12 +2481,18 @@ fn should_continue_polling(status: PollingStatus) -> bool {
         && status.connected_relayed_peer_circuits < status.configured_relayed_peer_circuits;
     let dcutr_success_waiting = status.requirements.dcutr_success
         && (status.dcutr_successes == 0 || status.direct_connected_relayed_peer_circuits == 0);
+    let membership_records_waiting = status.requirements.membership_records
+        && status.membership_records.configured_records > 0
+        && (!status.membership_records.publish_succeeded
+            || status.membership_records.found_records == 0
+            || status.membership_records.verified_records == 0);
 
     bootstrap_waiting
         || relay_waiting
         || autonat_waiting
         || relayed_peer_waiting
         || dcutr_success_waiting
+        || membership_records_waiting
 }
 
 const fn relay_reservations_ready(
@@ -2275,6 +2612,7 @@ mod tests {
             PacketPlaneConfig, PeerConfig, QueueConfig, RelayConfig, ResourceConfig,
         },
         identity::NodeIdentity,
+        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         runtime::p2p::{HostConfig, build_node},
     };
 
@@ -2421,6 +2759,7 @@ mod tests {
                 dcutr_ready: true,
                 dcutr_success: false,
                 relayed_peer_circuits: false,
+                membership_records: false,
             },
         )
         .await
@@ -2521,6 +2860,7 @@ mod tests {
                 dcutr_ready: false,
                 dcutr_success: false,
                 relayed_peer_circuits: true,
+                membership_records: false,
             },
         )
         .await
@@ -3005,6 +3345,7 @@ mod tests {
                 dcutr_ready: true,
                 dcutr_success: true,
                 relayed_peer_circuits: true,
+                membership_records: false,
             },
             kademlia_protocol: "/ipfs/kad/1.0.0".to_owned(),
             ipfs_compatible: true,
@@ -3033,6 +3374,7 @@ mod tests {
                 rendezvous_lookup_started: true,
                 rendezvous_advertise_started: true,
             },
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: vec![BootstrapPeerCheck {
                 peer_id: peer,
                 address: "/dnsaddr/bootstrap.libp2p.io".to_owned(),
@@ -3066,6 +3408,7 @@ mod tests {
         assert!(lines.contains(&"require dcutr ready: true".to_owned()));
         assert!(lines.contains(&"require dcutr success: true".to_owned()));
         assert!(lines.contains(&"require relayed peer circuits: true".to_owned()));
+        assert!(lines.contains(&"require membership records: false".to_owned()));
         assert!(lines.contains(&"ipfs compatible: true".to_owned()));
         assert!(lines.contains(&"dcutr enabled: true".to_owned()));
         assert!(lines.contains(&"dcutr ready: false".to_owned()));
@@ -3078,6 +3421,7 @@ mod tests {
                 &"relay reservations: 1 accepted 0 relayed_listen_addresses 0".to_owned()
             )
         );
+        assert_default_membership_record_lines(&lines);
         assert!(lines.contains(&"autonat probe servers registered: 2".to_owned()));
         assert!(lines.contains(&"autonat status: private".to_owned()));
         assert!(
@@ -3093,6 +3437,60 @@ mod tests {
                     && line.contains("connected false")
                     && line.contains("dial_failures 1"))
         );
+    }
+
+    fn assert_default_membership_record_lines(lines: &[String]) {
+        assert!(lines.contains(&"kademlia membership records configured: 0".to_owned()));
+        assert!(lines.contains(&"kademlia membership records publish started: false".to_owned()));
+        assert!(lines.contains(&"kademlia membership records publish succeeded: false".to_owned()));
+        assert!(lines.contains(&"kademlia membership records lookup started: false".to_owned()));
+        assert!(lines.contains(&"kademlia membership records found: 0".to_owned()));
+        assert!(lines.contains(&"kademlia membership records verified: 0".to_owned()));
+        assert!(lines.contains(&"kademlia membership records accepted: 0".to_owned()));
+    }
+
+    #[test]
+    fn bootstrap_membership_record_value_accepts_trusted_dht_bundle() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let trust_root = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: issuer.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("trust root");
+        let member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("member record");
+        let mut config = config_with_bootstrap_peer(peer_id(), &"/memory/9".parse().expect("addr"));
+        config.network.member_records = vec![trust_root];
+        let value = encode_bootstrap_membership_records("lab", None, vec![member_record])
+            .expect("encode bundle");
+
+        let (verified, accepted) =
+            validate_bootstrap_membership_record_value(&config, None, &[], &value).expect("value");
+
+        assert_eq!(verified, 1);
+        assert_eq!(accepted, 1);
     }
 
     #[test]
@@ -3273,13 +3671,14 @@ mod tests {
             dcutr_successes: 1,
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
+            membership_records: &BootstrapMembershipRecordDhtCheck::default(),
             now,
             deadline: now + Duration::from_secs(1),
         };
 
-        assert!(should_continue_polling(status));
+        assert!(should_continue_polling(&status));
         status.direct_connected_relayed_peer_circuits = 1;
-        assert!(!should_continue_polling(status));
+        assert!(!should_continue_polling(&status));
     }
 
     #[test]
@@ -3541,6 +3940,7 @@ mod tests {
                 dcutr_ready: false,
                 dcutr_success: false,
                 relayed_peer_circuits: false,
+                membership_records: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -3565,6 +3965,7 @@ mod tests {
             autonat_probe_servers_registered,
             autonat_status,
             kademlia: BootstrapKademliaCheck::default(),
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results: Vec::new(),
@@ -3583,6 +3984,7 @@ mod tests {
                 dcutr_ready: false,
                 dcutr_success: false,
                 relayed_peer_circuits: false,
+                membership_records: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -3600,6 +4002,7 @@ mod tests {
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results,
             relayed_peer_results: Vec::new(),
@@ -3631,6 +4034,7 @@ mod tests {
                 dcutr_ready: true,
                 dcutr_success: false,
                 relayed_peer_circuits: false,
+                membership_records: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -3660,6 +4064,7 @@ mod tests {
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results,
             relayed_peer_results: Vec::new(),
@@ -3684,6 +4089,7 @@ mod tests {
                 dcutr_ready: false,
                 dcutr_success: true,
                 relayed_peer_circuits: false,
+                membership_records: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -3708,6 +4114,7 @@ mod tests {
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results: Vec::new(),
@@ -3745,6 +4152,7 @@ mod tests {
                 dcutr_ready: false,
                 dcutr_success: false,
                 relayed_peer_circuits: true,
+                membership_records: false,
             },
             kademlia_protocol: "/p2p-vpn/kad/1.0.0".to_owned(),
             ipfs_compatible: false,
@@ -3762,6 +4170,7 @@ mod tests {
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
+            membership_records: BootstrapMembershipRecordDhtCheck::default(),
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results,

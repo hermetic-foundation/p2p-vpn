@@ -932,6 +932,7 @@ cargo run -- bootstrap-check --config p2p-vpn.json --require-autonat-status --ti
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-ready --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-dcutr-success --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --require-relayed-peer-circuits --timeout-seconds 30
+cargo run -- bootstrap-check --config p2p-vpn.json --require-membership-records --timeout-seconds 30
 cargo run -- bootstrap-check --config p2p-vpn.json --write-report bootstrap-check.json --force
 ```
 
@@ -944,7 +945,8 @@ temporarily unavailable. Use `--require-all` for private infrastructure where
 every configured bootstrap peer is expected to be reachable. The output reports
 the Kademlia protocol, whether it is IPFS-compatible, the success threshold,
 DCUtR enablement/readiness, Kademlia startup state, AutoNAT probe-server count,
-observed AutoNAT status, per-peer connection state, and dial-failure counts.
+observed AutoNAT status, membership-record DHT publish/lookup/verification/
+acceptance counts, per-peer connection state, and dial-failure counts.
 Pass `--write-report PATH` to persist the same bootstrap/DCUtR/AutoNAT/relay
 state as JSON for later comparison; existing files require `--force`.
 Use `--require-autonat-status` to make the command fail unless AutoNAT has
@@ -965,6 +967,15 @@ target addresses such as
 `/dns4/relay.example.net/tcp/4001/p2p/RELAY/p2p-circuit/p2p/PEER`; the command
 dials each configured relayed peer target, reports per-peer circuit status, and
 fails unless every configured relayed peer circuit connects before the timeout.
+When `network.member_records` is nonempty and Kademlia discovery is enabled,
+`bootstrap-check` also publishes the bounded signed membership-record bundle to
+the overlay-scoped Kademlia value key, runs a lookup for that key, verifies any
+found bundle against the local network name, membership scope, record
+signatures, and trusted issuers, and reports found/verified/accepted/invalid
+counts. Use
+`--require-membership-records` to fail unless publication succeeds and a lookup
+returns at least one verified record before the timeout; this is a rootless DHT
+propagation gate and still does not make the DHT a membership trust root.
 It does not add bootstrap or relay peers to VPN membership or grant route
 authority.
 
