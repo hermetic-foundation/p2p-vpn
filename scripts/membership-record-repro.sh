@@ -22,6 +22,7 @@ issuer_config="$artifact_dir/issuer.json"
 member_config="$artifact_dir/member.json"
 member_identity="$artifact_dir/member.identity.json"
 member_record="$artifact_dir/member.record.json"
+issuer_installed_config="$artifact_dir/issuer.with-member-record.json"
 commands="$artifact_dir/repro-commands.sh"
 summary="$artifact_dir/repro-summary.txt"
 
@@ -94,6 +95,13 @@ run_p2p "${record_issue_args[@]}"
 verify_output="$(run_p2p membership-record-verify --input "$member_record" --network "$network")"
 printf '%s\n' "$verify_output" >"$artifact_dir/membership-record-verify.txt"
 
+install_output="$(run_p2p membership-record-install \
+  --config "$issuer_config" \
+  --record "$member_record" \
+  --output "$issuer_installed_config" \
+  --force)"
+printf '%s\n' "$install_output" >"$artifact_dir/membership-record-install.txt"
+
 {
   echo "membership record repro: ok"
   echo "artifact_dir=$artifact_dir"
@@ -102,10 +110,12 @@ printf '%s\n' "$verify_output" >"$artifact_dir/membership-record-verify.txt"
   echo "membership_epoch=$membership_epoch"
   echo "sequence=$sequence"
   echo "issuer_config=$issuer_config"
+  echo "issuer_installed_config=$issuer_installed_config"
   echo "member_config=$member_config"
   echo "member_identity=$member_identity"
   echo "member_record=$member_record"
   echo "verify_output=$artifact_dir/membership-record-verify.txt"
+  echo "install_output=$artifact_dir/membership-record-install.txt"
   echo "replay_commands=$commands"
 } >"$summary"
 

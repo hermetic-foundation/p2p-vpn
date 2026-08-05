@@ -21,8 +21,8 @@ use p2p_vpn::{
         import_invite_config,
     },
     membership::{
-        MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
-        SignedMembershipRecord, issue_membership_record_for_subject_at,
+        MembershipRecordIssueOptions, MembershipRecordMergeStats, MembershipRecordSubject,
+        MembershipRole, SignedMembershipRecord, issue_membership_record_for_subject_at,
         validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
@@ -411,6 +411,16 @@ enum Command {
         input: PathBuf,
         #[arg(long)]
         network: Option<String>,
+    },
+    MembershipRecordInstall {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(long = "record", required = true)]
+        records: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
     },
     DaemonStatus {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -852,6 +862,12 @@ async fn main() -> Result<(), String> {
         Command::MembershipRecordVerify { input, network } => {
             membership_record_verify(&input, network.as_deref())
         }
+        Command::MembershipRecordInstall {
+            config,
+            records,
+            output,
+            force,
+        } => membership_record_install(&config, &records, output.as_deref(), force),
         Command::DaemonStatus {
             socket,
             timeout_seconds,
@@ -1045,6 +1061,12 @@ struct MembershipRecordIssueArgs {
     revoked: bool,
     expires_at_unix_seconds: Option<u64>,
     force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MembershipRecordInstallStats {
+    accepted: usize,
+    ignored_stale_or_equal: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1392,6 +1414,88 @@ fn membership_record_verify(input: &Path, network: Option<&str>) -> Result<(), S
     println!("sequence: {}", record.payload.sequence);
     println!("revoked: {}", record.payload.revoked);
     Ok(())
+}
+
+fn membership_record_install(
+    config_path: &Path,
+    record_paths: &[PathBuf],
+    output: Option<&Path>,
+    force: bool,
+) -> Result<(), String> {
+    let mut config =
+        Config::load(config_path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let records = record_paths
+        .iter()
+        .map(|path| read_membership_record(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let now = current_unix_seconds_lossy();
+    validate_membership_records_at(&records, &config.network.name, now)
+        .map_err(|error| format!("membership record invalid: {error:?}"))?;
+    let stats = install_config_membership_records(&mut config.network.member_records, &records);
+    let output_path = output.unwrap_or(config_path);
+    let overwrite = force || output.is_none() || output_path == config_path;
+
+    write_config_output(&config, output_path, overwrite)?;
+    if output_path.to_string_lossy() != "-" {
+        println!("membership records accepted: {}", stats.accepted);
+        println!(
+            "membership records ignored stale or equal: {}",
+            stats.ignored_stale_or_equal
+        );
+        println!(
+            "membership records configured: {}",
+            config.network.member_records.len()
+        );
+    }
+
+    Ok(())
+}
+
+fn read_membership_record(path: &Path) -> Result<SignedMembershipRecord, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn install_config_membership_records(
+    records: &mut Vec<SignedMembershipRecord>,
+    incoming: &[SignedMembershipRecord],
+) -> MembershipRecordInstallStats {
+    let merge_stats = merge_config_membership_records(records, incoming);
+    MembershipRecordInstallStats {
+        accepted: merge_stats.accepted,
+        ignored_stale_or_equal: merge_stats.ignored_stale_or_equal,
+    }
+}
+
+fn merge_config_membership_records(
+    records: &mut Vec<SignedMembershipRecord>,
+    incoming: &[SignedMembershipRecord],
+) -> MembershipRecordMergeStats {
+    let mut stats = MembershipRecordMergeStats::default();
+    for incoming_record in incoming {
+        let existing_index = records
+            .iter()
+            .position(|record| record.payload.member_peer == incoming_record.payload.member_peer);
+        if let Some(index) = existing_index {
+            let existing = &records[index];
+            if (
+                incoming_record.payload.membership_epoch,
+                incoming_record.payload.sequence,
+            ) > (existing.payload.membership_epoch, existing.payload.sequence)
+            {
+                records[index] = incoming_record.clone();
+                stats.accepted += 1;
+            } else {
+                stats.ignored_stale_or_equal += 1;
+            }
+        } else {
+            records.push(incoming_record.clone());
+            stats.accepted += 1;
+        }
+    }
+    stats
 }
 
 fn write_json_output<T: Serialize>(
@@ -7918,6 +8022,41 @@ mod tests {
 
         assert_eq!(input, PathBuf::from("member-record.json"));
         assert_eq!(network.as_deref(), Some("lab"));
+
+        let install = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership-record-install",
+            "--config",
+            "node-a.json",
+            "--record",
+            "member-record.json",
+            "--record",
+            "revocation-record.json",
+            "--output",
+            "node-a.updated.json",
+            "--force",
+        ])
+        .expect("install cli");
+        let Command::MembershipRecordInstall {
+            config,
+            records,
+            output,
+            force,
+        } = install.command
+        else {
+            panic!("expected membership-record-install command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(
+            records,
+            vec![
+                PathBuf::from("member-record.json"),
+                PathBuf::from("revocation-record.json")
+            ]
+        );
+        assert_eq!(output, Some(PathBuf::from("node-a.updated.json")));
+        assert!(force);
     }
 
     #[test]
@@ -8082,6 +8221,156 @@ mod tests {
         let _ = fs::remove_file(&issuer_config);
         let _ = fs::remove_file(&member_public);
         let _ = fs::remove_file(&record_path);
+    }
+
+    #[test]
+    fn membership_record_install_updates_config_idempotently() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer_config = temp_config_path("p2p-vpn-install-issuer");
+        let member_public = temp_config_path("p2p-vpn-install-member-public");
+        let member_record = temp_config_path("p2p-vpn-install-member-record");
+        let output = temp_config_path("p2p-vpn-install-output");
+        let issuer_config_value = InitConfigTemplate {
+            identity: issuer,
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        write_config_output(&issuer_config_value, &issuer_config, false).expect("issuer config");
+        identity_public(IdentityPublicArgs {
+            config: None,
+            private_key: Some(member.private_key),
+            output: member_public.clone(),
+            force: false,
+        })
+        .expect("member public identity");
+
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            output: member_record.clone(),
+            network: None,
+            membership_epoch: 3,
+            sequence: 9,
+            roles: Vec::new(),
+            route_grants: vec![LocalRouteArg {
+                route: RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 100,
+                },
+            }],
+            revoked: false,
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue record");
+
+        membership_record_install(
+            &issuer_config,
+            std::slice::from_ref(&member_record),
+            Some(&output),
+            false,
+        )
+        .expect("install record");
+        let installed = Config::load(&output).expect("load installed config");
+        assert_eq!(installed.network.member_records.len(), 1);
+        assert_eq!(
+            installed.network.member_records[0].payload.membership_epoch,
+            3
+        );
+        assert_eq!(installed.network.member_records[0].payload.sequence, 9);
+        assert_eq!(
+            installed.network.member_records[0].payload.route_grants[0].prefix,
+            "10.77.0.0/24"
+        );
+
+        membership_record_install(&output, std::slice::from_ref(&member_record), None, false)
+            .expect("reinstall same record");
+        let reinstalled = Config::load(&output).expect("load reinstalled config");
+        assert_eq!(reinstalled.network.member_records.len(), 1);
+
+        let _ = fs::remove_file(&issuer_config);
+        let _ = fs::remove_file(&member_public);
+        let _ = fs::remove_file(&member_record);
+        let _ = fs::remove_file(&output);
+    }
+
+    #[test]
+    fn membership_record_install_rejects_wrong_network_records() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer_config = temp_config_path("p2p-vpn-install-wrong-network-issuer");
+        let member_public = temp_config_path("p2p-vpn-install-wrong-network-member-public");
+        let member_record = temp_config_path("p2p-vpn-install-wrong-network-record");
+        let output = temp_config_path("p2p-vpn-install-wrong-network-output");
+        let issuer_config_value = InitConfigTemplate {
+            identity: issuer,
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        write_config_output(&issuer_config_value, &issuer_config, false).expect("issuer config");
+        identity_public(IdentityPublicArgs {
+            config: None,
+            private_key: Some(member.private_key),
+            output: member_public.clone(),
+            force: false,
+        })
+        .expect("member public identity");
+
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            output: member_record.clone(),
+            network: Some("other".to_owned()),
+            membership_epoch: 1,
+            sequence: 1,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: Vec::new(),
+            revoked: false,
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue wrong-network record");
+
+        let error = membership_record_install(
+            &issuer_config,
+            std::slice::from_ref(&member_record),
+            Some(&output),
+            false,
+        )
+        .expect_err("wrong network should be rejected");
+        assert!(error.contains("NetworkMismatch"));
+        assert!(!output.exists());
+
+        let _ = fs::remove_file(&issuer_config);
+        let _ = fs::remove_file(&member_public);
+        let _ = fs::remove_file(&member_record);
     }
 
     #[test]

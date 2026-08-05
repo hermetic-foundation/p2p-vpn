@@ -468,6 +468,10 @@ cargo run -- membership-record-issue \
 cargo run -- membership-record-verify \
   --input node-b.member.json \
   --network lab
+
+cargo run -- membership-record-install \
+  --config node-a.json \
+  --record node-b.member.json
 ```
 
 To revoke a record-derived member, issue a newer tombstone for the same subject:
@@ -485,10 +489,13 @@ cargo run -- membership-record-issue \
 `membership-record-issue` signs that subject with the issuer identity from
 `--issuer-config`, defaults the record network to the issuer config's network,
 and automatically adds the `route_authority` role when `--route-grant` is used.
-Place valid records in `network.member_records` on nodes that should trust them.
-Those configured records also define the trusted issuer peer IDs for dynamic
-record exchange over the authenticated control plane. The record is not a
-secret.
+`membership-record-install` verifies record signatures and network names, then
+updates `network.member_records` idempotently by keeping the newest
+`(membership_epoch, sequence)` per member. Installing a valid record into local
+config is the explicit trust action for that issuer; configured records also
+define trusted issuer peer IDs for dynamic record exchange over the
+authenticated control plane and DHT membership-record bundles. The record is
+not a secret.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to

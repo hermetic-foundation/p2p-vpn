@@ -129,9 +129,10 @@ scripts/membership-record-repro.sh
 
 The script creates disposable issuer and member configs, exports the member's
 public identity, issues a signed record with a route grant, verifies it against
-the selected network, and preserves the generated JSON plus replay commands in
-one artifact directory. Set `P2P_VPN_MEMBERSHIP_REPRO_DIR` to choose that
-directory, `P2P_VPN_MEMBERSHIP_REPRO_NETWORK` to change the network name,
+the selected network, installs it into a derived issuer config, and preserves
+the generated JSON plus replay commands in one artifact directory. Set
+`P2P_VPN_MEMBERSHIP_REPRO_DIR` to choose that directory,
+`P2P_VPN_MEMBERSHIP_REPRO_NETWORK` to change the network name,
 `P2P_VPN_MEMBERSHIP_REPRO_ROUTE_GRANT` to change the granted route, and
 `P2P_VPN_MEMBERSHIP_REPRO_EXPIRES_AT_UNIX_SECONDS` to exercise expiry metadata.
 By default the script invokes the CLI through `nix develop -c cargo run
