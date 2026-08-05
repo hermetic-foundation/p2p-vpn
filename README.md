@@ -50,6 +50,15 @@ tags are an acceptance window, not an authority to originate routes or a value
 sent as the local identity. Kademlia refreshes query previous-tag rendezvous
 keys during that acceptance window so peers can still discover each other while
 membership-key rotation is in progress.
+Configs can also carry optional `network.member_records` entries. These are
+signed membership records that bind an issuer peer ID and public key to a
+member peer ID and public key, membership epoch, sequence, roles, optional
+route grants, and optional expiry. Runtime config validation verifies the
+signatures, peer ID/public-key bindings, route-grant syntax, expiry, and
+network name before startup. Today these records are a validated authority
+primitive for the next membership workflow; configured peers and configured
+routes remain the operational VPN membership and route authority until record
+grant enforcement is wired into capability admission.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.

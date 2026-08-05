@@ -632,6 +632,7 @@ mod tests {
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),

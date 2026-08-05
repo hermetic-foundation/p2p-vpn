@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
@@ -13,6 +13,7 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     PathKind, PeerId,
     identity::NodeIdentity,
+    membership::{MembershipRecordError, SignedMembershipRecord, validate_membership_records_at},
     path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
     runtime::packet_plane::PACKET_PLANE_MAX_PAYLOAD_LEN,
@@ -90,6 +91,7 @@ impl Config {
         self.identity()?;
         self.membership_key_bytes()?;
         self.previous_membership_tags()?;
+        self.validate_membership_records()?;
         self.compile_routes()?;
         self.validate_interface()?;
         self.validate_resources()?;
@@ -272,6 +274,15 @@ impl Config {
         Ok(self.network.previous_membership_tags.clone())
     }
 
+    pub fn validate_membership_records(&self) -> Result<(), ConfigError> {
+        validate_membership_records_at(
+            &self.network.member_records,
+            &self.network.name,
+            current_unix_seconds()?,
+        )?;
+        Ok(())
+    }
+
     pub fn listen_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
         parse_multiaddrs(&self.network.listen_addresses)
     }
@@ -342,6 +353,8 @@ pub struct NetworkConfig {
     pub membership_key: Option<String>,
     #[serde(default)]
     pub previous_membership_tags: Vec<String>,
+    #[serde(default)]
+    pub member_records: Vec<SignedMembershipRecord>,
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
     #[serde(default)]
@@ -665,6 +678,7 @@ impl InitConfigTemplate {
                 private_key: Some(self.identity.private_key),
                 membership_key: self.membership_key,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: self.local_routes,
                 listen_addresses: self.listen_addresses,
                 external_addresses: self.external_addresses,
@@ -698,6 +712,13 @@ pub fn empty_path_state() -> PathSet {
     PathSet::new()
 }
 
+fn current_unix_seconds() -> Result<u64, ConfigError> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ConfigError::SystemTimeBeforeEpoch)?
+        .as_secs())
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     Io(io::Error),
@@ -720,6 +741,8 @@ pub enum ConfigError {
     PacketPlane(PacketPlaneValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
+    MembershipRecord(MembershipRecordError),
+    SystemTimeBeforeEpoch,
 }
 
 impl From<io::Error> for ConfigError {
@@ -743,6 +766,12 @@ impl From<RouteError> for ConfigError {
 impl From<crate::identity::IdentityError> for ConfigError {
     fn from(error: crate::identity::IdentityError) -> Self {
         Self::Identity(error)
+    }
+}
+
+impl From<MembershipRecordError> for ConfigError {
+    fn from(error: MembershipRecordError) -> Self {
+        Self::MembershipRecord(error)
     }
 }
 
@@ -1281,6 +1310,7 @@ mod tests {
                 private_key: None,
                 membership_key: Some(key),
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1335,6 +1365,7 @@ mod tests {
                 previous_membership_tags: vec![
                     base64::engine::general_purpose::STANDARD.encode([9_u8; 32]),
                 ],
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1375,6 +1406,7 @@ mod tests {
                 private_key: None,
                 membership_key: Some(base64::engine::general_purpose::STANDARD.encode([7_u8; 32])),
                 previous_membership_tags: vec!["not-base64".to_owned()],
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1409,6 +1441,96 @@ mod tests {
         ));
     }
 
+    fn runtime_config_for_identity(identity: NodeIdentity) -> Config {
+        Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: identity.peer_id,
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: default_queue(),
+            resources: default_resources(),
+        }
+    }
+
+    fn signed_member_record_for(
+        issuer: &NodeIdentity,
+        member: NodeIdentity,
+        network_name: &str,
+    ) -> crate::membership::SignedMembershipRecord {
+        crate::membership::issue_membership_record_at(
+            issuer,
+            crate::membership::MembershipRecordOptions {
+                network_name: network_name.to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![crate::membership::MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("membership record")
+    }
+
+    #[test]
+    fn runtime_validation_accepts_valid_member_records() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let mut config = runtime_config_for_identity(member.clone());
+        config.network.member_records = vec![signed_member_record_for(&issuer, member, "lab")];
+
+        config.validate_runtime().expect("runtime config");
+    }
+
+    #[test]
+    fn runtime_validation_rejects_tampered_member_records() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let mut config = runtime_config_for_identity(member.clone());
+        let mut record = signed_member_record_for(&issuer, member, "lab");
+        record.payload.sequence += 1;
+        config.network.member_records = vec![record];
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::MembershipRecord(
+                crate::membership::MembershipRecordError::InvalidSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_wrong_network_member_records() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let mut config = runtime_config_for_identity(member.clone());
+        config.network.member_records = vec![signed_member_record_for(&issuer, member, "other")];
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::MembershipRecord(
+                crate::membership::MembershipRecordError::NetworkMismatch { .. }
+            ))
+        ));
+    }
+
     #[test]
     fn config_compiles_builtin_and_advertised_routes() {
         let config = Config {
@@ -1419,6 +1541,7 @@ mod tests {
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 75,
@@ -1479,6 +1602,7 @@ mod tests {
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/16".to_owned(),
                     metric: 50,
@@ -1526,6 +1650,7 @@ mod tests {
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1570,6 +1695,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1606,6 +1732,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1649,6 +1776,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1700,6 +1828,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1746,6 +1875,7 @@ mod tests {
                 private_key: None,
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1806,6 +1936,7 @@ mod tests {
                 private_key: Some(identity.private_key.clone()),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
@@ -1870,6 +2001,7 @@ mod tests {
                 private_key: Some(other.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: Vec::new(),
@@ -1903,6 +2035,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1936,6 +2069,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1996,6 +2130,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2040,6 +2175,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2116,6 +2252,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2154,6 +2291,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2192,6 +2330,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2230,6 +2369,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2275,6 +2415,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2365,6 +2506,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2465,6 +2607,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
                 external_addresses: Vec::new(),
@@ -2523,6 +2666,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2584,6 +2728,7 @@ mod tests {
                 private_key: Some(identity.private_key),
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
