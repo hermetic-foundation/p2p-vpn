@@ -664,6 +664,8 @@ pub struct PacketPlaneRuntime {
     sockets: Vec<UdpSocket>,
     listeners: Vec<SocketAddr>,
     sessions: HashMap<PeerId, PacketPlaneSession>,
+    session_endpoints: HashMap<SocketAddr, PeerId>,
+    recv_buffer: Vec<u8>,
     max_replay_windows_per_session: usize,
 }
 
@@ -683,6 +685,8 @@ impl Default for PacketPlaneRuntime {
             sockets: Vec::new(),
             listeners: Vec::new(),
             sessions: HashMap::new(),
+            session_endpoints: HashMap::new(),
+            recv_buffer: vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN],
             max_replay_windows_per_session:
                 crate::config::default_packet_plane_replay_windows_per_session(),
         }
@@ -1046,6 +1050,8 @@ impl PacketPlaneRuntime {
             sockets,
             listeners,
             sessions: HashMap::new(),
+            session_endpoints: HashMap::new(),
+            recv_buffer: vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN],
             max_replay_windows_per_session: max_replay_windows_per_session.max(1),
         })
     }
@@ -1131,8 +1137,18 @@ impl PacketPlaneRuntime {
             max_replay_windows: self.max_replay_windows_per_session,
         };
         let snapshot = session.snapshot();
+        if let Some(previous) = self.sessions.get(&remote.peer) {
+            self.remove_endpoint_mapping(remote.peer, previous.endpoint);
+        }
+        self.session_endpoints.insert(remote.endpoint, remote.peer);
         self.sessions.insert(remote.peer, session);
         Ok(snapshot)
+    }
+
+    fn remove_endpoint_mapping(&mut self, peer: PeerId, endpoint: SocketAddr) {
+        if self.session_endpoints.get(&endpoint).copied() == Some(peer) {
+            self.session_endpoints.remove(&endpoint);
+        }
     }
 
     #[cfg(test)]
@@ -1165,7 +1181,11 @@ impl PacketPlaneRuntime {
             .collect::<Vec<_>>();
         let mut expired = expired_peers
             .into_iter()
-            .filter_map(|peer| self.sessions.remove(&peer))
+            .filter_map(|peer| {
+                let session = self.sessions.remove(&peer)?;
+                self.remove_endpoint_mapping(peer, session.endpoint);
+                Some(session)
+            })
             .map(|session| session.snapshot())
             .collect::<Vec<_>>();
         expired.sort_by_key(|session| session.peer.to_string());
@@ -1273,30 +1293,33 @@ impl PacketPlaneRuntime {
         listener_index: usize,
         peer: PeerId,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneIoError> {
-        let session = self
+        let expected_endpoint = self
             .sessions
-            .get_mut(&peer)
-            .ok_or(PacketPlaneIoError::NoSession { peer })?;
+            .get(&peer)
+            .ok_or(PacketPlaneIoError::NoSession { peer })?
+            .endpoint;
         let socket = self
             .sockets
             .get(listener_index)
             .ok_or(PacketPlaneIoError::NoListener {
                 index: listener_index,
             })?;
-        let mut datagram = vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN];
-        let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
-        if remote_addr != session.endpoint {
+        let (len, remote_addr) = socket.recv_from(&mut self.recv_buffer).await?;
+        if remote_addr != expected_endpoint {
             return Err(PacketPlaneIoError::UnexpectedEndpoint {
                 peer,
-                expected: session.endpoint,
+                expected: expected_endpoint,
                 actual: remote_addr,
             });
         }
-        datagram.truncate(len);
+        let session = self
+            .sessions
+            .get_mut(&peer)
+            .ok_or(PacketPlaneIoError::NoSession { peer })?;
         let frame = session
             .keys
             .open
-            .open_frame(&datagram, usize::from(session.mtu))?;
+            .open_frame(&self.recv_buffer[..len], usize::from(session.mtu))?;
         session.accept_datagram(&frame)?;
         Ok(PacketPlaneReceivedFrame {
             frame,
@@ -1325,26 +1348,26 @@ impl PacketPlaneRuntime {
             .ok_or(PacketPlaneIoError::NoListener {
                 index: listener_index,
             })?;
-        let mut datagram = vec![0; PACKET_PLANE_MAX_UDP_DATAGRAM_LEN];
-        let (len, remote_addr) = socket.recv_from(&mut datagram).await?;
-        let Some(session) = self
-            .sessions
-            .values_mut()
-            .find(|session| session.endpoint == remote_addr)
-        else {
+        let (len, remote_addr) = socket.recv_from(&mut self.recv_buffer).await?;
+        let Some(peer) = self.session_endpoints.get(&remote_addr).copied() else {
             return Err(PacketPlaneIoError::UnknownEndpoint {
                 actual: remote_addr,
             });
         };
-        datagram.truncate(len);
+        let session = self
+            .sessions
+            .get_mut(&peer)
+            .ok_or(PacketPlaneIoError::UnknownEndpoint {
+                actual: remote_addr,
+            })?;
         let frame = session
             .keys
             .open
-            .open_frame(&datagram, usize::from(session.mtu))?;
+            .open_frame(&self.recv_buffer[..len], usize::from(session.mtu))?;
         session.accept_datagram(&frame)?;
         Ok(PacketPlaneReceivedFrame {
             frame,
-            peer: Some(session.peer),
+            peer: Some(peer),
             remote_addr,
             local_addr: socket.local_addr()?,
         })
@@ -2326,6 +2349,44 @@ mod tests {
         assert_eq!(session.remote_session_id, accept.session_id);
         assert_eq!(snapshot.sessions, vec![session]);
         assert!(runtime.session_for(accept.peer).is_some());
+        assert_eq!(
+            runtime.session_endpoints.get(&receiver_addr).copied(),
+            Some(accept.peer)
+        );
+    }
+
+    #[test]
+    fn runtime_reindexes_replaced_peer_session_endpoint() {
+        let first_endpoint = "127.0.0.1:51820".parse().expect("first endpoint");
+        let second_endpoint = "127.0.0.1:51821".parse().expect("second endpoint");
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let mut moved_accept = accept.clone();
+        moved_accept.endpoint = second_endpoint;
+        let mut runtime = PacketPlaneRuntime::disabled();
+
+        runtime
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("first session");
+        runtime
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &moved_accept,
+            )
+            .expect("replaced session");
+
+        assert_eq!(runtime.session_count(), 1);
+        assert_eq!(runtime.session_endpoints.get(&first_endpoint), None);
+        assert_eq!(
+            runtime.session_endpoints.get(&second_endpoint).copied(),
+            Some(accept.peer)
+        );
     }
 
     #[test]
@@ -2348,6 +2409,7 @@ mod tests {
         assert_eq!(runtime.expire_sessions_at(now, ttl), vec![session]);
         assert_eq!(runtime.session_count(), 0);
         assert!(!runtime.has_session(accept.peer));
+        assert!(runtime.session_endpoints.is_empty());
     }
 
     #[test]
