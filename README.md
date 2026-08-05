@@ -539,15 +539,17 @@ discover an otherwise unknown peer address. The default generated route metric
 is `100`, preserving the built-in host routes at metric `0`. Repeat `--bootstrap-peer
 PEER_ID=MULTIADDR` for Kademlia bootstrap nodes. By default the generated
 config uses the private
-`/p2p-vpn/kad/1` Kademlia protocol; pass `--ipfs-kademlia` as shorthand for
-`--kademlia-protocol /ipfs/kad/1.0.0` only when you intentionally want
-IPFS/public-DHT protocol compatibility with your bootstrap peers. Add
-`--ipfs-bootstrap-peers` with `--ipfs-kademlia` to include the well-known public
-IPFS bootstrap multiaddrs in the generated config. Public bootstrap peers are
-reachability infrastructure only: they can help route Kademlia queries, AutoNAT
-probes, and relay/DCUtR setup, but configured peer IDs and route ownership still
-define the VPN overlay. DNS multiaddrs, including `/dns4`, `/dns6`, `/dns`, and
-`/dnsaddr`, are resolved by the libp2p transport for startup dials and redials.
+`/p2p-vpn/kad/1` Kademlia protocol; pass `--public-ipfs-profile` when you
+intentionally want IPFS/public-DHT protocol compatibility with bundled public
+bootstrap peers and conservative public-DHT defaults. That profile selects
+`/ipfs/kad/1.0.0`, includes the well-known public IPFS bootstrap multiaddrs,
+disables mDNS and provider advertisement, and keeps AutoNAT/DCUtR enabled. Use
+`--ipfs-kademlia` and `--ipfs-bootstrap-peers` directly only for custom public
+discovery policy. Public bootstrap peers are reachability infrastructure only:
+they can help route Kademlia queries, AutoNAT probes, and relay/DCUtR setup, but
+configured peer IDs and route ownership still define the VPN overlay. DNS
+multiaddrs, including `/dns4`, `/dns6`, `/dns`, and `/dnsaddr`, are resolved by
+the libp2p transport for startup dials and redials.
 Use `bootstrap-check` before starting the TUN daemon when you need a rootless
 smoke test that the configured bootstrap peers are reachable through libp2p; the
 binary enables libp2p RSA peer identity decoding so the legacy public IPFS
@@ -801,11 +803,14 @@ the control handshake and accepts outbound TUN packets sourced from those
 prefixes; other peers must configure matching `peer.routes` entries for this
 node before they will accept those packets.
 `discovery.kademlia_protocol` defaults to the private `/p2p-vpn/kad/1`
-protocol. Set it to `/ipfs/kad/1.0.0` only for deployments that explicitly use
-IPFS-compatible public bootstrap peers; `init-config --ipfs-kademlia
---ipfs-bootstrap-peers` writes the default public bootstrap multiaddrs into the
-config. Those peers help discovery and NAT traversal, but do not grant overlay
-membership or route authority.
+protocol. Use `init-config --public-ipfs-profile` for deployments that
+explicitly use IPFS-compatible public bootstrap peers. That profile selects
+`/ipfs/kad/1.0.0`, writes the bundled public bootstrap multiaddrs, disables mDNS,
+disables Kademlia provider advertisement, and keeps AutoNAT/DCUtR enabled for
+reachability assistance. Use the lower-level `--ipfs-kademlia` and
+`--ipfs-bootstrap-peers` flags only when you want to choose the rest of the
+discovery policy yourself. Public peers help discovery and NAT traversal, but do
+not grant overlay membership or route authority.
 `external_addresses` are registered with the libp2p swarm as explicit
 advertised addresses; use them for stable public socket, DNS, or port-forwarded
 addresses that peers should prefer over wildcard listen addresses. Confirmed

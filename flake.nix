@@ -338,9 +338,7 @@
                   echo "p2p-vpn init-config \\"
                   printf "  --output %q \\\\\n" "$membership_config"
                   printf "  --network %q \\\\\n" "$membership_network"
-                  echo "  --ipfs-kademlia \\"
-                  echo "  --ipfs-bootstrap-peers \\"
-                  echo "  --disable-mdns \\"
+                  echo "  --public-ipfs-profile \\"
                   echo "  --disable-dcutr \\"
                   echo "  --force"
                   echo
@@ -533,9 +531,7 @@
               p2p-vpn init-config \
                 --output "$membership_config" \
                 --network "$membership_network" \
-                --ipfs-kademlia \
-                --ipfs-bootstrap-peers \
-                --disable-mdns \
+                --public-ipfs-profile \
                 --disable-dcutr \
                 --force
 

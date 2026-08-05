@@ -12,10 +12,7 @@ Command:
 ```sh
 nix develop -c cargo run --quiet -- init-config \
   --output /tmp/p2p-vpn-public-check/p2p-vpn.json \
-  --ipfs-kademlia \
-  --ipfs-bootstrap-peers \
-  --disable-mdns \
-  --disable-kademlia-provider-advertisement \
+  --public-ipfs-profile \
   --force
 
 nix develop -c cargo run --quiet -- bootstrap-check \
