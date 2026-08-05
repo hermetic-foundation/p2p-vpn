@@ -621,13 +621,14 @@ nix build ".#checks.${system}.releaseArchiveSanity"
 ```
 
 The archive contains the packaged `p2p-vpn` binary, README, flake lock, NixOS
-module, the feature matrix, and the `nixos-mesh` deployment template. Release
-builds should also run `nix flake check` so the binary package, release archive,
-release-archive sanity check, formatter, clippy check, and NixOS module
-evaluation are all verified before publishing. The release sanity check unpacks
-the archive, verifies the expected operational docs, NixOS module, and template
-are present, rejects unsafe archive paths, and confirms the archived CLI can
-print its help text.
+module, the feature matrix, the membership-record repro script, and the
+`nixos-mesh` deployment template. Release builds should also run
+`nix flake check` so the binary package, release archive, release-archive sanity
+check, formatter, clippy check, and NixOS module evaluation are all verified
+before publishing. The release sanity check unpacks the archive, verifies the
+expected operational docs, NixOS module, repro script, and template are present,
+rejects unsafe archive paths, and confirms the archived CLI can print its help
+text.
 
 The current feature-completeness audit lives in
 [`docs/feature-matrix.md`](docs/feature-matrix.md). It links each major

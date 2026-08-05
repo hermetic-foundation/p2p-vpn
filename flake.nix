@@ -1311,7 +1311,7 @@ EOF
           nativeBuildInputs = [ pkgs.gnutar ];
         } ''
           release_dir="$TMPDIR/p2p-vpn-0.1.0-${system}"
-          mkdir -p "$release_dir/bin" "$release_dir/docs" "$release_dir/examples" "$release_dir/nix"
+          mkdir -p "$release_dir/bin" "$release_dir/docs" "$release_dir/examples" "$release_dir/nix" "$release_dir/scripts"
           cp ${package}/bin/p2p-vpn "$release_dir/bin/"
           cp ${./README.md} "$release_dir/README.md"
           cp ${./docs/feature-matrix.md} "$release_dir/docs/feature-matrix.md"
@@ -1323,6 +1323,8 @@ EOF
           cp ${./Cargo.toml} "$release_dir/Cargo.toml"
           cp -R ${./examples/nixos-mesh} "$release_dir/examples/nixos-mesh"
           cp ${./nix/nixos-module.nix} "$release_dir/nix/nixos-module.nix"
+          cp ${./scripts/membership-record-repro.sh} "$release_dir/scripts/membership-record-repro.sh"
+          chmod +x "$release_dir/scripts/membership-record-repro.sh"
           tar --sort=name --mtime="UTC 1970-01-01" \
             --owner=0 --group=0 --numeric-owner \
             -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
@@ -1425,13 +1427,17 @@ EOF
               "$root/docs/namespace-e2e-smoke.md" \
               "$root/docs/public-bootstrap-smoke.md" \
               "$root/examples/nixos-mesh/flake.nix" \
-              "$root/nix/nixos-module.nix"
+              "$root/nix/nixos-module.nix" \
+              "$root/scripts/membership-record-repro.sh"
             do
               grep -Fx "$path" entries >/dev/null || {
                 echo "release archive missing $path" >&2
                 exit 1
               }
             done
+
+            tar -xzf "$archive" "$root/scripts/membership-record-repro.sh"
+            test -x "$root/scripts/membership-record-repro.sh"
 
             mkdir unpacked
             tar -xzf "$archive" -C unpacked
