@@ -170,6 +170,7 @@ pub struct RuntimeMetrics {
     control_reject_unsupported_preferred_path: AtomicU64,
     control_reject_unauthorized_route_advertisement: AtomicU64,
     control_reject_invalid_owned_quic_certificate: AtomicU64,
+    control_reject_invalid_membership_record: AtomicU64,
     control_failures: AtomicU64,
     service_requests_sent: AtomicU64,
     service_requests_received: AtomicU64,
@@ -702,6 +703,9 @@ impl RuntimeMetrics {
             ControlRejectionReason::InvalidOwnedQuicCertificate => self
                 .control_reject_invalid_owned_quic_certificate
                 .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::InvalidMembershipRecord => self
+                .control_reject_invalid_membership_record
+                .fetch_add(1, Ordering::Relaxed),
         };
     }
 
@@ -1131,6 +1135,9 @@ impl RuntimeMetrics {
         snapshot.control_reject_invalid_owned_quic_certificate = self
             .control_reject_invalid_owned_quic_certificate
             .load(Ordering::Relaxed);
+        snapshot.control_reject_invalid_membership_record = self
+            .control_reject_invalid_membership_record
+            .load(Ordering::Relaxed);
         snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
         snapshot.service_requests_sent = self.service_requests_sent.load(Ordering::Relaxed);
         snapshot.service_requests_received = self.service_requests_received.load(Ordering::Relaxed);
@@ -1296,6 +1303,7 @@ pub struct RuntimeSnapshot {
     pub control_reject_unsupported_preferred_path: u64,
     pub control_reject_unauthorized_route_advertisement: u64,
     pub control_reject_invalid_owned_quic_certificate: u64,
+    pub control_reject_invalid_membership_record: u64,
     pub control_failures: u64,
     pub service_requests_sent: u64,
     pub service_requests_received: u64,
@@ -1640,6 +1648,10 @@ impl RuntimeSnapshot {
             format!(
                 "control_reject_invalid_owned_quic_certificate {}",
                 self.control_reject_invalid_owned_quic_certificate
+            ),
+            format!(
+                "control_reject_invalid_membership_record {}",
+                self.control_reject_invalid_membership_record
             ),
             format!("control_failures {}", self.control_failures),
             format!("service_requests_sent {}", self.service_requests_sent),
@@ -2069,6 +2081,7 @@ mod tests {
             ControlRejectionReason::UnsupportedPreferredPath,
             ControlRejectionReason::UnauthorizedRouteAdvertisement,
             ControlRejectionReason::InvalidOwnedQuicCertificate,
+            ControlRejectionReason::InvalidMembershipRecord,
         ] {
             metrics.record_control_capability_rejection(reason);
         }
@@ -2375,7 +2388,7 @@ mod tests {
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
         assert_eq!(snapshot.control_capability_accepts, 1);
-        assert_eq!(snapshot.control_capability_rejections, 10);
+        assert_eq!(snapshot.control_capability_rejections, 11);
         assert_eq!(snapshot.control_reject_unauthorized_peer, 1);
         assert_eq!(snapshot.control_reject_wrong_network, 1);
         assert_eq!(snapshot.control_reject_membership_mismatch, 1);
@@ -2386,6 +2399,7 @@ mod tests {
         assert_eq!(snapshot.control_reject_unsupported_preferred_path, 1);
         assert_eq!(snapshot.control_reject_unauthorized_route_advertisement, 1);
         assert_eq!(snapshot.control_reject_invalid_owned_quic_certificate, 1);
+        assert_eq!(snapshot.control_reject_invalid_membership_record, 1);
         assert_eq!(snapshot.control_failures, 1);
         assert_eq!(snapshot.service_requests_sent, 1);
         assert_eq!(snapshot.service_requests_received, 1);
@@ -2508,7 +2522,7 @@ mod tests {
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");
         assert_metric_line(&snapshot, "control_capability_accepts 1");
-        assert_metric_line(&snapshot, "control_capability_rejections 10");
+        assert_metric_line(&snapshot, "control_capability_rejections 11");
         assert_metric_line(&snapshot, "control_reject_unauthorized_peer 1");
         assert_metric_line(&snapshot, "control_reject_wrong_network 1");
         assert_metric_line(&snapshot, "control_reject_membership_mismatch 1");
@@ -2525,6 +2539,7 @@ mod tests {
             "control_reject_unauthorized_route_advertisement 1",
         );
         assert_metric_line(&snapshot, "control_reject_invalid_owned_quic_certificate 1");
+        assert_metric_line(&snapshot, "control_reject_invalid_membership_record 1");
         assert_metric_line(&snapshot, "control_failures 1");
         assert_metric_line(&snapshot, "service_requests_sent 1");
         assert_metric_line(&snapshot, "service_requests_received 1");

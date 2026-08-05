@@ -5,7 +5,7 @@ use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures::StreamExt as _;
@@ -26,6 +26,7 @@ use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
     config::{Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
     identity::NodeIdentity,
+    membership::{SignedMembershipRecord, effective_membership_at},
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, RuntimeMetrics,
         RuntimeSnapshot,
@@ -36,8 +37,8 @@ use crate::{
     runtime::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
-            PeerCapabilities, accepted_capabilities_response, rejected_capabilities_response,
-            validate_capabilities,
+            MAX_CONTROL_MEMBERSHIP_RECORDS, PeerCapabilities, accepted_capabilities_response,
+            rejected_capabilities_response, validate_capabilities,
         },
         control_socket::{ControlSocket, RuntimeControlRequest},
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
@@ -406,7 +407,7 @@ pub struct RuntimeNodeOptions {
 pub async fn run_node_until<Shutdown>(
     mut node: P2pNode,
     mut forwarder: Forwarder,
-    membership: OverlayMembership,
+    mut membership: OverlayMembership,
     previous_membership_tags: Vec<String>,
     device: TunDevice,
     mtu: u16,
@@ -479,7 +480,8 @@ where
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
             .with_packet_endpoint_candidates(packet_endpoint_candidates)
             .with_owned_quic_packet_endpoint_candidates(packet_plane_quic_endpoint_candidates)
-            .with_advertised_routes(forwarder.local_advertised_routes());
+            .with_advertised_routes(forwarder.local_advertised_routes())
+            .with_member_records(advertised_member_records(&forwarder));
     let owned_udp_packet_plane = packet_plane.primary_listener().is_some()
         && !local_capabilities.packet_endpoint_candidates.is_empty();
     let local_data_plane = local_packet_data_plane();
@@ -561,7 +563,7 @@ where
                     &mut node.swarm,
                     SwarmEventContext {
                         forwarder: &mut forwarder,
-                        membership: &membership,
+                        membership: &mut membership,
                         infrastructure_peers: &mut infrastructure_peers,
                         writer: &mut writer,
                         paths: &mut paths,
@@ -687,6 +689,11 @@ where
                     let count = expired_replay_sessions.to_string();
                     log_runtime_event(LogLevel::Info, "replay_sessions_expired", &[("count", &count)]);
                 }
+                prune_expired_membership_records(
+                    &mut forwarder,
+                    &mut membership,
+                    &mut local_capabilities,
+                )?;
                 let mut expiry_context = PacketPlaneExpiryContext {
                     swarm: &mut node.swarm,
                     forwarder: &forwarder,
@@ -2865,6 +2872,18 @@ pub struct OverlayMembership {
 
 impl OverlayMembership {
     pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
+        Self::from_config_with_member_records(
+            config,
+            &config.network.member_records,
+            current_unix_seconds_lossy(),
+        )
+    }
+
+    fn from_config_with_member_records(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<Self, ConfigError> {
         let mut peers = HashSet::new();
         let mut configured_infrastructure_peers = HashSet::new();
         peers.insert(
@@ -2879,7 +2898,10 @@ impl OverlayMembership {
             peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
         }
 
-        for member in config.effective_membership()?.overlay_members() {
+        for member in
+            effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
+                .overlay_members()
+        {
             peers.insert(member.transport_peer);
         }
 
@@ -2909,6 +2931,18 @@ impl OverlayMembership {
     #[must_use]
     pub fn allows(&self, peer: Libp2pPeerId) -> bool {
         self.peers.contains(&peer)
+    }
+
+    pub fn replace_record_members(
+        &mut self,
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<(), ConfigError> {
+        let next = Self::from_config_with_member_records(config, member_records, now_unix_seconds)?;
+        self.peers = next.peers;
+        self.configured_infrastructure_peers = next.configured_infrastructure_peers;
+        Ok(())
     }
 
     #[must_use]
@@ -3570,7 +3604,7 @@ fn packet_transport_support_with_local_datagrams(
 
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
-    membership: &'a OverlayMembership,
+    membership: &'a mut OverlayMembership,
     infrastructure_peers: &'a mut InfrastructurePeers,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
@@ -3934,6 +3968,7 @@ async fn handle_control_event(
             handle_control_response_event(
                 swarm,
                 context.forwarder,
+                context.membership,
                 context.peer_capabilities,
                 context.metrics,
                 peer,
@@ -4385,8 +4420,9 @@ async fn handle_control_request(
         ControlRequest::Capabilities(capabilities) => {
             context.metrics.record_control_request_received();
             eprintln!("control capabilities from {peer}: {capabilities:?}");
-            let response = capability_response_for_peer(
+            let response = capability_response_for_peer_with_membership_records(
                 context.forwarder,
+                context.membership,
                 peer,
                 &capabilities,
                 context.local_capabilities,
@@ -4524,7 +4560,8 @@ fn handle_service_response(
 #[allow(clippy::too_many_arguments)]
 fn handle_control_response_event(
     swarm: &mut Swarm<Behaviour>,
-    forwarder: &Forwarder,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
     peer_capabilities: &mut PeerCapabilities,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
@@ -4542,6 +4579,7 @@ fn handle_control_response_event(
         ControlResponse::CapabilitiesAccepted(capabilities) => {
             if let Some(reason) = validate_peer_capabilities(
                 forwarder,
+                membership,
                 peer,
                 &capabilities,
                 validation.network,
@@ -4617,14 +4655,17 @@ fn handle_control_response(
     metrics.record_control_response_received();
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            if let Some(reason) = validate_peer_capabilities(
-                forwarder,
-                peer,
+            let reason = validate_capabilities(
                 &capabilities,
                 validation.network,
                 validation.current_tag,
                 validation.previous_tags,
-            ) {
+            )
+            .or_else(|| {
+                (!forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes))
+                    .then_some(ControlRejectionReason::UnauthorizedRouteAdvertisement)
+            });
+            if let Some(reason) = reason {
                 metrics.record_control_capability_rejection(reason);
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
@@ -4651,6 +4692,34 @@ fn handle_control_response(
     }
 }
 
+fn capability_response_for_peer_with_membership_records(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+    local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
+) -> ControlResponse {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
+    }
+
+    if let Some(reason) = validate_peer_capabilities(
+        forwarder,
+        membership,
+        peer,
+        capabilities,
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.as_deref(),
+        previous_membership_tags,
+    ) {
+        return rejected_capabilities_response(reason);
+    }
+
+    accepted_capabilities_response(&refreshed_local_capabilities(local_capabilities, forwarder))
+}
+
+#[cfg(test)]
 fn capability_response_for_peer(
     forwarder: &Forwarder,
     peer: Libp2pPeerId,
@@ -4678,6 +4747,88 @@ fn capability_response_for_peer(
     }
 
     accepted_capabilities_response(local_capabilities)
+}
+
+fn learn_membership_records_from_capabilities(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    capabilities: &ControlCapabilities,
+) -> Result<(), ForwardError> {
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats =
+        forwarder.merge_membership_records(&capabilities.member_records, now_unix_seconds)?;
+    if stats.accepted > 0 || stats.removed_expired > 0 {
+        membership.replace_record_members(
+            forwarder.config(),
+            forwarder.member_records(),
+            now_unix_seconds,
+        )?;
+        let accepted = stats.accepted.to_string();
+        let ignored = stats.ignored_stale_or_equal.to_string();
+        let removed_expired = stats.removed_expired.to_string();
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_records_merged",
+            &[
+                ("accepted", &accepted),
+                ("ignored_stale_or_equal", &ignored),
+                ("removed_expired", &removed_expired),
+            ],
+        );
+    }
+    Ok(())
+}
+
+fn prune_expired_membership_records(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    local_capabilities: &mut ControlCapabilities,
+) -> Result<(), ForwardError> {
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats = forwarder.prune_membership_records(now_unix_seconds)?;
+    if stats.removed_expired == 0 {
+        return Ok(());
+    }
+
+    membership.replace_record_members(
+        forwarder.config(),
+        forwarder.member_records(),
+        now_unix_seconds,
+    )?;
+    *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
+    let removed_expired = stats.removed_expired.to_string();
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_records_pruned",
+        &[("removed_expired", &removed_expired)],
+    );
+
+    Ok(())
+}
+
+fn advertised_member_records(forwarder: &Forwarder) -> Vec<SignedMembershipRecord> {
+    forwarder
+        .member_records()
+        .iter()
+        .take(MAX_CONTROL_MEMBERSHIP_RECORDS)
+        .cloned()
+        .collect()
+}
+
+fn refreshed_local_capabilities(
+    local_capabilities: &ControlCapabilities,
+    forwarder: &Forwarder,
+) -> ControlCapabilities {
+    let mut capabilities = local_capabilities.clone();
+    capabilities.advertised_routes = forwarder.local_advertised_routes();
+    capabilities.member_records = advertised_member_records(forwarder);
+    capabilities
+}
+
+fn current_unix_seconds_lossy() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4729,7 +4880,8 @@ fn service_status_response_for_peer(
 }
 
 fn validate_peer_capabilities(
-    forwarder: &Forwarder,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
     peer: Libp2pPeerId,
     capabilities: &ControlCapabilities,
     expected_network: &str,
@@ -4743,6 +4895,10 @@ fn validate_peer_capabilities(
         previous_membership_tags,
     ) {
         return Some(reason);
+    }
+
+    if learn_membership_records_from_capabilities(forwarder, membership, capabilities).is_err() {
+        return Some(ControlRejectionReason::InvalidMembershipRecord);
     }
 
     if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
@@ -5501,7 +5657,7 @@ fn send_control_capabilities(
 
     swarm.behaviour_mut().control.send_request(
         &peer,
-        ControlRequest::Capabilities(local_capabilities.clone()),
+        ControlRequest::Capabilities(refreshed_local_capabilities(local_capabilities, forwarder)),
     );
     metrics.record_control_request_sent();
 }
@@ -6433,6 +6589,7 @@ fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
         | ForwardError::UnexpectedPayload(_)
         | ForwardError::Frame(_)
         | ForwardError::Config(_)
+        | ForwardError::MembershipRecord(_)
         | ForwardError::Route(_)
         | ForwardError::UnauthorizedPeer(_)
         | ForwardError::UnauthorizedLocalDestination { .. }
@@ -6635,6 +6792,7 @@ fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
         | ForwardError::UnsupportedIpVersion(_)
         | ForwardError::Frame(_)
         | ForwardError::Config(_)
+        | ForwardError::MembershipRecord(_)
         | ForwardError::Route(_)
         | ForwardError::NoRoute(_)
         | ForwardError::NoTransportPeer(_)
@@ -6750,6 +6908,7 @@ fn packet_rejection_error_name(error: &ForwardError) -> &'static str {
         ForwardError::NoRoute(_) => "no_route",
         ForwardError::NoTransportPeer(_) => "no_transport_peer",
         ForwardError::Config(_) => "configuration_error",
+        ForwardError::MembershipRecord(_) => "membership_record_error",
         ForwardError::Enqueue(EnqueueError::QueueFull { .. }) => "queue_full",
     }
 }
@@ -6859,6 +7018,7 @@ fn control_rejection_name(reason: ControlRejectionReason) -> &'static str {
             "unauthorized_route_advertisement"
         }
         ControlRejectionReason::InvalidOwnedQuicCertificate => "invalid_owned_quic_certificate",
+        ControlRejectionReason::InvalidMembershipRecord => "invalid_membership_record",
     }
 }
 
@@ -10239,6 +10399,350 @@ mod tests {
                 ControlRejectionReason::UnauthorizedRouteAdvertisement
             )
         );
+    }
+
+    #[test]
+    fn capability_response_learns_member_records_from_configured_peer() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let trusted = peer_id();
+        let trusted_subject = NodeIdentity::generate_ed25519().expect("trusted subject");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let trust_root_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: trusted_subject,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("trust root");
+        let member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("record");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: vec![trust_root_record],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: trusted.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let trusted_capabilities =
+            ControlCapabilities::local("lab", None, 1200).with_member_records(vec![member_record]);
+
+        let response = capability_response_for_peer_with_membership_records(
+            &mut forwarder,
+            &mut membership,
+            trusted,
+            &trusted_capabilities,
+            &local_capabilities,
+            &[],
+        );
+        let ControlResponse::CapabilitiesAccepted(accepted) = response else {
+            panic!("expected accepted capabilities");
+        };
+        assert_eq!(accepted.member_records.len(), 2);
+
+        assert!(membership.allows(member_peer));
+        assert!(forwarder.is_configured_transport_peer(member_peer));
+        assert!(
+            forwarder
+                .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.77.0.0/24", 1)])
+        );
+        assert_eq!(forwarder.member_record_count(), 2);
+    }
+
+    #[test]
+    fn capability_response_rejects_untrusted_member_record_issuers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let trusted = peer_id();
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let trusted_issuer = NodeIdentity::generate_ed25519().expect("trusted issuer");
+        let untrusted_issuer = NodeIdentity::generate_ed25519().expect("untrusted issuer");
+        let trust_subject = NodeIdentity::generate_ed25519().expect("trust subject");
+        let trust_root_record = issue_membership_record_at(
+            &trusted_issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: trust_subject,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("trust root");
+        let untrusted_record = issue_membership_record_at(
+            &untrusted_issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("untrusted record");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: vec![trust_root_record],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: trusted.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert_eq!(
+            capability_response_for_peer_with_membership_records(
+                &mut forwarder,
+                &mut membership,
+                trusted,
+                &ControlCapabilities::local("lab", None, 1200)
+                    .with_member_records(vec![untrusted_record]),
+                &ControlCapabilities::local("lab", None, 1280),
+                &[],
+            ),
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::InvalidMembershipRecord)
+        );
+        assert_eq!(forwarder.member_record_count(), 1);
+    }
+
+    #[test]
+    fn forwarder_prunes_expired_member_records_from_live_authorization() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let now = current_unix_seconds_lossy();
+        let member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.88.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                expires_at_unix_seconds: Some(now + 1),
+            },
+            now,
+        )
+        .expect("member record");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: vec![member_record],
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert!(membership.allows(member_peer));
+        assert!(forwarder.is_configured_transport_peer(member_peer));
+        assert!(
+            forwarder
+                .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.88.0.0/24", 1)])
+        );
+
+        let stats = forwarder
+            .prune_membership_records(now + 2)
+            .expect("pruned member records");
+        membership
+            .replace_record_members(forwarder.config(), forwarder.member_records(), now + 2)
+            .expect("membership rebuilt");
+
+        assert_eq!(stats.removed_expired, 1);
+        assert_eq!(forwarder.member_record_count(), 0);
+        assert!(!membership.allows(member_peer));
+        assert!(!forwarder.is_configured_transport_peer(member_peer));
+        assert!(
+            !forwarder
+                .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.88.0.0/24", 1)])
+        );
+    }
+
+    #[test]
+    fn capability_response_rejects_invalid_member_records() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let trusted = peer_id();
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let mut member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("record");
+        member_record.payload.sequence += 1;
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: local_identity.peer_id.clone(),
+                private_key: Some(local_identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: trusted.to_string(),
+                name: None,
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert_eq!(
+            capability_response_for_peer_with_membership_records(
+                &mut forwarder,
+                &mut membership,
+                trusted,
+                &ControlCapabilities::local("lab", None, 1200)
+                    .with_member_records(vec![member_record]),
+                &ControlCapabilities::local("lab", None, 1280),
+                &[],
+            ),
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::InvalidMembershipRecord)
+        );
+        assert_eq!(forwarder.member_record_count(), 0);
     }
 
     #[test]

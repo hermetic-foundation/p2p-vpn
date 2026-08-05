@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libp2p::{PeerId as Libp2pPeerId, identity::PublicKey};
@@ -112,6 +112,30 @@ pub struct MembershipRecordIssueOptions {
     pub expires_at_unix_seconds: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MembershipRecordMergeStats {
+    pub accepted: usize,
+    pub ignored_stale_or_equal: usize,
+    pub removed_expired: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrustedMembershipIssuers {
+    issuers: HashSet<String>,
+}
+
+impl TrustedMembershipIssuers {
+    #[must_use]
+    pub fn contains(&self, issuer_peer: &str) -> bool {
+        self.issuers.contains(issuer_peer)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.issuers.is_empty()
+    }
+}
+
 pub fn issue_membership_record_at(
     issuer: &NodeIdentity,
     options: MembershipRecordOptions,
@@ -164,6 +188,69 @@ pub fn issue_membership_record_for_subject_at(
     Ok(record)
 }
 
+pub fn merge_membership_records_at(
+    records: &mut Vec<SignedMembershipRecord>,
+    incoming: &[SignedMembershipRecord],
+    network_name: &str,
+    now_unix_seconds: u64,
+    trusted_issuers: &TrustedMembershipIssuers,
+    max_records: usize,
+) -> Result<MembershipRecordMergeStats, MembershipRecordError> {
+    let mut stats = MembershipRecordMergeStats::default();
+    for record in incoming {
+        record.verify_at(now_unix_seconds)?;
+        if record.payload.network_name != network_name {
+            return Err(MembershipRecordError::NetworkMismatch {
+                expected: network_name.to_owned(),
+                actual: record.payload.network_name.clone(),
+            });
+        }
+        if !trusted_issuers.contains(&record.payload.issuer_peer) {
+            return Err(MembershipRecordError::UntrustedIssuer {
+                issuer: record.payload.issuer_peer.clone(),
+            });
+        }
+    }
+
+    let before_retain = records.len();
+    records.retain(|record| {
+        record.verify_at(now_unix_seconds).is_ok()
+            && record.payload.network_name == network_name
+            && trusted_issuers.contains(&record.payload.issuer_peer)
+    });
+    stats.removed_expired = before_retain - records.len();
+
+    for incoming_record in incoming {
+        let existing_index = records
+            .iter()
+            .position(|record| record.payload.member_peer == incoming_record.payload.member_peer);
+        if let Some(index) = existing_index {
+            let existing = &records[index];
+            if (
+                incoming_record.payload.membership_epoch,
+                incoming_record.payload.sequence,
+            ) > (existing.payload.membership_epoch, existing.payload.sequence)
+            {
+                records[index] = incoming_record.clone();
+                stats.accepted += 1;
+            } else {
+                stats.ignored_stale_or_equal += 1;
+            }
+        } else {
+            if records.len() >= max_records {
+                return Err(MembershipRecordError::TooManyRecords {
+                    max: max_records,
+                    actual: records.len() + 1,
+                });
+            }
+            records.push(incoming_record.clone());
+            stats.accepted += 1;
+        }
+    }
+
+    Ok(stats)
+}
+
 pub fn validate_membership_records_at(
     records: &[SignedMembershipRecord],
     network_name: &str,
@@ -180,6 +267,32 @@ pub fn validate_membership_records_at(
     }
 
     Ok(())
+}
+
+pub fn trusted_membership_issuers_at(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+    now_unix_seconds: u64,
+) -> Result<TrustedMembershipIssuers, MembershipRecordError> {
+    let mut issuers = HashSet::new();
+    for record in records {
+        if let Err(error) = record.verify_at(now_unix_seconds) {
+            if matches!(error, MembershipRecordError::Expired { .. })
+                && record.payload.network_name == network_name
+            {
+                continue;
+            }
+            return Err(error);
+        }
+        if record.payload.network_name != network_name {
+            return Err(MembershipRecordError::NetworkMismatch {
+                expected: network_name.to_owned(),
+                actual: record.payload.network_name.clone(),
+            });
+        }
+        issuers.insert(record.payload.issuer_peer.clone());
+    }
+    Ok(TrustedMembershipIssuers { issuers })
 }
 
 pub fn effective_membership_at(
@@ -333,6 +446,13 @@ pub enum MembershipRecordError {
         actual: String,
     },
     InvalidSignature,
+    UntrustedIssuer {
+        issuer: String,
+    },
+    TooManyRecords {
+        max: usize,
+        actual: usize,
+    },
     Expired {
         expired_at: u64,
         now: u64,
@@ -548,5 +668,178 @@ mod tests {
         assert_eq!(members[0].sequence, 2);
         assert!(!members[0].has_role(MembershipRole::RouteAuthority));
         assert!(members[0].route_grants.is_empty());
+    }
+
+    #[test]
+    fn merge_membership_records_accepts_newer_and_discards_stale_or_expired() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let old = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("old");
+        let stale = old.clone();
+        let newer = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 2,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("newer");
+        let expired_member = NodeIdentity::generate_ed25519().expect("expired member");
+        let expired = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: expired_member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: Some(1_050),
+            },
+            1_000,
+        )
+        .expect("expired");
+        let mut records = vec![old, expired];
+        let trusted_issuers =
+            trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted issuers");
+
+        let stats = merge_membership_records_at(
+            &mut records,
+            &[stale, newer],
+            "lab",
+            1_100,
+            &trusted_issuers,
+            8,
+        )
+        .expect("merge");
+
+        assert_eq!(
+            stats,
+            MembershipRecordMergeStats {
+                accepted: 1,
+                ignored_stale_or_equal: 1,
+                removed_expired: 1,
+            }
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].payload.sequence, 2);
+    }
+
+    #[test]
+    fn merge_membership_records_rejects_untrusted_issuers() {
+        let trusted_issuer = NodeIdentity::generate_ed25519().expect("trusted issuer");
+        let untrusted_issuer = NodeIdentity::generate_ed25519().expect("untrusted issuer");
+        let trusted_member = NodeIdentity::generate_ed25519().expect("trusted member");
+        let new_member = NodeIdentity::generate_ed25519().expect("new member");
+        let trusted_record = issue_membership_record_at(
+            &trusted_issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: trusted_member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("trusted record");
+        let incoming = issue_membership_record_at(
+            &untrusted_issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: new_member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("incoming");
+        let mut records = vec![trusted_record];
+        let trusted_issuers =
+            trusted_membership_issuers_at(&records, "lab", 1_100).expect("trusted issuers");
+
+        assert!(matches!(
+            merge_membership_records_at(
+                &mut records,
+                &[incoming],
+                "lab",
+                1_100,
+                &trusted_issuers,
+                8,
+            ),
+            Err(MembershipRecordError::UntrustedIssuer { .. })
+        ));
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn merge_membership_records_enforces_total_record_cap() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let first_member = NodeIdentity::generate_ed25519().expect("first member");
+        let second_member = NodeIdentity::generate_ed25519().expect("second member");
+        let first = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: first_member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("first");
+        let second = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: second_member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("second");
+        let mut records = vec![first];
+        let trusted_issuers =
+            trusted_membership_issuers_at(&records, "lab", 1_100).expect("trusted issuers");
+
+        assert!(matches!(
+            merge_membership_records_at(&mut records, &[second], "lab", 1_100, &trusted_issuers, 1),
+            Err(MembershipRecordError::TooManyRecords { max: 1, actual: 2 })
+        ));
+        assert_eq!(records.len(), 1);
     }
 }

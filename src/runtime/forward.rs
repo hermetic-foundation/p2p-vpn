@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use libp2p::{PeerId as Libp2pPeerId, Swarm, identity::Keypair as Libp2pKeypair, request_response};
@@ -9,6 +9,10 @@ use libp2p::{PeerId as Libp2pPeerId, Swarm, identity::Keypair as Libp2pKeypair, 
 use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError, RouteConfig},
+    membership::{
+        MembershipRecordError, MembershipRecordMergeStats, SignedMembershipRecord,
+        effective_membership_at, merge_membership_records_at, trusted_membership_issuers_at,
+    },
     queue::{EnqueueError, Packet, PeerQueues},
     route::{RouteError, RouteTable},
     runtime::{
@@ -22,6 +26,8 @@ use crate::{
 #[derive(Debug)]
 pub struct Forwarder {
     local_peer: PeerId,
+    config: Config,
+    member_records: Vec<SignedMembershipRecord>,
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
@@ -36,6 +42,7 @@ pub struct Forwarder {
 const REPLAY_WINDOW_BITS: u64 = 64;
 const DEFAULT_REPLAY_SESSION_TTL: Duration = Duration::from_mins(15);
 const MAX_REPLAY_WINDOWS: usize = 4096;
+pub const MAX_RETAINED_MEMBERSHIP_RECORDS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplayWindow {
@@ -100,25 +107,26 @@ impl ReplayWindow {
 
 impl Forwarder {
     pub fn from_config(config: &Config) -> Result<Self, ForwardError> {
-        let mut peers: HashMap<PeerId, Libp2pPeerId> = config
-            .peers
-            .iter()
-            .filter_map(|peer| {
-                let libp2p_peer = peer.id.parse::<Libp2pPeerId>().ok()?;
-                Some((PeerId::from_libp2p(libp2p_peer), libp2p_peer))
-            })
-            .collect();
-        for member in config.effective_membership()?.overlay_members() {
-            peers.insert(member.peer, member.transport_peer);
-        }
+        let member_records = config.network.member_records.clone();
+        let now_unix_seconds = current_unix_seconds_lossy();
 
         let local_peer = config.local_peer_id()?;
 
         Ok(Self {
             local_peer,
-            routes: config.compile_routes()?,
-            peers,
-            authorized_peers: AuthorizedPeers::try_from_config(config)?,
+            config: config.clone(),
+            member_records: member_records.clone(),
+            routes: config.compile_routes_with_member_records(&member_records)?,
+            peers: transport_peers_from_config_and_records(
+                config,
+                &member_records,
+                now_unix_seconds,
+            )?,
+            authorized_peers: authorized_peers_from_config_and_records(
+                config,
+                &member_records,
+                now_unix_seconds,
+            )?,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
             max_replay_windows: MAX_REPLAY_WINDOWS,
@@ -197,6 +205,70 @@ impl Forwarder {
 
     pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
         self.peers.keys().copied()
+    }
+
+    pub fn merge_membership_records(
+        &mut self,
+        records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        let mut member_records = self.member_records.clone();
+        let trusted_issuers = trusted_membership_issuers_at(
+            &self.config.network.member_records,
+            &self.config.network.name,
+            now_unix_seconds,
+        )?;
+        let stats = merge_membership_records_at(
+            &mut member_records,
+            records,
+            &self.config.network.name,
+            now_unix_seconds,
+            &trusted_issuers,
+            MAX_RETAINED_MEMBERSHIP_RECORDS,
+        )?;
+        if stats.accepted == 0 && stats.removed_expired == 0 {
+            return Ok(stats);
+        }
+
+        let routes = self
+            .config
+            .compile_routes_with_member_records(&member_records)?;
+        let authorized_peers = authorized_peers_from_config_and_records(
+            &self.config,
+            &member_records,
+            now_unix_seconds,
+        )?;
+        self.peers = transport_peers_from_config_and_records(
+            &self.config,
+            &member_records,
+            now_unix_seconds,
+        )?;
+        self.routes = routes;
+        self.authorized_peers = authorized_peers;
+        self.member_records = member_records;
+        Ok(stats)
+    }
+
+    pub fn prune_membership_records(
+        &mut self,
+        now_unix_seconds: u64,
+    ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        self.merge_membership_records(&[], now_unix_seconds)
+    }
+
+    #[must_use]
+    pub fn member_record_count(&self) -> usize {
+        self.member_records.len()
+    }
+
+    #[must_use]
+    pub fn member_records(&self) -> &[SignedMembershipRecord] {
+        &self.member_records
+    }
+
+    #[must_use]
+    pub const fn config(&self) -> &Config {
+        &self.config
     }
 
     #[must_use]
@@ -461,6 +533,47 @@ impl Forwarder {
     }
 }
 
+fn transport_peers_from_config_and_records(
+    config: &Config,
+    member_records: &[SignedMembershipRecord],
+    now_unix_seconds: u64,
+) -> Result<HashMap<PeerId, Libp2pPeerId>, ConfigError> {
+    let mut peers: HashMap<PeerId, Libp2pPeerId> = config
+        .peers
+        .iter()
+        .filter_map(|peer| {
+            let libp2p_peer = peer.id.parse::<Libp2pPeerId>().ok()?;
+            Some((PeerId::from_libp2p(libp2p_peer), libp2p_peer))
+        })
+        .collect();
+    for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
+        .overlay_members()
+    {
+        peers.insert(member.peer, member.transport_peer);
+    }
+    Ok(peers)
+}
+
+fn authorized_peers_from_config_and_records(
+    config: &Config,
+    member_records: &[SignedMembershipRecord],
+    now_unix_seconds: u64,
+) -> Result<AuthorizedPeers, ConfigError> {
+    let mut authorized = AuthorizedPeers::from_config(config);
+    for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
+        .overlay_members()
+    {
+        authorized.insert(member.transport_peer);
+    }
+    Ok(authorized)
+}
+
+fn current_unix_seconds_lossy() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
 #[must_use]
 pub fn session_id_for_peer(peer: PeerId) -> SessionId {
     let bytes = peer.as_bytes();
@@ -537,6 +650,7 @@ fn ipv6_endpoint(packet: &[u8], offset: usize) -> Result<IpAddr, ForwardError> {
 #[derive(Debug)]
 pub enum ForwardError {
     Config(ConfigError),
+    MembershipRecord(MembershipRecordError),
     Route(RouteError),
     Frame(FrameError),
     Enqueue(EnqueueError),
@@ -578,6 +692,12 @@ pub enum ForwardError {
 impl From<ConfigError> for ForwardError {
     fn from(error: ConfigError) -> Self {
         Self::Config(error)
+    }
+}
+
+impl From<MembershipRecordError> for ForwardError {
+    fn from(error: MembershipRecordError) -> Self {
+        Self::MembershipRecord(error)
     }
 }
 

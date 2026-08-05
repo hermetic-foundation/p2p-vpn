@@ -196,6 +196,10 @@ impl AuthorizedPeers {
     pub fn allows(&self, peer: &Libp2pPeerId) -> bool {
         self.peers.contains(peer)
     }
+
+    pub fn insert(&mut self, peer: Libp2pPeerId) {
+        self.peers.insert(peer);
+    }
 }
 
 #[must_use]

@@ -9,12 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::{
     PathKind, PeerId,
     config::validate_packet_plane_endpoint_candidate,
+    membership::SignedMembershipRecord,
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
-const MAX_CONTROL_MESSAGE_LEN: usize = 4096;
+const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;
+pub const MAX_CONTROL_MEMBERSHIP_RECORDS: usize = 8;
 pub const MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN: usize = 2048;
 
 #[derive(Clone, Debug, Default)]
@@ -62,6 +64,8 @@ pub struct ControlCapabilities {
     pub owned_quic_packet_endpoint_candidates: Vec<String>,
     #[serde(default)]
     pub packet_endpoint_candidates: Vec<String>,
+    #[serde(default)]
+    pub member_records: Vec<SignedMembershipRecord>,
 }
 
 impl ControlCapabilities {
@@ -84,6 +88,7 @@ impl ControlCapabilities {
             owned_quic_packet_plane_certificate_der: None,
             owned_quic_packet_endpoint_candidates: Vec::new(),
             packet_endpoint_candidates: Vec::new(),
+            member_records: Vec::new(),
         }
     }
 
@@ -96,6 +101,12 @@ impl ControlCapabilities {
     #[must_use]
     pub fn with_packet_endpoint_candidates(mut self, endpoints: Vec<String>) -> Self {
         self.packet_endpoint_candidates = endpoints;
+        self
+    }
+
+    #[must_use]
+    pub fn with_member_records(mut self, records: Vec<SignedMembershipRecord>) -> Self {
+        self.member_records = records;
         self
     }
 
@@ -153,12 +164,14 @@ impl ControlCapabilities {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ControlRequest {
     Capabilities(ControlCapabilities),
     PacketPlaneHello(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ControlResponse {
     CapabilitiesAccepted(ControlCapabilities),
     CapabilitiesRejected(ControlRejectionReason),
@@ -178,6 +191,7 @@ pub enum ControlRejectionReason {
     UnsupportedPreferredPath,
     UnauthorizedRouteAdvertisement,
     InvalidOwnedQuicCertificate,
+    InvalidMembershipRecord,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -315,6 +329,9 @@ pub fn validate_capabilities(
         .any(|endpoint| !validate_packet_plane_endpoint_candidate(endpoint))
     {
         return Some(ControlRejectionReason::UnsupportedPreferredPath);
+    }
+    if capabilities.member_records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
+        return Some(ControlRejectionReason::InvalidMembershipRecord);
     }
     if capabilities.supports_owned_quic_packet_plane {
         let Some(certificate) = capabilities
@@ -563,6 +580,37 @@ mod tests {
 
         assert!(capabilities.advertised_routes.is_empty());
         assert!(capabilities.packet_endpoint_candidates.is_empty());
+        assert!(capabilities.member_records.is_empty());
+    }
+
+    #[test]
+    fn capabilities_reject_too_many_member_records() {
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.member_records = vec![
+            crate::membership::SignedMembershipRecord {
+                payload: crate::membership::MembershipRecordPayload {
+                    version: crate::membership::MEMBERSHIP_RECORD_VERSION,
+                    network_name: "lab".to_owned(),
+                    member_peer: String::new(),
+                    member_public_key: String::new(),
+                    issuer_peer: String::new(),
+                    issuer_public_key: String::new(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![crate::membership::MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    issued_at_unix_seconds: 1,
+                    expires_at_unix_seconds: None,
+                },
+                signature: String::new(),
+            };
+            MAX_CONTROL_MEMBERSHIP_RECORDS + 1
+        ];
+
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidMembershipRecord)
+        );
     }
 
     #[tokio::test]

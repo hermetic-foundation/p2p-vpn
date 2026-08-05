@@ -59,8 +59,17 @@ network name before startup. Valid local records are an additional
 authorization source: `overlay_member` admits the peer for overlay control and
 packet traffic, while `route_authority` grants the listed route prefixes when
 the same latest record also carries `overlay_member`. `peers[]` and configured
-routes remain supported as the static compatibility model. Record exchange,
-revocation records, and dynamic distribution are still follow-up work.
+routes remain supported as the static compatibility model. Configured overlay
+peers advertise a bounded set of signed membership records during the
+authenticated control-plane capability exchange. Received records must verify
+for the current network and be signed by an issuer already trusted from local
+`network.member_records` before they are merged; newer `(membership_epoch,
+sequence)` records replace older records for the same member, stale records are
+ignored, retained records are capped, expired records are pruned by runtime
+maintenance, and accepted records update live overlay membership, packet
+authorization, and route-grant ownership in memory. Explicit revocation records
+and broader record gossip beyond connected overlay peers are still follow-up
+work.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
@@ -129,10 +138,11 @@ rejected, and configured peers are only accepted when they advertise the same
 overlay network name, compatible wire version, packet protocol, packet header
 length, matching membership tag when a key is configured, known preferred path,
 coherent datagram support, valid owned-QUIC certificate material when owned QUIC
-is advertised, non-zero effective MTU, and no route prefixes outside their
-configured ownership. Packet endpoint candidates must parse as socket
-addresses or DNS-style `host:port` endpoints; they are candidates for the owned
-packet data plane, not membership or route authority. The packet-plane session
+is advertised, non-zero effective MTU, at most eight valid signed membership
+records, and no route prefixes outside their configured or record-granted
+ownership. Packet endpoint candidates must parse as socket addresses or
+DNS-style `host:port` endpoints; they are candidates for the owned packet data
+plane, not membership or route authority. The packet-plane session
 primitive uses fixed binary
 hello/accept handshakes signed by the node's libp2p identity key and bound to
 the overlay network name, session id, nonce, MTU, endpoint, identity public key,
@@ -453,8 +463,9 @@ cargo run -- membership-record-verify \
 `--issuer-config`, defaults the record network to the issuer config's network,
 and automatically adds the `route_authority` role when `--route-grant` is used.
 Place valid records in `network.member_records` on nodes that should trust them.
-The record is not a secret, but explicit revocation and dynamic record exchange
-are still follow-up work.
+Those configured records also define the trusted issuer peer IDs for dynamic
+record exchange over the authenticated control plane. The record is not a
+secret, but explicit revocation is still follow-up work.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to

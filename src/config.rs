@@ -45,6 +45,13 @@ impl Config {
     }
 
     pub fn compile_routes(&self) -> Result<RouteTable, ConfigError> {
+        self.compile_routes_with_member_records(&self.network.member_records)
+    }
+
+    pub fn compile_routes_with_member_records(
+        &self,
+        member_records: &[SignedMembershipRecord],
+    ) -> Result<RouteTable, ConfigError> {
         let mut table = RouteTable::new();
         let local_peer = self.local_peer_id()?;
         table.insert_authorized(Route {
@@ -87,7 +94,8 @@ impl Config {
             }
         }
 
-        let effective_membership = self.effective_membership()?;
+        let effective_membership =
+            effective_membership_at(member_records, &self.network.name, current_unix_seconds()?)?;
         for member in effective_membership.overlay_members() {
             table.insert_authorized(Route {
                 owner: member.peer,
