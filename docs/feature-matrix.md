@@ -94,13 +94,20 @@ path.
    bounded public relay probe as JSON with mode, timeout, validation cap,
    host-reachable candidates, skipped candidates, per-candidate failure stages,
    errors, and bootstrap/DCUtR summary fields for candidates that reached the
-   bootstrap-check phase. The long-running daemon also reports currently
-   admitted relay-only infrastructure peers in `daemon-state`, including the
-   candidate address and live swarm connection flag, so public DHT/IPFS
-   reachability attempts are inspectable without scraping logs. The project
-   still needs recorded public-relay-assisted DCUtR success from this host or
-   another suitable NAT topology. Public infrastructure is not, and should not
-   become, membership or route authority.
+   bootstrap-check phase. `relay-check` can also consume larger bounded
+   `relay-scan --write-candidates` artifacts when a validation cap is set, so
+   broad public scans can feed repeatable smaller proof runs without manual
+   file trimming. A report-driven live run on 2026-08-04 found one public relay
+   candidate that accepted a reservation, carried a relayed circuit, and wrote
+   a relay-assisted config; the paired DCUtR-required report tested eight
+   host-reachable candidates, with four reservation timeouts and four
+   direct-dial timeouts after relayed-circuit setup. The long-running daemon
+   also reports currently admitted relay-only infrastructure peers in
+   `daemon-state`, including the candidate address and live swarm connection
+   flag, so public DHT/IPFS reachability attempts are inspectable without
+   scraping logs. The project still needs recorded public-relay-assisted DCUtR
+   success from this host or another suitable NAT topology. Public
+   infrastructure is not, and should not become, membership or route authority.
 3. Privileged namespace tests passed on this host on 2026-08-04, including a
    focused owned-QUIC packet-plane path, but they still
    require a Linux kernel with user namespaces, network namespaces, veth, and

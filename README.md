@@ -929,9 +929,12 @@ as `public relay check skipped: ... reason ipv4_unreachable` or
 `reason ipv6_unreachable`. Use `--max-validation-candidates N` to bound the
 manual check after host reachability filtering; this is useful for public DCUtR
 searches where each candidate has a single end-to-end reservation plus
-circuit/DCUtR timeout budget. Each candidate line includes a stable
-`failure_stage` value: `candidate_setup`, `relay_reservation`,
-`relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
+circuit/DCUtR timeout budget. When that validation cap is set, `relay-check`
+accepts a larger bounded scan artifact and applies ordering, host reachability
+filtering, and truncation before it opens public relay probes. Each candidate
+line includes a stable `failure_stage` value: `candidate_setup`,
+`relay_reservation`, `relayed_peer_circuit`, `dcutr_success`, or `none` for a
+usable candidate.
 The report also prints a `public relay candidate failure stages:` summary with
 per-stage counts across the attempted candidate set, which is useful for
 comparing bounded public scans.

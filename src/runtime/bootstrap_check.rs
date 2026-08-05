@@ -664,15 +664,22 @@ pub async fn scan_public_relay_candidates(
 }
 
 pub fn parse_public_relay_addresses(raw: &str) -> Result<Vec<Multiaddr>, String> {
+    parse_public_relay_addresses_with_limit(raw, PUBLIC_RELAY_CANDIDATE_LIMIT)
+}
+
+pub fn parse_public_relay_addresses_with_limit(
+    raw: &str,
+    candidate_limit: usize,
+) -> Result<Vec<Multiaddr>, String> {
     let mut addresses = Vec::new();
     for candidate in raw
         .split([',', ';', '\n'])
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
     {
-        if addresses.len() == PUBLIC_RELAY_CANDIDATE_LIMIT {
+        if addresses.len() == candidate_limit {
             return Err(format!(
-                "too many public relay candidates: maximum is {PUBLIC_RELAY_CANDIDATE_LIMIT}"
+                "too many public relay candidates: maximum is {candidate_limit}"
             ));
         }
         let address = candidate

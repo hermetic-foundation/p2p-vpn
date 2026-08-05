@@ -158,11 +158,13 @@ require IPv4 or IPv6 when the local host has no usable route for that address
 family and prints each skip as `public relay check skipped: ... reason
 ipv4_unreachable` or `reason ipv6_unreachable`. Use
 `--max-validation-candidates N` to bound the manual check after host
-reachability filtering. Reservation setup failures identify whether the probe
-connected directly to the relay, whether relay reservation acceptance or
-relayed listen-address publication timed out, and the last direct relay dial
-error when one was observed. Candidate lines also include a stable
-`failure_stage` value: `candidate_setup`, `relay_reservation`,
+reachability filtering. When that validation cap is set, `relay-check` accepts a
+larger bounded scan artifact and applies ordering, host reachability filtering,
+and truncation before it opens public relay probes. Reservation setup failures
+identify whether the probe connected directly to the relay, whether relay
+reservation acceptance or relayed listen-address publication timed out, and the
+last direct relay dial error when one was observed. Candidate lines also include
+a stable `failure_stage` value: `candidate_setup`, `relay_reservation`,
 `relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
 Probe output also includes a
 `public relay candidate failure stages:` summary with per-stage counts across
@@ -348,3 +350,42 @@ peer circuit, and then fail specifically at the direct DCUtR dial from this
 host. It keeps public-relay-assisted DCUtR success unproven, but narrows the
 remaining live gap to NAT/path conditions rather than relay discovery or relayed
 circuit setup.
+
+Report-driven public relay evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 45 --max-candidates 32 --write-candidates /tmp/p2p-vpn-public-relay-candidates.txt --force
+public relay scan: ok
+public relay scan peers: 5
+public relay scan total_peers: 16
+public relay scan routing_peers: 11 dialed 0
+public relay scan connected: 5
+public relay scan relay_capable: 8
+public relay candidates: 32
+
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 45 --max-candidates 8 --write-candidates /tmp/p2p-vpn-public-relay-candidates-8.txt --force
+public relay scan: ok
+public relay candidates: 8
+
+$ nix develop -c cargo run --quiet -- relay-check --relay-candidates-file /tmp/p2p-vpn-public-relay-candidates-8.txt --max-validation-candidates 8 --write-report /tmp/p2p-vpn-public-relay-check.json --write-config /tmp/p2p-vpn-public-relay-config.json --force --timeout-seconds 45
+public relay probe: ok
+public relay probe mode: relayed_peer_circuit
+public relay candidates: 5 succeeded 1
+public relay candidate failure stages: candidate_setup 0 relay_reservation 4 relayed_peer_circuit 0 dcutr_success 0
+wrote /tmp/p2p-vpn-public-relay-check.json
+wrote /tmp/p2p-vpn-public-relay-config.json
+
+$ nix develop -c cargo run --quiet -- relay-check --relay-candidates-file /tmp/p2p-vpn-public-relay-candidates-8.txt --max-validation-candidates 8 --require-dcutr-success --write-report /tmp/p2p-vpn-public-relay-dcutr.json --force --timeout-seconds 60
+public relay probe: failed
+public relay probe mode: dcutr_success
+public relay candidates: 8 succeeded 0
+public relay candidate failure stages: candidate_setup 0 relay_reservation 4 relayed_peer_circuit 0 dcutr_success 4
+wrote /tmp/p2p-vpn-public-relay-dcutr.json
+```
+
+The relayed-circuit report proved public IPFS bootstrap, relay candidate
+discovery, public relay reservation acceptance, relayed circuit dialing, and
+relay-assisted config generation in one repeatable flow. The DCUtR report
+proved four candidates reached the DCUtR proof stage after relayed-circuit
+setup, but each direct dial timed out from this host; public-relay-assisted
+DCUtR success remains the outstanding live evidence gap.

@@ -24,8 +24,9 @@ use p2p_vpn::{
     queue::QueueStats,
     runtime::{
         bootstrap_check::{
-            BootstrapCheckRequirements, BootstrapCheckThreshold, PublicRelayProbeMode,
-            check_config_bootstrap, check_public_relay_candidates, parse_public_relay_addresses,
+            BootstrapCheckRequirements, BootstrapCheckThreshold, PUBLIC_RELAY_CANDIDATE_LIMIT,
+            PublicRelayProbeMode, check_config_bootstrap, check_public_relay_candidates,
+            parse_public_relay_addresses, parse_public_relay_addresses_with_limit,
             scan_public_relay_candidates,
         },
         forward::session_id_for_peer,
@@ -41,6 +42,7 @@ use serde::Serialize;
 
 const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
 const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
+const RELAY_CHECK_CAPPED_INPUT_LIMIT: usize = 256;
 const IPFS_BOOTSTRAP_PEERS: &[(&str, &str)] = &[
     (
         "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
@@ -2199,7 +2201,7 @@ async fn bootstrap_check(
 async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     validate_relay_check_args(&args)?;
     let raw = relay_check_candidate_input(&args)?;
-    let addresses = relay_check_candidate_multiaddrs(&raw)?;
+    let addresses = relay_check_candidate_multiaddrs(&raw, args.max_validation_candidates)?;
     let (addresses, skipped_candidates) =
         filter_relay_validation_candidates(addresses, local_relay_candidate_reachability());
     for skipped in &skipped_candidates {
@@ -2296,8 +2298,16 @@ fn relay_check_candidate_input(args: &RelayCheckArgs) -> Result<String, String> 
     Ok(sources.join("\n"))
 }
 
-fn relay_check_candidate_multiaddrs(raw: &str) -> Result<Vec<libp2p::Multiaddr>, String> {
-    let addresses = parse_public_relay_addresses(raw)
+fn relay_check_candidate_multiaddrs(
+    raw: &str,
+    max_validation_candidates: Option<usize>,
+) -> Result<Vec<libp2p::Multiaddr>, String> {
+    let candidate_limit = if max_validation_candidates.is_some() {
+        RELAY_CHECK_CAPPED_INPUT_LIMIT
+    } else {
+        PUBLIC_RELAY_CANDIDATE_LIMIT
+    };
+    let addresses = parse_public_relay_addresses_with_limit(raw, candidate_limit)
         .map_err(|error| format!("failed to parse relay candidates: {error}"))?;
     order_relay_validation_candidates(addresses, "relay-check candidate")
 }
@@ -4792,7 +4802,8 @@ mod tests {
         ];
         let raw = addresses.join("\n");
 
-        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+        let candidates =
+            relay_check_candidate_multiaddrs(&raw, None).expect("relay-check candidates");
         let ordered = candidates
             .iter()
             .map(ToString::to_string)
@@ -4811,8 +4822,27 @@ mod tests {
     }
 
     #[test]
+    fn relay_check_candidate_multiaddrs_accept_large_file_when_validation_is_capped() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let raw = (0..32)
+            .map(|port| format!("/dns4/relay.example.net/tcp/{}/p2p/{peer}", 4001 + port))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            relay_check_candidate_multiaddrs(&raw, None)
+                .expect_err("uncapped input should keep the default safety limit")
+                .contains("maximum is 8")
+        );
+        let candidates =
+            relay_check_candidate_multiaddrs(&raw, Some(8)).expect("capped relay candidates");
+
+        assert_eq!(candidates.len(), 32);
+    }
+
+    #[test]
     fn relay_check_candidate_multiaddrs_reject_missing_peer_id() {
-        let error = relay_check_candidate_multiaddrs("/dns4/relay.example.net/tcp/4001")
+        let error = relay_check_candidate_multiaddrs("/dns4/relay.example.net/tcp/4001", None)
             .expect_err("missing peer id should fail");
 
         assert!(error.contains("missing /p2p/RELAY"));
@@ -4843,7 +4873,8 @@ mod tests {
         };
 
         let raw = relay_check_candidate_input(&args).expect("candidate input");
-        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+        let candidates =
+            relay_check_candidate_multiaddrs(&raw, None).expect("relay-check candidates");
         fs::remove_file(&output).expect("remove candidates");
 
         assert_eq!(
@@ -4934,7 +4965,8 @@ mod tests {
             format!("/ip6/2001:db8::1/tcp/4001/p2p/{peer_b}"),
         ]
         .join("\n");
-        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+        let candidates =
+            relay_check_candidate_multiaddrs(&raw, None).expect("relay-check candidates");
 
         let (kept, skipped) = filter_relay_validation_candidates(
             candidates,
