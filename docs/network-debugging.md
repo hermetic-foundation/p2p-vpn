@@ -53,6 +53,8 @@ When a daemon is still running with a control socket, start with
 `--require-validated-peers`, `--require-supported-paths`,
 `--require-packet-plane-session`, or `--require-packet-plane-quic-session` to
 turn a repro into a strict readiness gate for the stage under investigation.
+Use `--wait-seconds 30` when the repro should wait for asynchronous discovery,
+relay, DCUtR, or packet-plane negotiation instead of sampling only once.
 
 For discovery failures, check node logs for `kademlia query progressed`,
 `discovered_address_dial_attempts`, and `control capabilities accepted`.

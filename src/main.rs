@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
     str::FromStr,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -406,6 +406,8 @@ enum Command {
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, default_value_t = 0)]
+        wait_seconds: u64,
         #[arg(long)]
         require_peers: bool,
         #[arg(long)]
@@ -778,6 +780,7 @@ async fn main() -> Result<(), String> {
         Command::DaemonHealth {
             socket,
             timeout_seconds,
+            wait_seconds,
             require_peers,
             require_validated_peers,
             require_supported_paths,
@@ -789,14 +792,17 @@ async fn main() -> Result<(), String> {
             Box::pin(daemon_health(
                 &socket,
                 timeout_seconds,
-                DaemonHealthRequirements {
-                    peers: require_peers,
-                    validated_peers: require_validated_peers,
-                    supported_paths: require_supported_paths,
-                    packet_plane_listener: require_packet_plane_listener,
-                    packet_plane_session: require_packet_plane_session,
-                    packet_plane_quic_listener: require_packet_plane_quic_listener,
-                    packet_plane_quic_session: require_packet_plane_quic_session,
+                DaemonHealthOptions {
+                    wait: Duration::from_secs(wait_seconds),
+                    requirements: DaemonHealthRequirements {
+                        peers: require_peers,
+                        validated_peers: require_validated_peers,
+                        supported_paths: require_supported_paths,
+                        packet_plane_listener: require_packet_plane_listener,
+                        packet_plane_session: require_packet_plane_session,
+                        packet_plane_quic_listener: require_packet_plane_quic_listener,
+                        packet_plane_quic_session: require_packet_plane_quic_session,
+                    },
                 },
             ))
             .await
@@ -3738,6 +3744,12 @@ struct DaemonHealthRequirements {
     packet_plane_quic_session: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct DaemonHealthOptions {
+    wait: Duration,
+    requirements: DaemonHealthRequirements,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct DaemonHealthSnapshot {
     daemon_running: bool,
@@ -3766,16 +3778,11 @@ struct DaemonHealthCheck {
 async fn daemon_health(
     socket: &Path,
     timeout_seconds: u64,
-    requirements: DaemonHealthRequirements,
+    options: DaemonHealthOptions,
 ) -> Result<(), String> {
-    let lines = p2p_vpn::runtime::control_socket::query_state(
-        socket,
-        Duration::from_secs(timeout_seconds.max(1)),
-    )
-    .await
-    .map_err(|error| format!("daemon health query failed: {error:?}"))?;
-
-    let verdict = daemon_health_verdict(&lines, requirements);
+    let verdict =
+        wait_for_daemon_health(socket, Duration::from_secs(timeout_seconds.max(1)), options)
+            .await?;
     print_daemon_health_verdict(&verdict);
     if verdict.ready {
         Ok(())
@@ -3791,6 +3798,36 @@ async fn daemon_health(
                 .join(", ")
         ))
     }
+}
+
+async fn wait_for_daemon_health(
+    socket: &Path,
+    query_timeout: Duration,
+    options: DaemonHealthOptions,
+) -> Result<DaemonHealthVerdict, String> {
+    let deadline = Instant::now() + options.wait;
+    loop {
+        match p2p_vpn::runtime::control_socket::query_state(socket, query_timeout).await {
+            Ok(lines) => {
+                let verdict = daemon_health_verdict(&lines, options.requirements);
+                if verdict.ready || Instant::now() >= deadline {
+                    return Ok(verdict);
+                }
+            }
+            Err(error) => {
+                let message = format!("daemon health query failed: {error:?}");
+                if Instant::now() >= deadline {
+                    return Err(message);
+                }
+            }
+        }
+        tokio::time::sleep(daemon_health_poll_interval(options.wait)).await;
+    }
+}
+
+fn daemon_health_poll_interval(wait: Duration) -> Duration {
+    wait.min(Duration::from_secs(1))
+        .max(Duration::from_millis(100))
 }
 
 fn daemon_health_verdict(
@@ -5555,6 +5592,8 @@ mod tests {
             "/run/p2p-vpn-node-a/control.sock",
             "--timeout-seconds",
             "3",
+            "--wait-seconds",
+            "7",
             "--require-peers",
             "--require-validated-peers",
             "--require-supported-paths",
@@ -5568,6 +5607,7 @@ mod tests {
         let Command::DaemonHealth {
             socket,
             timeout_seconds,
+            wait_seconds,
             require_peers,
             require_validated_peers,
             require_supported_paths,
@@ -5582,6 +5622,7 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+        assert_eq!(wait_seconds, 7);
         assert!(require_peers);
         assert!(require_validated_peers);
         assert!(require_supported_paths);
@@ -5708,6 +5749,117 @@ mod tests {
                 packet_plane_quic_sessions: Some(1),
             }
         );
+    }
+
+    #[test]
+    fn daemon_health_poll_interval_is_bounded() {
+        assert_eq!(
+            daemon_health_poll_interval(Duration::from_millis(1)),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            daemon_health_poll_interval(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            daemon_health_poll_interval(Duration::from_secs(30)),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_health_waits_until_requirements_pass() {
+        let path =
+            std::env::temp_dir().join(format!("p2p-vpn-health-{}-wait.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) =
+            p2p_vpn::runtime::control_socket::ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            for response in [
+                vec![
+                    "daemon state: running".to_owned(),
+                    "configured peers: 1".to_owned(),
+                    "validated peers: 0".to_owned(),
+                ],
+                vec![
+                    "daemon state: running".to_owned(),
+                    "configured peers: 1".to_owned(),
+                    "validated peers: 1".to_owned(),
+                ],
+            ] {
+                let Some(p2p_vpn::runtime::control_socket::RuntimeControlRequest::State {
+                    respond_to,
+                }) = rx.recv().await
+                else {
+                    panic!("expected state request");
+                };
+                respond_to.send(response).expect("state response accepted");
+            }
+        });
+
+        let verdict = wait_for_daemon_health(
+            &path,
+            Duration::from_secs(1),
+            DaemonHealthOptions {
+                wait: Duration::from_secs(1),
+                requirements: DaemonHealthRequirements {
+                    validated_peers: true,
+                    ..DaemonHealthRequirements::default()
+                },
+            },
+        )
+        .await
+        .expect("health verdict");
+
+        assert!(verdict.ready);
+        assert!(
+            verdict
+                .checks
+                .iter()
+                .any(|check| check.name == "validated_peers" && check.ok)
+        );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn daemon_health_waits_for_socket_to_appear() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-health-{}-delayed.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener_path = path.clone();
+        let responder = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let (socket, mut rx) =
+                p2p_vpn::runtime::control_socket::ControlSocket::bind(&listener_path)
+                    .expect("control socket");
+            let Some(p2p_vpn::runtime::control_socket::RuntimeControlRequest::State { respond_to }) =
+                rx.recv().await
+            else {
+                panic!("expected state request");
+            };
+            respond_to
+                .send(vec!["daemon state: running".to_owned()])
+                .expect("state response accepted");
+            drop(socket);
+        });
+
+        let verdict = wait_for_daemon_health(
+            &path,
+            Duration::from_millis(100),
+            DaemonHealthOptions {
+                wait: Duration::from_millis(250),
+                requirements: DaemonHealthRequirements::default(),
+            },
+        )
+        .await
+        .expect("health verdict after socket appears");
+
+        assert!(verdict.ready);
+        responder.await.expect("responder");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

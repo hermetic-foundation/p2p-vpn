@@ -579,7 +579,8 @@
             machine.succeed(
                 "p2p-vpn daemon-health "
                 "--socket /run/p2p-vpn-smoke/control.sock "
-                "--timeout-seconds 5 | tee /tmp/p2p-vpn-health"
+                "--timeout-seconds 5 "
+                "--wait-seconds 5 | tee /tmp/p2p-vpn-health"
             )
             machine.succeed("grep -q '^daemon_health_ready true$' /tmp/p2p-vpn-health")
             machine.succeed("grep -q '^daemon_health_check daemon_running ok ' /tmp/p2p-vpn-health")

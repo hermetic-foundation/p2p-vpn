@@ -1259,6 +1259,7 @@ cargo run -- daemon-paths --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-mtu --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-capabilities --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-health --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-health --socket /run/p2p-vpn/control.sock --wait-seconds 30 --require-validated-peers --require-supported-paths
 cargo run -- daemon-shutdown --socket /run/p2p-vpn/control.sock
 ```
 
@@ -1270,9 +1271,10 @@ daemon; add `--require-peers`, `--require-validated-peers`,
 `--require-supported-paths`, `--require-packet-plane-listener`,
 `--require-packet-plane-session`, `--require-packet-plane-quic-listener`, or
 `--require-packet-plane-quic-session` to turn repro scripts into stricter stage
-gates. `daemon-status` uses the same line-oriented metric names as `metrics`,
-but comes from the running daemon's current queue and path state instead of a
-startup snapshot.
+gates. Add `--wait-seconds N` to poll until those checks pass or the wait
+deadline expires. `daemon-status` uses the same line-oriented metric names as
+`metrics`, but comes from the running daemon's current queue and path state
+instead of a startup snapshot.
 `daemon-state` reports the running daemon's configured peers, validated
 capability state, selected path, healthy direct and relay path counts, effective
 MTU, selected path MTU, per-candidate path MTU estimates, configured
