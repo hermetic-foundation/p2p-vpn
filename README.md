@@ -271,10 +271,14 @@ When AutoNAT reports private reachability, the daemon also watches identify
 results from connected infrastructure peers. If a connected peer advertises the
 libp2p relay hop protocol and a supported TCP or QUIC direct address, the
 daemon starts a bounded automatic relay reservation through that peer. This
-turns already-admitted public or shared relay infrastructure into live relay
-fallback without requiring every reservation to be written into the config.
-Arbitrary relay-only peers learned from the public DHT still need an explicit
-infrastructure admission path before the daemon will connect to them.
+turns public or shared relay infrastructure into live relay fallback without
+requiring every reservation to be written into the config. With Kademlia
+enabled, private nodes also query the DHT for nearby peers and provisionally
+admit direct TCP or QUIC candidates learned from routing-table updates or
+closest-peer results. Those peers remain relay-only infrastructure: Identify
+must confirm relay-hop support or the daemon disconnects them, and they do not
+gain VPN membership, packet forwarding, control-plane authority, service-plane
+authority, or route ownership.
 Discovered addresses that include an explicit `/p2p/<peer>` target are rejected
 when that target does not match the configured peer being learned, including
 relayed target addresses after `/p2p-circuit`.
@@ -962,7 +966,8 @@ frames, expired outbound queue packets, stream fallback sends, attempted native
 QUIC datagram sends, datagram-unavailable queue stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, packet-plane path demotions, relay reservation/circuit
-counts, auto-relay candidate/reservation attempt/failure counts, packet-plane
+counts, auto-relay candidate/reservation attempt/failure counts,
+auto-relay infrastructure candidate/dial/failure counts, packet-plane
 recovery dial attempts/failures, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT

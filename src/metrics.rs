@@ -118,6 +118,9 @@ pub struct RuntimeMetrics {
     outbound_path_mtu_probe_confirmations: AtomicU64,
     unauthorized_connections_dropped: AtomicU64,
     relay_reservations_accepted: AtomicU64,
+    auto_relay_infrastructure_candidates: AtomicU64,
+    auto_relay_infrastructure_dial_attempts: AtomicU64,
+    auto_relay_infrastructure_dial_failures: AtomicU64,
     auto_relay_candidates: AtomicU64,
     auto_relay_reservation_attempts: AtomicU64,
     auto_relay_reservation_failures: AtomicU64,
@@ -466,6 +469,21 @@ impl RuntimeMetrics {
 
     pub fn record_relay_reservation_accepted(&self) {
         self.relay_reservations_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_auto_relay_infrastructure_candidate(&self) {
+        self.auto_relay_infrastructure_candidates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_auto_relay_infrastructure_dial_attempt(&self) {
+        self.auto_relay_infrastructure_dial_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_auto_relay_infrastructure_dial_failure(&self) {
+        self.auto_relay_infrastructure_dial_failures
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -980,6 +998,15 @@ impl RuntimeMetrics {
             .load(Ordering::Relaxed);
         snapshot.relay_reservations_accepted =
             self.relay_reservations_accepted.load(Ordering::Relaxed);
+        snapshot.auto_relay_infrastructure_candidates = self
+            .auto_relay_infrastructure_candidates
+            .load(Ordering::Relaxed);
+        snapshot.auto_relay_infrastructure_dial_attempts = self
+            .auto_relay_infrastructure_dial_attempts
+            .load(Ordering::Relaxed);
+        snapshot.auto_relay_infrastructure_dial_failures = self
+            .auto_relay_infrastructure_dial_failures
+            .load(Ordering::Relaxed);
         snapshot.auto_relay_candidates = self.auto_relay_candidates.load(Ordering::Relaxed);
         snapshot.auto_relay_reservation_attempts =
             self.auto_relay_reservation_attempts.load(Ordering::Relaxed);
@@ -1211,6 +1238,9 @@ pub struct RuntimeSnapshot {
     pub outbound_path_mtu_probe_confirmations: u64,
     pub unauthorized_connections_dropped: u64,
     pub relay_reservations_accepted: u64,
+    pub auto_relay_infrastructure_candidates: u64,
+    pub auto_relay_infrastructure_dial_attempts: u64,
+    pub auto_relay_infrastructure_dial_failures: u64,
     pub auto_relay_candidates: u64,
     pub auto_relay_reservation_attempts: u64,
     pub auto_relay_reservation_failures: u64,
@@ -1399,15 +1429,6 @@ impl RuntimeSnapshot {
                 "relay_reservations_accepted {}",
                 self.relay_reservations_accepted
             ),
-            format!("auto_relay_candidates {}", self.auto_relay_candidates),
-            format!(
-                "auto_relay_reservation_attempts {}",
-                self.auto_relay_reservation_attempts
-            ),
-            format!(
-                "auto_relay_reservation_failures {}",
-                self.auto_relay_reservation_failures
-            ),
             format!(
                 "relay_outbound_circuits_established {}",
                 self.relay_outbound_circuits_established
@@ -1443,6 +1464,33 @@ impl RuntimeSnapshot {
             format!(
                 "relay_server_circuits_closed {}",
                 self.relay_server_circuits_closed
+            ),
+        ]);
+        self.extend_auto_relay_lines(lines);
+    }
+
+    fn extend_auto_relay_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
+            format!(
+                "auto_relay_infrastructure_candidates {}",
+                self.auto_relay_infrastructure_candidates
+            ),
+            format!(
+                "auto_relay_infrastructure_dial_attempts {}",
+                self.auto_relay_infrastructure_dial_attempts
+            ),
+            format!(
+                "auto_relay_infrastructure_dial_failures {}",
+                self.auto_relay_infrastructure_dial_failures
+            ),
+            format!("auto_relay_candidates {}", self.auto_relay_candidates),
+            format!(
+                "auto_relay_reservation_attempts {}",
+                self.auto_relay_reservation_attempts
+            ),
+            format!(
+                "auto_relay_reservation_failures {}",
+                self.auto_relay_reservation_failures
             ),
         ]);
     }
@@ -1925,6 +1973,9 @@ mod tests {
         metrics.record_outbound_path_mtu_probe_confirmation();
         metrics.record_unauthorized_connection_dropped();
         metrics.record_relay_reservation_accepted();
+        metrics.record_auto_relay_infrastructure_candidate();
+        metrics.record_auto_relay_infrastructure_dial_attempt();
+        metrics.record_auto_relay_infrastructure_dial_failure();
         metrics.record_auto_relay_candidate();
         metrics.record_auto_relay_reservation_attempt();
         metrics.record_auto_relay_reservation_failure();
@@ -2205,6 +2256,9 @@ mod tests {
         assert_eq!(snapshot.relayed_connections_established, 1);
         assert_eq!(snapshot.unauthorized_connections_dropped, 1);
         assert_eq!(snapshot.relay_reservations_accepted, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
         assert_eq!(snapshot.auto_relay_candidates, 1);
         assert_eq!(snapshot.auto_relay_reservation_attempts, 1);
         assert_eq!(snapshot.auto_relay_reservation_failures, 1);
@@ -2309,8 +2363,14 @@ mod tests {
         let snapshot = populated_snapshot();
 
         assert_eq!(snapshot.auto_relay_candidates, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
         assert_eq!(snapshot.auto_relay_reservation_attempts, 1);
         assert_eq!(snapshot.auto_relay_reservation_failures, 1);
+        assert_metric_line(&snapshot, "auto_relay_infrastructure_candidates 1");
+        assert_metric_line(&snapshot, "auto_relay_infrastructure_dial_attempts 1");
+        assert_metric_line(&snapshot, "auto_relay_infrastructure_dial_failures 1");
         assert_metric_line(&snapshot, "auto_relay_candidates 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_attempts 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_failures 1");
