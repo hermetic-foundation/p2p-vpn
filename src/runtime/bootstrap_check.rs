@@ -5,8 +5,8 @@ use std::{
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, autonat, dcutr, identify, kad, multiaddr::Protocol, relay,
-    swarm::SwarmEvent,
+    Multiaddr, PeerId as Libp2pPeerId, autonat, core::ConnectedPoint, dcutr, identify, kad,
+    multiaddr::Protocol, relay, swarm::SwarmEvent,
 };
 
 use crate::{
@@ -43,6 +43,8 @@ pub struct BootstrapCheckReport {
     pub relayed_listen_addresses: usize,
     pub configured_relayed_peer_circuits: usize,
     pub connected_relayed_peer_circuits: usize,
+    pub relayed_connection_addresses: Vec<String>,
+    pub direct_connection_addresses: Vec<String>,
     pub autonat_probe_servers_registered: usize,
     pub autonat_status: BootstrapAutoNatStatus,
     pub kademlia: BootstrapKademliaCheck,
@@ -197,6 +199,14 @@ impl BootstrapCheckReport {
                 self.configured_relayed_peer_circuits, self.connected_relayed_peer_circuits
             ),
         ];
+
+        for address in &self.relayed_connection_addresses {
+            lines.push(format!("relayed peer connection address: {address}"));
+        }
+
+        for address in &self.direct_connection_addresses {
+            lines.push(format!("direct peer connection address: {address}"));
+        }
 
         for peer in &self.peer_results {
             lines.push(format!(
@@ -632,6 +642,10 @@ pub async fn check_config_bootstrap(
         relayed_listen_addresses: poll.relayed_listen_addresses.len(),
         configured_relayed_peer_circuits: relayed_peers.len(),
         connected_relayed_peer_circuits: poll.connected_relayed_peers.len(),
+        relayed_connection_addresses: sorted_connection_addresses(&poll.connected_relayed_peers),
+        direct_connection_addresses: sorted_connection_addresses(
+            &poll.direct_connected_relayed_peers,
+        ),
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: poll.autonat_status,
         kademlia: BootstrapKademliaCheck {
@@ -861,10 +875,10 @@ fn relayed_peer_results(
             RelayedPeerCircuitCheck {
                 peer_id,
                 address: address.to_string(),
-                connected: poll.connected_relayed_peers.contains(&peer_id),
+                connected: poll.connected_relayed_peers.contains_key(&peer_id),
                 outbound_circuit: relay_peer.is_some_and(|relay| {
                     poll.outbound_circuit_relays.contains(&relay)
-                        || poll.connected_relayed_peers.contains(&peer_id)
+                        || poll.connected_relayed_peers.contains_key(&peer_id)
                 }),
                 dial_failures: poll
                     .relayed_peer_dial_failures
@@ -1299,8 +1313,17 @@ fn dcutr_direct_dial_last_error(
     poll.relayed_peer_dial_failures
         .iter()
         .rev()
-        .find(|(peer, _)| poll.connected_relayed_peers.contains(peer))
+        .find(|(peer, _)| poll.connected_relayed_peers.contains_key(peer))
         .map(|(_, error)| format!("direct_dial: {error}"))
+}
+
+fn sorted_connection_addresses(connections: &HashMap<Libp2pPeerId, Multiaddr>) -> Vec<String> {
+    let mut addresses: Vec<_> = connections
+        .iter()
+        .map(|(peer, address)| format!("{peer} {address}"))
+        .collect();
+    addresses.sort();
+    addresses
 }
 
 fn start_public_relay_closest_peer_lookup(node: &mut P2pNode) -> bool {
@@ -1683,10 +1706,13 @@ fn record_bootstrap_event(
                 result.connected_bootstrap_peers.insert(peer_id);
             }
             if relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
+                let address = connected_point_address(&endpoint).clone();
                 if endpoint.is_relayed() {
-                    result.connected_relayed_peers.insert(peer_id);
+                    result.connected_relayed_peers.insert(peer_id, address);
                 } else {
-                    result.direct_connected_relayed_peers.insert(peer_id);
+                    result
+                        .direct_connected_relayed_peers
+                        .insert(peer_id, address);
                 }
             }
         }
@@ -1751,14 +1777,21 @@ fn record_bootstrap_event(
     }
 }
 
+fn connected_point_address(endpoint: &ConnectedPoint) -> &Multiaddr {
+    match endpoint {
+        ConnectedPoint::Dialer { address, .. } => address,
+        ConnectedPoint::Listener { local_addr, .. } => local_addr,
+    }
+}
+
 #[derive(Debug, Default)]
 struct BootstrapPollResult {
     connected_bootstrap_peers: HashSet<Libp2pPeerId>,
     dial_failures: Vec<(Libp2pPeerId, String)>,
     accepted_relay_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashMap<Libp2pPeerId, libp2p::Multiaddr>,
-    connected_relayed_peers: HashSet<Libp2pPeerId>,
-    direct_connected_relayed_peers: HashSet<Libp2pPeerId>,
+    connected_relayed_peers: HashMap<Libp2pPeerId, Multiaddr>,
+    direct_connected_relayed_peers: HashMap<Libp2pPeerId, Multiaddr>,
     outbound_circuit_relays: HashSet<Libp2pPeerId>,
     relayed_peer_dial_failures: Vec<(Libp2pPeerId, String)>,
     dcutr_successes: usize,
@@ -2643,6 +2676,8 @@ mod tests {
             relayed_listen_addresses: 0,
             configured_relayed_peer_circuits: 1,
             connected_relayed_peer_circuits: 0,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered: 2,
             autonat_status: BootstrapAutoNatStatus::Private,
             kademlia: BootstrapKademliaCheck {
@@ -2823,7 +2858,11 @@ mod tests {
 
     #[test]
     fn bootstrap_check_can_require_dcutr_success_event() {
-        assert!(dcutr_success_report(true, 1, 1, 0, None).succeeded());
+        let success = dcutr_success_report(true, 1, 1, 0, None);
+        assert!(success.succeeded());
+        assert!(success.lines().iter().any(|line| {
+            line.starts_with("direct peer connection address: ") && line.contains("/memory/30")
+        }));
         assert!(!dcutr_success_report(true, 1, 0, 0, None).succeeded());
         assert!(!dcutr_success_report(true, 0, 1, 0, None).succeeded());
         assert!(
@@ -2880,7 +2919,8 @@ mod tests {
         let connected_peer = peer_id();
         let other_peer = peer_id();
         let mut poll = BootstrapPollResult::default();
-        poll.connected_relayed_peers.insert(connected_peer);
+        poll.connected_relayed_peers
+            .insert(connected_peer, "/memory/42".parse().expect("multiaddr"));
         poll.relayed_peer_dial_failures
             .push((other_peer, "ignored".to_owned()));
         poll.relayed_peer_dial_failures
@@ -3139,6 +3179,8 @@ mod tests {
             relayed_listen_addresses: 0,
             configured_relayed_peer_circuits: 0,
             connected_relayed_peer_circuits: 0,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered,
             autonat_status,
             kademlia: BootstrapKademliaCheck::default(),
@@ -3172,6 +3214,8 @@ mod tests {
             relayed_listen_addresses: configured_relay_reservations,
             configured_relayed_peer_circuits: 0,
             connected_relayed_peer_circuits: 0,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
@@ -3230,6 +3274,8 @@ mod tests {
             relayed_listen_addresses,
             configured_relayed_peer_circuits: 0,
             connected_relayed_peer_circuits: 0,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
@@ -3246,6 +3292,9 @@ mod tests {
         dcutr_failures: usize,
         dcutr_last_error: Option<String>,
     ) -> BootstrapCheckReport {
+        let direct_connection_addresses = (0..direct_connections)
+            .map(|index| format!("{} /memory/{}", peer_id(), index + 30))
+            .collect();
         BootstrapCheckReport {
             threshold: BootstrapCheckThreshold::Any,
             requirements: BootstrapCheckRequirements {
@@ -3273,6 +3322,8 @@ mod tests {
             relayed_listen_addresses: 0,
             configured_relayed_peer_circuits: 0,
             connected_relayed_peer_circuits: 0,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses,
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),
@@ -3325,6 +3376,8 @@ mod tests {
             relayed_listen_addresses: 0,
             configured_relayed_peer_circuits,
             connected_relayed_peer_circuits,
+            relayed_connection_addresses: Vec::new(),
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered: 0,
             autonat_status: BootstrapAutoNatStatus::Unknown,
             kademlia: BootstrapKademliaCheck::default(),

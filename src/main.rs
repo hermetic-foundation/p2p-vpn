@@ -2542,6 +2542,8 @@ struct BootstrapCheckReportJson<'a> {
     relayed_listen_addresses: usize,
     configured_relayed_peer_circuits: usize,
     connected_relayed_peer_circuits: usize,
+    relayed_connection_addresses: &'a [String],
+    direct_connection_addresses: &'a [String],
     autonat_probe_servers_registered: usize,
     autonat_status: &'static str,
     kademlia: BootstrapKademliaJson,
@@ -2581,7 +2583,7 @@ fn public_relay_probe_report_json<'a>(
     report: &'a p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
 ) -> PublicRelayProbeReportJson<'a> {
     PublicRelayProbeReportJson {
-        schema_version: 2,
+        schema_version: 3,
         mode: public_relay_probe_mode_name(args.mode),
         succeeded: report.succeeded(),
         timeout_seconds: args.timeout_seconds.max(1),
@@ -2643,6 +2645,8 @@ fn bootstrap_check_report_json(
         relayed_listen_addresses: report.relayed_listen_addresses,
         configured_relayed_peer_circuits: report.configured_relayed_peer_circuits,
         connected_relayed_peer_circuits: report.connected_relayed_peer_circuits,
+        relayed_connection_addresses: &report.relayed_connection_addresses,
+        direct_connection_addresses: &report.direct_connection_addresses,
         autonat_probe_servers_registered: report.autonat_probe_servers_registered,
         autonat_status: bootstrap_autonat_status_name(report.autonat_status),
         kademlia: BootstrapKademliaJson {
@@ -5320,7 +5324,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
 
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["mode"], "dcutr_success");
         assert_eq!(value["succeeded"], false);
         assert_eq!(value["timeout_seconds"], 45);
@@ -5436,6 +5440,10 @@ mod tests {
             relayed_listen_addresses: 1,
             configured_relayed_peer_circuits: 1,
             connected_relayed_peer_circuits: 1,
+            relayed_connection_addresses: vec![
+                "12D3KooWRelay /ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay/p2p-circuit".to_owned(),
+            ],
+            direct_connection_addresses: Vec::new(),
             autonat_probe_servers_registered: 1,
             autonat_status: p2p_vpn::runtime::bootstrap_check::BootstrapAutoNatStatus::Private,
             kademlia: p2p_vpn::runtime::bootstrap_check::BootstrapKademliaCheck {
@@ -5473,6 +5481,17 @@ mod tests {
         assert_eq!(bootstrap["relayed_listen_addresses"], 1);
         assert_eq!(bootstrap["configured_relayed_peer_circuits"], 1);
         assert_eq!(bootstrap["connected_relayed_peer_circuits"], 1);
+        assert_eq!(
+            bootstrap["relayed_connection_addresses"][0],
+            "12D3KooWRelay /ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay/p2p-circuit"
+        );
+        assert_eq!(
+            bootstrap["direct_connection_addresses"]
+                .as_array()
+                .expect("direct connection addresses")
+                .len(),
+            0
+        );
         assert_eq!(bootstrap["autonat_probe_servers_registered"], 1);
         assert_eq!(bootstrap["autonat_status"], "private");
         assert_eq!(bootstrap["kademlia"]["bootstrap_started"], true);

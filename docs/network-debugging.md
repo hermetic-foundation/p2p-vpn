@@ -96,9 +96,12 @@ validation succeeds, it also writes `public-relay-config.json`, a runnable
 relay-assisted config generated from the validated public relay. It exits
 nonzero if any phase fails, but earlier artifacts remain in the repro
 directory.
-Probe reports use schema version 2 and include per-candidate
-`elapsed_millis`, which helps distinguish fast setup failures from full-budget
-reservation, relayed-circuit, or DCUtR timeouts.
+Probe reports use schema version 3 and include per-candidate
+`elapsed_millis`, plus bootstrap-level `direct_connection_addresses` and
+`relayed_connection_addresses` when a candidate reaches the bootstrap-check
+phase. These fields help distinguish fast setup failures from full-budget
+reservation, relayed-circuit, or DCUtR timeouts, and confirm which concrete path
+type was observed.
 
 Every repro directory also contains `repro-metadata.txt`,
 `repro-host-network.txt`, `repro-commands.sh`, and `repro-summary.txt`. Start
@@ -133,5 +136,5 @@ p2p-vpn relay-check \
 
 Inspect `repro-summary.txt` first, then the scan report peer counts, routing
 peer counts, candidate addresses, candidate peer results, `failure_stage`,
-bootstrap details, relay readiness, DCUtR counters, direct connection counts,
-and `last_error` fields.
+bootstrap details, relay readiness, DCUtR counters, direct and relayed
+connection address lists, and `last_error` fields.

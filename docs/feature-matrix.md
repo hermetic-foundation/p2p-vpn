@@ -97,8 +97,9 @@ path.
    artifact. `relay-check --write-report` also persists the bounded public
    relay probe as JSON with mode, timeout, validation cap, host-reachable
    candidates, skipped candidates, per-candidate failure stages, errors, and
-   bootstrap/DCUtR summary fields for candidates that reached the
-   bootstrap-check phase. `relay-check --config BASE --write-config OUTPUT`
+   bootstrap/DCUtR summary fields, including observed relayed and direct
+   connection addresses, for candidates that reached the bootstrap-check phase.
+   `relay-check --config BASE --write-config OUTPUT`
    can preserve an existing overlay config while adding the first validated
    public relay as bootstrap/AutoNAT/relay infrastructure. `relay-check` can
    also consume larger bounded `relay-scan --write-candidates` artifacts when a
@@ -107,8 +108,9 @@ path.
    app now runs discovery,
    relay-circuit validation, and DCUtR validation as separate phases, preserving
    the scan, relay-check, and DCUtR JSON reports even when a later phase fails.
-   Relay-check JSON reports include per-candidate elapsed milliseconds so
-   timeout signatures can be compared across hosts. The repro summary records
+   Relay-check JSON reports include per-candidate elapsed milliseconds and
+   observed path addresses so timeout signatures and direct-promotion evidence
+   can be compared across hosts. The repro summary records
    per-phase elapsed seconds and per-report candidate elapsed ranges so public
    topology failures can be triaged without hand-parsing each JSON artifact.
    The repro writes a runnable relay-assisted config when the relay-circuit phase
