@@ -74,6 +74,7 @@ pub struct BootstrapDcutrCheck {
     pub enabled: bool,
     pub ready: bool,
     pub successes: usize,
+    pub direct_connections: usize,
     pub failures: usize,
     pub last_error: Option<String>,
 }
@@ -105,8 +106,10 @@ impl BootstrapCheckReport {
         let autonat_ok = !self.requirements.autonat_status
             || (self.autonat_probe_servers_registered > 0 && self.autonat_status.is_observed());
         let dcutr_ok = !self.requirements.dcutr_ready || self.dcutr.ready;
-        let dcutr_success_ok =
-            !self.requirements.dcutr_success || (self.dcutr.enabled && self.dcutr.successes > 0);
+        let dcutr_success_ok = !self.requirements.dcutr_success
+            || (self.dcutr.enabled
+                && self.dcutr.successes > 0
+                && self.dcutr.direct_connections > 0);
 
         let relayed_peer_circuits_ok = !self.requirements.relayed_peer_circuits
             || (self.configured_relayed_peer_circuits > 0
@@ -153,6 +156,10 @@ impl BootstrapCheckReport {
             format!("dcutr enabled: {}", self.dcutr.enabled),
             format!("dcutr ready: {}", self.dcutr.ready),
             format!("dcutr successes: {}", self.dcutr.successes),
+            format!(
+                "dcutr direct_connections: {}",
+                self.dcutr.direct_connections
+            ),
             format!("dcutr failures: {}", self.dcutr.failures),
             format!(
                 "dcutr last_error: {}",
@@ -612,6 +619,7 @@ pub async fn check_config_bootstrap(
             enabled: node.startup.dcutr_enabled,
             ready: dcutr_ready,
             successes: poll.dcutr_successes,
+            direct_connections: poll.direct_connected_relayed_peers.len(),
             failures: poll.dcutr_failures,
             last_error: dcutr_last_error,
         },
@@ -963,7 +971,7 @@ async fn live_public_dcutr_success(
         mtu: 1280,
         max_concurrent_control_streams: 64,
         max_concurrent_packet_streams: 256,
-        listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse().expect("listen address")],
+        listen_addresses: dcutr_probe_listen_addresses(),
         external_addresses: Vec::new(),
         bootstrap_peers: Vec::new(),
         known_peers: Vec::new(),
@@ -1004,7 +1012,7 @@ async fn live_public_dcutr_success(
         dcutr_probe_discovery(),
     )
     .map_err(PublicRelayProbeFailure::without_bootstrap)?;
-    config.network.listen_addresses = vec!["/ip4/0.0.0.0/tcp/0".to_owned()];
+    config.network.listen_addresses = dcutr_probe_listen_address_strings();
     let report = check_config_bootstrap(
         &config,
         public_relay_candidate_remaining(deadline).ok_or_else(|| {
@@ -1133,6 +1141,20 @@ fn dcutr_probe_discovery() -> DiscoveryConfig {
     }
 }
 
+fn dcutr_probe_listen_addresses() -> Vec<Multiaddr> {
+    dcutr_probe_listen_address_strings()
+        .into_iter()
+        .map(|address| address.parse().expect("static DCUtR probe listen address"))
+        .collect()
+}
+
+fn dcutr_probe_listen_address_strings() -> Vec<String> {
+    vec![
+        "/ip4/0.0.0.0/tcp/0".to_owned(),
+        "/ip4/0.0.0.0/udp/0/quic-v1".to_owned(),
+    ]
+}
+
 fn relay_probe_config_with_relayed_peer(
     peer: Libp2pPeerId,
     address: &Multiaddr,
@@ -1227,6 +1249,7 @@ async fn poll_bootstrap_events(
         relayed_listen_addresses: result.relayed_listen_addresses.len(),
         configured_relayed_peer_circuits: relayed_peers.len(),
         connected_relayed_peer_circuits: result.connected_relayed_peers.len(),
+        direct_connected_relayed_peer_circuits: result.direct_connected_relayed_peers.len(),
         dcutr_successes: result.dcutr_successes,
         autonat_probe_servers_registered: node.startup.autonat_servers_registered,
         autonat_status: result.autonat_status,
@@ -1643,8 +1666,12 @@ fn record_bootstrap_event(
             if bootstrap_peers.iter().any(|(peer, _)| *peer == peer_id) {
                 result.connected_bootstrap_peers.insert(peer_id);
             }
-            if endpoint.is_relayed() && relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
-                result.connected_relayed_peers.insert(peer_id);
+            if relayed_peers.iter().any(|(peer, _)| *peer == peer_id) {
+                if endpoint.is_relayed() {
+                    result.connected_relayed_peers.insert(peer_id);
+                } else {
+                    result.direct_connected_relayed_peers.insert(peer_id);
+                }
             }
         }
         SwarmEvent::OutgoingConnectionError {
@@ -1715,6 +1742,7 @@ struct BootstrapPollResult {
     accepted_relay_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashMap<Libp2pPeerId, libp2p::Multiaddr>,
     connected_relayed_peers: HashSet<Libp2pPeerId>,
+    direct_connected_relayed_peers: HashSet<Libp2pPeerId>,
     outbound_circuit_relays: HashSet<Libp2pPeerId>,
     relayed_peer_dial_failures: Vec<(Libp2pPeerId, String)>,
     dcutr_successes: usize,
@@ -1755,6 +1783,7 @@ struct PollingStatus {
     relayed_listen_addresses: usize,
     configured_relayed_peer_circuits: usize,
     connected_relayed_peer_circuits: usize,
+    direct_connected_relayed_peer_circuits: usize,
     dcutr_successes: usize,
     autonat_probe_servers_registered: usize,
     autonat_status: BootstrapAutoNatStatus,
@@ -1791,7 +1820,8 @@ fn should_continue_polling(status: PollingStatus) -> bool {
     let relayed_peer_waiting = status.requirements.relayed_peer_circuits
         && status.configured_relayed_peer_circuits > 0
         && status.connected_relayed_peer_circuits < status.configured_relayed_peer_circuits;
-    let dcutr_success_waiting = status.requirements.dcutr_success && status.dcutr_successes == 0;
+    let dcutr_success_waiting = status.requirements.dcutr_success
+        && (status.dcutr_successes == 0 || status.direct_connected_relayed_peer_circuits == 0);
 
     bootstrap_waiting
         || relay_waiting
@@ -2174,6 +2204,7 @@ mod tests {
                 error: Some("dcutr success check did not meet success threshold".to_owned()),
                 bootstrap: Some(dcutr_success_report(
                     true,
+                    0,
                     0,
                     1,
                     Some("NoDirectConnection".to_owned()),
@@ -2582,6 +2613,7 @@ mod tests {
                 enabled: true,
                 ready: false,
                 successes: 0,
+                direct_connections: 0,
                 failures: 1,
                 last_error: Some("HandshakeTimedOut".to_owned()),
             },
@@ -2637,6 +2669,7 @@ mod tests {
         assert!(lines.contains(&"dcutr enabled: true".to_owned()));
         assert!(lines.contains(&"dcutr ready: false".to_owned()));
         assert!(lines.contains(&"dcutr successes: 0".to_owned()));
+        assert!(lines.contains(&"dcutr direct_connections: 0".to_owned()));
         assert!(lines.contains(&"dcutr failures: 1".to_owned()));
         assert!(lines.contains(&"dcutr last_error: HandshakeTimedOut".to_owned()));
         assert!(
@@ -2772,12 +2805,56 @@ mod tests {
 
     #[test]
     fn bootstrap_check_can_require_dcutr_success_event() {
-        assert!(dcutr_success_report(true, 1, 0, None).succeeded());
-        assert!(!dcutr_success_report(true, 0, 0, None).succeeded());
+        assert!(dcutr_success_report(true, 1, 1, 0, None).succeeded());
+        assert!(!dcutr_success_report(true, 1, 0, 0, None).succeeded());
+        assert!(!dcutr_success_report(true, 0, 1, 0, None).succeeded());
         assert!(
-            !dcutr_success_report(true, 0, 1, Some("NoDirectConnection".to_owned())).succeeded()
+            !dcutr_success_report(true, 0, 0, 1, Some("NoDirectConnection".to_owned())).succeeded()
         );
-        assert!(!dcutr_success_report(false, 1, 0, None).succeeded());
+        assert!(!dcutr_success_report(false, 1, 1, 0, None).succeeded());
+    }
+
+    #[test]
+    fn dcutr_public_probe_listens_on_tcp_and_quic() {
+        let addresses = dcutr_probe_listen_address_strings();
+
+        assert_eq!(
+            addresses,
+            vec![
+                "/ip4/0.0.0.0/tcp/0".to_owned(),
+                "/ip4/0.0.0.0/udp/0/quic-v1".to_owned(),
+            ]
+        );
+        assert_eq!(dcutr_probe_listen_addresses().len(), addresses.len());
+    }
+
+    #[test]
+    fn dcutr_success_polling_waits_for_direct_connection_evidence() {
+        let now = Instant::now();
+        let mut status = PollingStatus {
+            threshold: BootstrapCheckThreshold::Any,
+            configured_bootstrap_peers: 0,
+            connected_bootstrap_peers: 0,
+            requirements: BootstrapCheckRequirements {
+                dcutr_success: true,
+                ..BootstrapCheckRequirements::default()
+            },
+            configured_relay_reservations: 0,
+            accepted_relay_reservations: 0,
+            relayed_listen_addresses: 0,
+            configured_relayed_peer_circuits: 1,
+            connected_relayed_peer_circuits: 1,
+            direct_connected_relayed_peer_circuits: 0,
+            dcutr_successes: 1,
+            autonat_probe_servers_registered: 0,
+            autonat_status: BootstrapAutoNatStatus::Unknown,
+            now,
+            deadline: now + Duration::from_secs(1),
+        };
+
+        assert!(should_continue_polling(status));
+        status.direct_connected_relayed_peer_circuits = 1;
+        assert!(!should_continue_polling(status));
     }
 
     #[test]
@@ -3032,6 +3109,7 @@ mod tests {
                 enabled: false,
                 ready: false,
                 successes: 0,
+                direct_connections: 0,
                 failures: 0,
                 last_error: None,
             },
@@ -3122,6 +3200,7 @@ mod tests {
                         relayed_listen_addresses,
                     ),
                 successes: 0,
+                direct_connections: 0,
                 failures: 0,
                 last_error: None,
             },
@@ -3145,6 +3224,7 @@ mod tests {
     fn dcutr_success_report(
         dcutr_enabled: bool,
         dcutr_successes: usize,
+        direct_connections: usize,
         dcutr_failures: usize,
         dcutr_last_error: Option<String>,
     ) -> BootstrapCheckReport {
@@ -3163,6 +3243,7 @@ mod tests {
                 enabled: dcutr_enabled,
                 ready: false,
                 successes: dcutr_successes,
+                direct_connections,
                 failures: dcutr_failures,
                 last_error: dcutr_last_error,
             },

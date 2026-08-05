@@ -53,14 +53,15 @@ QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt /dnsaddr/bootstrap.libp2p.io
 QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ /ip4/104.131.131.82/tcp/4001
 ```
 
-This proves current public IPFS-compatible bootstrap connectivity and AutoNAT
-observation from an unprivileged process. It does not prove public relay
-reservation acceptance, relayed peer circuit dialing, or public-relay-assisted
-DCUtR hole punching; those require a known public circuit-relay v2 endpoint that
-accepts reservations for the test.
+This first check proves public IPFS-compatible bootstrap connectivity and
+AutoNAT observation from an unprivileged process. Later 2026-08-04 runs below
+prove public Kademlia-assisted relay discovery, public relay reservation
+acceptance, relayed peer circuit dialing, and relay-assisted config generation.
+Public-relay-assisted DCUtR success remains unproven.
 
-To record the remaining relay evidence, first scan configured or public
-bootstrap peers for peers that advertise the circuit-relay v2 hop protocol:
+To reproduce or extend public relay evidence, and to keep searching for the
+remaining DCUtR success proof, first scan configured or public bootstrap peers
+for peers that advertise the circuit-relay v2 hop protocol:
 
 ```sh
 nix develop -c cargo run -- relay-scan --ipfs-bootstrap-peers --timeout-seconds 30
@@ -98,7 +99,8 @@ reservations because of load, policy, or resource limits. The scanner filters
 out transport protocols this binary cannot dial. With
 `--check-candidates`, the command immediately runs the same reservation and
 relayed-circuit validation as `relay-check`; add `--require-dcutr-success` when
-the candidate must also prove public-relay-assisted hole punching. Validation
+the candidate must also prove public-relay-assisted hole punching plus a direct
+non-relayed post-punch connection to the target peer. Validation
 tries scanned candidates round-robin by relay peer, so a scan with many
 addresses for one relay still tests other relays before cycling through that
 peer's alternate addresses. Within each relay peer, validation tries
@@ -149,9 +151,11 @@ one was observed. Candidate lines also include a stable `failure_stage` value:
 the attempted set. Failures after reservation setup include the same detailed
 bootstrap-check lines that successful candidates print, so failed
 relayed-circuit and DCUtR probes show which prerequisite was missing. DCUtR
-failures also include the last libp2p hole-punch error as `dcutr last_error`,
-which distinguishes cases such as no direct connection, rejected relay
-prerequisites, or direct handshake timeouts.
+success mode gives both temporary nodes TCP and QUIC direct listen sockets and
+requires both libp2p's hole-punch event and a direct non-relayed connection to
+the target peer. DCUtR failures also include the last libp2p hole-punch error
+as `dcutr last_error`, which distinguishes cases such as no direct connection,
+rejected relay prerequisites, or direct handshake timeouts.
 Successful candidates also print a `public relay candidate config:` line with
 the exact `--relay-peer
 PEER=MULTIADDR` shortcut and full `--relay-reservation .../p2p-circuit`

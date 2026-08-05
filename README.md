@@ -27,7 +27,9 @@ ID is already present in the configured peer list, so DHT discovery is a
 reachability hint rather than route or membership authorization. Public libp2p
 relays can be useful for experiments only when they support the needed relay
 reservations and are acceptable for the deployment's trust and availability
-requirements.
+requirements. A relay that proves reservation and relayed-circuit fallback is
+still not proof that public-relay-assisted DCUtR will complete, because direct
+promotion depends on the relay, transport, and both peers' NAT/path topology.
 
 Runtime connections are membership-filtered before they are used for control or
 packet forwarding. The local peer, configured VPN peers, configured bootstrap
@@ -893,8 +895,9 @@ reservation infrastructure.
 `relay-check` is rootless. In its default mode it creates a temporary listener,
 reserves a circuit on the supplied relay, and dials that listener from a second
 temporary node through the relay. With `--require-dcutr-success`, it also gives
-both temporary nodes direct listen sockets and fails unless libp2p reports a
-successful DCUtR hole-punch event. Repeat `--relay-candidate` to try a small
+both temporary nodes TCP and QUIC direct listen sockets and fails unless libp2p
+reports a successful DCUtR hole-punch event and the probe observes a direct
+non-relayed connection to the target peer. Repeat `--relay-candidate` to try a small
 candidate set; the command stops after the first usable relay and prints
 candidate-level failures when none work. Each candidate line includes a stable
 `failure_stage` value: `candidate_setup`, `relay_reservation`,
@@ -939,15 +942,19 @@ supplied relay multiaddr must be the relay's direct address with its
 one succeeds and report all candidate failures if none work. The relayed-peer
 smoke creates a temporary listener, reserves a circuit on that relay, then uses
 `bootstrap-check` against a second temporary node to prove the relayed target can
-be dialed. The DCUtR smoke also gives both temporary nodes direct listen sockets
-and fails unless `bootstrap-check` observes a successful DCUtR hole-punch event.
+be dialed. Use `--require-dcutr-success` only when the evidence target is
+relay-assisted direct promotion; the DCUtR smoke gives both temporary nodes TCP
+and QUIC direct listen sockets and fails unless `bootstrap-check` observes a
+successful DCUtR hole-punch event plus a direct non-relayed connection to the
+target peer.
 
 Recorded public bootstrap smoke evidence is kept in
-`docs/public-bootstrap-smoke.md`. The current recorded run proves public
-IPFS-compatible bootstrap connectivity, AutoNAT observation, public relay
-reservation, and relayed circuit dialing. Public-relay-assisted DCUtR proof
-still requires a suitable relay plus NAT topology that completes a hole punch
-for the test.
+`docs/public-bootstrap-smoke.md`. Recorded 2026-08-04 runs prove public
+IPFS-compatible bootstrap connectivity, AutoNAT observation, public
+Kademlia-assisted relay discovery, public relay reservation, relayed circuit
+dialing, and relay-assisted config generation. Public-relay-assisted DCUtR
+proof still requires a suitable relay plus NAT topology that completes a hole
+punch for the test.
 
 Inspect the runtime metric names and startup snapshot:
 
