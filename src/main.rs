@@ -494,6 +494,16 @@ enum Command {
         #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
         format: DaemonViewFormat,
     },
+    DaemonDump {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+        #[arg(long)]
+        force: bool,
+    },
     DaemonHealth {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -944,6 +954,12 @@ async fn main() -> Result<(), String> {
             timeout_seconds,
             format,
         } => Box::pin(daemon_capabilities(&socket, timeout_seconds, format)).await,
+        Command::DaemonDump {
+            socket,
+            output_dir,
+            timeout_seconds,
+            force,
+        } => Box::pin(daemon_dump(&socket, &output_dir, timeout_seconds, force)).await,
         Command::DaemonHealth {
             socket,
             timeout_seconds,
@@ -4699,6 +4715,253 @@ struct DaemonViewJson<'a> {
     lines: &'a [String],
 }
 
+async fn daemon_dump(
+    socket: &Path,
+    output_dir: &Path,
+    timeout_seconds: u64,
+    force: bool,
+) -> Result<(), String> {
+    prepare_daemon_dump_dir(output_dir, force)?;
+    let timeout = Duration::from_secs(timeout_seconds.max(1));
+    let mut views = Vec::new();
+
+    views.push(
+        dump_daemon_status(socket, output_dir, timeout)
+            .await
+            .unwrap_or_else(|error| daemon_dump_error(output_dir, "status", error)),
+    );
+
+    for view in ["state", "peers", "routes", "paths", "mtu", "capabilities"] {
+        views.push(
+            dump_daemon_view(socket, output_dir, timeout, view)
+                .await
+                .unwrap_or_else(|error| daemon_dump_error(output_dir, view, error)),
+        );
+    }
+
+    let succeeded = views.iter().all(|view| view.ok);
+    let summary = DaemonDumpSummary {
+        schema_version: 1,
+        socket: socket.display().to_string(),
+        output_dir: output_dir.display().to_string(),
+        timeout_seconds: timeout.as_secs(),
+        succeeded,
+        views,
+    };
+    let rendered = serde_json::to_string_pretty(&summary)
+        .map_err(|error| format!("failed to render daemon dump summary: {error}"))?;
+    fs::write(output_dir.join("summary.json"), format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write daemon dump summary: {error}"))?;
+
+    println!("daemon dump: {}", output_dir.display());
+    println!("summary: {}", output_dir.join("summary.json").display());
+    if succeeded {
+        Ok(())
+    } else {
+        Err("daemon dump captured one or more failed views; inspect summary.json".to_owned())
+    }
+}
+
+fn prepare_daemon_dump_dir(output_dir: &Path, force: bool) -> Result<(), String> {
+    if output_dir.exists() {
+        if !output_dir.is_dir() {
+            return Err(format!(
+                "daemon dump output {} exists and is not a directory",
+                output_dir.display()
+            ));
+        }
+        if !force
+            && fs::read_dir(output_dir)
+                .map_err(|error| {
+                    format!(
+                        "failed to inspect daemon dump dir {}: {error}",
+                        output_dir.display()
+                    )
+                })?
+                .next()
+                .is_some()
+        {
+            return Err(format!(
+                "daemon dump output {} is not empty; pass --force to reuse it",
+                output_dir.display()
+            ));
+        }
+        if force {
+            clear_daemon_dump_artifacts(output_dir)?;
+        }
+    }
+
+    fs::create_dir_all(output_dir).map_err(|error| {
+        format!(
+            "failed to create daemon dump dir {}: {error}",
+            output_dir.display()
+        )
+    })
+}
+
+fn clear_daemon_dump_artifacts(output_dir: &Path) -> Result<(), String> {
+    for name in daemon_dump_artifact_names() {
+        let path = output_dir.join(name);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to remove stale daemon dump artifact {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn daemon_dump_artifact_names() -> &'static [&'static str] {
+    &[
+        "summary.json",
+        "status.txt",
+        "status.prometheus",
+        "status.error.txt",
+        "state.txt",
+        "state.json",
+        "state.error.txt",
+        "peers.txt",
+        "peers.json",
+        "peers.error.txt",
+        "routes.txt",
+        "routes.json",
+        "routes.error.txt",
+        "paths.txt",
+        "paths.json",
+        "paths.error.txt",
+        "mtu.txt",
+        "mtu.json",
+        "mtu.error.txt",
+        "capabilities.txt",
+        "capabilities.json",
+        "capabilities.error.txt",
+    ]
+}
+
+async fn dump_daemon_status(
+    socket: &Path,
+    output_dir: &Path,
+    timeout: Duration,
+) -> Result<DaemonDumpViewSummary, String> {
+    let lines = p2p_vpn::runtime::control_socket::query_status(socket, timeout)
+        .await
+        .map_err(|error| format!("daemon status query failed: {error:?}"))?;
+    let text_path = output_dir.join("status.txt");
+    write_lines(&text_path, &lines)?;
+    let prometheus_lines = prometheus_lines_from_metric_lines(&lines);
+    let prometheus_path = output_dir.join("status.prometheus");
+    write_lines(&prometheus_path, &prometheus_lines)?;
+    Ok(DaemonDumpViewSummary {
+        name: "status",
+        ok: true,
+        line_count: Some(lines.len()),
+        text_path: Some(text_path.display().to_string()),
+        json_path: None,
+        prometheus_path: Some(prometheus_path.display().to_string()),
+        error_path: None,
+        error: None,
+    })
+}
+
+async fn dump_daemon_view(
+    socket: &Path,
+    output_dir: &Path,
+    timeout: Duration,
+    view: &'static str,
+) -> Result<DaemonDumpViewSummary, String> {
+    let lines = match view {
+        "state" => p2p_vpn::runtime::control_socket::query_state(socket, timeout).await,
+        "peers" => p2p_vpn::runtime::control_socket::query_peers(socket, timeout).await,
+        "routes" => p2p_vpn::runtime::control_socket::query_routes(socket, timeout).await,
+        "paths" => p2p_vpn::runtime::control_socket::query_paths(socket, timeout).await,
+        "mtu" => p2p_vpn::runtime::control_socket::query_mtu(socket, timeout).await,
+        "capabilities" => {
+            p2p_vpn::runtime::control_socket::query_capabilities(socket, timeout).await
+        }
+        _ => return Err(format!("unknown daemon dump view {view}")),
+    }
+    .map_err(|error| format!("daemon {view} query failed: {error:?}"))?;
+
+    let text_path = output_dir.join(format!("{view}.txt"));
+    write_lines(&text_path, &lines)?;
+    let json_path = output_dir.join(format!("{view}.json"));
+    fs::write(&json_path, format!("{}\n", daemon_view_json(view, &lines)?))
+        .map_err(|error| format!("failed to write daemon {view} JSON: {error}"))?;
+
+    Ok(DaemonDumpViewSummary {
+        name: view,
+        ok: true,
+        line_count: Some(lines.len()),
+        text_path: Some(text_path.display().to_string()),
+        json_path: Some(json_path.display().to_string()),
+        prometheus_path: None,
+        error_path: None,
+        error: None,
+    })
+}
+
+fn daemon_dump_error(
+    output_dir: &Path,
+    view: &'static str,
+    error: String,
+) -> DaemonDumpViewSummary {
+    let error_path = output_dir.join(format!("{view}.error.txt"));
+    let error_path_string = error_path.display().to_string();
+    let write_result = fs::write(&error_path, format!("{error}\n"));
+    DaemonDumpViewSummary {
+        name: view,
+        ok: false,
+        line_count: None,
+        text_path: None,
+        json_path: None,
+        prometheus_path: None,
+        error_path: Some(error_path_string),
+        error: Some(match write_result {
+            Ok(()) => error,
+            Err(write_error) => {
+                format!("{error}; additionally failed to write error file: {write_error}")
+            }
+        }),
+    }
+}
+
+fn write_lines(path: &Path, lines: &[String]) -> Result<(), String> {
+    let mut rendered = String::new();
+    for line in lines {
+        rendered.push_str(line);
+        rendered.push('\n');
+    }
+    fs::write(path, rendered)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+#[derive(Serialize)]
+struct DaemonDumpSummary {
+    schema_version: u8,
+    socket: String,
+    output_dir: String,
+    timeout_seconds: u64,
+    succeeded: bool,
+    views: Vec<DaemonDumpViewSummary>,
+}
+
+#[derive(Serialize)]
+struct DaemonDumpViewSummary {
+    name: &'static str,
+    ok: bool,
+    line_count: Option<usize>,
+    text_path: Option<String>,
+    json_path: Option<String>,
+    prometheus_path: Option<String>,
+    error_path: Option<String>,
+    error: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 struct DaemonHealthRequirements {
@@ -6682,6 +6945,37 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_daemon_dump_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "daemon-dump",
+            "--socket",
+            "/run/p2p-vpn-node-a/control.sock",
+            "--output-dir",
+            "dump",
+            "--timeout-seconds",
+            "3",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::DaemonDump {
+            socket,
+            output_dir,
+            timeout_seconds,
+            force,
+        } = cli.command
+        else {
+            panic!("expected daemon-dump command");
+        };
+
+        assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
+        assert_eq!(output_dir, PathBuf::from("dump"));
+        assert_eq!(timeout_seconds, 3);
+        assert!(force);
+    }
+
+    #[test]
     fn daemon_view_json_wraps_line_output() {
         let lines = vec![
             "daemon state: running".to_owned(),
@@ -6694,6 +6988,99 @@ mod tests {
         assert_eq!(parsed["view"], "state");
         assert_eq!(parsed["lines"][0], "daemon state: running");
         assert_eq!(parsed["lines"][1], "packet_plane_sessions 1");
+    }
+
+    #[tokio::test]
+    async fn daemon_dump_writes_all_views_and_summary() {
+        use p2p_vpn::runtime::control_socket::RuntimeControlRequest;
+
+        let socket_path =
+            std::env::temp_dir().join(format!("p2p-vpn-dump-{}-control.sock", std::process::id()));
+        let output_dir =
+            std::env::temp_dir().join(format!("p2p-vpn-dump-{}-out", std::process::id()));
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let (socket, mut rx) = p2p_vpn::runtime::control_socket::ControlSocket::bind(&socket_path)
+            .expect("control socket");
+        let responder = tokio::spawn(async move {
+            for expected in [
+                "status",
+                "state",
+                "peers",
+                "routes",
+                "paths",
+                "mtu",
+                "capabilities",
+            ] {
+                let request = rx.recv().await.expect("control request");
+                match (expected, request) {
+                    ("status", RuntimeControlRequest::Status { respond_to }) => respond_to
+                        .send(vec!["tun_read_packets 1".to_owned()])
+                        .expect("status response accepted"),
+                    ("state", RuntimeControlRequest::State { respond_to }) => respond_to
+                        .send(vec!["daemon state: running".to_owned()])
+                        .expect("state response accepted"),
+                    ("peers", RuntimeControlRequest::Peers { respond_to }) => respond_to
+                        .send(vec!["peers: 1".to_owned()])
+                        .expect("peers response accepted"),
+                    ("routes", RuntimeControlRequest::Routes { respond_to }) => respond_to
+                        .send(vec!["compiled routes: 1".to_owned()])
+                        .expect("routes response accepted"),
+                    ("paths", RuntimeControlRequest::Paths { respond_to }) => respond_to
+                        .send(vec!["configured path candidates: 1".to_owned()])
+                        .expect("paths response accepted"),
+                    ("mtu", RuntimeControlRequest::Mtu { respond_to }) => respond_to
+                        .send(vec!["effective packet mtu: 1280".to_owned()])
+                        .expect("mtu response accepted"),
+                    ("capabilities", RuntimeControlRequest::Capabilities { respond_to }) => {
+                        respond_to
+                            .send(vec!["local capability network: lab".to_owned()])
+                            .expect("capabilities response accepted");
+                    }
+                    (expected, other) => panic!("expected {expected} request, got {other:?}"),
+                }
+            }
+        });
+
+        daemon_dump(&socket_path, &output_dir, 1, false)
+            .await
+            .expect("daemon dump");
+        responder.await.expect("responder");
+
+        assert!(output_dir.join("status.txt").is_file());
+        assert!(output_dir.join("status.prometheus").is_file());
+        assert!(output_dir.join("state.txt").is_file());
+        assert!(output_dir.join("state.json").is_file());
+        assert!(output_dir.join("capabilities.json").is_file());
+
+        let summary: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("summary.json")).expect("summary"),
+        )
+        .expect("summary json");
+        assert_eq!(summary["schema_version"], 1);
+        assert_eq!(summary["succeeded"], true);
+        assert_eq!(summary["views"].as_array().expect("views").len(), 7);
+
+        drop(socket);
+        let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn daemon_dump_rejects_nonempty_output_dir_without_force() {
+        let output_dir =
+            std::env::temp_dir().join(format!("p2p-vpn-dump-{}-nonempty", std::process::id()));
+        let _ = std::fs::remove_dir_all(&output_dir);
+        std::fs::create_dir_all(&output_dir).expect("output dir");
+        std::fs::write(output_dir.join("existing.txt"), "existing\n").expect("existing file");
+        std::fs::write(output_dir.join("state.json"), "stale\n").expect("stale state file");
+
+        let error = prepare_daemon_dump_dir(&output_dir, false).expect_err("nonempty rejected");
+        assert!(error.contains("is not empty"));
+        prepare_daemon_dump_dir(&output_dir, true).expect("force allows reuse");
+        assert!(output_dir.join("existing.txt").is_file());
+        assert!(!output_dir.join("state.json").exists());
+
+        let _ = std::fs::remove_dir_all(&output_dir);
     }
 
     #[test]

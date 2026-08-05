@@ -103,8 +103,22 @@ overrides only the outer `unshare` wrapper timeout.
 
 ## What To Inspect
 
-When a daemon is still running with a control socket, start with
-`p2p-vpn daemon-health --socket /run/p2p-vpn/control.sock`. Add
+When a daemon is still running with a control socket, capture a durable dump
+before restarting it:
+
+```sh
+dump_dir="/tmp/p2p-vpn-daemon-dump-$(date -u +%Y%m%dT%H%M%SZ)"
+p2p-vpn daemon-dump --socket /run/p2p-vpn/control.sock --output-dir "$dump_dir"
+jq . "$dump_dir/summary.json"
+```
+
+`daemon-dump` writes `status.txt`, `status.prometheus`, text and JSON files for
+state, peers, routes, paths, MTU, and capabilities, plus `summary.json` with
+per-view success and artifact paths. It returns non-zero when one or more views
+cannot be captured, but keeps any partial files for triage. Use `--force` only
+when intentionally reusing a nonempty output directory.
+
+Then check `p2p-vpn daemon-health --socket /run/p2p-vpn/control.sock`. Add
 `--require-validated-peers`, `--require-supported-paths`,
 `--require-packet-plane-session`, or `--require-packet-plane-quic-session` to
 turn a repro into a strict readiness gate for the stage under investigation.
