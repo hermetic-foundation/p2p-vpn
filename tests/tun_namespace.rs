@@ -21,6 +21,7 @@ use p2p_vpn::{
         InviteExportOptions, InviteImportOptions, export_signed_invite_at, import_invite_config_at,
     },
     runtime::{
+        control_socket::query_state,
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PacketPlaneQuicRuntime, PacketPlaneRuntime},
@@ -182,16 +183,19 @@ fn run_direct_orchestrator(test_name: &str) {
 
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(2));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(4));
     if test_name == DIRECT_QUIC_TEST_NAME {
+        wait_for_peer_ready(&temp_dir, "a");
+        wait_for_peer_ready(&temp_dir, "b");
         wait_for_owned_quic_packet_plane_sessions(&temp_dir);
+    } else {
+        wait_for_daemon_running(&temp_dir, "a");
+        wait_for_daemon_running(&temp_dir, "b");
     }
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let routed_ping = ping_from_namespace(node_b.id(), "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS);
-    thread::sleep(Duration::from_secs(2));
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
     let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
     let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
@@ -273,10 +277,11 @@ fn run_mdns_orchestrator() {
 
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(2));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(8));
+    wait_for_packet_plane_sessions(&temp_dir, "a");
+    wait_for_packet_plane_sessions(&temp_dir, "b");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
@@ -362,10 +367,11 @@ fn run_relay_orchestrator() {
     wait_for_file(&temp_dir.join("ready-relay"));
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(2));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(1));
+    wait_for_peer_ready(&temp_dir, "a");
+    wait_for_peer_ready(&temp_dir, "b");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
@@ -455,10 +461,11 @@ fn run_invite_relay_orchestrator() {
     wait_for_file(&temp_dir.join("ready-relay"));
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(2));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(1));
+    wait_for_peer_ready(&temp_dir, "a");
+    wait_for_peer_ready(&temp_dir, "b");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
@@ -549,10 +556,12 @@ fn run_relay_promotion_orchestrator() {
     wait_for_file(&temp_dir.join("ready-relay"));
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(2));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(8));
+    wait_for_packet_plane_sessions(&temp_dir, "a");
+    wait_for_packet_plane_sessions(&temp_dir, "b");
+    wait_for_direct_promotion(&temp_dir, "a");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
@@ -649,10 +658,11 @@ fn run_dht_orchestrator() {
     wait_for_file(&temp_dir.join("ready-bootstrap"));
     fs::write(&start_b, b"start").expect("write node B start file");
     wait_for_file(&temp_dir.join("ready-b"));
-    thread::sleep(Duration::from_secs(4));
+    wait_for_daemon_running(&temp_dir, "b");
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
-    thread::sleep(Duration::from_secs(8));
+    wait_for_packet_plane_sessions(&temp_dir, "a");
+    wait_for_packet_plane_sessions(&temp_dir, "b");
 
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
@@ -799,6 +809,129 @@ fn wait_for_owned_quic_packet_plane_datagrams(temp_dir: &Path) -> (String, Strin
         }
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn wait_for_daemon_running(temp_dir: &Path, role: &str) {
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        Duration::from_secs(10),
+        "daemon running",
+        |lines| lines.iter().any(|line| line == "daemon state: running"),
+    );
+}
+
+fn wait_for_peer_ready(temp_dir: &Path, role: &str) {
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        Duration::from_secs(15),
+        "validated peer with supported path",
+        |lines| {
+            state_colon_count(lines, "validated peers").is_some_and(|count| count >= 1)
+                && state_metric_count(lines, "peers_with_supported_path")
+                    .is_some_and(|count| count >= 1)
+        },
+    );
+}
+
+fn wait_for_packet_plane_sessions(temp_dir: &Path, role: &str) {
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        Duration::from_secs(15),
+        "validated peer with packet-plane session",
+        |lines| {
+            state_colon_count(lines, "validated peers").is_some_and(|count| count >= 1)
+                && state_metric_count(lines, "peers_with_supported_path")
+                    .is_some_and(|count| count >= 1)
+                && state_metric_count(lines, "packet_plane_sessions")
+                    .is_some_and(|count| count >= 1)
+        },
+    );
+}
+
+fn wait_for_direct_promotion(temp_dir: &Path, role: &str) {
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        Duration::from_secs(30),
+        "relay path promoted to direct path",
+        |lines| {
+            state_metric_count(lines, "dcutr_successes").is_some_and(|count| count >= 1)
+                && state_metric_count(lines, "path_promotions_to_direct")
+                    .is_some_and(|count| count >= 1)
+                && state_metric_count(lines, "healthy_direct_tcp_stream_paths")
+                    .is_some_and(|count| count >= 1)
+        },
+    );
+}
+
+fn wait_for_daemon_state<F>(
+    temp_dir: &Path,
+    role: &str,
+    timeout: Duration,
+    context: &str,
+    mut predicate: F,
+) -> Vec<String>
+where
+    F: FnMut(&[String]) -> bool,
+{
+    let socket = node_control_socket(temp_dir, role);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for control socket polling");
+    let deadline = Instant::now() + timeout;
+    let mut last_lines = Vec::new();
+    let mut last_error = None;
+
+    loop {
+        match runtime.block_on(query_state(&socket, Duration::from_millis(500))) {
+            Ok(lines) => {
+                if predicate(&lines) {
+                    return lines;
+                }
+                last_lines = lines;
+            }
+            Err(error) => {
+                last_error = Some(format!("{error:?}"));
+            }
+        }
+        if Instant::now() >= deadline {
+            let log = read_log(&temp_dir.join(format!("node-{role}.log")));
+            panic!(
+                "timed out waiting for {context} on node {role} via {}\nlast_error: {}\nlast_state:\n{}\nnode log tail:\n{}",
+                socket.display(),
+                last_error.unwrap_or_else(|| "none".to_owned()),
+                last_lines.join("\n"),
+                log_tail(&log, 100),
+            );
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn node_control_socket(temp_dir: &Path, role: &str) -> PathBuf {
+    temp_dir.join(format!("control-{role}.sock"))
+}
+
+fn state_colon_count(lines: &[String], prefix: &str) -> Option<usize> {
+    let needle = format!("{prefix}: ");
+    lines
+        .iter()
+        .find_map(|line| line.strip_prefix(&needle)?.parse().ok())
+}
+
+fn state_metric_count(lines: &[String], name: &str) -> Option<usize> {
+    lines.iter().find_map(|line| {
+        let (candidate, value) = line.split_once(' ')?;
+        if candidate == name {
+            value.parse().ok()
+        } else {
+            None
+        }
+    })
 }
 
 fn packet_plane_datagrams_used(log: &str) -> bool {
@@ -1057,6 +1190,7 @@ fn run_node_child() {
             device,
             effective_mtu,
             temp_dir.join(format!("ready-{role}")),
+            node_control_socket(&temp_dir, &role),
         ))
         .expect("node runtime");
 }
@@ -1347,6 +1481,7 @@ async fn run_ready_node(
     device: TunDevice,
     mtu: u16,
     ready_file: PathBuf,
+    control_socket: PathBuf,
 ) -> Result<(), runner::RunnerError> {
     let mut node = build_node(&HostConfig {
         identity: config.identity()?,
@@ -1397,7 +1532,7 @@ async fn run_ready_node(
         config.queue,
         config.resources,
         Some(Duration::from_secs(1)),
-        None,
+        Some(control_socket),
         packet_plane,
         packet_plane_quic,
         config.packet_plane_quic_endpoint_candidates()?,

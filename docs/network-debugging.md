@@ -45,6 +45,10 @@ The preserved directory is printed on stderr. It contains `node-a.log`,
 `node-b.log`, and, for relay or bootstrap scenarios, `node-relay.log` or
 `node-bootstrap.log`. Failed tests already include node logs, `ip addr`, and
 route-table output in the assertion message.
+Namespace peer nodes also expose per-role daemon control sockets in that
+directory as `control-a.sock` and `control-b.sock`. The orchestrator uses those
+sockets to wait for validated peers, supported paths, and packet-plane sessions
+instead of relying on fixed post-start sleeps.
 
 ## What To Inspect
 
