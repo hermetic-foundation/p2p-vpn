@@ -855,6 +855,7 @@ cargo run -- relay-scan \
 cargo run -- relay-check \
   --relay-candidates-file public-relay-candidates.txt \
   --write-report public-relay-check.json \
+  --write-config p2p-vpn-public-relay.json \
   --max-validation-candidates 6 \
   --timeout-seconds 45
 

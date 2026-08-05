@@ -77,8 +77,11 @@ with `P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS`,
 `P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES`. The repro runs discovery,
 relay-circuit validation, and DCUtR validation as separate phases and preserves
 `public-relay-scan-report.json`, `public-relay-check-report.json`, and
-`public-relay-dcutr-report.json` when those phases can run. It exits nonzero if
-any phase fails, but earlier artifacts remain in the repro directory.
+`public-relay-dcutr-report.json` when those phases can run. If relay-circuit
+validation succeeds, it also writes `public-relay-config.json`, a runnable
+relay-assisted config generated from the validated public relay. It exits
+nonzero if any phase fails, but earlier artifacts remain in the repro
+directory.
 
 Probe candidates and write a machine-readable report:
 

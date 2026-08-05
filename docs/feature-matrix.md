@@ -104,7 +104,9 @@ path.
    file trimming. The packaged `public-relay-repro` app now runs discovery,
    relay-circuit validation, and DCUtR validation as separate phases, preserving
    the scan, relay-check, and DCUtR JSON reports even when a later phase fails,
-   so public topology failures can be compared across hosts. A report-driven
+   and writing a runnable relay-assisted config when the relay-circuit phase
+   succeeds, so public topology failures can be compared across hosts while
+   still preserving the strongest usable fallback found. A report-driven
    live run on 2026-08-04 found one public relay
    candidate that accepted a reservation, carried a relayed circuit, and wrote
    a relay-assisted config; the paired DCUtR-required report tested eight
