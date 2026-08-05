@@ -973,8 +973,9 @@ same reservation, relayed-circuit, AutoNAT, and DCUtR detail lines as
 hole-punch failure. Pass `--write-report PATH` to save a pretty-printed JSON
 artifact with schema version, probe mode, timeout, validation cap,
 host-reachable candidates, skipped candidates with reasons, per-candidate
-success, failure stage, error, and the bootstrap/DCUtR summary observed for
-each candidate that reached the bootstrap-check phase. Successful candidates also print a
+success, failure stage, elapsed milliseconds, error, and the bootstrap/DCUtR
+summary observed for each candidate that reached the bootstrap-check phase.
+Successful candidates also print a
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
 `--relay-reservation .../p2p-circuit` address for `init-config`. Pass

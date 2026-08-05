@@ -308,6 +308,7 @@ pub struct PublicRelayCandidateReport {
     pub failure_stage: PublicRelayCandidateFailureStage,
     pub error: Option<String>,
     pub bootstrap: Option<BootstrapCheckReport>,
+    pub elapsed_millis: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -768,6 +769,7 @@ pub async fn check_public_relay_candidates(
 ) -> PublicRelayProbeReport {
     let mut candidates = Vec::new();
     for relay_address in relay_addresses {
+        let started = Instant::now();
         let result = match mode {
             PublicRelayProbeMode::RelayedPeerCircuit => {
                 Box::pin(live_public_relayed_peer_circuit(relay_address, timeout)).await
@@ -776,6 +778,7 @@ pub async fn check_public_relay_candidates(
                 Box::pin(live_public_dcutr_success(relay_address, timeout)).await
             }
         };
+        let elapsed_millis = elapsed_millis_since(started);
         let candidate = match result {
             Ok(report) => PublicRelayCandidateReport {
                 address: relay_address.to_string(),
@@ -783,6 +786,7 @@ pub async fn check_public_relay_candidates(
                 failure_stage: PublicRelayCandidateFailureStage::None,
                 error: None,
                 bootstrap: Some(report),
+                elapsed_millis,
             },
             Err(failure) => PublicRelayCandidateReport {
                 address: relay_address.to_string(),
@@ -790,6 +794,7 @@ pub async fn check_public_relay_candidates(
                 failure_stage: failure.stage,
                 error: Some(failure.message),
                 bootstrap: failure.bootstrap,
+                elapsed_millis,
             },
         };
         let succeeded = candidate.succeeded;
@@ -800,6 +805,10 @@ pub async fn check_public_relay_candidates(
     }
 
     PublicRelayProbeReport { mode, candidates }
+}
+
+fn elapsed_millis_since(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn bootstrap_peer_results(
@@ -2216,6 +2225,7 @@ mod tests {
                     1,
                     Some("NoDirectConnection".to_owned()),
                 )),
+                elapsed_millis: 45_000,
             }],
         };
 
@@ -2257,6 +2267,7 @@ mod tests {
                 failure_stage: PublicRelayCandidateFailureStage::None,
                 error: None,
                 bootstrap: Some(relayed_peer_report(1, 1)),
+                elapsed_millis: 1_250,
             }],
         };
 

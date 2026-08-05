@@ -96,6 +96,9 @@ validation succeeds, it also writes `public-relay-config.json`, a runnable
 relay-assisted config generated from the validated public relay. It exits
 nonzero if any phase fails, but earlier artifacts remain in the repro
 directory.
+Probe reports use schema version 2 and include per-candidate
+`elapsed_millis`, which helps distinguish fast setup failures from full-budget
+reservation, relayed-circuit, or DCUtR timeouts.
 
 Every repro directory also contains `repro-metadata.txt`,
 `repro-host-network.txt`, `repro-commands.sh`, and `repro-summary.txt`. Start
