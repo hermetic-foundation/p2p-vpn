@@ -271,6 +271,12 @@
                     else group_by(.) | map("\(.[0])=\(length)") | join(",")
                     end
                 ),
+                "  elapsed_millis=" + (
+                  [(.candidates // [])[].elapsed_millis | select(. != null)]
+                  | if length == 0 then "none"
+                    else "min=\(min),max=\(max)"
+                    end
+                ),
                 "  first_error=" + (
                   (
                     [(.candidates // [])[].error, (.peer_results // [])[].last_error]
@@ -308,15 +314,18 @@
               phase="$1"
               shift
               echo "$phase" >&2
+              phase_started="$(date +%s)"
               set +e
               "$@"
               phase_status="$?"
               set -e
+              phase_finished="$(date +%s)"
+              phase_elapsed="$((phase_finished - phase_started))"
               if [[ "$phase_status" -ne 0 ]]; then
-                echo "$phase failed with exit status $phase_status" >&2
+                echo "$phase failed with exit status $phase_status after ''${phase_elapsed}s" >&2
                 status=1
               fi
-              phase_results+=("$phase status=$phase_status")
+              phase_results+=("$phase status=$phase_status elapsed_seconds=$phase_elapsed")
             }
 
             echo "writing public relay repro artifacts to $artifact_dir" >&2

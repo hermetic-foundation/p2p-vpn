@@ -108,8 +108,10 @@ path.
    relay-circuit validation, and DCUtR validation as separate phases, preserving
    the scan, relay-check, and DCUtR JSON reports even when a later phase fails.
    Relay-check JSON reports include per-candidate elapsed milliseconds so
-   timeout signatures can be compared across hosts. The repro writes a runnable
-   relay-assisted config when the relay-circuit phase
+   timeout signatures can be compared across hosts. The repro summary records
+   per-phase elapsed seconds and per-report candidate elapsed ranges so public
+   topology failures can be triaged without hand-parsing each JSON artifact.
+   The repro writes a runnable relay-assisted config when the relay-circuit phase
    succeeds. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that relay-assisted
    config preserves the supplied overlay. Public topology failures can be
    compared across hosts while still preserving the strongest usable fallback
