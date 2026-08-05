@@ -141,6 +141,7 @@
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
             max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
             base_config="''${P2P_VPN_REPRO_BASE_CONFIG:-}"
+            repro_candidates_file="''${P2P_VPN_REPRO_CANDIDATES_FILE:-}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -157,6 +158,7 @@
                 echo "p2p_vpn_version=$(p2p-vpn --version 2>/dev/null || echo unknown)"
                 echo "P2P_VPN_REPRO_DIR=$artifact_dir"
                 echo "P2P_VPN_REPRO_BASE_CONFIG=$base_config"
+                echo "P2P_VPN_REPRO_CANDIDATES_FILE=$repro_candidates_file"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -210,19 +212,27 @@
                 if [[ -n "$base_config" ]]; then
                   printf "export P2P_VPN_REPRO_BASE_CONFIG=%q\n" "$base_config"
                 fi
+                if [[ -n "$repro_candidates_file" ]]; then
+                  printf "export P2P_VPN_REPRO_CANDIDATES_FILE=%q\n" "$repro_candidates_file"
+                fi
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
                 printf "export P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=%q\n" "$max_validation"
                 echo
-                echo "p2p-vpn relay-scan \\"
-                echo "  --ipfs-bootstrap-peers \\"
-                printf "  --timeout-seconds %q \\\\\n" "$scan_timeout"
-                printf "  --max-candidates %q \\\\\n" "$max_candidates"
-                printf "  --write-candidates %q \\\\\n" "$candidates"
-                printf "  --write-report %q \\\\\n" "$scan_report"
-                echo "  --force"
-                echo
+                if [[ -n "$repro_candidates_file" ]]; then
+                  printf "cp %q %q\n" "$repro_candidates_file" "$candidates"
+                  echo
+                else
+                  echo "p2p-vpn relay-scan \\"
+                  echo "  --ipfs-bootstrap-peers \\"
+                  printf "  --timeout-seconds %q \\\\\n" "$scan_timeout"
+                  printf "  --max-candidates %q \\\\\n" "$max_candidates"
+                  printf "  --write-candidates %q \\\\\n" "$candidates"
+                  printf "  --write-report %q \\\\\n" "$scan_report"
+                  echo "  --force"
+                  echo
+                fi
                 echo "p2p-vpn relay-check \\"
                 if [[ -n "$base_config" ]]; then
                   printf "  --config %q \\\\\n" "$base_config"
@@ -332,14 +342,23 @@
             write_metadata
             write_host_network
             write_commands
-            run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
-              p2p-vpn relay-scan \
-              --ipfs-bootstrap-peers \
-              --timeout-seconds "$scan_timeout" \
-              --max-candidates "$max_candidates" \
-              --write-candidates "$candidates" \
-              --write-report "$scan_report" \
-              --force
+            if [[ -n "$repro_candidates_file" ]]; then
+              if [[ ! -s "$repro_candidates_file" ]]; then
+                echo "P2P_VPN_REPRO_CANDIDATES_FILE must point to a nonempty relay candidate file" >&2
+                exit 2
+              fi
+              cp "$repro_candidates_file" "$candidates"
+              phase_results+=("using supplied public relay candidate file status=0 elapsed_seconds=0")
+            else
+              run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
+                p2p-vpn relay-scan \
+                --ipfs-bootstrap-peers \
+                --timeout-seconds "$scan_timeout" \
+                --max-candidates "$max_candidates" \
+                --write-candidates "$candidates" \
+                --write-report "$scan_report" \
+                --force
+            fi
 
             if [[ -s "$candidates" ]]; then
               run_phase "probing candidates for relay reservation and relayed-circuit evidence" \

@@ -115,9 +115,12 @@ path.
    topology failures can be triaged without hand-parsing each JSON artifact.
    The repro writes a runnable relay-assisted config when the relay-circuit phase
    succeeds. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that relay-assisted
-   config preserves the supplied overlay. Public topology failures can be
-   compared across hosts while still preserving the strongest usable fallback
-   found. A report-driven live run on 2026-08-04 found one public relay
+   config preserves the supplied overlay. `P2P_VPN_REPRO_CANDIDATES_FILE` can
+   point at a previous candidate file to skip public discovery and immediately
+   replay relay-circuit/DCUtR validation, which shortens repeated debugging on
+   the same public relay set. Public topology failures can be compared across
+   hosts while still preserving the strongest usable fallback found. A
+   report-driven live run on 2026-08-04 found one public relay
    candidate that accepted a reservation, carried a relayed circuit, and wrote
    a relay-assisted config; the paired DCUtR-required report tested eight
    host-reachable candidates, with four reservation timeouts and four

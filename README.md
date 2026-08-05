@@ -1007,7 +1007,10 @@ error from each report. The host-network file captures OS/kernel, IPv4/IPv6
 route availability, interface addresses, and route tables so public relay and
 DCUtR failures can be compared across machines. The commands file records the
 exact probe commands and environment limits used for the run so the same
-candidate set can be replayed without starting over from memory.
+candidate set can be replayed without starting over from memory. Set
+`P2P_VPN_REPRO_CANDIDATES_FILE` to a nonempty candidate file from an earlier
+run to skip the public discovery phase and immediately replay relay-circuit and
+DCUtR validation against those relay candidates.
 
 The ignored tests run the same kind of probe from the test harness:
 
