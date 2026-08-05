@@ -1720,7 +1720,14 @@ async fn peer_lines_live(config: &Config, timeout: Duration) -> Result<Vec<Strin
 }
 
 fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
+    let readiness = peer_operational_readiness(status);
     lines.push(format!("peer live: {} reachable", status.peer));
+    lines.push(format!(
+        "peer live operational: {} ready {} reason {}",
+        status.peer,
+        readiness.ready,
+        readiness.reason.as_str()
+    ));
     lines.push(format!(
         "peer live network: {} {}",
         status.peer, status.service.network_name
@@ -1924,6 +1931,7 @@ async fn path_lines_live(config: &Config, timeout: Duration) -> Result<Vec<Strin
 fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
     let preferred_path = PathKind::from_wire_name(&status.capabilities.preferred_path)
         .unwrap_or(PathKind::DirectQuicStream);
+    let readiness = peer_operational_readiness(status);
     let packet_datagram_ready = status.service.supports_owned_udp_packet_plane
         || status.service.supports_owned_quic_packet_plane
         || status.service.supports_quic_datagrams
@@ -1933,7 +1941,7 @@ fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus)
         configured_path_mtu_estimate(preferred_path, status.service.effective_mtu);
 
     lines.push(format!(
-        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} path_probe_ready {}",
+        "peer live path: {} reachable preferred {} score {} mtu {} path_mtu_estimate {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} path_probe_ready {} operational_ready {} operational_reason {}",
         status.peer,
         path_name(preferred_path),
         preferred_path.default_score(),
@@ -1943,8 +1951,126 @@ fn push_peer_live_path_lines(lines: &mut Vec<String>, status: &RemotePeerStatus)
         status.service.supports_native_quic_datagrams,
         status.service.supports_owned_udp_packet_plane,
         status.service.supports_owned_quic_packet_plane,
-        path_probe_ready
+        path_probe_ready,
+        readiness.ready,
+        readiness.reason.as_str()
     ));
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PeerOperationalReadiness {
+    ready: bool,
+    reason: PeerOperationalReadinessReason,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PeerOperationalReadinessReason {
+    Ready,
+    InvalidPreferredPath,
+    RemoteDatagramSupportMissing,
+    DatagramCapabilityMismatch,
+    OwnedQuicCertificateMissing,
+    OwnedQuicEndpointMissing,
+    OwnedUdpEndpointMissing,
+}
+
+impl PeerOperationalReadinessReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::InvalidPreferredPath => "invalid_preferred_path",
+            Self::RemoteDatagramSupportMissing => "remote_datagram_support_missing",
+            Self::DatagramCapabilityMismatch => "datagram_capability_mismatch",
+            Self::OwnedQuicCertificateMissing => "owned_quic_certificate_missing",
+            Self::OwnedQuicEndpointMissing => "owned_quic_endpoint_missing",
+            Self::OwnedUdpEndpointMissing => "owned_udp_endpoint_missing",
+        }
+    }
+}
+
+fn peer_operational_readiness(status: &RemotePeerStatus) -> PeerOperationalReadiness {
+    let Some(preferred_path) = PathKind::from_wire_name(&status.capabilities.preferred_path) else {
+        return blocked(PeerOperationalReadinessReason::InvalidPreferredPath);
+    };
+
+    if !preferred_path.requires_quic_datagrams() {
+        return ready();
+    }
+
+    if !service_supports_datagram_packet_path(&status.service) {
+        return blocked(PeerOperationalReadinessReason::RemoteDatagramSupportMissing);
+    }
+
+    if !status.capabilities.supports_datagram_packet_path() {
+        return blocked(PeerOperationalReadinessReason::DatagramCapabilityMismatch);
+    }
+
+    let owned_quic_claimed = status.service.supports_owned_quic_packet_plane
+        || status.capabilities.supports_owned_quic_packet_plane;
+    let owned_udp_claimed = status.service.supports_owned_udp_packet_plane
+        || status.capabilities.supports_owned_udp_packet_plane;
+    let owned_quic_ready = owned_quic_claimed
+        && status
+            .capabilities
+            .owned_quic_packet_plane_certificate_der
+            .is_some()
+        && !status
+            .capabilities
+            .owned_quic_packet_endpoint_candidates
+            .is_empty();
+    let owned_udp_ready =
+        owned_udp_claimed && !status.capabilities.packet_endpoint_candidates.is_empty();
+
+    if owned_quic_ready || owned_udp_ready {
+        return ready();
+    }
+
+    if owned_quic_claimed
+        && status
+            .capabilities
+            .owned_quic_packet_plane_certificate_der
+            .is_none()
+    {
+        return blocked(PeerOperationalReadinessReason::OwnedQuicCertificateMissing);
+    }
+
+    if owned_quic_claimed
+        && status
+            .capabilities
+            .owned_quic_packet_endpoint_candidates
+            .is_empty()
+    {
+        return blocked(PeerOperationalReadinessReason::OwnedQuicEndpointMissing);
+    }
+
+    if owned_udp_claimed && status.capabilities.packet_endpoint_candidates.is_empty() {
+        return blocked(PeerOperationalReadinessReason::OwnedUdpEndpointMissing);
+    }
+
+    ready()
+}
+
+const fn ready() -> PeerOperationalReadiness {
+    PeerOperationalReadiness {
+        ready: true,
+        reason: PeerOperationalReadinessReason::Ready,
+    }
+}
+
+const fn blocked(reason: PeerOperationalReadinessReason) -> PeerOperationalReadiness {
+    PeerOperationalReadiness {
+        ready: false,
+        reason,
+    }
+}
+
+const fn service_supports_datagram_packet_path(
+    status: &p2p_vpn::runtime::service::ServiceStatusResponse,
+) -> bool {
+    status.supports_quic_datagrams
+        || status.supports_native_quic_datagrams
+        || status.supports_owned_udp_packet_plane
+        || status.supports_owned_quic_packet_plane
 }
 
 const fn configured_path_mtu_estimate(kind: PathKind, mtu: u16) -> u16 {
@@ -3309,8 +3435,14 @@ async fn daemon_shutdown(socket: &Path, timeout_seconds: u64) -> Result<(), Stri
 }
 
 fn peer_status_lines(status: &RemotePeerStatus) -> Vec<String> {
+    let readiness = peer_operational_readiness(status);
     let mut lines = vec![
         format!("peer: {}", status.peer),
+        format!(
+            "operational ready: {} reason {}",
+            readiness.ready,
+            readiness.reason.as_str()
+        ),
         format!("network: {}", status.service.network_name),
         format!(
             "membership key matched: {}",
@@ -3929,6 +4061,11 @@ mod tests {
         let lines = peer_status_lines(&status);
 
         assert!(lines.iter().any(|line| line == &format!("peer: {peer}")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "operational ready: true reason ready")
+        );
         assert!(lines.iter().any(|line| line == "network: lab"));
         assert!(lines.iter().any(|line| line == "effective mtu: 1200"));
         assert!(
@@ -4073,6 +4210,12 @@ mod tests {
         assert!(
             lines
                 .iter()
+                .any(|line| line
+                    == &format!("peer live operational: {peer} ready true reason ready"))
+        );
+        assert!(
+            lines
+                .iter()
                 .any(|line| line == &format!("peer live mtu: {peer} 1200"))
         );
         assert!(lines.iter().any(|line| line
@@ -4210,8 +4353,84 @@ mod tests {
 
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false path_probe_ready false"
+                "peer live path: {peer} reachable preferred direct QUIC datagram score 100 mtu 1200 path_mtu_estimate 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false path_probe_ready false operational_ready false operational_reason remote_datagram_support_missing"
             )));
+    }
+
+    #[test]
+    fn peer_operational_readiness_reports_owned_quic_blockers() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities =
+            p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+                .with_owned_quic_packet_plane(true);
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        let service = p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+            .with_packet_data_plane_capabilities(&capabilities);
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service,
+        };
+
+        assert_eq!(
+            peer_operational_readiness(&status),
+            blocked(PeerOperationalReadinessReason::OwnedQuicCertificateMissing)
+        );
+
+        let mut status = status;
+        status.capabilities.owned_quic_packet_plane_certificate_der = Some(vec![1, 2, 3]);
+
+        assert_eq!(
+            peer_operational_readiness(&status),
+            blocked(PeerOperationalReadinessReason::OwnedQuicEndpointMissing)
+        );
+    }
+
+    #[test]
+    fn peer_operational_readiness_reports_owned_udp_blocker() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities =
+            p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+                .with_owned_udp_packet_plane(true);
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        let service = p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+            .with_packet_data_plane_capabilities(&capabilities);
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service,
+        };
+
+        assert_eq!(
+            peer_operational_readiness(&status),
+            blocked(PeerOperationalReadinessReason::OwnedUdpEndpointMissing)
+        );
+    }
+
+    #[test]
+    fn peer_operational_readiness_allows_owned_udp_when_owned_quic_is_incomplete() {
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        let mut capabilities =
+            p2p_vpn::runtime::control::ControlCapabilities::local("lab", None, 1200)
+                .with_owned_quic_packet_plane(true)
+                .with_owned_udp_packet_plane(true)
+                .with_packet_endpoint_candidates(vec!["203.0.113.10:51820".to_owned()]);
+        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        let service = p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+            .with_packet_data_plane_capabilities(&capabilities);
+        let status = RemotePeerStatus {
+            peer,
+            capabilities,
+            service,
+        };
+
+        assert_eq!(peer_operational_readiness(&status), ready());
     }
 
     #[test]
