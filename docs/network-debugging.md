@@ -11,6 +11,12 @@ Run the whole Linux namespace suite:
 nix run .#tun-e2e -- -- --ignored --nocapture
 ```
 
+Run the same suite with artifacts preserved by default:
+
+```sh
+nix run .#namespace-repro
+```
+
 Run a focused case:
 
 ```sh
@@ -51,8 +57,20 @@ For packet-plane failures, check for `event=packet_plane_session_established`,
 Scan public IPFS-compatible bootstrap peers and write candidates:
 
 ```sh
-p2p-vpn relay-scan --ipfs-bootstrap --check-candidates --write-candidates /tmp/p2p-vpn-relays.txt
+p2p-vpn relay-scan --ipfs-bootstrap-peers --check-candidates --write-candidates /tmp/p2p-vpn-relays.txt
 ```
+
+Run the packaged repro bundle:
+
+```sh
+nix run .#public-relay-repro
+```
+
+The app writes artifacts to a temporary directory and prints that path. Set
+`P2P_VPN_REPRO_DIR` to choose the directory. Tune long-running network probes
+with `P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS`,
+`P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS`, `P2P_VPN_RELAY_MAX_CANDIDATES`, and
+`P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES`.
 
 Probe candidates and write a machine-readable report:
 

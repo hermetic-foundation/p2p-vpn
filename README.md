@@ -553,6 +553,12 @@ logs after successful namespace runs. See
 [`docs/network-debugging.md`](docs/network-debugging.md) for focused repro and
 artifact-inspection commands.
 
+For a preserved-artifact namespace repro, use:
+
+```sh
+nix run .#namespace-repro
+```
+
 Recorded namespace E2E smoke evidence is kept in
 `docs/namespace-e2e-smoke.md`.
 

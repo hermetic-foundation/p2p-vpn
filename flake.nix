@@ -67,6 +67,60 @@
             exec cargo test --test tun_namespace "$@"
           '';
         };
+        namespaceRepro = pkgs.writeShellApplication {
+          name = "p2p-vpn-namespace-repro";
+          runtimeInputs = [ tunE2e ];
+          text = ''
+            export P2P_VPN_TUN_E2E_KEEP_TEMP="''${P2P_VPN_TUN_E2E_KEEP_TEMP:-1}"
+            export RUST_BACKTRACE=1
+            exec p2p-vpn-tun-e2e "$@"
+          '';
+        };
+        publicRelayRepro = pkgs.writeShellApplication {
+          name = "p2p-vpn-public-relay-repro";
+          runtimeInputs = [
+            package
+            pkgs.coreutils
+          ];
+          text = ''
+            artifact_dir="''${P2P_VPN_REPRO_DIR:-}"
+            if [[ -z "$artifact_dir" ]]; then
+              artifact_dir="$(mktemp -d -t p2p-vpn-public-relay-repro.XXXXXXXX)"
+            fi
+            mkdir -p "$artifact_dir"
+
+            candidates="$artifact_dir/public-relay-candidates.txt"
+            dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
+            scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
+            candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
+            max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
+            max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
+
+            echo "writing public relay repro artifacts to $artifact_dir" >&2
+            echo "scanning IPFS-compatible bootstrap peers for public relay candidates" >&2
+            p2p-vpn relay-scan \
+              --ipfs-bootstrap-peers \
+              --timeout-seconds "$scan_timeout" \
+              --max-candidates "$max_candidates" \
+              --check-candidates \
+              --candidate-timeout-seconds "$candidate_timeout" \
+              --max-validation-candidates "$max_validation" \
+              --write-candidates "$candidates" \
+              --force
+
+            echo "probing candidates for DCUtR success evidence" >&2
+            p2p-vpn relay-check \
+              --relay-candidates-file "$candidates" \
+              --timeout-seconds "$candidate_timeout" \
+              --max-validation-candidates "$max_validation" \
+              --require-dcutr-success \
+              --write-report "$dcutr_report" \
+              --force
+
+            echo "candidate file: $candidates" >&2
+            echo "DCUtR report: $dcutr_report" >&2
+          '';
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -94,9 +148,10 @@
         };
       in
       {
-        packages.default = package;
+        packages = {
+          default = package;
 
-        packages.releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
+          releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
           nativeBuildInputs = [ pkgs.gnutar ];
         } ''
           release_dir="$TMPDIR/p2p-vpn-0.1.0-${system}"
@@ -104,6 +159,7 @@
           cp ${package}/bin/p2p-vpn "$release_dir/bin/"
           cp ${./README.md} "$release_dir/README.md"
           cp ${./docs/feature-matrix.md} "$release_dir/docs/feature-matrix.md"
+          cp ${./docs/network-debugging.md} "$release_dir/docs/network-debugging.md"
           cp ${./docs/namespace-e2e-smoke.md} "$release_dir/docs/namespace-e2e-smoke.md"
           cp ${./docs/public-bootstrap-smoke.md} "$release_dir/docs/public-bootstrap-smoke.md"
           cp ${./flake.nix} "$release_dir/flake.nix"
@@ -115,6 +171,10 @@
             --owner=0 --group=0 --numeric-owner \
             -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
         '';
+        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          namespace-repro = namespaceRepro;
+          public-relay-repro = publicRelayRepro;
+        };
 
         apps = {
           default = {
@@ -125,6 +185,20 @@
             };
           };
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          namespace-repro = {
+            type = "app";
+            program = "${namespaceRepro}/bin/p2p-vpn-namespace-repro";
+            meta = {
+              description = "Run namespace E2E tests with repro artifacts preserved";
+            };
+          };
+          public-relay-repro = {
+            type = "app";
+            program = "${publicRelayRepro}/bin/p2p-vpn-public-relay-repro";
+            meta = {
+              description = "Run public IPFS relay and DCUtR repro diagnostics";
+            };
+          };
           tun-e2e = {
             type = "app";
             program = "${tunE2e}/bin/p2p-vpn-tun-e2e";
@@ -168,6 +242,7 @@
               "$root/flake.lock" \
               "$root/Cargo.toml" \
               "$root/docs/feature-matrix.md" \
+              "$root/docs/network-debugging.md" \
               "$root/docs/namespace-e2e-smoke.md" \
               "$root/docs/public-bootstrap-smoke.md" \
               "$root/examples/nixos-mesh/flake.nix" \
