@@ -78,6 +78,29 @@ const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 
 const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
     LocalPacketDataPlane::identity_keyed_streams();
+const NATIVE_LIBP2P_QUIC_DATAGRAMS: NativeLibp2pQuicDatagramCapability =
+    NativeLibp2pQuicDatagramCapability::unavailable(
+        "libp2p-quic 0.13.1 disables Quinn datagram receive buffers and Swarm exposes no application datagram handle",
+    );
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeLibp2pQuicDatagramCapability {
+    application_datagram_handle: bool,
+    reason: &'static str,
+}
+
+impl NativeLibp2pQuicDatagramCapability {
+    const fn unavailable(reason: &'static str) -> Self {
+        Self {
+            application_datagram_handle: false,
+            reason,
+        }
+    }
+
+    const fn can_advertise(self) -> bool {
+        self.application_datagram_handle
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LocalPacketDataPlane {
@@ -87,13 +110,9 @@ struct LocalPacketDataPlane {
 }
 
 impl LocalPacketDataPlane {
-    // libp2p-quic 0.13.1 disables Quinn datagram receive buffers internally and
-    // does not expose an application datagram handle through Swarm connections.
-    // Until that changes, the only operational packet data plane is the
-    // identity-keyed libp2p request-response stream fallback.
     const fn identity_keyed_streams() -> Self {
         Self {
-            native_quic_datagrams: false,
+            native_quic_datagrams: NATIVE_LIBP2P_QUIC_DATAGRAMS.can_advertise(),
             owned_udp_packet_plane: false,
             owned_quic_packet_plane: false,
         }
@@ -11576,6 +11595,37 @@ mod tests {
     }
 
     #[test]
+    fn packet_transport_decision_blocks_native_only_datagram_claim_without_local_handle() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280).with_native_quic_datagrams(true),
+        );
+
+        assert_eq!(
+            local_packet_datagram_backend(&peer_capabilities, None, None, remote_overlay),
+            None
+        );
+        assert_eq!(
+            packet_transport_support(&peer_capabilities, remote_overlay),
+            PathTransportSupport {
+                quic_datagrams: false
+            }
+        );
+        assert_eq!(
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay),
+            PacketTransportDecision::Blocked {
+                reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
+                best_path: Some(PathKind::DirectQuicDatagram)
+            }
+        );
+    }
+
+    #[test]
     fn packet_plane_negotiation_waits_for_direct_transport_path() {
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -11606,6 +11656,13 @@ mod tests {
             local_data_plane,
             LocalPacketDataPlane::identity_keyed_streams()
         );
+        assert_eq!(
+            NATIVE_LIBP2P_QUIC_DATAGRAMS,
+            NativeLibp2pQuicDatagramCapability::unavailable(
+                "libp2p-quic 0.13.1 disables Quinn datagram receive buffers and Swarm exposes no application datagram handle"
+            )
+        );
+        assert!(!NATIVE_LIBP2P_QUIC_DATAGRAMS.can_advertise());
         assert!(!local_data_plane.native_quic_datagrams);
         assert!(!local_data_plane.owned_udp_packet_plane);
         assert!(!local_data_plane.owned_quic_packet_plane);
