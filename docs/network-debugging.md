@@ -148,9 +148,13 @@ when intentionally reusing a nonempty output directory.
 Then check `p2p-vpn daemon-health --socket /run/p2p-vpn/control.sock`. Add
 `--require-validated-peers`, `--require-supported-paths`,
 `--require-packet-plane-session`, or `--require-packet-plane-quic-session` to
-turn a repro into a strict readiness gate for the stage under investigation.
-Use `--wait-seconds 30` when the repro should wait for asynchronous discovery,
-relay, DCUtR, or packet-plane negotiation instead of sampling only once.
+turn a repro into a strict readiness gate for the stage under investigation. Add
+`--require-observed-packet-plane-udp-endpoint` or
+`--require-observed-packet-plane-quic-endpoint` when the repro depends on
+libp2p confirmed external addresses becoming owned UDP or owned-QUIC endpoint
+advertisements. Use `--wait-seconds 30` when the repro should wait for
+asynchronous discovery, relay, DCUtR, or packet-plane negotiation instead of
+sampling only once.
 
 For discovery failures, check node logs for `kademlia query progressed`,
 `discovered_address_dial_attempts`, and `control capabilities accepted`.

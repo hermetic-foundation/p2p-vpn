@@ -543,6 +543,10 @@ enum Command {
         require_packet_plane_quic_listener: bool,
         #[arg(long)]
         require_packet_plane_quic_session: bool,
+        #[arg(long)]
+        require_observed_packet_plane_udp_endpoint: bool,
+        #[arg(long)]
+        require_observed_packet_plane_quic_endpoint: bool,
     },
     DaemonShutdown {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -1007,6 +1011,8 @@ async fn main() -> Result<(), String> {
             require_packet_plane_session,
             require_packet_plane_quic_listener,
             require_packet_plane_quic_session,
+            require_observed_packet_plane_udp_endpoint,
+            require_observed_packet_plane_quic_endpoint,
         } => {
             Box::pin(daemon_health(
                 &socket,
@@ -1021,6 +1027,10 @@ async fn main() -> Result<(), String> {
                         packet_plane_session: require_packet_plane_session,
                         packet_plane_quic_listener: require_packet_plane_quic_listener,
                         packet_plane_quic_session: require_packet_plane_quic_session,
+                        observed_packet_plane_udp_endpoint:
+                            require_observed_packet_plane_udp_endpoint,
+                        observed_packet_plane_quic_endpoint:
+                            require_observed_packet_plane_quic_endpoint,
                     },
                 },
             ))
@@ -5220,6 +5230,8 @@ struct DaemonHealthRequirements {
     packet_plane_session: bool,
     packet_plane_quic_listener: bool,
     packet_plane_quic_session: bool,
+    observed_packet_plane_udp_endpoint: bool,
+    observed_packet_plane_quic_endpoint: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -5238,6 +5250,8 @@ struct DaemonHealthSnapshot {
     packet_plane_sessions: Option<usize>,
     packet_plane_quic_listeners: Option<usize>,
     packet_plane_quic_sessions: Option<usize>,
+    observed_packet_plane_udp_endpoint_candidates: Option<usize>,
+    observed_packet_plane_quic_endpoint_candidates: Option<usize>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5372,6 +5386,20 @@ fn daemon_health_verdict(
             "packet plane QUIC sessions",
         ));
     }
+    if requirements.observed_packet_plane_udp_endpoint {
+        checks.push(count_check(
+            "observed_packet_plane_udp_endpoint",
+            snapshot.observed_packet_plane_udp_endpoint_candidates,
+            "observed packet plane UDP endpoint candidates",
+        ));
+    }
+    if requirements.observed_packet_plane_quic_endpoint {
+        checks.push(count_check(
+            "observed_packet_plane_quic_endpoint",
+            snapshot.observed_packet_plane_quic_endpoint_candidates,
+            "observed packet plane QUIC endpoint candidates",
+        ));
+    }
 
     DaemonHealthVerdict {
         ready: checks.iter().all(|check| check.ok),
@@ -5409,6 +5437,14 @@ fn parse_daemon_health_snapshot(lines: &[String]) -> DaemonHealthSnapshot {
             snapshot.packet_plane_quic_listeners = Some(value);
         } else if let Some(value) = parse_metric_count(line, "packet_plane_quic_sessions") {
             snapshot.packet_plane_quic_sessions = Some(value);
+        } else if let Some(value) =
+            parse_metric_count(line, "observed_packet_plane_udp_endpoint_candidates")
+        {
+            snapshot.observed_packet_plane_udp_endpoint_candidates = Some(value);
+        } else if let Some(value) =
+            parse_metric_count(line, "observed_packet_plane_quic_endpoint_candidates")
+        {
+            snapshot.observed_packet_plane_quic_endpoint_candidates = Some(value);
         }
     }
     snapshot
@@ -7371,6 +7407,8 @@ mod tests {
             "--require-packet-plane-session",
             "--require-packet-plane-quic-listener",
             "--require-packet-plane-quic-session",
+            "--require-observed-packet-plane-udp-endpoint",
+            "--require-observed-packet-plane-quic-endpoint",
         ])
         .expect("cli");
 
@@ -7385,6 +7423,8 @@ mod tests {
             require_packet_plane_session,
             require_packet_plane_quic_listener,
             require_packet_plane_quic_session,
+            require_observed_packet_plane_udp_endpoint,
+            require_observed_packet_plane_quic_endpoint,
         } = cli.command
         else {
             panic!("expected daemon-health command");
@@ -7400,6 +7440,8 @@ mod tests {
         assert!(require_packet_plane_session);
         assert!(require_packet_plane_quic_listener);
         assert!(require_packet_plane_quic_session);
+        assert!(require_observed_packet_plane_udp_endpoint);
+        assert!(require_observed_packet_plane_quic_endpoint);
     }
 
     #[test]
@@ -7454,6 +7496,8 @@ mod tests {
             "packet_plane_sessions 0".to_owned(),
             "packet_plane_quic_listeners 0".to_owned(),
             "packet_plane_quic_sessions 0".to_owned(),
+            "observed_packet_plane_udp_endpoint_candidates 0".to_owned(),
+            "observed_packet_plane_quic_endpoint_candidates 0".to_owned(),
         ];
 
         let verdict = daemon_health_verdict(
@@ -7466,6 +7510,8 @@ mod tests {
                 packet_plane_session: true,
                 packet_plane_quic_listener: true,
                 packet_plane_quic_session: true,
+                observed_packet_plane_udp_endpoint: true,
+                observed_packet_plane_quic_endpoint: true,
             },
         );
 
@@ -7482,6 +7528,8 @@ mod tests {
             "packet_plane_session",
             "packet_plane_quic_listener",
             "packet_plane_quic_session",
+            "observed_packet_plane_udp_endpoint",
+            "observed_packet_plane_quic_endpoint",
         ] {
             assert!(
                 verdict
@@ -7504,6 +7552,8 @@ mod tests {
             "packet_plane_sessions 1".to_owned(),
             "packet_plane_quic_listeners 1".to_owned(),
             "packet_plane_quic_sessions 1".to_owned(),
+            "observed_packet_plane_udp_endpoint_candidates 1".to_owned(),
+            "observed_packet_plane_quic_endpoint_candidates 1".to_owned(),
         ];
 
         assert_eq!(
@@ -7517,6 +7567,8 @@ mod tests {
                 packet_plane_sessions: Some(1),
                 packet_plane_quic_listeners: Some(1),
                 packet_plane_quic_sessions: Some(1),
+                observed_packet_plane_udp_endpoint_candidates: Some(1),
+                observed_packet_plane_quic_endpoint_candidates: Some(1),
             }
         );
     }
