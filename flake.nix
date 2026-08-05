@@ -229,11 +229,20 @@
                 echo "[ip -br addr]"
                 ip -br addr || true
                 echo
+                echo "[ip -d link show]"
+                ip -d link show || true
+                echo
                 echo "[ip route show]"
                 ip route show || true
                 echo
                 echo "[ip -6 route show]"
                 ip -6 route show || true
+                echo
+                echo "[ss -lunpt]"
+                ss -lunpt || true
+                echo
+                echo "[ps -o pid,ppid,stat,comm,args -C p2p-vpn]"
+                ps -o pid,ppid,stat,comm,args -C p2p-vpn || true
               } > "$host_network"
             }
 
@@ -577,9 +586,23 @@ EOF
             daemon_log="''${P2P_VPN_VPN_REPRO_DAEMON_LOG:-$artifact_dir/p2p-vpn-daemon.log}"
             health_log="$artifact_dir/daemon-health.txt"
             state_log="$artifact_dir/daemon-state.txt"
+            state_json="$artifact_dir/daemon-state.json"
+            peers_log="$artifact_dir/daemon-peers.txt"
+            peers_json="$artifact_dir/daemon-peers.json"
+            routes_log="$artifact_dir/daemon-routes.txt"
+            routes_json="$artifact_dir/daemon-routes.json"
             paths_log="$artifact_dir/daemon-paths.txt"
+            paths_json="$artifact_dir/daemon-paths.json"
+            mtu_log="$artifact_dir/daemon-mtu.txt"
+            mtu_json="$artifact_dir/daemon-mtu.json"
+            capabilities_log="$artifact_dir/daemon-capabilities.txt"
+            capabilities_json="$artifact_dir/daemon-capabilities.json"
             status_log="$artifact_dir/daemon-status.txt"
             prometheus_log="$artifact_dir/daemon-status-prometheus.txt"
+            final_status_log="$artifact_dir/daemon-status-final.txt"
+            final_prometheus_log="$artifact_dir/daemon-status-prometheus-final.txt"
+            final_state_json="$artifact_dir/daemon-state-final.json"
+            final_paths_json="$artifact_dir/daemon-paths-final.json"
             ping_log="$artifact_dir/ping.txt"
             require_packet_session="''${P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION:-1}"
             require_quic_session="''${P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION:-0}"
@@ -614,11 +637,20 @@ EOF
                 echo "[ip -br addr]"
                 ip -br addr || true
                 echo
+                echo "[ip -d link show]"
+                ip -d link show || true
+                echo
                 echo "[ip route show]"
                 ip route show || true
                 echo
                 echo "[ip -6 route show]"
                 ip -6 route show || true
+                echo
+                echo "[ss -lunpt]"
+                ss -lunpt || true
+                echo
+                echo "[ps -o pid,ppid,stat,comm,args -C p2p-vpn]"
+                ps -o pid,ppid,stat,comm,args -C p2p-vpn || true
               } > "$host_network"
             }
 
@@ -667,9 +699,23 @@ EOF
                 printf "daemon_log=%q\n" "$daemon_log"
                 printf "health_log=%q\n" "$health_log"
                 printf "state_log=%q\n" "$state_log"
+                printf "state_json=%q\n" "$state_json"
+                printf "peers_log=%q\n" "$peers_log"
+                printf "peers_json=%q\n" "$peers_json"
+                printf "routes_log=%q\n" "$routes_log"
+                printf "routes_json=%q\n" "$routes_json"
                 printf "paths_log=%q\n" "$paths_log"
+                printf "paths_json=%q\n" "$paths_json"
+                printf "mtu_log=%q\n" "$mtu_log"
+                printf "mtu_json=%q\n" "$mtu_json"
+                printf "capabilities_log=%q\n" "$capabilities_log"
+                printf "capabilities_json=%q\n" "$capabilities_json"
                 printf "status_log=%q\n" "$status_log"
                 printf "prometheus_log=%q\n" "$prometheus_log"
+                printf "final_status_log=%q\n" "$final_status_log"
+                printf "final_prometheus_log=%q\n" "$final_prometheus_log"
+                printf "final_state_json=%q\n" "$final_state_json"
+                printf "final_paths_json=%q\n" "$final_paths_json"
                 printf "ping_log=%q\n" "$ping_log"
                 printf "ping_target=%q\n" "$ping_target"
                 printf "ping_count=%q\n" "$ping_count"
@@ -693,17 +739,34 @@ EOF
                 echo "if [[ \"\$require_quic_session\" == 1 ]]; then"
                 echo "  health_args+=(--require-packet-plane-quic-session)"
                 echo "fi"
+                echo "capture_daemon_views() {"
+                echo "  p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
+                echo "  p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$state_json\""
+                echo "  p2p-vpn daemon-peers --socket \"\$control_socket\" | tee \"\$peers_log\""
+                echo "  p2p-vpn daemon-peers --socket \"\$control_socket\" --format json > \"\$peers_json\""
+                echo "  p2p-vpn daemon-routes --socket \"\$control_socket\" | tee \"\$routes_log\""
+                echo "  p2p-vpn daemon-routes --socket \"\$control_socket\" --format json > \"\$routes_json\""
+                echo "  p2p-vpn daemon-paths --socket \"\$control_socket\" | tee \"\$paths_log\""
+                echo "  p2p-vpn daemon-paths --socket \"\$control_socket\" --format json > \"\$paths_json\""
+                echo "  p2p-vpn daemon-mtu --socket \"\$control_socket\" | tee \"\$mtu_log\""
+                echo "  p2p-vpn daemon-mtu --socket \"\$control_socket\" --format json > \"\$mtu_json\""
+                echo "  p2p-vpn daemon-capabilities --socket \"\$control_socket\" | tee \"\$capabilities_log\""
+                echo "  p2p-vpn daemon-capabilities --socket \"\$control_socket\" --format json > \"\$capabilities_json\""
+                echo "  p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
+                echo "  p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
+                echo "}"
                 # shellcheck disable=SC2016
                 echo 'p2p-vpn daemon-health "''${health_args[@]}" | tee "$health_log"'
-                echo "p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
-                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" | tee \"\$paths_log\""
-                echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
-                echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
+                echo "capture_daemon_views"
                 echo "if [[ -n \"\$ping_target\" ]]; then"
                 echo "  ping -c \"\$ping_count\" -W \"\$ping_timeout\" \"\$ping_target\" | tee \"\$ping_log\""
                 echo "else"
                 echo "  echo \"set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address to prove data forwarding\" | tee \"\$ping_log\""
                 echo "fi"
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$final_status_log\""
+                echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$final_prometheus_log\""
+                echo "p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$final_state_json\""
+                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" --format json > \"\$final_paths_json\""
                 printf "echo %q\n" "$role complete; artifacts in $artifact_dir"
               } > "$script"
               chmod +x "$script"
@@ -716,12 +779,32 @@ EOF
                 printf "control_socket=%q\n" "$control_socket"
                 printf "health_log=%q\n" "$health_log"
                 printf "state_log=%q\n" "$state_log"
+                printf "state_json=%q\n" "$state_json"
+                printf "peers_log=%q\n" "$peers_log"
+                printf "peers_json=%q\n" "$peers_json"
+                printf "routes_log=%q\n" "$routes_log"
+                printf "routes_json=%q\n" "$routes_json"
                 printf "paths_log=%q\n" "$paths_log"
+                printf "paths_json=%q\n" "$paths_json"
+                printf "mtu_log=%q\n" "$mtu_log"
+                printf "mtu_json=%q\n" "$mtu_json"
+                printf "capabilities_log=%q\n" "$capabilities_log"
+                printf "capabilities_json=%q\n" "$capabilities_json"
                 printf "status_log=%q\n" "$status_log"
                 printf "prometheus_log=%q\n" "$prometheus_log"
                 echo "p2p-vpn daemon-health --socket \"\$control_socket\" | tee \"\$health_log\""
                 echo "p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
+                echo "p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$state_json\""
+                echo "p2p-vpn daemon-peers --socket \"\$control_socket\" | tee \"\$peers_log\""
+                echo "p2p-vpn daemon-peers --socket \"\$control_socket\" --format json > \"\$peers_json\""
+                echo "p2p-vpn daemon-routes --socket \"\$control_socket\" | tee \"\$routes_log\""
+                echo "p2p-vpn daemon-routes --socket \"\$control_socket\" --format json > \"\$routes_json\""
                 echo "p2p-vpn daemon-paths --socket \"\$control_socket\" | tee \"\$paths_log\""
+                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" --format json > \"\$paths_json\""
+                echo "p2p-vpn daemon-mtu --socket \"\$control_socket\" | tee \"\$mtu_log\""
+                echo "p2p-vpn daemon-mtu --socket \"\$control_socket\" --format json > \"\$mtu_json\""
+                echo "p2p-vpn daemon-capabilities --socket \"\$control_socket\" | tee \"\$capabilities_log\""
+                echo "p2p-vpn daemon-capabilities --socket \"\$control_socket\" --format json > \"\$capabilities_json\""
                 echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
                 echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
               } > "$collect_script"
@@ -785,16 +868,30 @@ EOF
                 echo "daemon_log=$daemon_log"
                 echo "health_log=$health_log"
                 echo "state_log=$state_log"
+                echo "state_json=$state_json"
+                echo "peers_log=$peers_log"
+                echo "peers_json=$peers_json"
+                echo "routes_log=$routes_log"
+                echo "routes_json=$routes_json"
                 echo "paths_log=$paths_log"
+                echo "paths_json=$paths_json"
+                echo "mtu_log=$mtu_log"
+                echo "mtu_json=$mtu_json"
+                echo "capabilities_log=$capabilities_log"
+                echo "capabilities_json=$capabilities_json"
                 echo "status_log=$status_log"
                 echo "prometheus_log=$prometheus_log"
+                echo "final_status_log=$final_status_log"
+                echo "final_prometheus_log=$final_prometheus_log"
+                echo "final_state_json=$final_state_json"
+                echo "final_paths_json=$final_paths_json"
                 echo "ping_log=$ping_log"
                 echo
                 echo "workflow:"
                 echo "  1. Copy the overlay config to both hosts or point both hosts at equivalent configs."
                 echo "  2. Set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address on each host."
                 echo "  3. Run the generated host script with sudo on each host."
-                echo "  4. Compare daemon-health, daemon-paths, daemon-status, daemon logs, and ping output."
+                echo "  4. Compare health, routes, paths, MTU, capabilities, status, JSON snapshots, daemon logs, host network, and ping output."
               } > "$summary"
             }
 

@@ -263,10 +263,13 @@ The app writes `vpn-repro-host-a.sh`, `vpn-repro-host-b.sh`,
 `vpn-repro-host-network.txt`, and `vpn-repro-summary.txt`. Run the generated
 Host A and Host B scripts with the privileges needed to create the TUN device.
 Each host script starts `p2p-vpn up`, waits on `daemon-health`, captures
-`daemon-state`, `daemon-paths`, line-oriented metrics, Prometheus metrics, and
-then pings `P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The artifact names
-are stable so two hosts can exchange directories and compare the selected path,
-packet-plane session state, drops, queue state, and ping result directly.
+`daemon-state`, `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`,
+`daemon-capabilities`, line-oriented metrics, Prometheus metrics, matching JSON
+view envelopes, and final post-ping status/path snapshots. It then pings
+`P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The artifact names are stable
+so two hosts can exchange directories and compare the selected path,
+packet-plane session state, drops, queue state, route ownership, MTU ceilings,
+capability negotiation, host topology, and ping result directly.
 
 Scan public IPFS-compatible bootstrap peers and write candidates:
 
