@@ -1410,8 +1410,9 @@ instead of a startup snapshot.
 capability state, selected path, healthy direct and relay path counts, effective
 MTU, selected path MTU, per-candidate path MTU estimates, configured
 packet-plane session TTL and replay-window limit, and path-probe, DCUtR,
-AutoNAT, relay-only infrastructure peers admitted from public or shared
-reachability discovery, and stream-fallback in-flight shard counters. The
+AutoNAT, configured and current auto-relay candidate/reservation/retry state,
+relay-only infrastructure peers admitted from public or shared reachability
+discovery, and stream-fallback in-flight shard counters. The
 narrower `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`, and
 `daemon-capabilities` commands expose those live daemon views directly for
 scripts and operators that do not want to parse the full state dump. Those view

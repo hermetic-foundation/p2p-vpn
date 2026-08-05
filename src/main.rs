@@ -2216,6 +2216,12 @@ fn push_relay_status(lines: &mut Vec<String>, config: &Config) {
         config.network.relay.reservations.len()
     ));
     lines.push(format!(
+        "relay auto policy: {} candidates / {} reservations / {}s retry",
+        config.network.relay.auto.max_candidates,
+        config.network.relay.auto.max_reservations,
+        config.network.relay.auto.retry_interval_seconds
+    ));
+    lines.push(format!(
         "relay resources: {} reservations / {} per peer / {}s reservation / {} circuits / {} per peer / {}s circuit / {} bytes",
         config.network.relay.resources.max_reservations,
         config.network.relay.resources.max_reservations_per_peer,
@@ -5097,6 +5103,11 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line == "kademlia scope: private overlay")
+        );
+        assert!(
+            lines.contains(
+                &"relay auto policy: 16 candidates / 2 reservations / 30s retry".to_owned()
+            )
         );
         assert!(lines.iter().any(|line| line
             == "protocols: control=/p2p-vpn/control/1 packet=/p2p-vpn/packet/1 service=/p2p-vpn/service/1"));

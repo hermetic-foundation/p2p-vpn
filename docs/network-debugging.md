@@ -107,7 +107,11 @@ For discovery failures, check node logs for `kademlia query progressed`,
 `discovered_address_dial_attempts`, and `control capabilities accepted`.
 
 For relay failures, check relay logs for `CircuitReqAccepted` and peer logs for
-relay readiness metrics and `relay_reservations_lost`.
+relay readiness metrics and `relay_reservations_lost`. The captured
+`daemon-state` and `daemon-status` artifacts include `auto_relay_policy_*`,
+`auto_relay_current_candidates`, `auto_relay_active_reservations`, and
+`auto_relay_pending_retries` lines, which distinguish policy caps from an empty
+or retry-delayed candidate set.
 
 For DCUtR or path-promotion failures, check peer logs for `event=dcutr_enabled`,
 `event=autonat_enabled`, `event=dcutr_hole_punch_result`, and

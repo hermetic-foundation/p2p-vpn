@@ -756,6 +756,7 @@ where
                     queue: queues.total_stats(),
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
+                    auto_relay: auto_relay.snapshot(Instant::now()),
                     relay_infrastructure: infrastructure_peers.snapshot(&node.swarm),
                     packet_plane: packet_plane.snapshot(),
                     packet_plane_quic: current_packet_plane_quic_snapshot(
@@ -1072,6 +1073,7 @@ struct RuntimeControlContext<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
+    auto_relay: AutoRelaySnapshot,
     relay_infrastructure: RelayInfrastructureSnapshot,
     packet_plane: PacketPlaneSnapshot,
     packet_plane_quic: PacketPlaneQuicSnapshot,
@@ -1085,22 +1087,24 @@ fn handle_runtime_control_request(
 ) -> Option<ShutdownReason> {
     match request {
         RuntimeControlRequest::Status { respond_to } => {
-            let lines = runtime_status_lines(
-                context.metrics,
-                context.queue,
-                context.path_stats,
-                &context.packet_plane,
-                context.packet_plane_session_ttl,
-                context.packet_plane_replay_windows_per_session,
-                &context.packet_plane_quic,
-            );
+            let lines = runtime_status_lines(RuntimeStatusView {
+                metrics: context.metrics,
+                queue: context.queue,
+                path_stats: context.path_stats,
+                auto_relay: context.auto_relay,
+                packet_plane: &context.packet_plane,
+                packet_plane_quic: &context.packet_plane_quic,
+                packet_plane_session_ttl: context.packet_plane_session_ttl,
+                packet_plane_replay_windows_per_session: context
+                    .packet_plane_replay_windows_per_session,
+            });
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket status response receiver dropped");
             }
             None
         }
         RuntimeControlRequest::State { respond_to } => {
-            let lines = runtime_state_lines(RuntimeStateView {
+            let lines = runtime_state_lines(&RuntimeStateView {
                 forwarder: context.forwarder,
                 paths: context.paths,
                 peer_capabilities: context.peer_capabilities,
@@ -1108,6 +1112,7 @@ fn handle_runtime_control_request(
                 queue: context.queue,
                 path_stats: context.path_stats,
                 packet_in_flight: context.packet_in_flight,
+                auto_relay: context.auto_relay,
                 relay_infrastructure: &context.relay_infrastructure,
                 packet_plane: &context.packet_plane,
                 packet_plane_quic: &context.packet_plane_quic,
@@ -1568,32 +1573,41 @@ fn sorted_configured_peers(forwarder: &Forwarder) -> Vec<PeerId> {
     peers
 }
 
-fn runtime_status_lines(
-    metrics: &RuntimeMetrics,
+#[derive(Clone, Copy)]
+struct RuntimeStatusView<'a> {
+    metrics: &'a RuntimeMetrics,
     queue: crate::queue::QueueStats,
-    path: crate::path::PathRuntimeStats,
-    packet_plane: &PacketPlaneSnapshot,
+    path_stats: crate::path::PathRuntimeStats,
+    auto_relay: AutoRelaySnapshot,
+    packet_plane: &'a PacketPlaneSnapshot,
+    packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
-    packet_plane_quic: &PacketPlaneQuicSnapshot,
-) -> Vec<String> {
-    let mut lines = metrics.snapshot_with_paths(queue, path).lines();
+}
+
+fn runtime_status_lines(view: RuntimeStatusView<'_>) -> Vec<String> {
+    let mut lines = view
+        .metrics
+        .snapshot_with_paths(view.queue, view.path_stats)
+        .lines();
+    extend_auto_relay_summary_lines(&mut lines, view.auto_relay);
     lines.push(format!(
         "packet_plane_session_ttl_seconds {}",
-        packet_plane_session_ttl.as_secs()
+        view.packet_plane_session_ttl.as_secs()
     ));
     lines.push(format!(
-        "packet_plane_replay_windows_per_session {packet_plane_replay_windows_per_session}"
+        "packet_plane_replay_windows_per_session {}",
+        view.packet_plane_replay_windows_per_session
     ));
     lines.push(format!(
         "packet_plane_listeners {}",
-        packet_plane.listeners.len()
+        view.packet_plane.listeners.len()
     ));
     lines.push(format!(
         "packet_plane_sessions {}",
-        packet_plane.sessions.len()
+        view.packet_plane.sessions.len()
     ));
-    extend_runtime_packet_plane_quic_summary_lines(&mut lines, packet_plane_quic);
+    extend_runtime_packet_plane_quic_summary_lines(&mut lines, view.packet_plane_quic);
     lines
 }
 
@@ -1606,6 +1620,7 @@ struct RuntimeStateView<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
+    auto_relay: AutoRelaySnapshot,
     relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
@@ -1613,7 +1628,7 @@ struct RuntimeStateView<'a> {
     packet_plane_replay_windows_per_session: usize,
 }
 
-fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
+fn runtime_state_lines(view: &RuntimeStateView<'_>) -> Vec<String> {
     let snapshot = view
         .metrics
         .snapshot_with_paths(view.queue, view.path_stats);
@@ -1629,6 +1644,7 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
         validated_peers: view.peer_capabilities.len(),
         replay_windows: view.forwarder.replay_window_count(),
         packet_in_flight: view.packet_in_flight,
+        auto_relay: view.auto_relay,
         relay_infrastructure: view.relay_infrastructure,
         packet_plane: view.packet_plane,
         packet_plane_quic: view.packet_plane_quic,
@@ -1658,6 +1674,7 @@ struct RuntimeStateSummaryView<'a> {
     validated_peers: usize,
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
+    auto_relay: AutoRelaySnapshot,
     relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
@@ -1711,11 +1728,33 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
         ),
     ];
     extend_runtime_discovery_summary_lines(&mut lines, snapshot);
+    extend_auto_relay_summary_lines(&mut lines, view.auto_relay);
     extend_runtime_path_summary_lines(&mut lines, snapshot);
     extend_runtime_relay_infrastructure_lines(&mut lines, view.relay_infrastructure);
     extend_runtime_packet_plane_summary_lines(&mut lines, view.packet_plane);
     extend_runtime_packet_plane_quic_summary_lines(&mut lines, view.packet_plane_quic);
     lines
+}
+
+fn extend_auto_relay_summary_lines(lines: &mut Vec<String>, snapshot: AutoRelaySnapshot) {
+    lines.extend([
+        format!("auto_relay_policy_candidates {}", snapshot.max_candidates),
+        format!(
+            "auto_relay_policy_reservations {}",
+            snapshot.max_reservations
+        ),
+        format!(
+            "auto_relay_policy_retry_seconds {}",
+            snapshot.retry_interval_seconds
+        ),
+        format!(
+            "auto_relay_private_reachability {}",
+            snapshot.private_reachability
+        ),
+        format!("auto_relay_current_candidates {}", snapshot.candidates),
+        format!("auto_relay_active_reservations {}", snapshot.reservations),
+        format!("auto_relay_pending_retries {}", snapshot.pending_retries),
+    ]);
 }
 
 fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &RuntimeSnapshot) {
@@ -2375,6 +2414,17 @@ struct AutoRelayState {
     retry_after: HashMap<Libp2pPeerId, Instant>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct AutoRelaySnapshot {
+    max_candidates: usize,
+    max_reservations: usize,
+    retry_interval_seconds: u64,
+    private_reachability: bool,
+    candidates: usize,
+    reservations: usize,
+    pending_retries: usize,
+}
+
 impl Default for AutoRelayState {
     fn default() -> Self {
         Self::new(AutoRelayConfig::default())
@@ -2399,6 +2449,22 @@ impl AutoRelayState {
 
     const fn private_reachability(&self) -> bool {
         self.private_reachability
+    }
+
+    fn snapshot(&self, now: Instant) -> AutoRelaySnapshot {
+        AutoRelaySnapshot {
+            max_candidates: self.policy.max_candidates,
+            max_reservations: self.policy.max_reservations,
+            retry_interval_seconds: self.policy.retry_interval_seconds,
+            private_reachability: self.private_reachability,
+            candidates: self.candidates.len(),
+            reservations: self.reservation_peers.len(),
+            pending_retries: self
+                .retry_after
+                .values()
+                .filter(|retry_after| now < **retry_after)
+                .count(),
+        }
     }
 
     fn record_candidate(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
@@ -7625,6 +7691,117 @@ mod tests {
         }
     }
 
+    fn assert_auto_relay_lines(lines: &[String], snapshot: AutoRelaySnapshot) {
+        assert!(lines.contains(&format!(
+            "auto_relay_policy_candidates {}",
+            snapshot.max_candidates
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_policy_reservations {}",
+            snapshot.max_reservations
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_policy_retry_seconds {}",
+            snapshot.retry_interval_seconds
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_private_reachability {}",
+            snapshot.private_reachability
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_current_candidates {}",
+            snapshot.candidates
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_active_reservations {}",
+            snapshot.reservations
+        )));
+        assert!(lines.contains(&format!(
+            "auto_relay_pending_retries {}",
+            snapshot.pending_retries
+        )));
+    }
+
+    fn assert_lines_contain(lines: &[String], expected: &[&str]) {
+        for line in expected {
+            assert!(lines.contains(&(*line).to_owned()), "missing line: {line}");
+        }
+    }
+
+    struct RuntimeStateLinesFixture {
+        lines: Vec<String>,
+        remote: Libp2pPeerId,
+        remote_overlay: PeerId,
+        infrastructure: Libp2pPeerId,
+        infrastructure_address: Multiaddr,
+        auto_relay: AutoRelaySnapshot,
+    }
+
+    fn runtime_state_lines_fixture() -> RuntimeStateLinesFixture {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1200)
+                .with_advertised_routes(vec![ControlRoute::new("10.0.0.2/32", 100)]),
+        );
+        let metrics = RuntimeMetrics::default();
+        metrics.record_outbound_path_probe_sent();
+        metrics.record_outbound_path_probe_ack_sent();
+        metrics.record_outbound_path_mtu_probe_confirmation();
+        metrics.record_dcutr_result(true);
+        metrics.record_dcutr_result(false);
+        metrics.record_autonat_probe_scheduled();
+        metrics.record_autonat_status(AutoNatReachability::Public);
+        let (infrastructure, infrastructure_address, relay_infrastructure) =
+            test_relay_infrastructure_snapshot();
+        let packet_plane = test_packet_plane_snapshot(remote_overlay);
+        let auto_relay = AutoRelaySnapshot {
+            max_candidates: 16,
+            max_reservations: 4,
+            retry_interval_seconds: 60,
+            private_reachability: true,
+            candidates: 3,
+            reservations: 2,
+            pending_retries: 1,
+        };
+        let lines = runtime_state_lines(&RuntimeStateView {
+            forwarder: &forwarder,
+            paths: &paths,
+            peer_capabilities: &peer_capabilities,
+            metrics: &metrics,
+            queue: crate::queue::QueueStats::default(),
+            path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+            packet_in_flight: PacketInFlightStats {
+                packets: 2,
+                peers: 1,
+                shards: 2,
+                limit_per_peer: 256,
+            },
+            auto_relay,
+            relay_infrastructure: &relay_infrastructure,
+            packet_plane: &packet_plane,
+            packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
+            packet_plane_session_ttl: Duration::from_secs(90),
+            packet_plane_replay_windows_per_session: 256,
+        });
+
+        RuntimeStateLinesFixture {
+            lines,
+            remote,
+            remote_overlay,
+            infrastructure,
+            infrastructure_address,
+            auto_relay,
+        }
+    }
+
     fn config_with_peer(
         local_identity: &crate::identity::NodeIdentity,
         peer: Libp2pPeerId,
@@ -7830,6 +8007,7 @@ mod tests {
                 queue: crate::queue::QueueStats::default(),
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
+                auto_relay: AutoRelaySnapshot::default(),
                 relay_infrastructure: RelayInfrastructureSnapshot::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
                 packet_plane_quic: PacketPlaneQuicSnapshot::default(),
@@ -7997,16 +8175,27 @@ mod tests {
                 remote_session_id: 19,
             }],
         };
-        let lines = runtime_status_lines(
-            &RuntimeMetrics::default(),
-            crate::queue::QueueStats::default(),
-            crate::path::PathRuntimeStats::default(),
-            &packet_plane,
-            Duration::from_secs(75),
-            512,
-            &packet_plane_quic,
-        );
+        let auto_relay = AutoRelaySnapshot {
+            max_candidates: 12,
+            max_reservations: 3,
+            retry_interval_seconds: 45,
+            private_reachability: true,
+            candidates: 5,
+            reservations: 2,
+            pending_retries: 1,
+        };
+        let lines = runtime_status_lines(RuntimeStatusView {
+            metrics: &RuntimeMetrics::default(),
+            queue: crate::queue::QueueStats::default(),
+            path_stats: crate::path::PathRuntimeStats::default(),
+            auto_relay,
+            packet_plane: &packet_plane,
+            packet_plane_quic: &packet_plane_quic,
+            packet_plane_session_ttl: Duration::from_secs(75),
+            packet_plane_replay_windows_per_session: 512,
+        });
 
+        assert_auto_relay_lines(&lines, auto_relay);
         assert!(lines.contains(&"packet_plane_session_ttl_seconds 75".to_owned()));
         assert!(lines.contains(&"packet_plane_replay_windows_per_session 512".to_owned()));
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
@@ -8023,102 +8212,76 @@ mod tests {
 
     #[test]
     fn runtime_state_lines_include_peer_capabilities_paths_and_probes() {
-        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
-        let remote = peer_id();
-        let remote_overlay = PeerId::from_libp2p(remote);
-        let config = config_with_peer(&local_identity, remote);
-        let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
-        let mut peer_capabilities = PeerCapabilities::default();
-        peer_capabilities.record(
-            remote_overlay,
-            ControlCapabilities::local("lab", None, 1200)
-                .with_advertised_routes(vec![ControlRoute::new("10.0.0.2/32", 100)]),
+        let fixture = runtime_state_lines_fixture();
+        let lines = fixture.lines;
+
+        assert_lines_contain(
+            &lines,
+            &[
+                "daemon state: running",
+                "configured peers: 1",
+                "validated peers: 1",
+                "replay_windows 0",
+                "packet_plane_session_ttl_seconds 90",
+                "packet_plane_replay_windows_per_session 256",
+                "outbound_stream_fallback_packets 0",
+                "outbound_quic_datagram_packets 0",
+                "outbound_quic_datagram_unavailable_packets 0",
+                "path_promotions_to_direct 0",
+                "path_fallbacks_to_relay 0",
+                "dcutr_successes 1",
+                "dcutr_failures 1",
+                "autonat_probes_scheduled 1",
+                "autonat_status_unknown 0",
+                "autonat_status_public 1",
+                "autonat_status_private 0",
+            ],
         );
-        let metrics = RuntimeMetrics::default();
-        metrics.record_outbound_path_probe_sent();
-        metrics.record_outbound_path_probe_ack_sent();
-        metrics.record_outbound_path_mtu_probe_confirmation();
-        metrics.record_dcutr_result(true);
-        metrics.record_dcutr_result(false);
-        metrics.record_autonat_probe_scheduled();
-        metrics.record_autonat_status(AutoNatReachability::Public);
-        let (infrastructure, infrastructure_address, relay_infrastructure) =
-            test_relay_infrastructure_snapshot();
-        let packet_plane = test_packet_plane_snapshot(remote_overlay);
-
-        let lines = runtime_state_lines(RuntimeStateView {
-            forwarder: &forwarder,
-            paths: &paths,
-            peer_capabilities: &peer_capabilities,
-            metrics: &metrics,
-            queue: crate::queue::QueueStats::default(),
-            path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
-            packet_in_flight: PacketInFlightStats {
-                packets: 2,
-                peers: 1,
-                shards: 2,
-                limit_per_peer: 256,
-            },
-            relay_infrastructure: &relay_infrastructure,
-            packet_plane: &packet_plane,
-            packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
-            packet_plane_session_ttl: Duration::from_secs(90),
-            packet_plane_replay_windows_per_session: 256,
-        });
-
-        assert!(lines.contains(&"daemon state: running".to_owned()));
-        assert!(lines.contains(&"configured peers: 1".to_owned()));
-        assert!(lines.contains(&"validated peers: 1".to_owned()));
-        assert!(lines.contains(&"replay_windows 0".to_owned()));
-        assert!(lines.contains(&"packet_plane_session_ttl_seconds 90".to_owned()));
-        assert!(lines.contains(&"packet_plane_replay_windows_per_session 256".to_owned()));
-        assert!(lines.contains(&"outbound_stream_fallback_packets 0".to_owned()));
-        assert!(lines.contains(&"outbound_quic_datagram_packets 0".to_owned()));
-        assert!(lines.contains(&"outbound_quic_datagram_unavailable_packets 0".to_owned()));
-        assert!(lines.contains(&"path_promotions_to_direct 0".to_owned()));
-        assert!(lines.contains(&"path_fallbacks_to_relay 0".to_owned()));
-        assert!(lines.contains(&"dcutr_successes 1".to_owned()));
-        assert!(lines.contains(&"dcutr_failures 1".to_owned()));
-        assert!(lines.contains(&"autonat_probes_scheduled 1".to_owned()));
-        assert!(lines.contains(&"autonat_status_unknown 0".to_owned()));
-        assert!(lines.contains(&"autonat_status_public 1".to_owned()));
-        assert!(lines.contains(&"autonat_status_private 0".to_owned()));
-        assert!(lines.contains(&"autonat_status_changes_to_public 1".to_owned()));
-        assert!(lines.contains(&"autonat_status_changes_to_private 0".to_owned()));
-        assert!(lines.contains(&"outbound_path_probes_sent 1".to_owned()));
-        assert!(lines.contains(&"outbound_path_probe_acks_sent 1".to_owned()));
-        assert!(lines.contains(&"outbound_path_mtu_probe_confirmations 1".to_owned()));
-        assert!(lines.contains(&"outbound_queue_blocked_no_supported_path_events 0".to_owned()));
-        assert!(lines.contains(&"outbound_queue_blocked_packet_window_events 0".to_owned()));
-        assert!(lines.contains(&"relay_infrastructure_peers 1".to_owned()));
+        assert_auto_relay_lines(&lines, fixture.auto_relay);
+        assert_lines_contain(
+            &lines,
+            &[
+                "autonat_status_changes_to_public 1",
+                "autonat_status_changes_to_private 0",
+                "outbound_path_probes_sent 1",
+                "outbound_path_probe_acks_sent 1",
+                "outbound_path_mtu_probe_confirmations 1",
+                "outbound_queue_blocked_no_supported_path_events 0",
+                "outbound_queue_blocked_packet_window_events 0",
+                "relay_infrastructure_peers 1",
+                "packet_stream_fallback_in_flight 2",
+                "packet_stream_fallback_in_flight_peers 1",
+                "packet_stream_fallback_in_flight_shards 2",
+                "packet_stream_fallback_limit_per_peer 256",
+                "packet_plane_listeners 1",
+                "packet_plane_listener 127.0.0.1:51820",
+                "packet_plane_sessions 1",
+            ],
+        );
         assert!(lines.contains(&format!(
-            "relay_infrastructure_peer {infrastructure} address {infrastructure_address} connected true"
+            "relay_infrastructure_peer {} address {} connected true",
+            fixture.infrastructure, fixture.infrastructure_address
         )));
-        assert!(lines.contains(&"packet_stream_fallback_in_flight 2".to_owned()));
-        assert!(lines.contains(&"packet_stream_fallback_in_flight_peers 1".to_owned()));
-        assert!(lines.contains(&"packet_stream_fallback_in_flight_shards 2".to_owned()));
-        assert!(lines.contains(&"packet_stream_fallback_limit_per_peer 256".to_owned()));
-        assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
-        assert!(lines.contains(&"packet_plane_listener 127.0.0.1:51820".to_owned()));
-        assert!(lines.contains(&"packet_plane_sessions 1".to_owned()));
         assert!(lines.contains(&format!(
-            "packet_plane_session {remote_overlay} endpoint 127.0.0.1:51821 mtu 1200 role responder local_session 13 remote_session 11"
+            "packet_plane_session {} endpoint 127.0.0.1:51821 mtu 1200 role responder local_session 13 remote_session 11",
+            fixture.remote_overlay
         )));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer state: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 selected_path_rtt_ms unknown healthy_paths 1 direct_paths 1 relay_paths 0"
+                "peer state: {} transport {} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 selected_path_rtt_ms unknown healthy_paths 1 direct_paths 1 relay_paths 0",
+                fixture.remote_overlay, fixture.remote
             )
         }));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer capability state: {remote_overlay} preferred_path direct_quic_stream advertised_routes 1"
+                "peer capability state: {} preferred_path direct_quic_stream advertised_routes 1",
+                fixture.remote_overlay
             )
         }));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer path state: {remote_overlay} direct_tcp_stream healthy true relay false established_connections 1 score 60 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown"
+                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 60 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown",
+                fixture.remote_overlay
             )
         }));
     }
