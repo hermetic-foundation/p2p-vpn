@@ -208,7 +208,8 @@ positive `observed_packet_plane_external_addresses`, low
 `observed_packet_plane_external_addresses_rejected`, and positive
 `observed_packet_plane_udp_endpoint_candidates` or
 `observed_packet_plane_quic_endpoint_candidates`. Also check for
-`backend=owned_quic` when testing owned QUIC, positive
+`backend=owned_udp` or `backend=owned_quic`, positive
+`path_healthy_direct_udp_datagram_paths` or
 `path_healthy_direct_quic_datagram_paths`, and positive packet counters such as
 `outbound_quic_datagram_packets` or `inbound_accepted_packets`. Use
 `p2p-vpn daemon-paths --socket ... --format json` or

@@ -92,6 +92,7 @@ fn decode_hex(byte: u8) -> Result<u8, PeerIdParseError> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PathKind {
+    DirectUdpDatagram,
     DirectQuicDatagram,
     DirectQuicStream,
     DirectTcpStream,
@@ -102,6 +103,7 @@ impl PathKind {
     #[must_use]
     pub const fn default_score(self) -> u16 {
         match self {
+            Self::DirectUdpDatagram => 95,
             Self::DirectQuicDatagram => 100,
             Self::DirectQuicStream => 75,
             Self::DirectTcpStream => 60,
@@ -112,6 +114,7 @@ impl PathKind {
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
         match self {
+            Self::DirectUdpDatagram => "direct_udp_datagram",
             Self::DirectQuicDatagram => "direct_quic_datagram",
             Self::DirectQuicStream => "direct_quic_stream",
             Self::DirectTcpStream => "direct_tcp_stream",
@@ -122,6 +125,7 @@ impl PathKind {
     #[must_use]
     pub fn from_wire_name(name: &str) -> Option<Self> {
         match name {
+            "direct_udp_datagram" => Some(Self::DirectUdpDatagram),
             "direct_quic_datagram" => Some(Self::DirectQuicDatagram),
             "direct_quic_stream" => Some(Self::DirectQuicStream),
             "direct_tcp_stream" => Some(Self::DirectTcpStream),
@@ -132,7 +136,7 @@ impl PathKind {
 
     #[must_use]
     pub const fn requires_quic_datagrams(self) -> bool {
-        matches!(self, Self::DirectQuicDatagram)
+        matches!(self, Self::DirectUdpDatagram | Self::DirectQuicDatagram)
     }
 }
 
@@ -158,6 +162,7 @@ mod tests {
     #[test]
     fn path_kind_wire_names_round_trip() {
         for path in [
+            PathKind::DirectUdpDatagram,
             PathKind::DirectQuicDatagram,
             PathKind::DirectQuicStream,
             PathKind::DirectTcpStream,
@@ -167,6 +172,7 @@ mod tests {
         }
 
         assert_eq!(PathKind::from_wire_name("unknown"), None);
+        assert!(PathKind::DirectUdpDatagram.requires_quic_datagrams());
         assert!(PathKind::DirectQuicDatagram.requires_quic_datagrams());
         assert!(!PathKind::DirectQuicStream.requires_quic_datagrams());
     }

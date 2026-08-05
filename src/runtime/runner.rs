@@ -857,12 +857,10 @@ async fn send_path_probes(
         if !peer_capabilities.contains(peer) {
             continue;
         }
-        let support = packet_transport_support_with_local_datagrams(
-            peer_capabilities,
-            peer,
-            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer)
-                .is_some(),
-        );
+        let datagram_backend =
+            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+        let support =
+            packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         if !paths.has_supported_path(peer, support) {
             continue;
         }
@@ -907,7 +905,7 @@ async fn send_path_probes(
                         Ok(_) => {
                             path_probe_tracker.record(
                                 peer,
-                                PathKind::DirectQuicDatagram,
+                                packet_datagram_backend_path_kind(backend),
                                 token,
                                 Instant::now(),
                             );
@@ -1860,6 +1858,10 @@ fn extend_runtime_path_summary_lines(lines: &mut Vec<String>, snapshot: &Runtime
         format!(
             "peers_without_supported_path {}",
             snapshot.path.peers_without_supported_path
+        ),
+        format!(
+            "healthy_direct_udp_datagram_paths {}",
+            snapshot.path.healthy_direct_udp_datagram_paths
         ),
         format!(
             "healthy_direct_quic_datagram_paths {}",
@@ -3905,6 +3907,13 @@ const fn packet_datagram_backend_name(backend: PacketDatagramBackend) -> &'stati
     }
 }
 
+const fn packet_datagram_backend_path_kind(backend: PacketDatagramBackend) -> PathKind {
+    match backend {
+        PacketDatagramBackend::OwnedQuic => PathKind::DirectQuicDatagram,
+        PacketDatagramBackend::OwnedUdp => PathKind::DirectUdpDatagram,
+    }
+}
+
 #[derive(Debug)]
 enum PacketPlaneSendError {
     MissingUdpRuntime,
@@ -3946,8 +3955,7 @@ fn packet_transport_decision(
     let datagram_backend =
         local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
     let local_datagrams = datagram_backend.is_some();
-    let support =
-        packet_transport_support_with_local_datagrams(peer_capabilities, peer, local_datagrams);
+    let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     if let Some(path) = paths.best_supported_for(peer, support) {
         return if path.kind.requires_quic_datagrams() {
             PacketTransportDecision::PacketPlaneDatagram {
@@ -4013,7 +4021,7 @@ fn packet_plane_send_stream_fallback_path(
     paths
         .best_supported_for(
             peer,
-            packet_transport_support_with_local_datagrams(peer_capabilities, peer, false),
+            packet_transport_support_for_backend(peer_capabilities, peer, None),
         )
         .and_then(|path| (!path.kind.requires_quic_datagrams()).then_some(path.kind))
 }
@@ -4022,21 +4030,23 @@ fn packet_transport_support(
     peer_capabilities: &PeerCapabilities,
     peer: PeerId,
 ) -> PathTransportSupport {
-    packet_transport_support_with_local_datagrams(
-        peer_capabilities,
-        peer,
-        local_packet_data_plane().native_quic_datagrams,
-    )
+    PathTransportSupport {
+        udp_datagrams: false,
+        quic_datagrams: local_packet_data_plane().native_quic_datagrams
+            && peer_capabilities.supports_datagram_packet_path_for(peer),
+    }
 }
 
-fn packet_transport_support_with_local_datagrams(
+fn packet_transport_support_for_backend(
     peer_capabilities: &PeerCapabilities,
     peer: PeerId,
-    local_datagrams: bool,
+    backend: Option<PacketDatagramBackend>,
 ) -> PathTransportSupport {
     PathTransportSupport {
-        quic_datagrams: local_datagrams
-            && peer_capabilities.supports_datagram_packet_path_for(peer),
+        udp_datagrams: backend == Some(PacketDatagramBackend::OwnedUdp)
+            && peer_capabilities.supports_owned_udp_packet_plane_for(peer),
+        quic_datagrams: backend == Some(PacketDatagramBackend::OwnedQuic)
+            && peer_capabilities.supports_owned_quic_packet_plane_for(peer),
     }
 }
 
@@ -5661,7 +5671,7 @@ fn maybe_send_packet_plane_hello(
 fn has_direct_packet_plane_negotiation_path(paths: &PathSet, peer: PeerId) -> bool {
     paths
         .candidates_for(peer)
-        .any(|path| path.healthy && path.is_direct() && path.kind != PathKind::DirectQuicDatagram)
+        .any(|path| path.healthy && path.is_direct() && !path.kind.requires_quic_datagrams())
 }
 
 fn packet_plane_negotiation_backend(
@@ -5863,6 +5873,7 @@ async fn accept_packet_plane_hello(
         context.paths,
         context.metrics,
         remote_overlay,
+        backend,
         session.mtu,
     );
     log_runtime_event(
@@ -5950,6 +5961,7 @@ fn complete_packet_plane_hello(
         context.paths,
         context.metrics,
         remote_overlay,
+        pending.backend,
         session.mtu,
     );
     log_runtime_event(
@@ -5982,7 +5994,7 @@ struct PacketPlaneExpiryContext<'a> {
 fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
     let expired = context.packet_plane.expire_sessions(context.session_ttl);
     for session in expired {
-        handle_expired_packet_plane_session(context, &session, "owned_udp");
+        handle_expired_packet_plane_session(context, &session, PacketDatagramBackend::OwnedUdp);
     }
 
     let expired = context
@@ -5992,19 +6004,18 @@ fn expire_packet_plane_sessions(context: &mut PacketPlaneExpiryContext<'_>) {
             packet_plane_quic.expire_sessions(context.session_ttl)
         });
     for session in expired {
-        handle_expired_packet_plane_session(context, &session, "owned_quic");
+        handle_expired_packet_plane_session(context, &session, PacketDatagramBackend::OwnedQuic);
     }
 }
 
 fn handle_expired_packet_plane_session(
     context: &mut PacketPlaneExpiryContext<'_>,
     session: &PacketPlaneSessionSnapshot,
-    backend: &'static str,
+    backend: PacketDatagramBackend,
 ) {
     context.metrics.record_packet_plane_session_expired();
-    let change = context
-        .paths
-        .mark_unhealthy(session.peer, PathKind::DirectQuicDatagram);
+    let path = packet_datagram_backend_path_kind(backend);
+    let change = context.paths.mark_unhealthy(session.peer, path);
     record_path_selection_change(context.metrics, change);
     log_runtime_event(
         LogLevel::Info,
@@ -6013,7 +6024,7 @@ fn handle_expired_packet_plane_session(
             ("peer", &session.peer.to_string()),
             ("endpoint", &session.endpoint.to_string()),
             ("role", packet_plane_session_role_name(session.role)),
-            ("backend", backend),
+            ("backend", packet_datagram_backend_name(backend)),
         ],
     );
 
@@ -6040,9 +6051,14 @@ fn record_packet_plane_path_established(
     paths: &mut PathSet,
     metrics: &RuntimeMetrics,
     peer: PeerId,
+    backend: PacketDatagramBackend,
     mtu: u16,
 ) {
-    let change = paths.record_established_with_mtu(peer, PathKind::DirectQuicDatagram, Some(mtu));
+    let change = paths.record_established_with_mtu(
+        peer,
+        packet_datagram_backend_path_kind(backend),
+        Some(mtu),
+    );
     record_path_selection_change(metrics, change);
 }
 
@@ -6457,7 +6473,7 @@ fn record_path_established_and_maybe_send_packet_plane_hello(
     };
     let kind = path_kind_for_endpoint(endpoint);
     let remote_overlay = PeerId::from_libp2p(peer);
-    let selected_direct_negotiation_path = kind != PathKind::DirectQuicDatagram
+    let selected_direct_negotiation_path = !kind.requires_quic_datagrams()
         && change
             .current
             .is_some_and(|current| current.peer == remote_overlay && current.is_direct());
@@ -7336,11 +7352,7 @@ fn selected_path_mtu(
     let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
     let datagram_backend =
         local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
-    let support = packet_transport_support_with_local_datagrams(
-        peer_capabilities,
-        peer,
-        datagram_backend.is_some(),
-    );
+    let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     let path_mtu = paths
         .best_supported_for(peer, support)
         .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu));
@@ -7418,11 +7430,11 @@ fn maybe_confirm_path_mtu_probe(
     confirmed_mtu: u16,
     local_mtu: u16,
 ) {
-    let support = packet_transport_support_with_local_datagrams(peer_capabilities, peer, true);
+    let support = packet_transport_support_for_backend(peer_capabilities, peer, Some(backend));
     let Some(path) = paths.best_supported_for(peer, support) else {
         return;
     };
-    if path.kind != PathKind::DirectQuicDatagram {
+    if path.kind != packet_datagram_backend_path_kind(backend) {
         return;
     }
     let ceiling = selected_path_mtu_ceiling(
@@ -7458,9 +7470,10 @@ const fn initial_path_mtu(kind: PathKind, local_mtu: u16) -> u16 {
                 1_200
             }
         }
-        PathKind::DirectQuicDatagram | PathKind::DirectQuicStream | PathKind::DirectTcpStream => {
-            local_mtu
-        }
+        PathKind::DirectUdpDatagram
+        | PathKind::DirectQuicDatagram
+        | PathKind::DirectQuicStream
+        | PathKind::DirectTcpStream => local_mtu,
     }
 }
 
@@ -8120,7 +8133,7 @@ mod tests {
     fn packet_plane_test_capabilities(endpoint: std::net::SocketAddr) -> ControlCapabilities {
         let mut capabilities =
             ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true);
-        capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
+        capabilities.preferred_path = PathKind::DirectUdpDatagram.wire_name().to_owned();
         capabilities.packet_endpoint_candidates = vec![endpoint.to_string()];
         capabilities
     }
@@ -10776,14 +10789,14 @@ mod tests {
         ));
         paths.upsert(crate::path::PathCandidate::new(
             peer,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
         ));
 
         maybe_demote_packet_plane_path(
             &mut paths,
             &metrics,
             peer,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
             &PacketPlaneIoError::NoSession { peer },
         );
 
@@ -10810,7 +10823,7 @@ mod tests {
         ));
         paths.upsert(crate::path::PathCandidate::new(
             peer,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
         ));
 
         let error = PacketPlaneIoError::Datagram(PacketPlaneDatagramError::PayloadTooLarge {
@@ -10821,13 +10834,13 @@ mod tests {
             &mut paths,
             &metrics,
             peer,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
             &error,
         );
 
         assert_eq!(
             paths.best_for(peer).map(|candidate| candidate.kind),
-            Some(PathKind::DirectQuicDatagram)
+            Some(PathKind::DirectUdpDatagram)
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.packet_plane_path_demotions, 0);
@@ -10893,7 +10906,7 @@ mod tests {
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::DirectQuicStream);
-        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
 
         let mut packet_plane =
             PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("socket")])
@@ -13022,7 +13035,7 @@ mod tests {
             )
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -13138,7 +13151,7 @@ mod tests {
             .enqueue_tun_packet(&mut queues, packet.clone())
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -13232,6 +13245,7 @@ mod tests {
             .enqueue_tun_packet(&mut queues, packet.clone())
             .expect("queued");
         let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
         paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
@@ -13507,11 +13521,7 @@ mod tests {
             1_000,
         );
         let mut paths = PathSet::new();
-        paths.record_established_with_mtu(
-            remote_overlay,
-            PathKind::DirectQuicDatagram,
-            Some(1_200),
-        );
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectUdpDatagram, Some(1_200));
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -13580,11 +13590,7 @@ mod tests {
         );
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut paths = PathSet::new();
-        paths.record_established_with_mtu(
-            remote_overlay,
-            PathKind::DirectQuicDatagram,
-            Some(1_200),
-        );
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectUdpDatagram, Some(1_200));
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -13695,13 +13701,13 @@ mod tests {
         let mut sender_paths = PathSet::new();
         sender_paths.record_established_with_mtu(
             remote_overlay,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
             Some(1_000),
         );
         let mut receiver_paths = PathSet::new();
         receiver_paths.record_established_with_mtu(
             local_overlay,
-            PathKind::DirectQuicDatagram,
+            PathKind::DirectUdpDatagram,
             Some(1_280),
         );
         let mut sender_capabilities = PeerCapabilities::default();
@@ -13776,12 +13782,12 @@ mod tests {
         .await;
 
         assert_eq!(
-            sender_paths.path_mtu(remote_overlay, PathKind::DirectQuicDatagram),
+            sender_paths.path_mtu(remote_overlay, PathKind::DirectUdpDatagram),
             Some(1_064)
         );
         assert!(
             sender_paths
-                .path_rtt(remote_overlay, PathKind::DirectQuicDatagram)
+                .path_rtt(remote_overlay, PathKind::DirectUdpDatagram)
                 .is_some()
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -13822,11 +13828,7 @@ mod tests {
         );
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut paths = PathSet::new();
-        paths.record_established_with_mtu(
-            remote_overlay,
-            PathKind::DirectQuicDatagram,
-            Some(1_000),
-        );
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectUdpDatagram, Some(1_000));
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -13860,7 +13862,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            paths.path_mtu(remote_overlay, PathKind::DirectQuicDatagram),
+            paths.path_mtu(remote_overlay, PathKind::DirectUdpDatagram),
             Some(1_200)
         );
     }
@@ -14010,14 +14012,14 @@ mod tests {
                 .best_for(responder_overlay)
                 .expect("initiator path")
                 .kind,
-            PathKind::DirectQuicDatagram
+            PathKind::DirectUdpDatagram
         );
         assert_eq!(
             responder_paths
                 .best_for(initiator_overlay)
                 .expect("responder path")
                 .kind,
-            PathKind::DirectQuicDatagram
+            PathKind::DirectUdpDatagram
         );
         assert_eq!(initiator_session.mtu, 1200);
         assert_eq!(responder_session.mtu, 1200);
@@ -14360,7 +14362,7 @@ mod tests {
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
@@ -14370,7 +14372,7 @@ mod tests {
             packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay),
             PacketTransportDecision::Blocked {
                 reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
-                best_path: Some(PathKind::DirectQuicDatagram)
+                best_path: Some(PathKind::DirectUdpDatagram)
             }
         );
     }
@@ -14394,6 +14396,7 @@ mod tests {
         assert_eq!(
             packet_transport_support(&peer_capabilities, remote_overlay),
             PathTransportSupport {
+                udp_datagrams: false,
                 quic_datagrams: false
             }
         );
@@ -14742,7 +14745,7 @@ mod tests {
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut paths = PathSet::new();
         paths.record_established(stream_overlay, PathKind::DirectQuicStream);
-        paths.record_established(datagram_overlay, PathKind::DirectQuicDatagram);
+        paths.record_established(datagram_overlay, PathKind::DirectUdpDatagram);
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             stream_overlay,
@@ -14754,7 +14757,8 @@ mod tests {
 
         let stats = runtime_path_stats(&forwarder, &paths, &peer_capabilities);
 
-        assert_eq!(stats.healthy_direct_quic_datagram_paths, 1);
+        assert_eq!(stats.healthy_direct_udp_datagram_paths, 1);
+        assert_eq!(stats.healthy_direct_quic_datagram_paths, 0);
         assert_eq!(stats.healthy_direct_quic_stream_paths, 1);
         assert_eq!(stats.peers_with_supported_path, 1);
         assert_eq!(stats.peers_without_supported_path, 1);

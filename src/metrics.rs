@@ -1888,6 +1888,10 @@ impl RuntimeSnapshot {
     fn extend_path_and_queue_lines(&self, lines: &mut Vec<String>) {
         lines.extend([
             format!(
+                "path_healthy_direct_udp_datagram_paths {}",
+                self.path.healthy_direct_udp_datagram_paths
+            ),
+            format!(
                 "path_healthy_direct_quic_datagram_paths {}",
                 self.path.healthy_direct_quic_datagram_paths
             ),
@@ -2300,12 +2304,13 @@ mod tests {
 
     fn populated_path_stats() -> PathRuntimeStats {
         PathRuntimeStats {
-            healthy_direct_quic_datagram_paths: 1,
-            healthy_direct_quic_stream_paths: 2,
-            healthy_direct_tcp_stream_paths: 3,
-            healthy_relay_paths: 4,
-            peers_with_supported_path: 5,
-            peers_without_supported_path: 6,
+            healthy_direct_udp_datagram_paths: 1,
+            healthy_direct_quic_datagram_paths: 2,
+            healthy_direct_quic_stream_paths: 3,
+            healthy_direct_tcp_stream_paths: 4,
+            healthy_relay_paths: 5,
+            peers_with_supported_path: 6,
+            peers_without_supported_path: 7,
         }
     }
 
@@ -2369,7 +2374,7 @@ mod tests {
         assert!(lines.contains(&"p2p_vpn_tun_read_packets 1".to_owned()));
         assert!(lines.contains(&"p2p_vpn_tun_read_bytes 20".to_owned()));
         assert!(lines.contains(&"p2p_vpn_queue_queued_packets 2".to_owned()));
-        assert!(lines.contains(&"p2p_vpn_path_peers_with_supported_path 5".to_owned()));
+        assert!(lines.contains(&"p2p_vpn_path_peers_with_supported_path 6".to_owned()));
     }
 
     #[test]
@@ -2545,6 +2550,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn metrics_snapshot_reports_runtime_and_queue_counters() {
         let snapshot = populated_snapshot();
 
@@ -2641,12 +2647,13 @@ mod tests {
         assert_eq!(snapshot.discovered_addresses_expired, 2);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
-        assert_eq!(snapshot.path.healthy_direct_quic_datagram_paths, 1);
-        assert_eq!(snapshot.path.healthy_direct_quic_stream_paths, 2);
-        assert_eq!(snapshot.path.healthy_direct_tcp_stream_paths, 3);
-        assert_eq!(snapshot.path.healthy_relay_paths, 4);
-        assert_eq!(snapshot.path.peers_with_supported_path, 5);
-        assert_eq!(snapshot.path.peers_without_supported_path, 6);
+        assert_eq!(snapshot.path.healthy_direct_udp_datagram_paths, 1);
+        assert_eq!(snapshot.path.healthy_direct_quic_datagram_paths, 2);
+        assert_eq!(snapshot.path.healthy_direct_quic_stream_paths, 3);
+        assert_eq!(snapshot.path.healthy_direct_tcp_stream_paths, 4);
+        assert_eq!(snapshot.path.healthy_relay_paths, 5);
+        assert_eq!(snapshot.path.peers_with_supported_path, 6);
+        assert_eq!(snapshot.path.peers_without_supported_path, 7);
     }
 
     #[test]
@@ -2780,12 +2787,13 @@ mod tests {
             "outbound_queue_blocked_no_supported_path_events 1",
         );
         assert_metric_line(&snapshot, "outbound_queue_blocked_packet_window_events 1");
-        assert_metric_line(&snapshot, "path_healthy_direct_quic_datagram_paths 1");
-        assert_metric_line(&snapshot, "path_healthy_direct_quic_stream_paths 2");
-        assert_metric_line(&snapshot, "path_healthy_direct_tcp_stream_paths 3");
-        assert_metric_line(&snapshot, "path_healthy_relay_paths 4");
-        assert_metric_line(&snapshot, "path_peers_with_supported_path 5");
-        assert_metric_line(&snapshot, "path_peers_without_supported_path 6");
+        assert_metric_line(&snapshot, "path_healthy_direct_udp_datagram_paths 1");
+        assert_metric_line(&snapshot, "path_healthy_direct_quic_datagram_paths 2");
+        assert_metric_line(&snapshot, "path_healthy_direct_quic_stream_paths 3");
+        assert_metric_line(&snapshot, "path_healthy_direct_tcp_stream_paths 4");
+        assert_metric_line(&snapshot, "path_healthy_relay_paths 5");
+        assert_metric_line(&snapshot, "path_peers_with_supported_path 6");
+        assert_metric_line(&snapshot, "path_peers_without_supported_path 7");
         assert_metric_line(&snapshot, "queue_expired_packets 2");
         assert_metric_line(&snapshot, "queue_expired_bytes 60");
     }

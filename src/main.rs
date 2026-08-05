@@ -3005,9 +3005,10 @@ const fn configured_path_mtu_estimate(kind: PathKind, mtu: u16) -> u16 {
                 1_200
             }
         }
-        PathKind::DirectQuicDatagram | PathKind::DirectQuicStream | PathKind::DirectTcpStream => {
-            mtu
-        }
+        PathKind::DirectUdpDatagram
+        | PathKind::DirectQuicDatagram
+        | PathKind::DirectQuicStream
+        | PathKind::DirectTcpStream => mtu,
     }
 }
 
@@ -5758,6 +5759,7 @@ async fn shutdown_signal() -> ShutdownReason {
 
 fn path_name(path: PathKind) -> &'static str {
     match path {
+        PathKind::DirectUdpDatagram => "direct UDP datagram",
         PathKind::DirectQuicDatagram => "direct QUIC datagram",
         PathKind::DirectQuicStream => "direct QUIC stream",
         PathKind::DirectTcpStream => "direct TCP stream",

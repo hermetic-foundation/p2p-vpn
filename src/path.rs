@@ -62,6 +62,7 @@ impl PathCandidate {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PathTransportSupport {
+    pub udp_datagrams: bool,
     pub quic_datagrams: bool,
 }
 
@@ -69,13 +70,18 @@ impl PathTransportSupport {
     #[must_use]
     pub const fn stream_fallback() -> Self {
         Self {
+            udp_datagrams: false,
             quic_datagrams: false,
         }
     }
 
     #[must_use]
     pub const fn supports(self, kind: PathKind) -> bool {
-        !kind.requires_quic_datagrams() || self.quic_datagrams
+        match kind {
+            PathKind::DirectUdpDatagram => self.udp_datagrams,
+            PathKind::DirectQuicDatagram => self.quic_datagrams,
+            PathKind::DirectQuicStream | PathKind::DirectTcpStream | PathKind::CircuitRelay => true,
+        }
     }
 }
 
@@ -111,6 +117,7 @@ impl PathSelectionChange {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PathRuntimeStats {
+    pub healthy_direct_udp_datagram_paths: u64,
     pub healthy_direct_quic_datagram_paths: u64,
     pub healthy_direct_quic_stream_paths: u64,
     pub healthy_direct_tcp_stream_paths: u64,
@@ -144,6 +151,7 @@ impl PathSet {
         self.best_supported_for(
             peer,
             PathTransportSupport {
+                udp_datagrams: true,
                 quic_datagrams: true,
             },
         )
@@ -329,6 +337,7 @@ impl PathSet {
         let mut stats = PathRuntimeStats::default();
         for candidate in self.candidates.iter().filter(|candidate| candidate.healthy) {
             match candidate.kind {
+                PathKind::DirectUdpDatagram => stats.healthy_direct_udp_datagram_paths += 1,
                 PathKind::DirectQuicDatagram => stats.healthy_direct_quic_datagram_paths += 1,
                 PathKind::DirectQuicStream => stats.healthy_direct_quic_stream_paths += 1,
                 PathKind::DirectTcpStream => stats.healthy_direct_tcp_stream_paths += 1,
@@ -431,6 +440,7 @@ mod tests {
                 .best_supported_for(
                     peer(1),
                     PathTransportSupport {
+                        udp_datagrams: false,
                         quic_datagrams: true
                     }
                 )
@@ -629,6 +639,7 @@ mod tests {
         let stats =
             paths.runtime_stats_for_peers([peer(1), peer(2), peer(3), peer(4)], |candidate_peer| {
                 PathTransportSupport {
+                    udp_datagrams: false,
                     quic_datagrams: candidate_peer == peer(3),
                 }
             });
@@ -636,6 +647,7 @@ mod tests {
         assert_eq!(
             stats,
             PathRuntimeStats {
+                healthy_direct_udp_datagram_paths: 0,
                 healthy_direct_quic_datagram_paths: 1,
                 healthy_direct_quic_stream_paths: 1,
                 healthy_direct_tcp_stream_paths: 0,

@@ -234,6 +234,9 @@ when a fallback libp2p connection is still up, and records
 `packet_plane_path_recovery_dial_failures`.
 The drain decision is explicit: owned UDP packet-plane datagram, owned QUIC
 packet-plane datagram, libp2p stream fallback, or blocked with a reason. The
+daemon tracks owned UDP and owned QUIC packet-plane health as separate
+`direct_udp_datagram` and `direct_quic_datagram` path kinds, including separate
+MTU, RTT, expiry, demotion, and metrics state. The
 locked libp2p 0.56 / libp2p-quic 0.13.1 transport disables QUIC datagram
 receive buffers internally and exposes only stream muxing through the libp2p
 `Swarm`, so the daemon's local native-libp2p datagram capability gate remains
@@ -1351,7 +1354,9 @@ the other packet-plane datagram parser/session failures), rate-limited inbound
 frames, expired outbound queue packets, stream fallback sends, attempted native
 QUIC datagram sends, datagram-unavailable queue stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
-fallbacks to relay, packet-plane path demotions, relay reservation/circuit
+fallbacks to relay, backend-specific healthy path counters such as
+`path_healthy_direct_udp_datagram_paths` and
+`path_healthy_direct_quic_datagram_paths`, packet-plane path demotions, relay reservation/circuit
 counts including client-side `relay_reservations_lost`, auto-relay
 candidate/reservation attempt/failure counts,
 auto-relay infrastructure discovery query, candidate, dial, and failure counts, packet-plane
