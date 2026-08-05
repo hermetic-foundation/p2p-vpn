@@ -73,7 +73,10 @@ For DCUtR or path-promotion failures, check peer logs for `event=dcutr_enabled`,
 For packet-plane failures, check for `event=packet_plane_session_established`,
 `backend=owned_quic` when testing owned QUIC, positive
 `path_healthy_direct_quic_datagram_paths`, and positive packet counters such as
-`outbound_quic_datagram_packets` or `inbound_accepted_packets`.
+`outbound_quic_datagram_packets` or `inbound_accepted_packets`. Use
+`p2p-vpn daemon-paths --socket ...` or `p2p-vpn daemon-state --socket ...` to
+compare `observed_rtt_ms` across healthy path candidates after packet-plane
+path probes have started flowing.
 
 ## Public Relay Smoke
 

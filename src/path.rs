@@ -263,12 +263,34 @@ impl PathSet {
         false
     }
 
+    pub fn record_rtt(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        rtt_ms: u16,
+    ) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
+        let candidate = self.candidates.iter_mut().find(|candidate| {
+            candidate.peer == peer && candidate.kind == kind && candidate.healthy
+        })?;
+        candidate.observed_rtt_ms = Some(rtt_ms);
+        self.selection_change(peer, previous)
+    }
+
     #[must_use]
     pub fn path_mtu(&self, peer: PeerId, kind: PathKind) -> Option<u16> {
         self.candidates
             .iter()
             .find(|candidate| candidate.peer == peer && candidate.kind == kind)
             .and_then(|candidate| candidate.estimated_mtu)
+    }
+
+    #[must_use]
+    pub fn path_rtt(&self, peer: PeerId, kind: PathKind) -> Option<u16> {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .and_then(|candidate| candidate.observed_rtt_ms)
     }
 
     fn selection_change(
@@ -570,6 +592,30 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectQuicDatagram);
         assert!(!paths.raise_path_mtu(peer(1), PathKind::DirectQuicDatagram, 1300, 1400));
+    }
+
+    #[test]
+    fn rtt_updates_can_change_selected_path() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::DirectQuicDatagram);
+        paths.record_established(peer(1), PathKind::DirectQuicStream);
+
+        let change = paths
+            .record_rtt(peer(1), PathKind::DirectQuicDatagram, 900)
+            .expect("high datagram rtt should change selected path");
+
+        assert_eq!(
+            paths.path_rtt(peer(1), PathKind::DirectQuicDatagram),
+            Some(900)
+        );
+        assert_eq!(
+            change.previous.map(|path| path.kind),
+            Some(PathKind::DirectQuicDatagram)
+        );
+        assert_eq!(
+            change.current.map(|path| path.kind),
+            Some(PathKind::DirectQuicStream)
+        );
     }
 
     #[test]
