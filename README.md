@@ -548,6 +548,11 @@ To run only the owned QUIC packet-plane case:
 nix run .#tun-e2e -- tun_namespace_ping_crosses_owned_quic_packet_plane -- --ignored --exact --nocapture
 ```
 
+Set `P2P_VPN_TUN_E2E_KEEP_TEMP=1` to preserve generated configs and per-node
+logs after successful namespace runs. See
+[`docs/network-debugging.md`](docs/network-debugging.md) for focused repro and
+artifact-inspection commands.
+
 Recorded namespace E2E smoke evidence is kept in
 `docs/namespace-e2e-smoke.md`.
 

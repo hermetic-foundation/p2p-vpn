@@ -30,6 +30,7 @@ use p2p_vpn::{
 };
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
+const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
@@ -230,7 +231,7 @@ fn run_direct_orchestrator(test_name: &str) {
         assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
         assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
     }
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn run_mdns_orchestrator() {
@@ -304,7 +305,7 @@ fn run_mdns_orchestrator() {
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
     assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn run_relay_orchestrator() {
@@ -391,7 +392,7 @@ fn run_relay_orchestrator() {
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log"))
     );
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn run_invite_relay_orchestrator() {
@@ -488,7 +489,7 @@ fn run_invite_relay_orchestrator() {
         initiator_log.contains("control capabilities accepted"),
         "invite-imported node did not exchange accepted capabilities\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn run_relay_promotion_orchestrator() {
@@ -591,7 +592,7 @@ fn run_relay_promotion_orchestrator() {
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
     assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn run_dht_orchestrator() {
@@ -682,7 +683,7 @@ fn run_dht_orchestrator() {
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
     assert_packet_plane_datagrams_used("node B", &responder_log, &initiator_log);
-    let _ = fs::remove_dir_all(temp_dir);
+    cleanup_temp_dir(temp_dir);
 }
 
 fn assert_ping_success(
@@ -707,6 +708,22 @@ fn assert_ping_success(
         read_log(&temp_dir.join("node-a.log")),
         read_log(&temp_dir.join("node-b.log")),
     );
+}
+
+fn cleanup_temp_dir(temp_dir: PathBuf) {
+    if keep_temp_artifacts() {
+        eprintln!(
+            "preserving namespace E2E artifacts at {}",
+            temp_dir.display()
+        );
+    } else {
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+}
+
+fn keep_temp_artifacts() -> bool {
+    env::var(KEEP_TEMP_ENV)
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 fn assert_packet_plane_datagrams_used(context: &str, log: &str, peer_log: &str) {
