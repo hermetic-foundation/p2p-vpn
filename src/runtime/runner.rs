@@ -2860,11 +2860,13 @@ impl DiscoveredPeerAddresses {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OverlayMembership {
     peers: HashSet<Libp2pPeerId>,
+    configured_infrastructure_peers: HashSet<Libp2pPeerId>,
 }
 
 impl OverlayMembership {
     pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
         let mut peers = HashSet::new();
+        let mut configured_infrastructure_peers = HashSet::new();
         peers.insert(
             config
                 .network
@@ -2878,26 +2880,26 @@ impl OverlayMembership {
         }
 
         for peer in &config.network.bootstrap_peers {
-            peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
+            configured_infrastructure_peers
+                .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
         }
 
-        for (_, address) in config
-            .bootstrap_multiaddrs()?
-            .into_iter()
-            .chain(config.peer_multiaddrs()?)
-        {
+        for (_, address) in config.peer_multiaddrs()? {
             if let Some(peer) = relay_peer_from_relayed_address(&address) {
-                peers.insert(peer);
+                configured_infrastructure_peers.insert(peer);
             }
         }
 
         for address in config.relay_reservation_multiaddrs()? {
             if let Some(peer) = relay_peer_from_relayed_address(&address) {
-                peers.insert(peer);
+                configured_infrastructure_peers.insert(peer);
             }
         }
 
-        Ok(Self { peers })
+        Ok(Self {
+            peers,
+            configured_infrastructure_peers,
+        })
     }
 
     #[must_use]
@@ -2906,8 +2908,19 @@ impl OverlayMembership {
     }
 
     #[must_use]
+    fn allows_configured_infrastructure(&self, peer: Libp2pPeerId) -> bool {
+        self.configured_infrastructure_peers.contains(&peer)
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
         self.peers.len()
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    fn configured_infrastructure_len(&self) -> usize {
+        self.configured_infrastructure_peers.len()
     }
 
     #[must_use]
@@ -5705,7 +5718,7 @@ fn authorize_established_connection(
         return EstablishedConnectionAuthorization::OverlayPeer;
     }
 
-    if infrastructure_peers.contains(peer) {
+    if membership.allows_configured_infrastructure(peer) || infrastructure_peers.contains(peer) {
         return EstablishedConnectionAuthorization::InfrastructurePeer;
     }
 
@@ -8540,7 +8553,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_membership_includes_local_peers_bootstrap_and_relay_peers() {
+    fn overlay_membership_separates_vpn_peers_from_configured_infrastructure() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let local = local_identity
             .peer_id
@@ -8594,12 +8607,16 @@ mod tests {
 
         let membership = OverlayMembership::from_config(&config).expect("membership");
 
-        assert_eq!(membership.len(), 5);
+        assert_eq!(membership.len(), 2);
+        assert_eq!(membership.configured_infrastructure_len(), 3);
         assert!(membership.allows(local));
         assert!(membership.allows(configured));
-        assert!(membership.allows(bootstrap));
-        assert!(membership.allows(relay));
-        assert!(membership.allows(peer_address_relay));
+        assert!(!membership.allows(bootstrap));
+        assert!(!membership.allows(relay));
+        assert!(!membership.allows(peer_address_relay));
+        assert!(membership.allows_configured_infrastructure(bootstrap));
+        assert!(membership.allows_configured_infrastructure(relay));
+        assert!(membership.allows_configured_infrastructure(peer_address_relay));
         assert!(!membership.allows(peer_id()));
     }
 
@@ -8658,6 +8675,7 @@ mod tests {
         let rejected = peer_id();
         let membership = OverlayMembership {
             peers: HashSet::from([allowed]),
+            configured_infrastructure_peers: HashSet::new(),
         };
         let mut infrastructure_peers = InfrastructurePeers::default();
         assert!(
@@ -8674,6 +8692,40 @@ mod tests {
             authorize_established_connection(&membership, &infrastructure_peers, &metrics, allowed),
             EstablishedConnectionAuthorization::OverlayPeer,
         );
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                infrastructure,
+            ),
+            EstablishedConnectionAuthorization::InfrastructurePeer,
+        );
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                rejected
+            ),
+            EstablishedConnectionAuthorization::Rejected,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.unauthorized_connections_dropped, 1);
+    }
+
+    #[test]
+    fn configured_infrastructure_connections_are_admitted_without_overlay_membership() {
+        let infrastructure = peer_id();
+        let rejected = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::new(),
+            configured_infrastructure_peers: HashSet::from([infrastructure]),
+        };
+        let infrastructure_peers = InfrastructurePeers::default();
+        let metrics = RuntimeMetrics::default();
+
         assert_eq!(
             authorize_established_connection(
                 &membership,
@@ -8743,6 +8795,7 @@ mod tests {
         assert!(infrastructure_peers.insert(peer, address));
         let membership = OverlayMembership {
             peers: HashSet::from([peer]),
+            configured_infrastructure_peers: HashSet::new(),
         };
         let metrics = RuntimeMetrics::default();
 

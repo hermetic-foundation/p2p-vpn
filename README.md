@@ -31,12 +31,14 @@ requirements. A relay that proves reservation and relayed-circuit fallback is
 still not proof that public-relay-assisted DCUtR will complete, because direct
 promotion depends on the relay, transport, and both peers' NAT/path topology.
 
-Runtime connections are membership-filtered before they are used for control or
-packet forwarding. The local peer, configured VPN peers, configured bootstrap
-peers, and relay peers named in reservation addresses are allowed to remain
-connected; other peers are disconnected and counted as unauthorized connection
-drops. This connection-level membership does not grant routing authority:
-packet source ownership is still checked separately against configured routes.
+Runtime connections are role-filtered before they are used for control or packet
+forwarding. The local peer and configured VPN peers are overlay members.
+Configured bootstrap peers, relay reservation peers, and relays embedded in
+relayed peer addresses are reachability infrastructure only: they may remain
+connected for discovery, AutoNAT, relay, or DCUtR support, but they do not gain
+overlay control, service, packet forwarding, or route authority. Other peers are
+disconnected and counted as unauthorized connection drops. Packet source
+ownership is checked separately against configured routes.
 An optional `network.membership_key` adds overlay-wide membership proof for
 configured peers. The base64 key is never sent on the wire; peers exchange a
 network-scoped SHA-256 membership tag in the control handshake and reject
