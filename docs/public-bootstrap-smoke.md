@@ -293,3 +293,26 @@ out during relay reservation; the larger unbounded run in the same environment
 validated 17 host-reachable candidates with zero DCUtR successes. Several
 candidates established relayed circuits, but direct hole-punch dials still
 ended in `HandshakeTimedOut` or direct TCP timeout from this host.
+
+Additional DCUtR-required public scan evidence on 2026-08-04:
+
+```text
+$ nix develop -c cargo run --quiet -- relay-scan --ipfs-bootstrap-peers --check-candidates --require-dcutr-success --timeout-seconds 45 --candidate-timeout-seconds 20 --max-candidates 12 --max-validation-candidates 6
+public relay scan: ok
+public relay scan total_peers: 16
+public relay scan routing_peers: 11 dialed 0
+public relay candidates: 12
+public relay scan validation limited: 6 of 12 host-reachable candidates
+public relay scan validation: public relay probe: failed
+public relay scan validation: public relay probe mode: dcutr_success
+public relay scan validation: public relay candidates: 6 succeeded 0
+public relay scan validation: public relay candidate failure stages: candidate_setup 0 relay_reservation 5 relayed_peer_circuit 0 dcutr_success 1
+public relay scan validation: public relay candidate detail: relayed peer circuits: 1 connected 1
+public relay scan validation: public relay candidate detail: dcutr last_error: direct_dial: Transport([(/ip4/216.114.103.137/tcp/26649/p2p/12D3KooWKrZ4gn9B72QdxqKVnM937mUiTa4trNrRqFA8sxUMAmPE, Other(Custom { kind: Other, error: Timeout }))])
+```
+
+This confirms the public scan path can reach a public relay, establish a relayed
+peer circuit, and then fail specifically at the direct DCUtR dial from this
+host. It keeps public-relay-assisted DCUtR success unproven, but narrows the
+remaining live gap to NAT/path conditions rather than relay discovery or relayed
+circuit setup.

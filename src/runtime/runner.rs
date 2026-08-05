@@ -705,6 +705,7 @@ where
                     queue: queues.total_stats(),
                     path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
+                    relay_infrastructure: infrastructure_peers.snapshot(&node.swarm),
                     packet_plane: packet_plane.snapshot(),
                     packet_plane_quic: current_packet_plane_quic_snapshot(
                         packet_plane_quic.as_ref(),
@@ -917,6 +918,7 @@ struct RuntimeControlContext<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
+    relay_infrastructure: RelayInfrastructureSnapshot,
     packet_plane: PacketPlaneSnapshot,
     packet_plane_quic: PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
@@ -952,6 +954,7 @@ fn handle_runtime_control_request(
                 queue: context.queue,
                 path_stats: context.path_stats,
                 packet_in_flight: context.packet_in_flight,
+                relay_infrastructure: &context.relay_infrastructure,
                 packet_plane: &context.packet_plane,
                 packet_plane_quic: &context.packet_plane_quic,
                 packet_plane_session_ttl: context.packet_plane_session_ttl,
@@ -1443,6 +1446,7 @@ struct RuntimeStateView<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
+    relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
@@ -1465,6 +1469,7 @@ fn runtime_state_lines(view: RuntimeStateView<'_>) -> Vec<String> {
         validated_peers: view.peer_capabilities.len(),
         replay_windows: view.forwarder.replay_window_count(),
         packet_in_flight: view.packet_in_flight,
+        relay_infrastructure: view.relay_infrastructure,
         packet_plane: view.packet_plane,
         packet_plane_quic: view.packet_plane_quic,
         packet_plane_session_ttl: view.packet_plane_session_ttl,
@@ -1493,6 +1498,7 @@ struct RuntimeStateSummaryView<'a> {
     validated_peers: usize,
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
+    relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
@@ -1546,6 +1552,7 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
     ];
     extend_runtime_discovery_summary_lines(&mut lines, snapshot);
     extend_runtime_path_summary_lines(&mut lines, snapshot);
+    extend_runtime_relay_infrastructure_lines(&mut lines, view.relay_infrastructure);
     extend_runtime_packet_plane_summary_lines(&mut lines, view.packet_plane);
     extend_runtime_packet_plane_quic_summary_lines(&mut lines, view.packet_plane_quic);
     lines
@@ -1646,6 +1653,22 @@ fn extend_runtime_path_summary_lines(lines: &mut Vec<String>, snapshot: &Runtime
         ),
         format!("healthy_relay_paths {}", snapshot.path.healthy_relay_paths),
     ]);
+}
+
+fn extend_runtime_relay_infrastructure_lines(
+    lines: &mut Vec<String>,
+    relay_infrastructure: &RelayInfrastructureSnapshot,
+) {
+    lines.push(format!(
+        "relay_infrastructure_peers {}",
+        relay_infrastructure.peers.len()
+    ));
+    for peer in &relay_infrastructure.peers {
+        lines.push(format!(
+            "relay_infrastructure_peer {} address {} connected {}",
+            peer.peer, peer.address, peer.connected
+        ));
+    }
 }
 
 fn extend_runtime_packet_plane_summary_lines(
@@ -2152,6 +2175,18 @@ struct InfrastructurePeers {
     peers: HashMap<Libp2pPeerId, Multiaddr>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RelayInfrastructureSnapshot {
+    peers: Vec<RelayInfrastructurePeerSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RelayInfrastructurePeerSnapshot {
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+    connected: bool,
+}
+
 impl InfrastructurePeers {
     fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
         if self.peers.contains_key(&peer) || self.peers.len() >= AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS
@@ -2169,6 +2204,20 @@ impl InfrastructurePeers {
 
     fn remove(&mut self, peer: Libp2pPeerId) -> bool {
         self.peers.remove(&peer).is_some()
+    }
+
+    fn snapshot(&self, swarm: &Swarm<Behaviour>) -> RelayInfrastructureSnapshot {
+        let mut peers = self
+            .peers
+            .iter()
+            .map(|(peer, address)| RelayInfrastructurePeerSnapshot {
+                peer: *peer,
+                address: address.clone(),
+                connected: swarm.is_connected(peer),
+            })
+            .collect::<Vec<_>>();
+        peers.sort_by_key(|peer| peer.peer.to_string());
+        RelayInfrastructureSnapshot { peers }
     }
 }
 
@@ -6670,6 +6719,36 @@ mod tests {
         capabilities
     }
 
+    fn test_relay_infrastructure_snapshot() -> (Libp2pPeerId, Multiaddr, RelayInfrastructureSnapshot)
+    {
+        let peer = peer_id();
+        let address: Multiaddr = format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("relay infrastructure address");
+        let snapshot = RelayInfrastructureSnapshot {
+            peers: vec![RelayInfrastructurePeerSnapshot {
+                peer,
+                address: address.clone(),
+                connected: true,
+            }],
+        };
+        (peer, address, snapshot)
+    }
+
+    fn test_packet_plane_snapshot(peer: PeerId) -> PacketPlaneSnapshot {
+        PacketPlaneSnapshot {
+            listeners: vec!["127.0.0.1:51820".parse::<SocketAddr>().expect("listener")],
+            sessions: vec![PacketPlaneSessionSnapshot {
+                peer,
+                endpoint: "127.0.0.1:51821".parse().expect("endpoint"),
+                mtu: 1200,
+                role: PacketPlaneSessionRole::Responder,
+                local_session_id: 13,
+                remote_session_id: 11,
+            }],
+        }
+    }
+
     fn config_with_peer(
         local_identity: &crate::identity::NodeIdentity,
         peer: Libp2pPeerId,
@@ -6874,6 +6953,7 @@ mod tests {
                 queue: crate::queue::QueueStats::default(),
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
+                relay_infrastructure: RelayInfrastructureSnapshot::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
                 packet_plane_quic: PacketPlaneQuicSnapshot::default(),
                 packet_plane_session_ttl: Duration::from_secs(42),
@@ -7116,17 +7196,9 @@ mod tests {
         metrics.record_dcutr_result(false);
         metrics.record_autonat_probe_scheduled();
         metrics.record_autonat_status(AutoNatReachability::Public);
-        let packet_plane = PacketPlaneSnapshot {
-            listeners: vec!["127.0.0.1:51820".parse::<SocketAddr>().expect("listener")],
-            sessions: vec![PacketPlaneSessionSnapshot {
-                peer: remote_overlay,
-                endpoint: "127.0.0.1:51821".parse().expect("endpoint"),
-                mtu: 1200,
-                role: PacketPlaneSessionRole::Responder,
-                local_session_id: 13,
-                remote_session_id: 11,
-            }],
-        };
+        let (infrastructure, infrastructure_address, relay_infrastructure) =
+            test_relay_infrastructure_snapshot();
+        let packet_plane = test_packet_plane_snapshot(remote_overlay);
 
         let lines = runtime_state_lines(RuntimeStateView {
             forwarder: &forwarder,
@@ -7141,6 +7213,7 @@ mod tests {
                 shards: 2,
                 limit_per_peer: 256,
             },
+            relay_infrastructure: &relay_infrastructure,
             packet_plane: &packet_plane,
             packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
             packet_plane_session_ttl: Duration::from_secs(90),
@@ -7171,6 +7244,10 @@ mod tests {
         assert!(lines.contains(&"outbound_path_mtu_probe_confirmations 1".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_no_supported_path_events 0".to_owned()));
         assert!(lines.contains(&"outbound_queue_blocked_packet_window_events 0".to_owned()));
+        assert!(lines.contains(&"relay_infrastructure_peers 1".to_owned()));
+        assert!(lines.contains(&format!(
+            "relay_infrastructure_peer {infrastructure} address {infrastructure_address} connected true"
+        )));
         assert!(lines.contains(&"packet_stream_fallback_in_flight 2".to_owned()));
         assert!(lines.contains(&"packet_stream_fallback_in_flight_peers 1".to_owned()));
         assert!(lines.contains(&"packet_stream_fallback_in_flight_shards 2".to_owned()));
