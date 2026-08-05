@@ -5,7 +5,7 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{PeerId as Libp2pPeerId, StreamProtocol, request_response};
 
 use crate::{
-    config::Config,
+    config::{Config, ConfigError},
     wire::{Frame, HEADER_LEN, Header, MAX_PAYLOAD_LEN},
 };
 
@@ -184,6 +184,14 @@ impl AuthorizedPeers {
         Self { peers }
     }
 
+    pub fn try_from_config(config: &Config) -> Result<Self, ConfigError> {
+        let mut authorized = Self::from_config(config);
+        for member in config.effective_membership()?.overlay_members() {
+            authorized.peers.insert(member.transport_peer);
+        }
+        Ok(authorized)
+    }
+
     #[must_use]
     pub fn allows(&self, peer: &Libp2pPeerId) -> bool {
         self.peers.contains(peer)
@@ -241,6 +249,8 @@ mod tests {
 
     use crate::{
         config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
+        identity::NodeIdentity,
+        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         wire::PayloadType,
     };
 
@@ -372,6 +382,66 @@ mod tests {
         };
 
         let authorized = AuthorizedPeers::from_config(&config);
+
+        assert!(authorized.allows(&remote));
+        assert!(!authorized.allows(&other));
+    }
+
+    #[test]
+    fn authorized_peers_include_member_record_overlay_members() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let remote = member.peer_id.parse().expect("member peer");
+        let other = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: Keypair::generate_ed25519()
+                    .public()
+                    .to_peer_id()
+                    .to_string(),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig {
+                max_packets_per_peer: 4,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("member record"),
+        ];
+
+        let authorized = AuthorizedPeers::try_from_config(&config).expect("authorized peers");
 
         assert!(authorized.allows(&remote));
         assert!(!authorized.allows(&other));

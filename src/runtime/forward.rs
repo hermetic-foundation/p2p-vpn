@@ -100,7 +100,7 @@ impl ReplayWindow {
 
 impl Forwarder {
     pub fn from_config(config: &Config) -> Result<Self, ForwardError> {
-        let peers = config
+        let mut peers: HashMap<PeerId, Libp2pPeerId> = config
             .peers
             .iter()
             .filter_map(|peer| {
@@ -108,6 +108,9 @@ impl Forwarder {
                 Some((PeerId::from_libp2p(libp2p_peer), libp2p_peer))
             })
             .collect();
+        for member in config.effective_membership()?.overlay_members() {
+            peers.insert(member.peer, member.transport_peer);
+        }
 
         let local_peer = config.local_peer_id()?;
 
@@ -115,7 +118,7 @@ impl Forwarder {
             local_peer,
             routes: config.compile_routes()?,
             peers,
-            authorized_peers: AuthorizedPeers::from_config(config),
+            authorized_peers: AuthorizedPeers::try_from_config(config)?,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
             max_replay_windows: MAX_REPLAY_WINDOWS,
@@ -606,6 +609,8 @@ mod tests {
         config::{
             InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig, RouteConfig,
         },
+        identity::NodeIdentity,
+        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         route::{builtin_ipv4, builtin_ipv6},
         runtime::p2p::{HostConfig, build_node},
         wire::Header,
@@ -658,6 +663,30 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    fn record_only_config_for(member: NodeIdentity, roles: Vec<MembershipRole>) -> Config {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let transport_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_for(transport_peer);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles,
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("member record"),
+        ];
+        config
     }
 
     fn local_ipv4(config: &Config) -> Ipv4Addr {
@@ -816,6 +845,80 @@ mod tests {
             !forwarder
                 .authorizes_advertised_routes(remote, &[ControlRoute::new("not-a-prefix", 0)])
         );
+    }
+
+    #[test]
+    fn advertised_routes_can_match_member_record_route_grants() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let remote = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_for(remote);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![
+                        MembershipRole::OverlayMember,
+                        MembershipRole::RouteAuthority,
+                    ],
+                    route_grants: vec![RouteConfig {
+                        prefix: "10.42.0.0/24".to_owned(),
+                        metric: 100,
+                    }],
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("member record"),
+        ];
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(
+            forwarder.authorizes_advertised_routes(remote, &[ControlRoute::new("10.42.0.0/24", 1)])
+        );
+        assert!(
+            !forwarder
+                .authorizes_advertised_routes(remote, &[ControlRoute::new("10.42.1.0/24", 1)])
+        );
+    }
+
+    #[test]
+    fn inbound_packet_accepts_member_record_peer_with_builtin_source() {
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let remote = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = record_only_config_for(member, vec![MembershipRole::OverlayMember]);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let frame = Frame::packet(0, 1, packet).expect("frame");
+
+        assert_eq!(
+            forwarder
+                .accept_inbound_packet(remote, &frame)
+                .expect("packet accepted"),
+            frame.payload.as_slice()
+        );
+    }
+
+    #[test]
+    fn inbound_packet_rejects_member_record_without_overlay_member_role() {
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let remote = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = record_only_config_for(member, vec![MembershipRole::RouteAuthority]);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let frame = Frame::packet(0, 1, packet).expect("frame");
+
+        assert!(matches!(
+            forwarder.accept_inbound_packet(remote, &frame),
+            Err(ForwardError::UnauthorizedPeer(peer)) if peer == remote
+        ));
     }
 
     #[test]

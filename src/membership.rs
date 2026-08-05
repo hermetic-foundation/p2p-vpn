@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libp2p::{PeerId as Libp2pPeerId, identity::PublicKey};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::RouteConfig, identity::NodeIdentity};
+use crate::{PeerId, config::RouteConfig, identity::NodeIdentity};
 
 pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
 
@@ -130,6 +132,79 @@ pub fn validate_membership_records_at(
     }
 
     Ok(())
+}
+
+pub fn effective_membership_at(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+    now_unix_seconds: u64,
+) -> Result<EffectiveMembership, MembershipRecordError> {
+    let mut members = HashMap::new();
+
+    for record in records {
+        record.verify_at(now_unix_seconds)?;
+        if record.payload.network_name != network_name {
+            return Err(MembershipRecordError::NetworkMismatch {
+                expected: network_name.to_owned(),
+                actual: record.payload.network_name.clone(),
+            });
+        }
+
+        let candidate = EffectiveMember::try_from_payload(&record.payload)?;
+        let replace = members
+            .get(&candidate.peer)
+            .is_none_or(|existing: &EffectiveMember| {
+                (candidate.membership_epoch, candidate.sequence)
+                    > (existing.membership_epoch, existing.sequence)
+            });
+        if replace {
+            members.insert(candidate.peer, candidate);
+        }
+    }
+
+    Ok(EffectiveMembership { members })
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EffectiveMembership {
+    members: HashMap<PeerId, EffectiveMember>,
+}
+
+impl EffectiveMembership {
+    pub fn overlay_members(&self) -> impl Iterator<Item = &EffectiveMember> {
+        self.members
+            .values()
+            .filter(|member| member.has_role(MembershipRole::OverlayMember))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectiveMember {
+    pub peer: PeerId,
+    pub transport_peer: Libp2pPeerId,
+    pub membership_epoch: u64,
+    pub sequence: u64,
+    pub roles: Vec<MembershipRole>,
+    pub route_grants: Vec<RouteConfig>,
+}
+
+impl EffectiveMember {
+    fn try_from_payload(payload: &MembershipRecordPayload) -> Result<Self, MembershipRecordError> {
+        let transport_peer = payload.member_peer.parse::<Libp2pPeerId>()?;
+        Ok(Self {
+            peer: PeerId::from_libp2p(transport_peer),
+            transport_peer,
+            membership_epoch: payload.membership_epoch,
+            sequence: payload.sequence,
+            roles: payload.roles.clone(),
+            route_grants: payload.route_grants.clone(),
+        })
+    }
+
+    #[must_use]
+    pub fn has_role(&self, role: MembershipRole) -> bool {
+        self.roles.contains(&role)
+    }
 }
 
 fn validate_payload(
@@ -377,5 +452,53 @@ mod tests {
             record.verify_at(1_500),
             Err(MembershipRecordError::ExpiredBeforeIssued)
         ));
+    }
+
+    #[test]
+    fn effective_membership_uses_latest_epoch_sequence() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let older = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 10,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("older");
+        let newer = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 2,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("newer");
+
+        let effective = effective_membership_at(&[older, newer], "lab", 1_500).expect("effective");
+        let members = effective.overlay_members().collect::<Vec<_>>();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].sequence, 2);
+        assert!(!members[0].has_role(MembershipRole::RouteAuthority));
+        assert!(members[0].route_grants.is_empty());
     }
 }

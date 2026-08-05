@@ -2879,6 +2879,10 @@ impl OverlayMembership {
             peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
         }
 
+        for member in config.effective_membership()?.overlay_members() {
+            peers.insert(member.transport_peer);
+        }
+
         for peer in &config.network.bootstrap_peers {
             configured_infrastructure_peers
                 .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
@@ -6968,6 +6972,8 @@ mod tests {
             BootstrapPeerConfig, Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig,
             RelayConfig, ResourceConfig, RouteConfig,
         },
+        identity::NodeIdentity,
+        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         route::builtin_ipv4,
         runtime::control::ControlRoute,
         runtime::packet_plane::{
@@ -8592,6 +8598,45 @@ mod tests {
         assert!(membership.allows_configured_infrastructure(relay));
         assert!(membership.allows_configured_infrastructure(peer_address_relay));
         assert!(!membership.allows(peer_id()));
+    }
+
+    #[test]
+    fn overlay_membership_accepts_member_record_peer() {
+        let local_identity = NodeIdentity::generate_ed25519().expect("local identity");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_with_peer(&local_identity, member_peer);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("member record"),
+        ];
+
+        let membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert_eq!(membership.len(), 2);
+        assert!(
+            membership.allows(
+                local_identity
+                    .peer_id
+                    .parse::<Libp2pPeerId>()
+                    .expect("local peer")
+            )
+        );
+        assert!(membership.allows(member_peer));
     }
 
     #[test]

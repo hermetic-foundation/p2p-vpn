@@ -55,10 +55,12 @@ signed membership records that bind an issuer peer ID and public key to a
 member peer ID and public key, membership epoch, sequence, roles, optional
 route grants, and optional expiry. Runtime config validation verifies the
 signatures, peer ID/public-key bindings, route-grant syntax, expiry, and
-network name before startup. Today these records are a validated authority
-primitive for the next membership workflow; configured peers and configured
-routes remain the operational VPN membership and route authority until record
-grant enforcement is wired into capability admission.
+network name before startup. Valid local records are an additional
+authorization source: `overlay_member` admits the peer for overlay control and
+packet traffic, while `route_authority` grants the listed route prefixes when
+the same latest record also carries `overlay_member`. `peers[]` and configured
+routes remain supported as the static compatibility model. Record exchange,
+revocation records, and dynamic distribution are still follow-up work.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.

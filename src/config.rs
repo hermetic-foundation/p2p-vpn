@@ -13,7 +13,10 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     PathKind, PeerId,
     identity::NodeIdentity,
-    membership::{MembershipRecordError, SignedMembershipRecord, validate_membership_records_at},
+    membership::{
+        EffectiveMembership, MembershipRecordError, MembershipRole, SignedMembershipRecord,
+        effective_membership_at, validate_membership_records_at,
+    },
     path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
     runtime::packet_plane::PACKET_PLANE_MAX_PAYLOAD_LEN,
@@ -81,6 +84,30 @@ impl Config {
                     prefix: route.prefix()?,
                     metric: route.metric,
                 })?;
+            }
+        }
+
+        let effective_membership = self.effective_membership()?;
+        for member in effective_membership.overlay_members() {
+            table.insert_authorized(Route {
+                owner: member.peer,
+                prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(member.peer)), 32)?,
+                metric: 0,
+            })?;
+            table.insert_authorized(Route {
+                owner: member.peer,
+                prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(member.peer)), 128)?,
+                metric: 0,
+            })?;
+
+            if member.has_role(MembershipRole::RouteAuthority) {
+                for route in &member.route_grants {
+                    table.insert_authorized(Route {
+                        owner: member.peer,
+                        prefix: route.prefix()?,
+                        metric: route.metric,
+                    })?;
+                }
             }
         }
 
@@ -281,6 +308,14 @@ impl Config {
             current_unix_seconds()?,
         )?;
         Ok(())
+    }
+
+    pub fn effective_membership(&self) -> Result<EffectiveMembership, ConfigError> {
+        Ok(effective_membership_at(
+            &self.network.member_records,
+            &self.network.name,
+            current_unix_seconds()?,
+        )?)
     }
 
     pub fn listen_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
@@ -1473,15 +1508,33 @@ mod tests {
         member: NodeIdentity,
         network_name: &str,
     ) -> crate::membership::SignedMembershipRecord {
+        signed_member_record_with_roles(
+            issuer,
+            member,
+            network_name,
+            vec![crate::membership::MembershipRole::OverlayMember],
+            Vec::new(),
+            1,
+        )
+    }
+
+    fn signed_member_record_with_roles(
+        issuer: &NodeIdentity,
+        member: NodeIdentity,
+        network_name: &str,
+        roles: Vec<crate::membership::MembershipRole>,
+        route_grants: Vec<RouteConfig>,
+        sequence: u64,
+    ) -> crate::membership::SignedMembershipRecord {
         crate::membership::issue_membership_record_at(
             issuer,
             crate::membership::MembershipRecordOptions {
                 network_name: network_name.to_owned(),
                 member,
                 membership_epoch: 1,
-                sequence: 1,
-                roles: vec![crate::membership::MembershipRole::OverlayMember],
-                route_grants: Vec::new(),
+                sequence,
+                roles,
+                route_grants,
                 expires_at_unix_seconds: None,
             },
             1_000,
@@ -1528,6 +1581,88 @@ mod tests {
             Err(ConfigError::MembershipRecord(
                 crate::membership::MembershipRecordError::NetworkMismatch { .. }
             ))
+        ));
+    }
+
+    #[test]
+    fn compile_routes_includes_member_record_overlay_builtin_routes() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_str(&member.peer_id).expect("member peer");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.network.member_records = vec![signed_member_record_for(&issuer, member, "lab")];
+
+        let routes = config.compile_routes().expect("routes");
+
+        assert!(routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(builtin_ipv4(member_peer)), 32).expect("cidr")
+        ));
+        assert!(routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V6(builtin_ipv6(member_peer)), 128).expect("cidr")
+        ));
+    }
+
+    #[test]
+    fn compile_routes_includes_member_record_route_grants() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_str(&member.peer_id).expect("member peer");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.network.member_records = vec![signed_member_record_with_roles(
+            &issuer,
+            member,
+            "lab",
+            vec![
+                crate::membership::MembershipRole::OverlayMember,
+                crate::membership::MembershipRole::RouteAuthority,
+            ],
+            vec![RouteConfig {
+                prefix: "10.77.0.0/24".to_owned(),
+                metric: 44,
+            }],
+            1,
+        )];
+
+        let routes = config.compile_routes().expect("routes");
+
+        assert!(routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 77, 0, 0)), 24).expect("cidr")
+        ));
+    }
+
+    #[test]
+    fn compile_routes_rejects_conflicting_member_record_grants() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.network.routes = vec![RouteConfig {
+            prefix: "10.77.0.0/24".to_owned(),
+            metric: 1,
+        }];
+        config.network.member_records = vec![signed_member_record_with_roles(
+            &issuer,
+            member,
+            "lab",
+            vec![
+                crate::membership::MembershipRole::OverlayMember,
+                crate::membership::MembershipRole::RouteAuthority,
+            ],
+            vec![RouteConfig {
+                prefix: "10.77.0.0/24".to_owned(),
+                metric: 44,
+            }],
+            1,
+        )];
+
+        assert!(matches!(
+            config.compile_routes(),
+            Err(ConfigError::Route(RouteError::ConflictingOwnership { .. }))
         ));
     }
 
