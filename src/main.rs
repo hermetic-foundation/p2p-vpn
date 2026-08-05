@@ -397,6 +397,26 @@ enum Command {
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
     },
+    DaemonHealth {
+        #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        timeout_seconds: u64,
+        #[arg(long)]
+        require_peers: bool,
+        #[arg(long)]
+        require_validated_peers: bool,
+        #[arg(long)]
+        require_supported_paths: bool,
+        #[arg(long)]
+        require_packet_plane_listener: bool,
+        #[arg(long)]
+        require_packet_plane_session: bool,
+        #[arg(long)]
+        require_packet_plane_quic_listener: bool,
+        #[arg(long)]
+        require_packet_plane_quic_session: bool,
+    },
     DaemonShutdown {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -750,6 +770,32 @@ async fn main() -> Result<(), String> {
             socket,
             timeout_seconds,
         } => Box::pin(daemon_capabilities(&socket, timeout_seconds)).await,
+        Command::DaemonHealth {
+            socket,
+            timeout_seconds,
+            require_peers,
+            require_validated_peers,
+            require_supported_paths,
+            require_packet_plane_listener,
+            require_packet_plane_session,
+            require_packet_plane_quic_listener,
+            require_packet_plane_quic_session,
+        } => {
+            Box::pin(daemon_health(
+                &socket,
+                timeout_seconds,
+                DaemonHealthRequirements {
+                    peers: require_peers,
+                    validated_peers: require_validated_peers,
+                    supported_paths: require_supported_paths,
+                    packet_plane_listener: require_packet_plane_listener,
+                    packet_plane_session: require_packet_plane_session,
+                    packet_plane_quic_listener: require_packet_plane_quic_listener,
+                    packet_plane_quic_session: require_packet_plane_quic_session,
+                },
+            ))
+            .await
+        }
         Command::DaemonShutdown {
             socket,
             timeout_seconds,
@@ -3647,6 +3693,205 @@ async fn daemon_capabilities(socket: &Path, timeout_seconds: u64) -> Result<(), 
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct DaemonHealthRequirements {
+    peers: bool,
+    validated_peers: bool,
+    supported_paths: bool,
+    packet_plane_listener: bool,
+    packet_plane_session: bool,
+    packet_plane_quic_listener: bool,
+    packet_plane_quic_session: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DaemonHealthSnapshot {
+    daemon_running: bool,
+    configured_peers: Option<usize>,
+    validated_peers: Option<usize>,
+    peers_with_supported_path: Option<usize>,
+    packet_plane_listeners: Option<usize>,
+    packet_plane_sessions: Option<usize>,
+    packet_plane_quic_listeners: Option<usize>,
+    packet_plane_quic_sessions: Option<usize>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DaemonHealthVerdict {
+    ready: bool,
+    checks: Vec<DaemonHealthCheck>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DaemonHealthCheck {
+    name: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+async fn daemon_health(
+    socket: &Path,
+    timeout_seconds: u64,
+    requirements: DaemonHealthRequirements,
+) -> Result<(), String> {
+    let lines = p2p_vpn::runtime::control_socket::query_state(
+        socket,
+        Duration::from_secs(timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("daemon health query failed: {error:?}"))?;
+
+    let verdict = daemon_health_verdict(&lines, requirements);
+    print_daemon_health_verdict(&verdict);
+    if verdict.ready {
+        Ok(())
+    } else {
+        Err(format!(
+            "daemon health check failed: {}",
+            verdict
+                .checks
+                .iter()
+                .filter(|check| !check.ok)
+                .map(|check| check.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+fn daemon_health_verdict(
+    lines: &[String],
+    requirements: DaemonHealthRequirements,
+) -> DaemonHealthVerdict {
+    let snapshot = parse_daemon_health_snapshot(lines);
+    let mut checks = vec![DaemonHealthCheck {
+        name: "daemon_running",
+        ok: snapshot.daemon_running,
+        detail: if snapshot.daemon_running {
+            "state running".to_owned()
+        } else {
+            "missing `daemon state: running`".to_owned()
+        },
+    }];
+
+    if requirements.peers {
+        checks.push(count_check(
+            "configured_peers",
+            snapshot.configured_peers,
+            "configured peers",
+        ));
+    }
+    if requirements.validated_peers {
+        checks.push(count_check(
+            "validated_peers",
+            snapshot.validated_peers,
+            "validated peers",
+        ));
+    }
+    if requirements.supported_paths {
+        checks.push(count_check(
+            "supported_paths",
+            snapshot.peers_with_supported_path,
+            "peers with supported path",
+        ));
+    }
+    if requirements.packet_plane_listener {
+        checks.push(count_check(
+            "packet_plane_listener",
+            snapshot.packet_plane_listeners,
+            "packet plane listeners",
+        ));
+    }
+    if requirements.packet_plane_session {
+        checks.push(count_check(
+            "packet_plane_session",
+            snapshot.packet_plane_sessions,
+            "packet plane sessions",
+        ));
+    }
+    if requirements.packet_plane_quic_listener {
+        checks.push(count_check(
+            "packet_plane_quic_listener",
+            snapshot.packet_plane_quic_listeners,
+            "packet plane QUIC listeners",
+        ));
+    }
+    if requirements.packet_plane_quic_session {
+        checks.push(count_check(
+            "packet_plane_quic_session",
+            snapshot.packet_plane_quic_sessions,
+            "packet plane QUIC sessions",
+        ));
+    }
+
+    DaemonHealthVerdict {
+        ready: checks.iter().all(|check| check.ok),
+        checks,
+    }
+}
+
+fn count_check(name: &'static str, value: Option<usize>, label: &'static str) -> DaemonHealthCheck {
+    DaemonHealthCheck {
+        name,
+        ok: value.is_some_and(|count| count > 0),
+        detail: value.map_or_else(
+            || format!("missing `{label}`"),
+            |count| format!("{label} {count}"),
+        ),
+    }
+}
+
+fn parse_daemon_health_snapshot(lines: &[String]) -> DaemonHealthSnapshot {
+    let mut snapshot = DaemonHealthSnapshot::default();
+    for line in lines {
+        if line == "daemon state: running" {
+            snapshot.daemon_running = true;
+        } else if let Some(value) = parse_colon_count(line, "configured peers") {
+            snapshot.configured_peers = Some(value);
+        } else if let Some(value) = parse_colon_count(line, "validated peers") {
+            snapshot.validated_peers = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "peers_with_supported_path") {
+            snapshot.peers_with_supported_path = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "packet_plane_listeners") {
+            snapshot.packet_plane_listeners = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "packet_plane_sessions") {
+            snapshot.packet_plane_sessions = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "packet_plane_quic_listeners") {
+            snapshot.packet_plane_quic_listeners = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "packet_plane_quic_sessions") {
+            snapshot.packet_plane_quic_sessions = Some(value);
+        }
+    }
+    snapshot
+}
+
+fn parse_colon_count(line: &str, label: &str) -> Option<usize> {
+    let (actual_label, value) = line.split_once(": ")?;
+    (actual_label == label)
+        .then_some(value)
+        .and_then(|value| value.parse().ok())
+}
+
+fn parse_metric_count(line: &str, metric: &str) -> Option<usize> {
+    let (actual_metric, value) = line.split_once(' ')?;
+    (actual_metric == metric)
+        .then_some(value)
+        .and_then(|value| value.parse().ok())
+}
+
+fn print_daemon_health_verdict(verdict: &DaemonHealthVerdict) {
+    println!("daemon_health_ready {}", verdict.ready);
+    for check in &verdict.checks {
+        println!(
+            "daemon_health_check {} {} {}",
+            check.name,
+            if check.ok { "ok" } else { "failed" },
+            check.detail
+        );
+    }
+}
+
 async fn daemon_shutdown(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_shutdown(
         socket,
@@ -5245,6 +5490,51 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_daemon_health_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "daemon-health",
+            "--socket",
+            "/run/p2p-vpn-node-a/control.sock",
+            "--timeout-seconds",
+            "3",
+            "--require-peers",
+            "--require-validated-peers",
+            "--require-supported-paths",
+            "--require-packet-plane-listener",
+            "--require-packet-plane-session",
+            "--require-packet-plane-quic-listener",
+            "--require-packet-plane-quic-session",
+        ])
+        .expect("cli");
+
+        let Command::DaemonHealth {
+            socket,
+            timeout_seconds,
+            require_peers,
+            require_validated_peers,
+            require_supported_paths,
+            require_packet_plane_listener,
+            require_packet_plane_session,
+            require_packet_plane_quic_listener,
+            require_packet_plane_quic_session,
+        } = cli.command
+        else {
+            panic!("expected daemon-health command");
+        };
+
+        assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
+        assert_eq!(timeout_seconds, 3);
+        assert!(require_peers);
+        assert!(require_validated_peers);
+        assert!(require_supported_paths);
+        assert!(require_packet_plane_listener);
+        assert!(require_packet_plane_session);
+        assert!(require_packet_plane_quic_listener);
+        assert!(require_packet_plane_quic_session);
+    }
+
+    #[test]
     fn cli_parses_daemon_shutdown_command() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -5266,6 +5556,101 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+    }
+
+    #[test]
+    fn daemon_health_defaults_to_running_daemon_check() {
+        let lines = vec![
+            "daemon state: running".to_owned(),
+            "configured peers: 0".to_owned(),
+            "validated peers: 0".to_owned(),
+            "peers_with_supported_path 0".to_owned(),
+        ];
+
+        let verdict = daemon_health_verdict(&lines, DaemonHealthRequirements::default());
+
+        assert!(verdict.ready);
+        assert_eq!(verdict.checks.len(), 1);
+        assert_eq!(verdict.checks[0].name, "daemon_running");
+        assert!(verdict.checks[0].ok);
+    }
+
+    #[test]
+    fn daemon_health_reports_failed_requirements() {
+        let lines = vec![
+            "daemon state: running".to_owned(),
+            "configured peers: 1".to_owned(),
+            "validated peers: 0".to_owned(),
+            "peers_with_supported_path 0".to_owned(),
+            "packet_plane_listeners 1".to_owned(),
+            "packet_plane_sessions 0".to_owned(),
+            "packet_plane_quic_listeners 0".to_owned(),
+            "packet_plane_quic_sessions 0".to_owned(),
+        ];
+
+        let verdict = daemon_health_verdict(
+            &lines,
+            DaemonHealthRequirements {
+                peers: true,
+                validated_peers: true,
+                supported_paths: true,
+                packet_plane_listener: true,
+                packet_plane_session: true,
+                packet_plane_quic_listener: true,
+                packet_plane_quic_session: true,
+            },
+        );
+
+        assert!(!verdict.ready);
+        assert!(
+            verdict
+                .checks
+                .iter()
+                .any(|check| check.name == "configured_peers" && check.ok)
+        );
+        for failed in [
+            "validated_peers",
+            "supported_paths",
+            "packet_plane_session",
+            "packet_plane_quic_listener",
+            "packet_plane_quic_session",
+        ] {
+            assert!(
+                verdict
+                    .checks
+                    .iter()
+                    .any(|check| check.name == failed && !check.ok),
+                "missing failed check {failed}"
+            );
+        }
+    }
+
+    #[test]
+    fn daemon_health_snapshot_parses_state_lines() {
+        let lines = vec![
+            "daemon state: running".to_owned(),
+            "configured peers: 2".to_owned(),
+            "validated peers: 1".to_owned(),
+            "peers_with_supported_path 1".to_owned(),
+            "packet_plane_listeners 1".to_owned(),
+            "packet_plane_sessions 1".to_owned(),
+            "packet_plane_quic_listeners 1".to_owned(),
+            "packet_plane_quic_sessions 1".to_owned(),
+        ];
+
+        assert_eq!(
+            parse_daemon_health_snapshot(&lines),
+            DaemonHealthSnapshot {
+                daemon_running: true,
+                configured_peers: Some(2),
+                validated_peers: Some(1),
+                peers_with_supported_path: Some(1),
+                packet_plane_listeners: Some(1),
+                packet_plane_sessions: Some(1),
+                packet_plane_quic_listeners: Some(1),
+                packet_plane_quic_sessions: Some(1),
+            }
+        );
     }
 
     #[test]

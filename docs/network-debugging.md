@@ -48,6 +48,12 @@ route-table output in the assertion message.
 
 ## What To Inspect
 
+When a daemon is still running with a control socket, start with
+`p2p-vpn daemon-health --socket /run/p2p-vpn/control.sock`. Add
+`--require-validated-peers`, `--require-supported-paths`,
+`--require-packet-plane-session`, or `--require-packet-plane-quic-session` to
+turn a repro into a strict readiness gate for the stage under investigation.
+
 For discovery failures, check node logs for `kademlia query progressed`,
 `discovered_address_dial_attempts`, and `control capabilities accepted`.
 

@@ -566,6 +566,13 @@
             machine.succeed("grep -q '^tun_read_packets ' /tmp/p2p-vpn-status")
             machine.succeed("grep -q '^packet_plane_session_ttl_seconds ' /tmp/p2p-vpn-status")
             machine.succeed("grep -q '^packet_plane_sessions ' /tmp/p2p-vpn-status")
+            machine.succeed(
+                "p2p-vpn daemon-health "
+                "--socket /run/p2p-vpn-smoke/control.sock "
+                "--timeout-seconds 5 | tee /tmp/p2p-vpn-health"
+            )
+            machine.succeed("grep -q '^daemon_health_ready true$' /tmp/p2p-vpn-health")
+            machine.succeed("grep -q '^daemon_health_check daemon_running ok ' /tmp/p2p-vpn-health")
 
             machine.succeed("systemctl stop p2p-vpn-smoke.service")
             machine.wait_until_fails("test -S /run/p2p-vpn-smoke/control.sock")

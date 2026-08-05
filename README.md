@@ -1179,8 +1179,9 @@ to the unit path for interface setup, grants `CAP_NET_ADMIN` and `CAP_NET_RAW`,
 restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
 firewall. The Linux flake checks include `checks.x86_64-linux.nixos-vm-smoke`,
 which boots a NixOS VM, starts a module-managed instance, queries
-`daemon-status` over its control socket, stops the unit, and confirms orderly
-socket cleanup. Keep JSON configs that contain `network.private_key` or
+`daemon-status` and `daemon-health` over its control socket, stops the unit, and
+confirms orderly socket cleanup. Keep JSON configs that contain
+`network.private_key` or
 `network.membership_key` outside the Nix store, for example under
 `/etc/p2p-vpn`, with permissions managed by your deployment system. Those JSON
 configs can tune packet-plane expiry with
@@ -1246,13 +1247,21 @@ cargo run -- daemon-routes --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-paths --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-mtu --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-capabilities --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-health --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-shutdown --socket /run/p2p-vpn/control.sock
 ```
 
 The control socket serves bounded `status`, `state`, `peers`, `routes`,
-`paths`, `mtu`, `capabilities`, and `shutdown` requests. `daemon-status` uses
-the same line-oriented metric names as `metrics`, but comes from the running
-daemon's current queue and path state instead of a startup snapshot.
+`paths`, `mtu`, `capabilities`, and `shutdown` requests. `daemon-health` queries
+the state view and prints line-oriented readiness checks, returning nonzero when
+any required check fails. By default it only requires a responsive running
+daemon; add `--require-peers`, `--require-validated-peers`,
+`--require-supported-paths`, `--require-packet-plane-listener`,
+`--require-packet-plane-session`, `--require-packet-plane-quic-listener`, or
+`--require-packet-plane-quic-session` to turn repro scripts into stricter stage
+gates. `daemon-status` uses the same line-oriented metric names as `metrics`,
+but comes from the running daemon's current queue and path state instead of a
+startup snapshot.
 `daemon-state` reports the running daemon's configured peers, validated
 capability state, selected path, healthy direct and relay path counts, effective
 MTU, selected path MTU, per-candidate path MTU estimates, configured
