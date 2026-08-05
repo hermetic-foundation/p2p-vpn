@@ -394,6 +394,8 @@ enum Command {
         member_peer: Option<String>,
         #[arg(long = "member-public-key")]
         member_public_key: Option<String>,
+        #[arg(long)]
+        issuer_as_member: bool,
         #[arg(short, long, default_value = "p2p-vpn-member-record.json")]
         output: PathBuf,
         #[arg(long)]
@@ -862,6 +864,7 @@ async fn main() -> Result<(), String> {
             member_identity,
             member_peer,
             member_public_key,
+            issuer_as_member,
             output,
             network,
             membership_epoch,
@@ -876,6 +879,7 @@ async fn main() -> Result<(), String> {
             member_identity,
             member_peer,
             member_public_key,
+            issuer_as_member,
             output,
             network,
             membership_epoch,
@@ -1085,6 +1089,7 @@ struct MembershipRecordIssueArgs {
     member_identity: Option<PathBuf>,
     member_peer: Option<String>,
     member_public_key: Option<String>,
+    issuer_as_member: bool,
     output: PathBuf,
     network: Option<String>,
     membership_epoch: u64,
@@ -1327,7 +1332,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
     let issuer = issuer_config
         .identity()
         .map_err(|error| format!("failed to read issuer identity: {error:?}"))?;
-    let member = membership_record_subject_from_args(&args)?;
+    let member = membership_record_subject_from_args(&args, &issuer)?;
     let route_grants = args
         .route_grants
         .into_iter()
@@ -1378,30 +1383,38 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
 
 fn membership_record_subject_from_args(
     args: &MembershipRecordIssueArgs,
+    issuer: &NodeIdentity,
 ) -> Result<MembershipRecordSubject, String> {
     match (
+        args.issuer_as_member,
         &args.member_identity,
         &args.member_peer,
         &args.member_public_key,
     ) {
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(
+        (true, None, None, None) => MembershipRecordSubject::from_identity(issuer)
+            .map_err(|error| format!("failed to use issuer identity as member: {error:?}")),
+        (true, _, _, _) => Err(
+            "pass either --issuer-as-member, --member-identity, or --member-peer with --member-public-key".to_owned(),
+        ),
+        (false, Some(_), Some(_), _) | (false, Some(_), _, Some(_)) => Err(
             "pass either --member-identity or --member-peer with --member-public-key".to_owned(),
         ),
-        (Some(path), None, None) => {
+        (false, Some(path), None, None) => {
             read_public_identity(path).map(|identity| MembershipRecordSubject {
                 peer_id: identity.peer_id,
                 public_key: identity.public_key,
             })
         }
-        (None, Some(peer_id), Some(public_key)) => Ok(MembershipRecordSubject {
+        (false, None, Some(peer_id), Some(public_key)) => Ok(MembershipRecordSubject {
             peer_id: peer_id.clone(),
             public_key: public_key.clone(),
         }),
-        (None, Some(_), None) => Err("--member-peer requires --member-public-key".to_owned()),
-        (None, None, Some(_)) => Err("--member-public-key requires --member-peer".to_owned()),
-        (None, None, None) => {
-            Err("pass --member-identity or --member-peer with --member-public-key".to_owned())
-        }
+        (false, None, Some(_), None) => Err("--member-peer requires --member-public-key".to_owned()),
+        (false, None, None, Some(_)) => Err("--member-public-key requires --member-peer".to_owned()),
+        (false, None, None, None) => Err(
+            "pass --issuer-as-member, --member-identity, or --member-peer with --member-public-key"
+                .to_owned(),
+        ),
     }
 }
 
@@ -8187,6 +8200,34 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_membership_record_self_issue_flag() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership-record-issue",
+            "--issuer-config",
+            "issuer.json",
+            "--issuer-as-member",
+            "--output",
+            "issuer-root.json",
+        ])
+        .expect("issue cli");
+
+        let Command::MembershipRecordIssue {
+            issuer_config,
+            issuer_as_member,
+            output,
+            ..
+        } = cli.command
+        else {
+            panic!("expected membership-record-issue command");
+        };
+
+        assert_eq!(issuer_config, PathBuf::from("issuer.json"));
+        assert!(issuer_as_member);
+        assert_eq!(output, PathBuf::from("issuer-root.json"));
+    }
+
+    #[test]
     fn membership_record_issue_and_verify_round_trip() {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -8223,6 +8264,7 @@ mod tests {
             member_identity: Some(member_public.clone()),
             member_peer: None,
             member_public_key: None,
+            issuer_as_member: false,
             output: record_path.clone(),
             network: None,
             membership_epoch: 7,
@@ -8266,9 +8308,125 @@ mod tests {
 
         assert!(membership_record_verify(&record_path, Some("lab")).is_err());
 
+        let conflicting_subject = membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            issuer_as_member: true,
+            output: record_path.clone(),
+            network: None,
+            membership_epoch: 7,
+            sequence: 43,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: Vec::new(),
+            revoked: false,
+            expires_at_unix_seconds: None,
+            force: true,
+        });
+        assert!(conflicting_subject.is_err());
+
         let _ = fs::remove_file(&issuer_config);
         let _ = fs::remove_file(&member_public);
         let _ = fs::remove_file(&record_path);
+    }
+
+    #[test]
+    fn membership_record_issue_can_create_issuer_trust_root() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer_config = temp_config_path("p2p-vpn-membership-trust-root-issuer");
+        let root_record_path = temp_config_path("p2p-vpn-membership-trust-root");
+        let member_record_path = temp_config_path("p2p-vpn-membership-trust-root-member");
+        let issuer_config_value = InitConfigTemplate {
+            identity: issuer.clone(),
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        write_config_output(&issuer_config_value, &issuer_config, false).expect("issuer config");
+
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: None,
+            member_peer: None,
+            member_public_key: None,
+            issuer_as_member: true,
+            output: root_record_path.clone(),
+            network: None,
+            membership_epoch: 1,
+            sequence: 1,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: Vec::new(),
+            revoked: false,
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue issuer self-record");
+        membership_record_verify(&root_record_path, Some("lab")).expect("verify self-record");
+
+        let root_record: SignedMembershipRecord =
+            serde_json::from_slice(&fs::read(&root_record_path).expect("root record file"))
+                .expect("root record json");
+        assert_eq!(root_record.payload.issuer_peer, issuer.peer_id);
+        assert_eq!(root_record.payload.member_peer, issuer.peer_id);
+
+        let member_subject =
+            MembershipRecordSubject::from_identity(&member).expect("member subject");
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: None,
+            member_peer: Some(member_subject.peer_id.clone()),
+            member_public_key: Some(member_subject.public_key.clone()),
+            issuer_as_member: false,
+            output: member_record_path.clone(),
+            network: None,
+            membership_epoch: 1,
+            sequence: 2,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: Vec::new(),
+            revoked: false,
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue member record");
+        let member_record: SignedMembershipRecord =
+            serde_json::from_slice(&fs::read(&member_record_path).expect("member record file"))
+                .expect("member record json");
+        let trusted_issuers = p2p_vpn::membership::trusted_membership_issuers_at(
+            std::slice::from_ref(&root_record),
+            "lab",
+            1,
+        )
+        .expect("trusted issuers");
+        let mut records = vec![root_record];
+
+        let stats = p2p_vpn::membership::merge_membership_records_at(
+            &mut records,
+            std::slice::from_ref(&member_record),
+            "lab",
+            current_unix_seconds_lossy(),
+            &trusted_issuers,
+            4,
+        )
+        .expect("trusted issuer merge");
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(records.len(), 2);
+
+        let _ = fs::remove_file(&issuer_config);
+        let _ = fs::remove_file(&root_record_path);
+        let _ = fs::remove_file(&member_record_path);
     }
 
     #[test]
@@ -8308,6 +8466,7 @@ mod tests {
             member_identity: Some(member_public.clone()),
             member_peer: None,
             member_public_key: None,
+            issuer_as_member: false,
             output: record_path.clone(),
             network: None,
             membership_epoch: 7,
@@ -8333,6 +8492,7 @@ mod tests {
             member_identity: Some(member_public.clone()),
             member_peer: None,
             member_public_key: None,
+            issuer_as_member: false,
             output: record_path.clone(),
             network: None,
             membership_epoch: 7,
@@ -8388,6 +8548,7 @@ mod tests {
             member_identity: Some(member_public.clone()),
             member_peer: None,
             member_public_key: None,
+            issuer_as_member: false,
             output: member_record.clone(),
             network: None,
             membership_epoch: 3,
@@ -8473,6 +8634,7 @@ mod tests {
             member_identity: Some(member_public.clone()),
             member_peer: None,
             member_public_key: None,
+            issuer_as_member: false,
             output: member_record.clone(),
             network: Some("other".to_owned()),
             membership_epoch: 1,

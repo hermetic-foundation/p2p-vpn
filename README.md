@@ -467,6 +467,11 @@ cargo run -- identity-public \
 
 cargo run -- membership-record-issue \
   --issuer-config node-a.json \
+  --issuer-as-member \
+  --output node-a.root.json
+
+cargo run -- membership-record-issue \
+  --issuer-config node-a.json \
   --member-identity node-b.identity.json \
   --output node-b.member.json \
   --route-grant 10.77.0.0/24,100
@@ -495,6 +500,10 @@ cargo run -- membership-record-issue \
 `membership-record-issue` signs that subject with the issuer identity from
 `--issuer-config`, defaults the record network to the issuer config's network,
 and automatically adds the `route_authority` role when `--route-grant` is used.
+Use `--issuer-as-member` to issue a self-signed issuer record directly from the
+issuer config; installing that record is the compact trust-root bootstrap for
+multi-issuer overlays and avoids exporting the issuer public identity only to
+feed it back into the issue command.
 `membership-record-install` verifies record signatures and network names, then
 updates `network.member_records` idempotently by keeping the newest
 `(membership_epoch, sequence)` per member. Installing a valid record into local
