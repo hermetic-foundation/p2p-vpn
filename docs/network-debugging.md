@@ -401,8 +401,12 @@ validation succeeds, it also writes `public-relay-config.json`, a runnable
 relay-assisted config generated from the validated public relay. Without
 `P2P_VPN_REPRO_BASE_CONFIG`, that config uses the public IPFS profile plus the
 validated relay shortcut; with a base config, it preserves the supplied overlay
-and adds only relay infrastructure. It exits nonzero if any phase fails, but
-earlier artifacts remain in the repro directory.
+and adds only relay infrastructure. It also writes `public-vpn-host-a.json` and
+`public-vpn-host-b.json`, a matched static two-host VPN pair whose peer
+addresses route through the validated relay. Use those with `public-vpn-repro`
+to prove relay stream fallback before DCUtR or the owned UDP/QUIC packet plane
+is available. It exits nonzero if any phase fails, but earlier artifacts remain
+in the repro directory.
 Probe reports use schema version 3 and include per-candidate
 `elapsed_millis`, plus bootstrap-level `direct_connection_addresses` and
 `relayed_connection_addresses` when a candidate reaches the bootstrap-check
@@ -417,6 +421,8 @@ Every repro directory also contains `repro-metadata.txt`,
 the app is run from a Git checkout. The Host A/Host B scripts are generated
 from the first successful relay-check candidate, or from
 `P2P_VPN_REPRO_RELAY_CANDIDATE` when that override is set. Use
+`P2P_VPN_REPRO_VPN_HOST_A_ROUTE`, `P2P_VPN_REPRO_VPN_HOST_B_ROUTE`, and
+`P2P_VPN_REPRO_VPN_NETWORK` to tune the generated VPN configs. Use
 `P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
 `P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS` to tune the generated listener and
 dialer durations. Start

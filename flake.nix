@@ -165,6 +165,8 @@
             scan_report="$artifact_dir/public-relay-scan-report.json"
             relay_report="$artifact_dir/public-relay-check-report.json"
             relay_config="$artifact_dir/public-relay-config.json"
+            vpn_host_a_config="$artifact_dir/public-vpn-host-a.json"
+            vpn_host_b_config="$artifact_dir/public-vpn-host-b.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
             membership_config="$artifact_dir/public-membership-dht-config.json"
             membership_root_record="$artifact_dir/public-membership-root.record.json"
@@ -194,6 +196,9 @@
             membership_dht="''${P2P_VPN_REPRO_MEMBERSHIP_DHT:-1}"
             membership_network="''${P2P_VPN_REPRO_MEMBERSHIP_NETWORK:-public-membership-repro}"
             membership_dht_timeout="''${P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS:-45}"
+            vpn_host_a_route="''${P2P_VPN_REPRO_VPN_HOST_A_ROUTE:-10.42.0.1/32}"
+            vpn_host_b_route="''${P2P_VPN_REPRO_VPN_HOST_B_ROUTE:-10.42.0.2/32}"
+            vpn_network="''${P2P_VPN_REPRO_VPN_NETWORK:-public-vpn-repro}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -217,6 +222,9 @@
                 echo "P2P_VPN_REPRO_MEMBERSHIP_DHT=$membership_dht"
                 echo "P2P_VPN_REPRO_MEMBERSHIP_NETWORK=$membership_network"
                 echo "P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=$membership_dht_timeout"
+                echo "P2P_VPN_REPRO_VPN_HOST_A_ROUTE=$vpn_host_a_route"
+                echo "P2P_VPN_REPRO_VPN_HOST_B_ROUTE=$vpn_host_b_route"
+                echo "P2P_VPN_REPRO_VPN_NETWORK=$vpn_network"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -296,6 +304,9 @@
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT=%q\n" "$membership_dht"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_NETWORK=%q\n" "$membership_network"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=%q\n" "$membership_dht_timeout"
+                printf "export P2P_VPN_REPRO_VPN_HOST_A_ROUTE=%q\n" "$vpn_host_a_route"
+                printf "export P2P_VPN_REPRO_VPN_HOST_B_ROUTE=%q\n" "$vpn_host_b_route"
+                printf "export P2P_VPN_REPRO_VPN_NETWORK=%q\n" "$vpn_network"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -326,6 +337,11 @@
                 printf "  --max-validation-candidates %q \\\\\n" "$max_validation"
                 printf "  --write-report %q \\\\\n" "$relay_report"
                 printf "  --write-config %q \\\\\n" "$relay_config"
+                printf "  --write-host-a-config %q \\\\\n" "$vpn_host_a_config"
+                printf "  --write-host-b-config %q \\\\\n" "$vpn_host_b_config"
+                printf "  --two-host-network %q \\\\\n" "$vpn_network"
+                printf "  --host-a-route %q \\\\\n" "$vpn_host_a_route"
+                printf "  --host-b-route %q \\\\\n" "$vpn_host_b_route"
                 echo "  --force"
                 echo
                 echo "p2p-vpn relay-check \\"
@@ -728,6 +744,8 @@
                 --arg phase_log "$phase_log" \
                 --arg candidate_file "$candidates" \
                 --arg relay_assisted_config "$relay_config" \
+                --arg vpn_host_a_config "$vpn_host_a_config" \
+                --arg vpn_host_b_config "$vpn_host_b_config" \
                 --arg membership_config "$membership_config" \
                 --arg membership_installed_config "$membership_installed_config" \
                 --arg membership_root_record "$membership_root_record" \
@@ -757,6 +775,8 @@
                     phase_log: $phase_log,
                     candidate_file: $candidate_file,
                     relay_assisted_config: $relay_assisted_config,
+                    vpn_host_a_config: $vpn_host_a_config,
+                    vpn_host_b_config: $vpn_host_b_config,
                     membership_config: $membership_config,
                     membership_installed_config: $membership_installed_config,
                     membership_root_record: $membership_root_record,
@@ -801,6 +821,8 @@
                 echo "dcutr_dial_script=$dcutr_dial_script"
                 echo "candidate_file=$candidates"
                 echo "relay_assisted_config=$relay_config"
+                echo "vpn_host_a_config=$vpn_host_a_config"
+                echo "vpn_host_b_config=$vpn_host_b_config"
                 echo "membership_dht_report=$membership_dht_report"
                 echo
                 echo "phase results:"
@@ -905,6 +927,11 @@
                 --max-validation-candidates "$max_validation" \
                 --write-report "$relay_report" \
                 --write-config "$relay_config" \
+                --write-host-a-config "$vpn_host_a_config" \
+                --write-host-b-config "$vpn_host_b_config" \
+                --two-host-network "$vpn_network" \
+                --host-a-route "$vpn_host_a_route" \
+                --host-b-route "$vpn_host_b_route" \
                 --force
 
               run_phase "probing candidates for DCUtR success evidence" \
@@ -925,6 +952,8 @@
             echo "scan report: $scan_report" >&2
             echo "relay-check report: $relay_report" >&2
             echo "relay-assisted config: $relay_config" >&2
+            echo "Host A VPN config: $vpn_host_a_config" >&2
+            echo "Host B VPN config: $vpn_host_b_config" >&2
             echo "DCUtR report: $dcutr_report" >&2
             echo "membership DHT report: $membership_dht_report" >&2
             write_public_dcutr_handoff_scripts
@@ -1931,6 +1960,12 @@ EOF
             grep -q 'public-membership-dht-bootstrap-check.json' "$script"
             grep -q -- '--require-membership-records' "$script"
             grep -q 'membership_dht' "$script"
+            grep -q 'public-vpn-host-a.json' "$script"
+            grep -q 'public-vpn-host-b.json' "$script"
+            grep -q -- '--write-host-a-config' "$script"
+            grep -q -- '--write-host-b-config' "$script"
+            grep -q 'vpn_host_a_config' "$script"
+            grep -q 'P2P_VPN_REPRO_VPN_HOST_A_ROUTE' "$script"
 
             touch $out
           '';

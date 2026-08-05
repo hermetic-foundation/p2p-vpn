@@ -1195,10 +1195,13 @@ In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
 `public-membership-dht-bootstrap-check.json`, `repro-metadata.txt`,
 `repro-host-network.txt`, `repro-commands.sh`,
 `repro-dcutr-listen-host-a.sh`, `repro-dcutr-dial-host-b.sh`, and
-`repro-summary.txt`. By default, the membership DHT phase creates a disposable
-IPFS-compatible config, issues and installs a self-signed trust-root membership
-record, and runs `bootstrap-check --require-membership-records` so public
-Kademlia membership-record propagation is captured beside relay/DCUtR evidence.
+`repro-summary.txt`. When relay-circuit validation succeeds it also writes
+`public-vpn-host-a.json` and `public-vpn-host-b.json`, a matched static
+two-host VPN pair with reciprocal relayed peer addresses for the validated
+relay. By default, the membership DHT phase creates a disposable IPFS-compatible
+config, issues and installs a self-signed trust-root membership record, and
+runs `bootstrap-check --require-membership-records` so public Kademlia
+membership-record propagation is captured beside relay/DCUtR evidence.
 Set `P2P_VPN_REPRO_MEMBERSHIP_DHT=0` to skip that phase for relay-only
 debugging, `P2P_VPN_REPRO_MEMBERSHIP_NETWORK` to choose the disposable network
 name, and `P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS` to tune the bootstrap
@@ -1211,7 +1214,9 @@ The metadata records source revision and dirty status when the app is run from
 a Git checkout. The two host scripts use the first
 successful relay-check candidate, or `P2P_VPN_REPRO_RELAY_CANDIDATE` when
 supplied, to turn the manual Host A/Host B DCUtR proof into a repeatable
-handoff. Tune those scripts with
+handoff. Use `P2P_VPN_REPRO_VPN_HOST_A_ROUTE`,
+`P2P_VPN_REPRO_VPN_HOST_B_ROUTE`, and `P2P_VPN_REPRO_VPN_NETWORK` to tune the
+paired VPN configs. Tune the DCUtR handoff scripts with
 `P2P_VPN_REPRO_DCUTR_SERVE_SECONDS` and
 `P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS`. The summary captures phase exit statuses, candidate
 durations, candidate counts, skipped-candidate counts, routing-peer counts,
