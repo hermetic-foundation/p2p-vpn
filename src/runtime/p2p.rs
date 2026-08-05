@@ -46,6 +46,7 @@ pub struct P2pNode {
     pub swarm: Swarm<Behaviour>,
     pub discovery: DiscoveryConfig,
     pub kademlia_rendezvous_key: Option<kad::RecordKey>,
+    pub kademlia_membership_records_key: Option<kad::RecordKey>,
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub relay_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
@@ -174,7 +175,8 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let relay_reservations_started = config.relay_reservations.len();
     install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
-    let (kademlia_rendezvous_key, kademlia) = start_configured_kademlia(&mut swarm, config)?;
+    let (kademlia_rendezvous_key, kademlia_membership_records_key, kademlia) =
+        start_configured_kademlia(&mut swarm, config)?;
 
     Ok(P2pNode {
         local_peer_id,
@@ -184,6 +186,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         swarm,
         discovery,
         kademlia_rendezvous_key,
+        kademlia_membership_records_key,
         bootstrap_peer_addresses,
         relay_peer_addresses,
         configured_peer_addresses,
@@ -218,17 +221,27 @@ fn startup_status(
 fn start_configured_kademlia(
     swarm: &mut Swarm<Behaviour>,
     config: &HostConfig,
-) -> Result<(Option<kad::RecordKey>, KademliaStartupStatus), P2pBuildError> {
+) -> Result<
+    (
+        Option<kad::RecordKey>,
+        Option<kad::RecordKey>,
+        KademliaStartupStatus,
+    ),
+    P2pBuildError,
+> {
     let rendezvous_key = config
         .discovery
         .kademlia
         .then(|| kademlia_rendezvous_key(&config.network_name, config.membership_tag.as_deref()));
+    let membership_records_key = config.discovery.kademlia.then(|| {
+        kademlia_membership_records_key(&config.network_name, config.membership_tag.as_deref())
+    });
     let startup = start_kademlia(
         swarm,
         rendezvous_key.as_ref(),
         config.discovery.kademlia_provider_advertisement,
     )?;
-    Ok((rendezvous_key, startup))
+    Ok((rendezvous_key, membership_records_key, startup))
 }
 
 fn register_autonat_servers(swarm: &mut Swarm<Behaviour>, config: &HostConfig) -> usize {
@@ -360,6 +373,20 @@ pub fn kademlia_rendezvous_key(network_name: &str, membership_tag: Option<&str>)
     let key = membership_tag.map_or_else(
         || format!("/p2p-vpn/{network_name}/providers/1"),
         |membership_tag| format!("/p2p-vpn/{network_name}/members/{membership_tag}/providers/1"),
+    );
+    kad::RecordKey::new(&key)
+}
+
+#[must_use]
+pub fn kademlia_membership_records_key(
+    network_name: &str,
+    membership_tag: Option<&str>,
+) -> kad::RecordKey {
+    let key = membership_tag.map_or_else(
+        || format!("/p2p-vpn/{network_name}/membership-records/1"),
+        |membership_tag| {
+            format!("/p2p-vpn/{network_name}/members/{membership_tag}/membership-records/1")
+        },
     );
     kad::RecordKey::new(&key)
 }

@@ -24,7 +24,11 @@ as the membership or routing authority. When Kademlia is enabled, nodes announce
 and query an overlay provider key derived from the configured network name,
 `/p2p-vpn/<network>/providers/1`. Provider results are only dialed when the peer
 ID is already present in the configured peer list, so DHT discovery is a
-reachability hint rather than route or membership authorization. Public libp2p
+reachability hint rather than route or membership authorization. Nodes can also
+publish and fetch bounded bundles of signed membership records under a separate
+overlay-scoped Kademlia value key; fetched records still must pass the local
+issuer-trust, signature, network, sequence, expiry, and revocation rules before
+they affect live membership. Public libp2p
 relays can be useful for experiments only when they support the needed relay
 reservations and are acceptable for the deployment's trust and availability
 requirements. A relay that proves reservation and relayed-circuit fallback is
@@ -70,7 +74,8 @@ ignored, retained records are capped, expired records are pruned by runtime
 maintenance, newer revocation records remove record-derived live overlay
 membership, packet authorization, and route-grant ownership in memory, and newer
 grant records can re-admit the member. Broader record gossip beyond connected
-overlay peers is still follow-up work.
+overlay peers is available through Kademlia value-record refresh when Kademlia
+is enabled; the DHT only distributes signed records and is not a trust root.
 Outbound packets are not drained to a peer until that peer has passed the
 control-plane capability exchange, including network-name, membership-tag,
 protocol, MTU, path, and route-advertisement validation.
@@ -320,7 +325,13 @@ relayed target addresses after `/p2p-circuit`.
 When Kademlia is enabled, the runtime also periodically refreshes the overlay
 provider advertisement, reruns the provider lookup, and retries Kademlia
 bootstrap. That lets a long-running node find configured peers that join the DHT
-after startup rather than relying on the initial one-shot provider query.
+after startup rather than relying on the initial one-shot provider query. Nodes
+that advertise providers also publish their retained signed membership-record
+bundle to an overlay-scoped Kademlia value key, and all Kademlia-enabled nodes
+fetch the current and previous membership-scope record keys during refresh.
+Fetched bundles are size-limited, versioned, network/scope-checked, and merged
+only through the same signed-record authorization path used by control-plane
+capability exchange.
 Observed external address candidates reported by libp2p identify are passed to
 AutoNAT when that behaviour is enabled, and configured bootstrap peers, peer
 addresses, and relay-reservation peers are registered as AutoNAT probe servers.
@@ -1205,7 +1216,8 @@ external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
 current public/private/unknown reachability gauges and status-change counters,
 service-plane request/response/status/rejection/failure counters, Kademlia
 provider lookup/result/ignored-provider/configured-provider-dial/advertisement
-and bootstrap refresh counts, unauthorized connection drops, configured peer
+and bootstrap refresh counts, Kademlia membership-record lookup/found/accepted/
+invalid/publication counts, unauthorized connection drops, configured peer
 redial counters, accepted/dialed/rejected/expired discovered-address counters,
 asynchronous outgoing connection error counts, healthy path counts by transport
 kind, configured peers with and without a currently supported packet path, and

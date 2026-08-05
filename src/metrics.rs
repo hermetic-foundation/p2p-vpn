@@ -153,6 +153,12 @@ pub struct RuntimeMetrics {
     kademlia_provider_dial_failures: AtomicU64,
     kademlia_provider_advertisements: AtomicU64,
     kademlia_provider_advertisement_failures: AtomicU64,
+    kademlia_membership_record_lookups: AtomicU64,
+    kademlia_membership_records_found: AtomicU64,
+    kademlia_membership_records_accepted: AtomicU64,
+    kademlia_membership_record_invalid: AtomicU64,
+    kademlia_membership_record_publications: AtomicU64,
+    kademlia_membership_record_publication_failures: AtomicU64,
     kademlia_bootstrap_refreshes: AtomicU64,
     kademlia_bootstrap_failures: AtomicU64,
     control_requests_sent: AtomicU64,
@@ -640,6 +646,38 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_kademlia_membership_record_lookup(&self) {
+        self.kademlia_membership_record_lookups
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_membership_records_found(&self) {
+        self.kademlia_membership_records_found
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_membership_records_accepted(&self, records: usize) {
+        self.kademlia_membership_records_accepted.fetch_add(
+            u64::try_from(records).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_kademlia_membership_record_invalid(&self) {
+        self.kademlia_membership_record_invalid
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_membership_record_publication(&self) {
+        self.kademlia_membership_record_publications
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_kademlia_membership_record_publication_failure(&self) {
+        self.kademlia_membership_record_publication_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_kademlia_bootstrap_refresh(&self) {
         self.kademlia_bootstrap_refreshes
             .fetch_add(1, Ordering::Relaxed);
@@ -1091,6 +1129,24 @@ impl RuntimeMetrics {
         snapshot.kademlia_provider_advertisement_failures = self
             .kademlia_provider_advertisement_failures
             .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_record_lookups = self
+            .kademlia_membership_record_lookups
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_records_found = self
+            .kademlia_membership_records_found
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_records_accepted = self
+            .kademlia_membership_records_accepted
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_record_invalid = self
+            .kademlia_membership_record_invalid
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_record_publications = self
+            .kademlia_membership_record_publications
+            .load(Ordering::Relaxed);
+        snapshot.kademlia_membership_record_publication_failures = self
+            .kademlia_membership_record_publication_failures
+            .load(Ordering::Relaxed);
         snapshot.kademlia_bootstrap_refreshes =
             self.kademlia_bootstrap_refreshes.load(Ordering::Relaxed);
         snapshot.kademlia_bootstrap_failures =
@@ -1286,6 +1342,12 @@ pub struct RuntimeSnapshot {
     pub kademlia_provider_dial_failures: u64,
     pub kademlia_provider_advertisements: u64,
     pub kademlia_provider_advertisement_failures: u64,
+    pub kademlia_membership_record_lookups: u64,
+    pub kademlia_membership_records_found: u64,
+    pub kademlia_membership_records_accepted: u64,
+    pub kademlia_membership_record_invalid: u64,
+    pub kademlia_membership_record_publications: u64,
+    pub kademlia_membership_record_publication_failures: u64,
     pub kademlia_bootstrap_refreshes: u64,
     pub kademlia_bootstrap_failures: u64,
     pub control_requests_sent: u64,
@@ -1572,6 +1634,30 @@ impl RuntimeSnapshot {
             format!(
                 "kademlia_provider_advertisement_failures {}",
                 self.kademlia_provider_advertisement_failures
+            ),
+            format!(
+                "kademlia_membership_record_lookups {}",
+                self.kademlia_membership_record_lookups
+            ),
+            format!(
+                "kademlia_membership_records_found {}",
+                self.kademlia_membership_records_found
+            ),
+            format!(
+                "kademlia_membership_records_accepted {}",
+                self.kademlia_membership_records_accepted
+            ),
+            format!(
+                "kademlia_membership_record_invalid {}",
+                self.kademlia_membership_record_invalid
+            ),
+            format!(
+                "kademlia_membership_record_publications {}",
+                self.kademlia_membership_record_publications
+            ),
+            format!(
+                "kademlia_membership_record_publication_failures {}",
+                self.kademlia_membership_record_publication_failures
             ),
             format!(
                 "kademlia_bootstrap_refreshes {}",
@@ -2061,6 +2147,12 @@ mod tests {
         metrics.record_kademlia_provider_dial_failure();
         metrics.record_kademlia_provider_advertisement();
         metrics.record_kademlia_provider_advertisement_failure();
+        metrics.record_kademlia_membership_record_lookup();
+        metrics.record_kademlia_membership_records_found();
+        metrics.record_kademlia_membership_records_accepted(2);
+        metrics.record_kademlia_membership_record_invalid();
+        metrics.record_kademlia_membership_record_publication();
+        metrics.record_kademlia_membership_record_publication_failure();
         metrics.record_kademlia_bootstrap_refresh();
         metrics.record_kademlia_bootstrap_failure();
     }
@@ -2139,6 +2231,44 @@ mod tests {
 
     fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
         assert!(snapshot.lines().contains(&line.to_owned()));
+    }
+
+    fn assert_kademlia_discovery_counters(snapshot: &RuntimeSnapshot) {
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_providers_found, 2);
+        assert_eq!(snapshot.kademlia_providers_ignored, 1);
+        assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
+        assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
+        assert_eq!(snapshot.kademlia_membership_record_lookups, 1);
+        assert_eq!(snapshot.kademlia_membership_records_found, 1);
+        assert_eq!(snapshot.kademlia_membership_records_accepted, 2);
+        assert_eq!(snapshot.kademlia_membership_record_invalid, 1);
+        assert_eq!(snapshot.kademlia_membership_record_publications, 1);
+        assert_eq!(snapshot.kademlia_membership_record_publication_failures, 1);
+        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 1);
+        assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+    }
+
+    fn assert_kademlia_discovery_lines(snapshot: &RuntimeSnapshot) {
+        assert_metric_line(snapshot, "kademlia_provider_lookups 1");
+        assert_metric_line(snapshot, "kademlia_providers_found 2");
+        assert_metric_line(snapshot, "kademlia_provider_dial_attempts 1");
+        assert_metric_line(snapshot, "kademlia_provider_dial_failures 1");
+        assert_metric_line(snapshot, "kademlia_provider_advertisements 1");
+        assert_metric_line(snapshot, "kademlia_provider_advertisement_failures 1");
+        assert_metric_line(snapshot, "kademlia_membership_record_lookups 1");
+        assert_metric_line(snapshot, "kademlia_membership_records_found 1");
+        assert_metric_line(snapshot, "kademlia_membership_records_accepted 2");
+        assert_metric_line(snapshot, "kademlia_membership_record_invalid 1");
+        assert_metric_line(snapshot, "kademlia_membership_record_publications 1");
+        assert_metric_line(
+            snapshot,
+            "kademlia_membership_record_publication_failures 1",
+        );
+        assert_metric_line(snapshot, "kademlia_bootstrap_refreshes 1");
+        assert_metric_line(snapshot, "kademlia_bootstrap_failures 1");
     }
 
     #[test]
@@ -2375,15 +2505,7 @@ mod tests {
         assert_eq!(snapshot.autonat_status_changes_to_unknown, 0);
         assert_eq!(snapshot.autonat_status_changes_to_public, 1);
         assert_eq!(snapshot.autonat_status_changes_to_private, 1);
-        assert_eq!(snapshot.kademlia_provider_lookups, 1);
-        assert_eq!(snapshot.kademlia_providers_found, 2);
-        assert_eq!(snapshot.kademlia_providers_ignored, 1);
-        assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
-        assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
-        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
-        assert_eq!(snapshot.kademlia_provider_advertisement_failures, 1);
-        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 1);
-        assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+        assert_kademlia_discovery_counters(&snapshot);
         assert_eq!(snapshot.control_requests_sent, 1);
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
@@ -2510,14 +2632,7 @@ mod tests {
         assert_metric_line(&snapshot, "autonat_status_private 1");
         assert_metric_line(&snapshot, "autonat_status_changes_to_public 1");
         assert_metric_line(&snapshot, "autonat_status_changes_to_private 1");
-        assert_metric_line(&snapshot, "kademlia_provider_lookups 1");
-        assert_metric_line(&snapshot, "kademlia_providers_found 2");
-        assert_metric_line(&snapshot, "kademlia_provider_dial_attempts 1");
-        assert_metric_line(&snapshot, "kademlia_provider_dial_failures 1");
-        assert_metric_line(&snapshot, "kademlia_provider_advertisements 1");
-        assert_metric_line(&snapshot, "kademlia_provider_advertisement_failures 1");
-        assert_metric_line(&snapshot, "kademlia_bootstrap_refreshes 1");
-        assert_metric_line(&snapshot, "kademlia_bootstrap_failures 1");
+        assert_kademlia_discovery_lines(&snapshot);
         assert_metric_line(&snapshot, "control_requests_sent 1");
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");

@@ -20,6 +20,7 @@ use libp2p::{
 };
 use rand_core::{OsRng, RngCore as _};
 use rustls::pki_types::CertificateDer;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -78,6 +79,7 @@ const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_RELAY_MAX_CANDIDATES: usize = 16;
 const AUTO_RELAY_MAX_RESERVATIONS: usize = 2;
+const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 
 const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
@@ -449,6 +451,13 @@ where
         kademlia_rendezvous_key.as_ref(),
         &previous_membership_tags,
     );
+    let kademlia_membership_records_key = node.kademlia_membership_records_key.clone();
+    let kademlia_membership_record_lookup_keys = kademlia_membership_record_lookup_keys(
+        &node.network_name,
+        node.membership_tag.as_deref(),
+        kademlia_membership_records_key.as_ref(),
+        &previous_membership_tags,
+    );
     let mut timers = RuntimeTimers::new(
         metrics_interval,
         !kademlia_lookup_keys.is_empty(),
@@ -575,7 +584,7 @@ where
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         metrics: &metrics,
-                        local_capabilities: &local_capabilities,
+                        local_capabilities: &mut local_capabilities,
                         previous_membership_tags: &previous_membership_tags,
                         discovery: &discovery,
                         identity: &node.identity,
@@ -666,13 +675,20 @@ where
             }, if timers.kademlia_refresh.is_some() => {
                 refresh_kademlia_rendezvous(
                     &mut node.swarm,
-                    kademlia_rendezvous_key
-                        .as_ref()
-                        .expect("kademlia rendezvous key is present"),
-                    &kademlia_lookup_keys,
-                    discovery.kademlia_provider_advertisement,
-                    &auto_relay,
-                    &metrics,
+                    &KademliaRefreshContext {
+                        advertise_key: kademlia_rendezvous_key
+                            .as_ref()
+                            .expect("kademlia rendezvous key is present"),
+                        lookup_keys: &kademlia_lookup_keys,
+                        membership_record_advertise_key: kademlia_membership_records_key.as_ref(),
+                        membership_record_lookup_keys: &kademlia_membership_record_lookup_keys,
+                        network_name: &node.network_name,
+                        membership_tag: node.membership_tag.as_deref(),
+                        forwarder: &forwarder,
+                        advertise_provider: discovery.kademlia_provider_advertisement,
+                        auto_relay: &auto_relay,
+                        metrics: &metrics,
+                    },
                 );
             }
             _ = timers.queue_expiry.tick() => {
@@ -2138,23 +2154,31 @@ fn expire_discovered_peer_addresses(
     metrics.record_discovered_address_expired(expired);
 }
 
-fn refresh_kademlia_rendezvous(
-    swarm: &mut Swarm<Behaviour>,
-    advertise_key: &kad::RecordKey,
-    lookup_keys: &[kad::RecordKey],
+struct KademliaRefreshContext<'a> {
+    advertise_key: &'a kad::RecordKey,
+    lookup_keys: &'a [kad::RecordKey],
+    membership_record_advertise_key: Option<&'a kad::RecordKey>,
+    membership_record_lookup_keys: &'a [kad::RecordKey],
+    network_name: &'a str,
+    membership_tag: Option<&'a str>,
+    forwarder: &'a Forwarder,
     advertise_provider: bool,
-    auto_relay: &AutoRelayState,
-    metrics: &RuntimeMetrics,
-) {
-    if advertise_provider {
+    auto_relay: &'a AutoRelayState,
+    metrics: &'a RuntimeMetrics,
+}
+
+fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaRefreshContext<'_>) {
+    if context.advertise_provider {
         match swarm
             .behaviour_mut()
             .kad
-            .start_providing(advertise_key.clone())
+            .start_providing(context.advertise_key.clone())
         {
-            Ok(_) => metrics.record_kademlia_provider_advertisement(),
+            Ok(_) => context.metrics.record_kademlia_provider_advertisement(),
             Err(error) => {
-                metrics.record_kademlia_provider_advertisement_failure();
+                context
+                    .metrics
+                    .record_kademlia_provider_advertisement_failure();
                 log_runtime_event(
                     LogLevel::Warn,
                     "kademlia_provider_advertisement_failed",
@@ -2164,23 +2188,88 @@ fn refresh_kademlia_rendezvous(
         }
     }
 
-    for lookup_key in lookup_keys {
+    for lookup_key in context.lookup_keys {
         swarm.behaviour_mut().kad.get_providers(lookup_key.clone());
-        metrics.record_kademlia_provider_lookup();
+        context.metrics.record_kademlia_provider_lookup();
     }
 
-    if auto_relay.private_reachability() {
+    if context.advertise_provider
+        && let Some(record_key) = context.membership_record_advertise_key
+    {
+        publish_kademlia_membership_records(
+            swarm,
+            record_key,
+            context.network_name,
+            context.membership_tag,
+            context.forwarder,
+            context.metrics,
+        );
+    }
+
+    for lookup_key in context.membership_record_lookup_keys {
+        swarm.behaviour_mut().kad.get_record(lookup_key.clone());
+        context.metrics.record_kademlia_membership_record_lookup();
+    }
+
+    if context.auto_relay.private_reachability() {
         let local_peer = *swarm.local_peer_id();
         swarm.behaviour_mut().kad.get_closest_peers(local_peer);
     }
 
     match swarm.behaviour_mut().kad.bootstrap() {
-        Ok(_) => metrics.record_kademlia_bootstrap_refresh(),
+        Ok(_) => context.metrics.record_kademlia_bootstrap_refresh(),
         Err(error) => {
-            metrics.record_kademlia_bootstrap_failure();
+            context.metrics.record_kademlia_bootstrap_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "kademlia_bootstrap_failed",
+                &[("error", &format!("{error:?}"))],
+            );
+        }
+    }
+}
+
+fn publish_kademlia_membership_records(
+    swarm: &mut Swarm<Behaviour>,
+    record_key: &kad::RecordKey,
+    network_name: &str,
+    membership_tag: Option<&str>,
+    forwarder: &Forwarder,
+    metrics: &RuntimeMetrics,
+) {
+    let records = advertised_member_records(forwarder);
+    if records.is_empty() {
+        return;
+    }
+
+    let Ok(value) = encode_kademlia_membership_records(network_name, membership_tag, records)
+    else {
+        metrics.record_kademlia_membership_record_publication_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "kademlia_membership_record_publication_failed",
+            &[("reason", "encode_failed")],
+        );
+        return;
+    };
+    let record = kad::Record {
+        key: record_key.clone(),
+        value,
+        publisher: Some(*swarm.local_peer_id()),
+        expires: None,
+    };
+
+    match swarm
+        .behaviour_mut()
+        .kad
+        .put_record(record, kad::Quorum::One)
+    {
+        Ok(_) => metrics.record_kademlia_membership_record_publication(),
+        Err(error) => {
+            metrics.record_kademlia_membership_record_publication_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "kademlia_membership_record_publication_failed",
                 &[("error", &format!("{error:?}"))],
             );
         }
@@ -2201,6 +2290,32 @@ fn kademlia_lookup_keys(
         if !keys.contains(&key) {
             keys.push(key);
         }
+    }
+    keys
+}
+
+fn kademlia_membership_record_lookup_keys(
+    network_name: &str,
+    current_membership_tag: Option<&str>,
+    current_key: Option<&kad::RecordKey>,
+    previous_membership_tags: &[String],
+) -> Vec<kad::RecordKey> {
+    let Some(current_key) = current_key else {
+        return Vec::new();
+    };
+    let mut keys = vec![current_key.clone()];
+    for tag in previous_membership_tags {
+        let key = crate::runtime::p2p::kademlia_membership_records_key(network_name, Some(tag));
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    if current_membership_tag.is_none() {
+        return keys;
+    }
+    let untagged_key = crate::runtime::p2p::kademlia_membership_records_key(network_name, None);
+    if !keys.contains(&untagged_key) {
+        keys.push(untagged_key);
     }
     keys
 }
@@ -3616,7 +3731,7 @@ struct SwarmEventContext<'a> {
     packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
     metrics: &'a RuntimeMetrics,
-    local_capabilities: &'a ControlCapabilities,
+    local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
     discovery: &'a DiscoveryConfig,
     identity: &'a NodeIdentity,
@@ -3674,6 +3789,8 @@ async fn handle_swarm_event(
                 discovered_peer_addresses: context.discovered_peer_addresses,
                 metrics: context.metrics,
                 discovery: context.discovery,
+                local_capabilities: context.local_capabilities,
+                previous_membership_tags: context.previous_membership_tags,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
         }
@@ -3965,6 +4082,10 @@ async fn handle_control_event(
             message: Message::Response { response, .. },
             ..
         } => {
+            let validation_scope = MembershipValidationScope::from_capabilities(
+                context.local_capabilities,
+                context.previous_membership_tags,
+            );
             handle_control_response_event(
                 swarm,
                 context.forwarder,
@@ -3973,10 +4094,7 @@ async fn handle_control_event(
                 context.metrics,
                 peer,
                 response,
-                MembershipValidationScope::from_capabilities(
-                    context.local_capabilities,
-                    context.previous_membership_tags,
-                ),
+                validation_scope,
                 context.local_capabilities,
                 context.packet_plane,
                 context.packet_plane_quic.as_deref_mut(),
@@ -4777,6 +4895,128 @@ fn learn_membership_records_from_capabilities(
         );
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct KademliaMembershipRecordBundle {
+    version: u8,
+    network_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    membership_tag: Option<String>,
+    records: Vec<SignedMembershipRecord>,
+}
+
+#[derive(Debug)]
+enum KademliaMembershipRecordError {
+    TooLarge,
+    Decode,
+    UnsupportedVersion,
+    WrongNetwork,
+    WrongMembershipScope,
+    TooManyRecords,
+    InvalidRecord(String),
+}
+
+impl std::fmt::Display for KademliaMembershipRecordError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => formatter.write_str("too_large"),
+            Self::Decode => formatter.write_str("decode_failed"),
+            Self::UnsupportedVersion => formatter.write_str("unsupported_version"),
+            Self::WrongNetwork => formatter.write_str("wrong_network"),
+            Self::WrongMembershipScope => formatter.write_str("wrong_membership_scope"),
+            Self::TooManyRecords => formatter.write_str("too_many_records"),
+            Self::InvalidRecord(error) => write!(formatter, "invalid_record:{error}"),
+        }
+    }
+}
+
+fn encode_kademlia_membership_records(
+    network_name: &str,
+    membership_tag: Option<&str>,
+    records: Vec<SignedMembershipRecord>,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&KademliaMembershipRecordBundle {
+        version: 1,
+        network_name: network_name.to_owned(),
+        membership_tag: membership_tag.map(str::to_owned),
+        records,
+    })
+}
+
+fn learn_membership_records_from_kademlia_value(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    local_capabilities: &mut ControlCapabilities,
+    expected_network_name: &str,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+    value: &[u8],
+) -> Result<usize, KademliaMembershipRecordError> {
+    if value.len() > MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES {
+        return Err(KademliaMembershipRecordError::TooLarge);
+    }
+    let bundle: KademliaMembershipRecordBundle =
+        serde_json::from_slice(value).map_err(|_| KademliaMembershipRecordError::Decode)?;
+    if bundle.version != 1 {
+        return Err(KademliaMembershipRecordError::UnsupportedVersion);
+    }
+    if bundle.network_name != expected_network_name {
+        return Err(KademliaMembershipRecordError::WrongNetwork);
+    }
+    if !membership_tag_allowed(
+        bundle.membership_tag.as_deref(),
+        current_membership_tag,
+        previous_membership_tags,
+    ) {
+        return Err(KademliaMembershipRecordError::WrongMembershipScope);
+    }
+    if bundle.records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
+        return Err(KademliaMembershipRecordError::TooManyRecords);
+    }
+
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats = forwarder
+        .merge_membership_records(&bundle.records, now_unix_seconds)
+        .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
+    if stats.accepted > 0 || stats.removed_expired > 0 {
+        membership
+            .replace_record_members(
+                forwarder.config(),
+                forwarder.member_records(),
+                now_unix_seconds,
+            )
+            .map_err(ForwardError::from)
+            .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
+        *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
+        let accepted = stats.accepted.to_string();
+        let ignored = stats.ignored_stale_or_equal.to_string();
+        let removed_expired = stats.removed_expired.to_string();
+        log_runtime_event(
+            LogLevel::Info,
+            "kademlia_membership_records_merged",
+            &[
+                ("accepted", &accepted),
+                ("ignored_stale_or_equal", &ignored),
+                ("removed_expired", &removed_expired),
+            ],
+        );
+    }
+    Ok(stats.accepted)
+}
+
+fn membership_tag_allowed(
+    tag: Option<&str>,
+    current_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+) -> bool {
+    tag == current_membership_tag
+        || tag.is_none()
+        || tag.is_some_and(|tag| {
+            previous_membership_tags
+                .iter()
+                .any(|previous| previous == tag)
+        })
 }
 
 fn prune_expired_membership_records(
@@ -5907,8 +6147,8 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
 }
 
 struct BehaviourEventContext<'a> {
-    forwarder: &'a Forwarder,
-    membership: &'a OverlayMembership,
+    forwarder: &'a mut Forwarder,
+    membership: &'a mut OverlayMembership,
     infrastructure_peers: &'a mut InfrastructurePeers,
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
@@ -5916,6 +6156,8 @@ struct BehaviourEventContext<'a> {
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
     discovery: &'a DiscoveryConfig,
+    local_capabilities: &'a mut ControlCapabilities,
+    previous_membership_tags: &'a [String],
 }
 
 fn handle_behaviour_event(
@@ -5963,9 +6205,14 @@ fn handle_behaviour_event(
         BehaviourEvent::Kad(event) if context.discovery.kademlia => {
             handle_kademlia_event(
                 swarm,
-                context.forwarder,
-                context.infrastructure_peers,
-                context.metrics,
+                KademliaEventContext {
+                    forwarder: context.forwarder,
+                    membership: context.membership,
+                    infrastructure_peers: context.infrastructure_peers,
+                    local_capabilities: context.local_capabilities,
+                    previous_membership_tags: context.previous_membership_tags,
+                    metrics: context.metrics,
+                },
                 event,
             );
         }
@@ -6125,11 +6372,18 @@ impl AutoNatReachability {
     }
 }
 
+struct KademliaEventContext<'a> {
+    forwarder: &'a mut Forwarder,
+    membership: &'a mut OverlayMembership,
+    infrastructure_peers: &'a mut InfrastructurePeers,
+    local_capabilities: &'a mut ControlCapabilities,
+    previous_membership_tags: &'a [String],
+    metrics: &'a RuntimeMetrics,
+}
+
 fn handle_kademlia_event(
     swarm: &mut Swarm<Behaviour>,
-    forwarder: &Forwarder,
-    infrastructure_peers: &mut InfrastructurePeers,
-    metrics: &RuntimeMetrics,
+    mut context: KademliaEventContext<'_>,
     event: kad::Event,
 ) {
     match event {
@@ -6139,36 +6393,15 @@ fn handle_kademlia_event(
                 ..
             })) = &result
             {
-                dial_kademlia_providers(swarm, forwarder, metrics, providers);
+                dial_kademlia_providers(swarm, context.forwarder, context.metrics, providers);
             }
-            if let kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk { peers, .. })) =
-                &result
-            {
-                for peer in peers {
-                    admit_kademlia_relay_infrastructure_peer(
-                        swarm,
-                        infrastructure_peers,
-                        metrics,
-                        peer.peer_id,
-                        peer.addrs.iter(),
-                    );
-                }
-            }
-            if let kad::QueryResult::GetClosestPeers(Err(kad::GetClosestPeersError::Timeout {
-                peers,
-                ..
-            })) = &result
-            {
-                for peer in peers {
-                    admit_kademlia_relay_infrastructure_peer(
-                        swarm,
-                        infrastructure_peers,
-                        metrics,
-                        peer.peer_id,
-                        peer.addrs.iter(),
-                    );
-                }
-            }
+            handle_kademlia_membership_record_result(&result, &mut context);
+            handle_kademlia_closest_peer_result(
+                swarm,
+                context.infrastructure_peers,
+                context.metrics,
+                &result,
+            );
             eprintln!("kademlia query progressed: {result:?}");
         }
         kad::Event::RoutingUpdated {
@@ -6176,8 +6409,8 @@ fn handle_kademlia_event(
         } => {
             admit_kademlia_relay_infrastructure_peer(
                 swarm,
-                infrastructure_peers,
-                metrics,
+                context.infrastructure_peers,
+                context.metrics,
                 peer,
                 addresses.iter(),
             );
@@ -6185,6 +6418,90 @@ fn handle_kademlia_event(
         }
         other => {
             eprintln!("kademlia event: {other:?}");
+        }
+    }
+}
+
+fn handle_kademlia_membership_record_result(
+    result: &kad::QueryResult,
+    context: &mut KademliaEventContext<'_>,
+) {
+    if let kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) = result {
+        let value = peer_record.record.value.as_slice();
+        let expected_network_name = context.local_capabilities.network_name.clone();
+        let current_membership_tag = context.local_capabilities.membership_tag.clone();
+        match learn_membership_records_from_kademlia_value(
+            context.forwarder,
+            context.membership,
+            context.local_capabilities,
+            &expected_network_name,
+            current_membership_tag.as_deref(),
+            context.previous_membership_tags,
+            value,
+        ) {
+            Ok(accepted) => {
+                context.metrics.record_kademlia_membership_records_found();
+                context
+                    .metrics
+                    .record_kademlia_membership_records_accepted(accepted);
+            }
+            Err(error) => {
+                context.metrics.record_kademlia_membership_record_invalid();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "kademlia_membership_record_rejected",
+                    &[("reason", &error.to_string())],
+                );
+            }
+        }
+    }
+    if let kad::QueryResult::GetRecord(Err(error)) = result {
+        log_runtime_event(
+            LogLevel::Warn,
+            "kademlia_membership_record_lookup_failed",
+            &[("error", &format!("{error:?}"))],
+        );
+    }
+    handle_kademlia_put_record_result(context.metrics, result);
+}
+
+fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::QueryResult) {
+    if let kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { key })) = result {
+        log_runtime_event(
+            LogLevel::Info,
+            "kademlia_membership_record_published",
+            &[("key", &format!("{key:?}"))],
+        );
+    }
+    if let kad::QueryResult::PutRecord(Err(error)) = result {
+        metrics.record_kademlia_membership_record_publication_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "kademlia_membership_record_publication_failed",
+            &[("error", &format!("{error:?}"))],
+        );
+    }
+}
+
+fn handle_kademlia_closest_peer_result(
+    swarm: &mut Swarm<Behaviour>,
+    infrastructure_peers: &mut InfrastructurePeers,
+    metrics: &RuntimeMetrics,
+    result: &kad::QueryResult,
+) {
+    if let kad::QueryResult::GetClosestPeers(
+        Ok(kad::GetClosestPeersOk { peers, .. })
+        | Err(kad::GetClosestPeersError::Timeout { peers, .. }),
+    ) = result
+    {
+        for peer in peers {
+            admit_kademlia_relay_infrastructure_peer(
+                swarm,
+                infrastructure_peers,
+                metrics,
+                peer.peer_id,
+                peer.addrs.iter(),
+            );
         }
     }
 }
@@ -7934,10 +8251,26 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
         let keys = vec![key.clone()];
+        let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
+            .expect("forwarder");
 
         let auto_relay = AutoRelayState::default();
 
-        refresh_kademlia_rendezvous(&mut node.swarm, &key, &keys, true, &auto_relay, &metrics);
+        refresh_kademlia_rendezvous(
+            &mut node.swarm,
+            &KademliaRefreshContext {
+                advertise_key: &key,
+                lookup_keys: &keys,
+                membership_record_advertise_key: node.kademlia_membership_records_key.as_ref(),
+                membership_record_lookup_keys: &[],
+                network_name: &node.network_name,
+                membership_tag: node.membership_tag.as_deref(),
+                forwarder: &forwarder,
+                advertise_provider: true,
+                auto_relay: &auto_relay,
+                metrics: &metrics,
+            },
+        );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -7978,13 +8311,29 @@ mod tests {
         let metrics = RuntimeMetrics::default();
         let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
         let keys = vec![key.clone()];
+        let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
+            .expect("forwarder");
 
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(node.startup.kademlia.rendezvous_lookup_started);
 
         let auto_relay = AutoRelayState::default();
 
-        refresh_kademlia_rendezvous(&mut node.swarm, &key, &keys, false, &auto_relay, &metrics);
+        refresh_kademlia_rendezvous(
+            &mut node.swarm,
+            &KademliaRefreshContext {
+                advertise_key: &key,
+                lookup_keys: &keys,
+                membership_record_advertise_key: node.kademlia_membership_records_key.as_ref(),
+                membership_record_lookup_keys: &[],
+                network_name: &node.network_name,
+                membership_tag: node.membership_tag.as_deref(),
+                forwarder: &forwarder,
+                advertise_provider: false,
+                auto_relay: &auto_relay,
+                metrics: &metrics,
+            },
+        );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -8042,19 +8391,142 @@ mod tests {
         );
 
         let auto_relay = AutoRelayState::default();
+        let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
+            .expect("forwarder");
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
-            &current_key,
-            &keys,
-            true,
-            &auto_relay,
-            &metrics,
+            &KademliaRefreshContext {
+                advertise_key: &current_key,
+                lookup_keys: &keys,
+                membership_record_advertise_key: node.kademlia_membership_records_key.as_ref(),
+                membership_record_lookup_keys: &[],
+                network_name: &node.network_name,
+                membership_tag: node.membership_tag.as_deref(),
+                forwarder: &forwarder,
+                advertise_provider: true,
+                auto_relay: &auto_relay,
+                metrics: &metrics,
+            },
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 3);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
+    }
+
+    #[test]
+    fn kademlia_membership_record_lookup_keys_include_previous_and_untagged_scope() {
+        let current_key =
+            crate::runtime::p2p::kademlia_membership_records_key("lab", Some("current"));
+
+        let keys = kademlia_membership_record_lookup_keys(
+            "lab",
+            Some("current"),
+            Some(&current_key),
+            &[
+                "previous-a".to_owned(),
+                "previous-b".to_owned(),
+                "previous-a".to_owned(),
+            ],
+        );
+
+        assert_eq!(
+            keys,
+            vec![
+                current_key,
+                crate::runtime::p2p::kademlia_membership_records_key("lab", Some("previous-a")),
+                crate::runtime::p2p::kademlia_membership_records_key("lab", Some("previous-b")),
+                crate::runtime::p2p::kademlia_membership_records_key("lab", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn kademlia_membership_record_bundle_merges_verified_records() {
+        let local_identity = NodeIdentity::generate_ed25519().expect("local identity");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_with_peer(&local_identity, member_peer);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: issuer.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("issuer record"),
+        ];
+        let member_record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("member record");
+        let value = encode_kademlia_membership_records("lab", Some("current"), vec![member_record])
+            .expect("encoded bundle");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut capabilities = ControlCapabilities::local("lab", Some("current".to_owned()), 1280);
+
+        let accepted = learn_membership_records_from_kademlia_value(
+            &mut forwarder,
+            &mut membership,
+            &mut capabilities,
+            "lab",
+            Some("current"),
+            &[],
+            &value,
+        )
+        .expect("trusted bundle");
+
+        assert_eq!(accepted, 1);
+        assert!(membership.allows(member_peer));
+        assert_eq!(capabilities.member_records.len(), 2);
+    }
+
+    #[test]
+    fn kademlia_membership_record_bundle_rejects_wrong_scope() {
+        let local_identity = NodeIdentity::generate_ed25519().expect("local identity");
+        let member = peer_id();
+        let config = config_with_peer(&local_identity, member);
+        let value =
+            encode_kademlia_membership_records("lab", Some("other"), Vec::new()).expect("bundle");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut capabilities = ControlCapabilities::local("lab", Some("current".to_owned()), 1280);
+
+        let result = learn_membership_records_from_kademlia_value(
+            &mut forwarder,
+            &mut membership,
+            &mut capabilities,
+            "lab",
+            Some("current"),
+            &["previous".to_owned()],
+            &value,
+        );
+
+        assert!(matches!(
+            result,
+            Err(KademliaMembershipRecordError::WrongMembershipScope)
+        ));
     }
 
     #[tokio::test]
