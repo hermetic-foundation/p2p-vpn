@@ -168,6 +168,15 @@ capture_daemon_control() {
   if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT:-0}" == 1 ]]; then
     health_args+=(--require-observed-packet-plane-quic-endpoint)
   fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_INFRASTRUCTURE_PEER:-0}" == 1 ]]; then
+    health_args+=(--require-auto-relay-infrastructure-peer)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_CANDIDATE:-0}" == 1 ]]; then
+    health_args+=(--require-auto-relay-candidate)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_RESERVATION:-0}" == 1 ]]; then
+    health_args+=(--require-auto-relay-reservation)
+  fi
 
   {
     printf "health_args:"
@@ -202,6 +211,9 @@ write_commands() {
     printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION:-0}"
     printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT:-0}"
     printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_INFRASTRUCTURE_PEER=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_INFRASTRUCTURE_PEER:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_CANDIDATE=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_CANDIDATE:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_RESERVATION=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_RESERVATION:-0}"
     echo
     echo "nix run .#debug-bundle"
     echo "sed -n '1,220p' \"$metadata\""

@@ -122,6 +122,7 @@ pub struct RuntimeMetrics {
     auto_relay_infrastructure_candidates: AtomicU64,
     auto_relay_infrastructure_dial_attempts: AtomicU64,
     auto_relay_infrastructure_dial_failures: AtomicU64,
+    auto_relay_discovery_queries: AtomicU64,
     auto_relay_candidates: AtomicU64,
     auto_relay_reservation_attempts: AtomicU64,
     auto_relay_reservation_failures: AtomicU64,
@@ -500,6 +501,11 @@ impl RuntimeMetrics {
 
     pub fn record_auto_relay_infrastructure_dial_failure(&self) {
         self.auto_relay_infrastructure_dial_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_auto_relay_discovery_query(&self) {
+        self.auto_relay_discovery_queries
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -1079,6 +1085,8 @@ impl RuntimeMetrics {
         snapshot.auto_relay_infrastructure_dial_failures = self
             .auto_relay_infrastructure_dial_failures
             .load(Ordering::Relaxed);
+        snapshot.auto_relay_discovery_queries =
+            self.auto_relay_discovery_queries.load(Ordering::Relaxed);
         snapshot.auto_relay_candidates = self.auto_relay_candidates.load(Ordering::Relaxed);
         snapshot.auto_relay_reservation_attempts =
             self.auto_relay_reservation_attempts.load(Ordering::Relaxed);
@@ -1347,6 +1355,7 @@ pub struct RuntimeSnapshot {
     pub auto_relay_infrastructure_candidates: u64,
     pub auto_relay_infrastructure_dial_attempts: u64,
     pub auto_relay_infrastructure_dial_failures: u64,
+    pub auto_relay_discovery_queries: u64,
     pub auto_relay_candidates: u64,
     pub auto_relay_reservation_attempts: u64,
     pub auto_relay_reservation_failures: u64,
@@ -1605,6 +1614,10 @@ impl RuntimeSnapshot {
             format!(
                 "auto_relay_infrastructure_dial_failures {}",
                 self.auto_relay_infrastructure_dial_failures
+            ),
+            format!(
+                "auto_relay_discovery_queries {}",
+                self.auto_relay_discovery_queries
             ),
             format!("auto_relay_candidates {}", self.auto_relay_candidates),
             format!(
@@ -2182,6 +2195,7 @@ mod tests {
         metrics.record_auto_relay_infrastructure_candidate();
         metrics.record_auto_relay_infrastructure_dial_attempt();
         metrics.record_auto_relay_infrastructure_dial_failure();
+        metrics.record_auto_relay_discovery_query();
         metrics.record_auto_relay_candidate();
         metrics.record_auto_relay_reservation_attempt();
         metrics.record_auto_relay_reservation_failure();
@@ -2557,6 +2571,7 @@ mod tests {
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
+        assert_eq!(snapshot.auto_relay_discovery_queries, 1);
         assert_eq!(snapshot.auto_relay_candidates, 1);
         assert_eq!(snapshot.auto_relay_reservation_attempts, 1);
         assert_eq!(snapshot.auto_relay_reservation_failures, 1);
@@ -2664,11 +2679,13 @@ mod tests {
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
+        assert_eq!(snapshot.auto_relay_discovery_queries, 1);
         assert_eq!(snapshot.auto_relay_reservation_attempts, 1);
         assert_eq!(snapshot.auto_relay_reservation_failures, 1);
         assert_metric_line(&snapshot, "auto_relay_infrastructure_candidates 1");
         assert_metric_line(&snapshot, "auto_relay_infrastructure_dial_attempts 1");
         assert_metric_line(&snapshot, "auto_relay_infrastructure_dial_failures 1");
+        assert_metric_line(&snapshot, "auto_relay_discovery_queries 1");
         assert_metric_line(&snapshot, "auto_relay_candidates 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_attempts 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_failures 1");

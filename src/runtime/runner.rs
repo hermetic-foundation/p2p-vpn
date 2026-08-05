@@ -2278,8 +2278,7 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
     }
 
     if context.auto_relay.private_reachability() {
-        let local_peer = *swarm.local_peer_id();
-        swarm.behaviour_mut().kad.get_closest_peers(local_peer);
+        query_auto_relay_infrastructure(swarm, context.metrics, "kademlia_refresh");
     }
 
     match swarm.behaviour_mut().kad.bootstrap() {
@@ -6875,8 +6874,7 @@ fn handle_autonat_event(
             auto_relay.record_reachability(reachability);
             metrics.record_autonat_status(reachability);
             if auto_relay.private_reachability() {
-                let local_peer = *swarm.local_peer_id();
-                swarm.behaviour_mut().kad.get_closest_peers(local_peer);
+                query_auto_relay_infrastructure(swarm, metrics, "autonat_private");
             }
             attempt_auto_relay_reservations(swarm, auto_relay, metrics);
             log_runtime_event(
@@ -7015,6 +7013,21 @@ fn handle_kademlia_membership_record_result(
         );
     }
     handle_kademlia_put_record_result(context.metrics, result);
+}
+
+fn query_auto_relay_infrastructure(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    reason: &'static str,
+) {
+    let local_peer = *swarm.local_peer_id();
+    swarm.behaviour_mut().kad.get_closest_peers(local_peer);
+    metrics.record_auto_relay_discovery_query();
+    log_runtime_event(
+        LogLevel::Info,
+        "auto_relay_discovery_query",
+        &[("reason", reason), ("target", &local_peer.to_string())],
+    );
 }
 
 fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::QueryResult) {
@@ -8911,7 +8924,8 @@ mod tests {
         let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
             .expect("forwarder");
 
-        let auto_relay = AutoRelayState::default();
+        let mut auto_relay = AutoRelayState::default();
+        auto_relay.record_reachability(AutoNatReachability::Private);
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
@@ -8933,6 +8947,7 @@ mod tests {
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
+        assert_eq!(snapshot.auto_relay_discovery_queries, 1);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
     }

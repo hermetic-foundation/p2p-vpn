@@ -45,6 +45,12 @@ converging, and enable readiness gates such as
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT=1`, or
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=1` when comparing public
 bootstrap, relay, or packet-plane failures.
+For daemon-managed public relay discovery, use
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_INFRASTRUCTURE_PEER=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_CANDIDATE=1`, or
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_RESERVATION=1` to require the
+Kademlia-discovered relay infrastructure, Identify-confirmed relay-hop
+candidate, or automatic reservation stage.
 
 Before running slower namespace or public relay repros, run the reproducible
 local feedback loop:
@@ -172,7 +178,10 @@ turn a repro into a strict readiness gate for the stage under investigation. Add
 `--require-observed-packet-plane-udp-endpoint` or
 `--require-observed-packet-plane-quic-endpoint` when the repro depends on
 libp2p confirmed external addresses becoming owned UDP or owned-QUIC endpoint
-advertisements. Use `--wait-seconds 30` when the repro should wait for
+advertisements. Add `--require-auto-relay-infrastructure-peer`,
+`--require-auto-relay-candidate`, or `--require-auto-relay-reservation` when
+the repro should prove daemon-managed public relay convergence instead of only
+configured relay state. Use `--wait-seconds 30` when the repro should wait for
 asynchronous discovery, relay, DCUtR, or packet-plane negotiation instead of
 sampling only once.
 
@@ -184,7 +193,9 @@ relay readiness metrics and `relay_reservations_lost`. The captured
 `daemon-state` and `daemon-status` artifacts include `auto_relay_policy_*`,
 `auto_relay_current_candidates`, `auto_relay_active_reservations`, and
 `auto_relay_pending_retries` lines, which distinguish policy caps from an empty
-or retry-delayed candidate set.
+or retry-delayed candidate set. `auto_relay_discovery_queries` in status or
+Prometheus output shows whether a private-reachability daemon is actively
+asking Kademlia for relay infrastructure candidates.
 
 For DCUtR or path-promotion failures, check peer logs for `event=dcutr_enabled`,
 `event=autonat_enabled`, `event=dcutr_hole_punch_result`, and

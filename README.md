@@ -606,7 +606,13 @@ control summary. Use `P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` plus
 readiness gates such as `P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=1`,
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION=1`, or
 `P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=1` when collecting
-comparable public bootstrap, relay, or packet-plane failure evidence.
+comparable public bootstrap, relay, or packet-plane failure evidence. For
+daemon-managed public relay discovery, add
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_INFRASTRUCTURE_PEER=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_CANDIDATE=1`, or
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_AUTO_RELAY_RESERVATION=1` to require that the
+daemon has admitted relay infrastructure, confirmed a relay-hop candidate, or
+started an automatic reservation.
 
 `check-fast` runs `cargo fmt -- --check`, `cargo test`, and
 `cargo clippy --all-targets -- -D warnings` with the Rust toolchain and native
@@ -1348,7 +1354,7 @@ relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, packet-plane path demotions, relay reservation/circuit
 counts including client-side `relay_reservations_lost`, auto-relay
 candidate/reservation attempt/failure counts,
-auto-relay infrastructure candidate/dial/failure counts, packet-plane
+auto-relay infrastructure discovery query, candidate, dial, and failure counts, packet-plane
 recovery dial attempts/failures, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
 external address candidate/scheduled-probe/confirmed/expired counts, AutoNAT
@@ -1519,10 +1525,15 @@ daemon; add `--require-peers`, `--require-validated-peers`,
 gates. When testing automatic endpoint advertisement from libp2p observed
 addresses, add `--require-observed-packet-plane-udp-endpoint` or
 `--require-observed-packet-plane-quic-endpoint` to require positive observed
-UDP or owned-QUIC endpoint candidate counters. Add `--wait-seconds N` to poll
-until those checks pass or the wait deadline expires. `daemon-status` uses the
-same line-oriented metric names as `metrics`, but comes from the running
-daemon's current queue and path state instead of a startup snapshot.
+UDP or owned-QUIC endpoint candidate counters. For public relay convergence,
+add `--require-auto-relay-infrastructure-peer`,
+`--require-auto-relay-candidate`, or `--require-auto-relay-reservation` to
+prove the daemon has admitted Kademlia-discovered relay infrastructure,
+confirmed relay-hop support through Identify, or started an automatic relay
+reservation. Add `--wait-seconds N` to poll until those checks pass or the wait
+deadline expires. `daemon-status` uses the same line-oriented metric names as
+`metrics`, but comes from the running daemon's current queue and path state
+instead of a startup snapshot.
 `daemon-state` reports the running daemon's configured peers, validated
 capability state, selected path, healthy direct and relay path counts, effective
 MTU, selected path MTU, per-candidate path MTU estimates, configured

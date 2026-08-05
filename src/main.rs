@@ -547,6 +547,12 @@ enum Command {
         require_observed_packet_plane_udp_endpoint: bool,
         #[arg(long)]
         require_observed_packet_plane_quic_endpoint: bool,
+        #[arg(long)]
+        require_auto_relay_infrastructure_peer: bool,
+        #[arg(long)]
+        require_auto_relay_candidate: bool,
+        #[arg(long)]
+        require_auto_relay_reservation: bool,
     },
     DaemonShutdown {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -1013,6 +1019,9 @@ async fn main() -> Result<(), String> {
             require_packet_plane_quic_session,
             require_observed_packet_plane_udp_endpoint,
             require_observed_packet_plane_quic_endpoint,
+            require_auto_relay_infrastructure_peer,
+            require_auto_relay_candidate,
+            require_auto_relay_reservation,
         } => {
             Box::pin(daemon_health(
                 &socket,
@@ -1031,6 +1040,9 @@ async fn main() -> Result<(), String> {
                             require_observed_packet_plane_udp_endpoint,
                         observed_packet_plane_quic_endpoint:
                             require_observed_packet_plane_quic_endpoint,
+                        auto_relay_infrastructure_peer: require_auto_relay_infrastructure_peer,
+                        auto_relay_candidate: require_auto_relay_candidate,
+                        auto_relay_reservation: require_auto_relay_reservation,
                     },
                 },
             ))
@@ -5232,6 +5244,9 @@ struct DaemonHealthRequirements {
     packet_plane_quic_session: bool,
     observed_packet_plane_udp_endpoint: bool,
     observed_packet_plane_quic_endpoint: bool,
+    auto_relay_infrastructure_peer: bool,
+    auto_relay_candidate: bool,
+    auto_relay_reservation: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -5252,6 +5267,9 @@ struct DaemonHealthSnapshot {
     packet_plane_quic_sessions: Option<usize>,
     observed_packet_plane_udp_endpoint_candidates: Option<usize>,
     observed_packet_plane_quic_endpoint_candidates: Option<usize>,
+    relay_infrastructure_peers: Option<usize>,
+    auto_relay_current_candidates: Option<usize>,
+    auto_relay_active_reservations: Option<usize>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5400,6 +5418,27 @@ fn daemon_health_verdict(
             "observed packet plane QUIC endpoint candidates",
         ));
     }
+    if requirements.auto_relay_infrastructure_peer {
+        checks.push(count_check(
+            "auto_relay_infrastructure_peer",
+            snapshot.relay_infrastructure_peers,
+            "relay infrastructure peers",
+        ));
+    }
+    if requirements.auto_relay_candidate {
+        checks.push(count_check(
+            "auto_relay_candidate",
+            snapshot.auto_relay_current_candidates,
+            "auto relay current candidates",
+        ));
+    }
+    if requirements.auto_relay_reservation {
+        checks.push(count_check(
+            "auto_relay_reservation",
+            snapshot.auto_relay_active_reservations,
+            "auto relay active reservations",
+        ));
+    }
 
     DaemonHealthVerdict {
         ready: checks.iter().all(|check| check.ok),
@@ -5445,6 +5484,12 @@ fn parse_daemon_health_snapshot(lines: &[String]) -> DaemonHealthSnapshot {
             parse_metric_count(line, "observed_packet_plane_quic_endpoint_candidates")
         {
             snapshot.observed_packet_plane_quic_endpoint_candidates = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "relay_infrastructure_peers") {
+            snapshot.relay_infrastructure_peers = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "auto_relay_current_candidates") {
+            snapshot.auto_relay_current_candidates = Some(value);
+        } else if let Some(value) = parse_metric_count(line, "auto_relay_active_reservations") {
+            snapshot.auto_relay_active_reservations = Some(value);
         }
     }
     snapshot
@@ -7409,6 +7454,9 @@ mod tests {
             "--require-packet-plane-quic-session",
             "--require-observed-packet-plane-udp-endpoint",
             "--require-observed-packet-plane-quic-endpoint",
+            "--require-auto-relay-infrastructure-peer",
+            "--require-auto-relay-candidate",
+            "--require-auto-relay-reservation",
         ])
         .expect("cli");
 
@@ -7425,6 +7473,9 @@ mod tests {
             require_packet_plane_quic_session,
             require_observed_packet_plane_udp_endpoint,
             require_observed_packet_plane_quic_endpoint,
+            require_auto_relay_infrastructure_peer,
+            require_auto_relay_candidate,
+            require_auto_relay_reservation,
         } = cli.command
         else {
             panic!("expected daemon-health command");
@@ -7442,6 +7493,9 @@ mod tests {
         assert!(require_packet_plane_quic_session);
         assert!(require_observed_packet_plane_udp_endpoint);
         assert!(require_observed_packet_plane_quic_endpoint);
+        assert!(require_auto_relay_infrastructure_peer);
+        assert!(require_auto_relay_candidate);
+        assert!(require_auto_relay_reservation);
     }
 
     #[test]
@@ -7498,6 +7552,9 @@ mod tests {
             "packet_plane_quic_sessions 0".to_owned(),
             "observed_packet_plane_udp_endpoint_candidates 0".to_owned(),
             "observed_packet_plane_quic_endpoint_candidates 0".to_owned(),
+            "relay_infrastructure_peers 0".to_owned(),
+            "auto_relay_current_candidates 0".to_owned(),
+            "auto_relay_active_reservations 0".to_owned(),
         ];
 
         let verdict = daemon_health_verdict(
@@ -7512,6 +7569,9 @@ mod tests {
                 packet_plane_quic_session: true,
                 observed_packet_plane_udp_endpoint: true,
                 observed_packet_plane_quic_endpoint: true,
+                auto_relay_infrastructure_peer: true,
+                auto_relay_candidate: true,
+                auto_relay_reservation: true,
             },
         );
 
@@ -7530,6 +7590,9 @@ mod tests {
             "packet_plane_quic_session",
             "observed_packet_plane_udp_endpoint",
             "observed_packet_plane_quic_endpoint",
+            "auto_relay_infrastructure_peer",
+            "auto_relay_candidate",
+            "auto_relay_reservation",
         ] {
             assert!(
                 verdict
@@ -7554,6 +7617,9 @@ mod tests {
             "packet_plane_quic_sessions 1".to_owned(),
             "observed_packet_plane_udp_endpoint_candidates 1".to_owned(),
             "observed_packet_plane_quic_endpoint_candidates 1".to_owned(),
+            "relay_infrastructure_peers 1".to_owned(),
+            "auto_relay_current_candidates 2".to_owned(),
+            "auto_relay_active_reservations 1".to_owned(),
         ];
 
         assert_eq!(
@@ -7569,6 +7635,9 @@ mod tests {
                 packet_plane_quic_sessions: Some(1),
                 observed_packet_plane_udp_endpoint_candidates: Some(1),
                 observed_packet_plane_quic_endpoint_candidates: Some(1),
+                relay_infrastructure_peers: Some(1),
+                auto_relay_current_candidates: Some(2),
+                auto_relay_active_reservations: Some(1),
             }
         );
     }
