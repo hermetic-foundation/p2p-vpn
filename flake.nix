@@ -41,6 +41,28 @@
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
+        checkFast = pkgs.writeShellApplication {
+          name = "p2p-vpn-check-fast";
+          runtimeInputs = [
+            cargo
+            rust
+            pkgs.clippy
+            pkgs.rustfmt
+            pkgs.pkg-config
+            pkgs.stdenv.cc
+          ];
+          text = ''
+            if [[ ! -f Cargo.toml || ! -d src ]]; then
+              echo "p2p-vpn-check-fast must be run from the p2p-vpn repository root" >&2
+              exit 2
+            fi
+
+            export RUST_BACKTRACE="''${RUST_BACKTRACE:-1}"
+            cargo fmt -- --check
+            cargo test
+            cargo clippy --all-targets -- -D warnings
+          '';
+        };
         namespacePreflight = pkgs.writeShellApplication {
           name = "p2p-vpn-namespace-preflight";
           runtimeInputs = [
@@ -892,6 +914,7 @@ EOF
       {
         packages = {
           default = package;
+          check-fast = checkFast;
 
           releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
           nativeBuildInputs = [ pkgs.gnutar ];
@@ -926,6 +949,13 @@ EOF
             program = "${self.packages.${system}.default}/bin/p2p-vpn";
             meta = {
               description = "Run the p2p-vpn CLI";
+            };
+          };
+          check-fast = {
+            type = "app";
+            program = "${checkFast}/bin/p2p-vpn-check-fast";
+            meta = {
+              description = "Run formatter, tests, and clippy in the Nix tool environment";
             };
           };
         } // lib.optionalAttrs pkgs.stdenv.isLinux {

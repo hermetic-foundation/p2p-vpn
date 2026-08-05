@@ -525,12 +525,15 @@ Relay-capable nodes can also set `--relay-max-reservations`,
 Run local checks:
 
 ```sh
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+nix run .#check-fast
 nix flake check
 nix build .#default
 ```
+
+`check-fast` runs `cargo fmt -- --check`, `cargo test`, and
+`cargo clippy --all-targets -- -D warnings` with the Rust toolchain and native
+build inputs supplied by the flake. Use it for the normal local feedback loop
+before the broader Nix checks.
 
 `nix flake check` builds and tests the package, checks formatting, runs clippy
 with warnings denied, evaluates the NixOS module, and on Linux runs a NixOS VM

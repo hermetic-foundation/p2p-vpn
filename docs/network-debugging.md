@@ -3,6 +3,18 @@
 Use this runbook when a namespace, relay, DCUtR, discovery, or packet-plane run
 fails and you need artifacts that can be inspected after the command exits.
 
+## Fast Local Checks
+
+Before running slower namespace or public relay repros, run the reproducible
+local feedback loop:
+
+```sh
+nix run .#check-fast
+```
+
+It uses the flake-provided Rust toolchain and native build inputs to run
+formatting, tests, and clippy from a single command.
+
 ## Namespace E2E
 
 Check host namespace/TUN prerequisites before running the slower ignored suite:
