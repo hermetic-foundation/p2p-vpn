@@ -668,7 +668,12 @@ where
                 }
             }
             _ = timers.redial.tick() => {
-                handle_redial_tick(&mut node, &mut queue_runtime.discovered_peer_addresses, &metrics);
+                handle_redial_tick(
+                    &mut node,
+                    &mut queue_runtime.discovered_peer_addresses,
+                    &paths,
+                    &metrics,
+                );
             }
             () = async {
                 timers.kademlia_refresh
@@ -2017,6 +2022,7 @@ fn extend_runtime_peer_state_lines(
 fn handle_redial_tick(
     node: &mut P2pNode,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
     expire_discovered_peer_addresses(discovered_peer_addresses, metrics);
@@ -2027,6 +2033,7 @@ fn handle_redial_tick(
         &node.relay_peer_addresses,
         &node.configured_peer_addresses,
         &discovered_addresses,
+        paths,
         metrics,
     );
 }
@@ -2369,6 +2376,7 @@ fn redial_known_addresses(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
     let local_peer = *swarm.local_peer_id();
@@ -2378,7 +2386,7 @@ fn redial_known_addresses(
         relay_addresses,
         configured_peer_addresses,
         discovered_peer_addresses,
-        |peer| swarm.is_connected(peer),
+        |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     );
 
     for _ in 0..targets.skipped_connected {
@@ -2905,6 +2913,7 @@ fn redial_selected_addresses(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
     let local_peer = *swarm.local_peer_id();
@@ -2914,7 +2923,7 @@ fn redial_selected_addresses(
         relay_addresses,
         configured_peer_addresses,
         discovered_peer_addresses,
-        |peer| swarm.is_connected(peer),
+        |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     );
 
     for (peer, address) in targets.addresses {
@@ -2994,23 +3003,38 @@ fn pending_redial_targets(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
-    mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
+    mut connection_state: impl FnMut(&Libp2pPeerId) -> RedialConnectionState,
 ) -> RedialTargets {
     let mut addresses = Vec::new();
     let mut skipped_connected = 0;
     let mut seen = HashSet::new();
-    for (peer, address) in bootstrap_addresses
+    for (peer, address) in bootstrap_addresses.iter().chain(relay_addresses.iter()) {
+        if *peer == local_peer {
+            continue;
+        }
+        if connection_state(peer).is_connected() {
+            skipped_connected += 1;
+            continue;
+        }
+        if !seen.insert((*peer, address.clone())) {
+            continue;
+        }
+        addresses.push((*peer, address.clone()));
+    }
+    for (peer, address) in configured_peer_addresses
         .iter()
-        .chain(relay_addresses.iter())
-        .chain(configured_peer_addresses.iter())
         .chain(discovered_peer_addresses.iter())
     {
         if *peer == local_peer {
             continue;
         }
-        if is_connected(peer) {
-            skipped_connected += 1;
-            continue;
+        match connection_state(peer) {
+            RedialConnectionState::Disconnected => {}
+            RedialConnectionState::RelayOnly if relayed_address_relay_peer(address).is_none() => {}
+            RedialConnectionState::RelayOnly | RedialConnectionState::Direct => {
+                skipped_connected += 1;
+                continue;
+            }
         }
         if !seen.insert((*peer, address.clone())) {
             continue;
@@ -3020,6 +3044,38 @@ fn pending_redial_targets(
     RedialTargets {
         addresses,
         skipped_connected,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RedialConnectionState {
+    Disconnected,
+    RelayOnly,
+    Direct,
+}
+
+impl RedialConnectionState {
+    const fn is_connected(self) -> bool {
+        !matches!(self, Self::Disconnected)
+    }
+}
+
+fn redial_connection_state(
+    paths: &PathSet,
+    peer: Libp2pPeerId,
+    connected: bool,
+) -> RedialConnectionState {
+    if !connected {
+        return RedialConnectionState::Disconnected;
+    }
+
+    let overlay_peer = PeerId::from_libp2p(peer);
+    if paths.candidates_for(overlay_peer).any(|candidate| {
+        candidate.is_direct() && candidate.healthy && candidate.established_connections > 0
+    }) {
+        RedialConnectionState::Direct
+    } else {
+        RedialConnectionState::RelayOnly
     }
 }
 
@@ -3800,6 +3856,7 @@ fn dial_blocked_queue_peers(
         context.relay_addresses,
         context.configured_peer_addresses,
         context.discovered_peer_addresses,
+        context.paths,
         context.metrics,
     );
 }
@@ -4035,6 +4092,7 @@ async fn handle_swarm_event(
                 infrastructure_peers: context.infrastructure_peers,
                 relay_readiness: context.relay_readiness,
                 auto_relay: context.auto_relay,
+                paths: context.paths,
                 configured_peer_addresses: context.configured_peer_addresses,
                 discovered_peer_addresses: context.discovered_peer_addresses,
                 metrics: context.metrics,
@@ -6446,6 +6504,7 @@ struct BehaviourEventContext<'a> {
     infrastructure_peers: &'a mut InfrastructurePeers,
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
+    paths: &'a PathSet,
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
@@ -6466,6 +6525,7 @@ fn handle_behaviour_event(
                     swarm,
                     context.forwarder,
                     context.discovered_peer_addresses,
+                    context.paths,
                     context.metrics,
                     peer,
                     address,
@@ -6558,6 +6618,7 @@ fn handle_identify_received(
             swarm,
             context.forwarder,
             context.discovered_peer_addresses,
+            context.paths,
             context.metrics,
             peer_id,
             address,
@@ -6921,6 +6982,7 @@ fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     address: Multiaddr,
@@ -6953,7 +7015,10 @@ fn learn_peer_address(
         autonat.add_server(peer, Some(address.clone()));
     }
 
-    if swarm.is_connected(&peer) {
+    if redial_connection_state(paths, peer, swarm.is_connected(&peer))
+        == RedialConnectionState::Direct
+        || (swarm.is_connected(&peer) && relayed_address_relay_peer(&address).is_some())
+    {
         return;
     }
 
@@ -9010,7 +9075,13 @@ mod tests {
             &[],
             &[(disconnected, peer_address.clone()), (local, local_address)],
             &[],
-            |peer| *peer == connected,
+            |peer| {
+                if *peer == connected {
+                    RedialConnectionState::Direct
+                } else {
+                    RedialConnectionState::Disconnected
+                }
+            },
         );
 
         assert_eq!(
@@ -9038,7 +9109,7 @@ mod tests {
             &[(relay, relay_address.clone())],
             &[(configured, peer_address.clone())],
             &[],
-            |_| false,
+            |_| RedialConnectionState::Disconnected,
         );
 
         assert_eq!(
@@ -9068,7 +9139,7 @@ mod tests {
             &[],
             &[(configured, configured_address.clone())],
             &[(discovered, discovered_address.clone())],
-            |_| false,
+            |_| RedialConnectionState::Disconnected,
         );
 
         assert_eq!(
@@ -9095,7 +9166,7 @@ mod tests {
             &[(peer, address.clone())],
             &[],
             &[(peer, address.clone())],
-            |_| false,
+            |_| RedialConnectionState::Disconnected,
         );
 
         assert_eq!(
@@ -9104,6 +9175,65 @@ mod tests {
                 addresses: vec![(peer, address)],
                 skipped_connected: 0,
             }
+        );
+    }
+
+    #[test]
+    fn redial_targets_keep_direct_overlay_addresses_for_relay_only_peers() {
+        let local = peer_id();
+        let relay = peer_id();
+        let peer = peer_id();
+        let direct_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("direct address");
+        let relayed_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+
+        let targets = pending_redial_targets(
+            local,
+            &[],
+            &[],
+            &[(peer, relayed_address)],
+            &[(peer, direct_address.clone())],
+            |_| RedialConnectionState::RelayOnly,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![(peer, direct_address)],
+                skipped_connected: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn redial_connection_state_reports_relay_only_until_direct_path_exists() {
+        let peer = peer_id();
+        let overlay = PeerId::from_libp2p(peer);
+        let mut paths = PathSet::new();
+
+        assert_eq!(
+            redial_connection_state(&paths, peer, false),
+            RedialConnectionState::Disconnected
+        );
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::RelayOnly
+        );
+
+        paths.record_established(overlay, PathKind::CircuitRelay);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::RelayOnly
+        );
+
+        paths.record_established(overlay, PathKind::DirectTcpStream);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::Direct
         );
     }
 
@@ -10041,6 +10171,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
 
@@ -10048,6 +10179,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
+            &paths,
             &metrics,
             configured,
             address.clone(),
@@ -10088,6 +10220,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
 
@@ -10095,6 +10228,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
+            &paths,
             &metrics,
             unconfigured,
             address,
@@ -10135,6 +10269,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}")
             .parse()
@@ -10144,6 +10279,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
+            &paths,
             &metrics,
             configured,
             address,
