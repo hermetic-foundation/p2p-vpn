@@ -1232,8 +1232,8 @@ memory. Set
 run to skip the public discovery phase and immediately replay relay-circuit and
 DCUtR validation against those relay candidates.
 
-Once `public-relay-repro` writes `public-relay-config.json`, generate a
-two-host VPN data-plane runbook with:
+Once `public-relay-repro` writes `public-vpn-host-a.json` and
+`public-vpn-host-b.json`, generate a two-host VPN data-plane runbook with:
 
 ```sh
 P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$P2P_VPN_REPRO_DIR" \
@@ -1249,6 +1249,11 @@ comparing the same public relay-assisted overlay across two machines. Each host
 also writes `vpn-repro-evidence.json`, a compact summary of health, ping,
 direct/relay path evidence, packet-plane session counts, QUIC session counts,
 DCUtR successes, and direct path promotions for quick machine comparison.
+Use `P2P_VPN_VPN_REPRO_HOST_A_CONFIG` and
+`P2P_VPN_VPN_REPRO_HOST_B_CONFIG` when the host configs live outside the
+`public-relay-repro` artifact directory. The legacy
+`P2P_VPN_VPN_REPRO_CONFIG` still generates both scripts against one shared
+config.
 
 The ignored tests run the same kind of probe from the test harness:
 

@@ -322,8 +322,8 @@ phase fails without deleting earlier evidence.
 
 ### Two-Host Public VPN Data-Plane Repro
 
-After `public-relay-repro` writes `public-relay-config.json`, generate the
-two-host daemon runbook:
+After `public-relay-repro` writes `public-vpn-host-a.json` and
+`public-vpn-host-b.json`, generate the two-host daemon runbook:
 
 ```sh
 export P2P_VPN_VPN_REPRO_DIR="/tmp/p2p-vpn-public-vpn-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -334,8 +334,11 @@ nix run .#public-vpn-repro
 
 Use `P2P_VPN_VPN_REPRO_CONFIG=/path/to/p2p-vpn.json` instead of
 `P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR` when both hosts already have their final
-overlay configs. Set `P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION=0` when the run
-is intentionally proving stream fallback over a relayed circuit. Set
+overlay configs. Use `P2P_VPN_VPN_REPRO_HOST_A_CONFIG` and
+`P2P_VPN_VPN_REPRO_HOST_B_CONFIG` when the hosts need distinct configs outside
+a `public-relay-repro` artifact directory. Set
+`P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION=0` when the run is intentionally
+proving stream fallback over a relayed circuit. Set
 `P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION=1` when the expected result is an owned
 QUIC packet-plane session.
 

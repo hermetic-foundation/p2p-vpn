@@ -991,22 +991,45 @@
             mkdir -p "$artifact_dir"
 
             config="''${P2P_VPN_VPN_REPRO_CONFIG:-}"
+            host_a_config="''${P2P_VPN_VPN_REPRO_HOST_A_CONFIG:-}"
+            host_b_config="''${P2P_VPN_VPN_REPRO_HOST_B_CONFIG:-}"
             public_relay_dir="''${P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR:-}"
-            if [[ -z "$config" && -n "$public_relay_dir" && -s "$public_relay_dir/public-relay-config.json" ]]; then
+            if [[ -z "$host_a_config" && -n "$public_relay_dir" && -s "$public_relay_dir/public-vpn-host-a.json" ]]; then
+              host_a_config="$public_relay_dir/public-vpn-host-a.json"
+            fi
+            if [[ -z "$host_b_config" && -n "$public_relay_dir" && -s "$public_relay_dir/public-vpn-host-b.json" ]]; then
+              host_b_config="$public_relay_dir/public-vpn-host-b.json"
+            fi
+            if [[ -z "$config" && -z "$host_a_config" && -z "$host_b_config" && -n "$public_relay_dir" && -s "$public_relay_dir/public-relay-config.json" ]]; then
               config="$public_relay_dir/public-relay-config.json"
             fi
-            if [[ -z "$config" ]]; then
+            if [[ -z "$config" && -z "$host_a_config" && -z "$host_b_config" ]]; then
               config="$artifact_dir/public-relay-config.json"
             fi
-            if [[ ! -s "$config" ]]; then
+            if [[ -n "$config" ]]; then
+              if [[ -z "$host_a_config" ]]; then
+                host_a_config="$config"
+              fi
+              if [[ -z "$host_b_config" ]]; then
+                host_b_config="$config"
+              fi
+            fi
+            if [[ ! -s "$host_a_config" || ! -s "$host_b_config" ]]; then
               cat >&2 <<EOF
-missing relay-assisted VPN config: $config
+missing relay-assisted VPN configs:
+  Host A: $host_a_config
+  Host B: $host_b_config
 
-Set P2P_VPN_VPN_REPRO_CONFIG to an existing overlay config, or set
+Set P2P_VPN_VPN_REPRO_HOST_A_CONFIG and P2P_VPN_VPN_REPRO_HOST_B_CONFIG to
+matched overlay configs, set P2P_VPN_VPN_REPRO_CONFIG to one shared existing
+overlay config, or set
 P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR to a public-relay-repro artifact directory
-containing public-relay-config.json.
+containing public-vpn-host-a.json and public-vpn-host-b.json.
 EOF
               exit 2
+            fi
+            if [[ -z "$config" ]]; then
+              config="$host_a_config"
             fi
 
             metadata="$artifact_dir/vpn-repro-metadata.txt"
@@ -1101,10 +1124,10 @@ EOF
             }
 
             write_metadata() {
-              peer_count="$(jq '(.peers // []) | length' "$config" 2>/dev/null || echo unknown)"
-              route_count="$(jq '(.network.routes // []) | length' "$config" 2>/dev/null || echo unknown)"
-              interface_name="$(jq -r '.interface.name // "unknown"' "$config" 2>/dev/null || echo unknown)"
-              interface_mtu="$(jq -r '.interface.mtu // "unknown"' "$config" 2>/dev/null || echo unknown)"
+              peer_count="$(jq '(.peers // []) | length' "$host_a_config" 2>/dev/null || echo unknown)"
+              route_count="$(jq '(.network.routes // []) | length' "$host_a_config" 2>/dev/null || echo unknown)"
+              interface_name="$(jq -r '.interface.name // "unknown"' "$host_a_config" 2>/dev/null || echo unknown)"
+              interface_mtu="$(jq -r '.interface.mtu // "unknown"' "$host_a_config" 2>/dev/null || echo unknown)"
               {
                 echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 echo "working_directory=$(pwd)"
@@ -1113,6 +1136,8 @@ EOF
                 echo "p2p_vpn_version=$(p2p-vpn --version 2>/dev/null || echo unknown)"
                 echo "artifact_dir=$artifact_dir"
                 echo "config=$config"
+                echo "host_a_config=$host_a_config"
+                echo "host_b_config=$host_b_config"
                 echo "public_relay_dir=$public_relay_dir"
                 echo "peer_count=$peer_count"
                 echo "route_count=$route_count"
@@ -1144,12 +1169,13 @@ EOF
             write_runner() {
               script="$1"
               role="$2"
+              runner_config="$3"
               {
                 echo "#!/usr/bin/env bash"
                 echo "set -euo pipefail"
                 echo "umask 077"
                 printf "artifact_dir=%q\n" "$artifact_dir"
-                printf "config=%q\n" "$config"
+                printf "config=%q\n" "$runner_config"
                 printf "control_socket=%q\n" "$control_socket"
                 printf "pidfile=%q\n" "$pidfile"
                 printf "daemon_log=%q\n" "$daemon_log"
@@ -1490,7 +1516,8 @@ EOF
                 echo "#!/usr/bin/env bash"
                 echo "set -euo pipefail"
                 printf "export P2P_VPN_VPN_REPRO_DIR=%q\n" "$artifact_dir"
-                printf "export P2P_VPN_VPN_REPRO_CONFIG=%q\n" "$config"
+                printf "export P2P_VPN_VPN_REPRO_HOST_A_CONFIG=%q\n" "$host_a_config"
+                printf "export P2P_VPN_VPN_REPRO_HOST_B_CONFIG=%q\n" "$host_b_config"
                 printf "export P2P_VPN_VPN_REPRO_CONTROL_SOCKET=%q\n" "$control_socket"
                 printf "export P2P_VPN_VPN_REPRO_PIDFILE=%q\n" "$pidfile"
                 printf "export P2P_VPN_VPN_REPRO_DAEMON_LOG=%q\n" "$daemon_log"
@@ -1517,6 +1544,8 @@ EOF
                 echo "p2p-vpn public VPN repro summary"
                 echo "artifact_dir=$artifact_dir"
                 echo "config=$config"
+                echo "host_a_config=$host_a_config"
+                echo "host_b_config=$host_b_config"
                 echo "metadata=$metadata"
                 echo "host_network=$host_network"
                 echo "host_network_before=$host_network_before"
@@ -1562,8 +1591,8 @@ EOF
             echo "writing public VPN repro artifacts to $artifact_dir" >&2
             write_metadata
             write_host_network
-            write_runner "$host_a_script" "Host A"
-            write_runner "$host_b_script" "Host B"
+            write_runner "$host_a_script" "Host A" "$host_a_config"
+            write_runner "$host_b_script" "Host B" "$host_b_config"
             write_collect
             write_shutdown
             write_commands
@@ -1977,6 +2006,8 @@ EOF
           } ''
             config="$TMPDIR/public-vpn-repro-config.json"
             artifacts="$TMPDIR/public-vpn-repro"
+            public_relay_artifacts="$TMPDIR/public-relay-repro"
+            mkdir -p "$public_relay_artifacts"
             p2p-vpn init-config \
               --output "$config" \
               --network public-vpn-repro-structure \
@@ -1984,9 +2015,11 @@ EOF
               --disable-mdns \
               --disable-kademlia \
               --force
+            cp "$config" "$public_relay_artifacts/public-vpn-host-a.json"
+            cp "$config" "$public_relay_artifacts/public-vpn-host-b.json"
 
             P2P_VPN_VPN_REPRO_DIR="$artifacts" \
-              P2P_VPN_VPN_REPRO_CONFIG="$config" \
+              P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$public_relay_artifacts" \
               P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
               p2p-vpn-public-vpn-repro
 
@@ -2006,8 +2039,14 @@ EOF
             grep -q 'capture_host_network "$host_network_after"' "$artifacts/vpn-repro-host-a.sh"
             grep -q 'capture_final_artifacts' "$artifacts/vpn-repro-host-a.sh"
             grep -q 'record_status daemon_health "$health_status"' "$artifacts/vpn-repro-host-a.sh"
+            grep -q "config=$public_relay_artifacts/public-vpn-host-a.json" "$artifacts/vpn-repro-host-a.sh"
+            grep -q "config=$public_relay_artifacts/public-vpn-host-b.json" "$artifacts/vpn-repro-host-b.sh"
+            grep -q 'P2P_VPN_VPN_REPRO_HOST_A_CONFIG' "$artifacts/vpn-repro-commands.sh"
+            grep -q 'P2P_VPN_VPN_REPRO_HOST_B_CONFIG' "$artifacts/vpn-repro-commands.sh"
             grep -q 'daemon_log_tail=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'result_log=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_a_config=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_b_config=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'evidence_json=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'vpn-repro-evidence.json' "$artifacts/vpn-repro-summary.txt"
             grep -q 'write_evidence_summary' "$artifacts/vpn-repro-host-a.sh"
