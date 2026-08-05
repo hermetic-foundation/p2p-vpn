@@ -143,12 +143,16 @@ The command tries candidates until one works, reports per-candidate failures,
 and requires direct relay multiaddrs with `/p2p/RELAY` but without
 `/p2p-circuit`. Repeated candidates are ordered round-robin by relay peer, with
 QUIC-capable addresses before TCP alternates for the same relay, matching
-`relay-scan --check-candidates`. Reservation setup failures identify whether
-the probe connected directly to the relay, whether relay reservation acceptance
-or relayed listen-address publication timed out, and the last direct relay dial
-error when one was observed. Candidate lines also include a stable `failure_stage` value:
-`candidate_setup`, `relay_reservation`, `relayed_peer_circuit`,
-`dcutr_success`, or `none` for a usable candidate. Probe output also includes a
+`relay-scan --check-candidates`. Before probing, it skips relay candidates that
+require IPv4 or IPv6 when the local host has no usable route for that address
+family and prints each skip as `public relay check skipped: ... reason
+ipv4_unreachable` or `reason ipv6_unreachable`. Reservation setup failures
+identify whether the probe connected directly to the relay, whether relay
+reservation acceptance or relayed listen-address publication timed out, and the
+last direct relay dial error when one was observed. Candidate lines also
+include a stable `failure_stage` value: `candidate_setup`,
+`relay_reservation`, `relayed_peer_circuit`, `dcutr_success`, or `none` for a
+usable candidate. Probe output also includes a
 `public relay candidate failure stages:` summary with per-stage counts across
 the attempted set. Failures after reservation setup include the same detailed
 bootstrap-check lines that successful candidates print, so failed

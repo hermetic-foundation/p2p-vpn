@@ -901,7 +901,10 @@ non-relayed connection to the target peer. Repeat `--relay-candidate` to try a s
 candidate set; the command tries candidates round-robin by relay peer, with
 QUIC-capable addresses before TCP alternates for the same relay, then stops
 after the first usable relay and prints candidate-level failures when none
-work. Each candidate line includes a stable
+work. Before probing, it skips relay candidates that require IPv4 or IPv6 when
+the local host has no usable route for that address family and prints each skip
+as `public relay check skipped: ... reason ipv4_unreachable` or
+`reason ipv6_unreachable`. Each candidate line includes a stable
 `failure_stage` value: `candidate_setup`, `relay_reservation`,
 `relayed_peer_circuit`, `dcutr_success`, or `none` for a usable candidate.
 The report also prints a `public relay candidate failure stages:` summary with

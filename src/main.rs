@@ -2178,6 +2178,19 @@ async fn bootstrap_check(
 async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     let raw = args.relay_candidates.join("\n");
     let addresses = relay_check_candidate_multiaddrs(&raw)?;
+    let (addresses, skipped_candidates) =
+        filter_relay_validation_candidates(addresses, local_relay_candidate_reachability());
+    for skipped in skipped_candidates {
+        println!(
+            "public relay check skipped: {} reason {}",
+            skipped.address, skipped.reason
+        );
+    }
+    if addresses.is_empty() {
+        return Err(
+            "public relay check did not have a host-reachable candidate to validate".to_owned(),
+        );
+    }
     let report = check_public_relay_candidates(
         &addresses,
         args.mode,
@@ -2370,7 +2383,7 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
 
     let candidates = relay_scan_candidate_multiaddrs(&report)?;
     let (candidates, skipped_candidates) =
-        filter_relay_scan_validation_candidates(candidates, local_relay_candidate_reachability());
+        filter_relay_validation_candidates(candidates, local_relay_candidate_reachability());
     for skipped in skipped_candidates {
         println!(
             "public relay scan validation skipped: {} reason {}",
@@ -2475,7 +2488,7 @@ fn order_relay_validation_candidates(
     Ok(round_robin_candidates_by_peer(parsed))
 }
 
-fn filter_relay_scan_validation_candidates(
+fn filter_relay_validation_candidates(
     candidates: Vec<libp2p::Multiaddr>,
     reachability: RelayCandidateReachability,
 ) -> (Vec<libp2p::Multiaddr>, Vec<SkippedRelayCandidate>) {
@@ -4440,6 +4453,41 @@ mod tests {
     }
 
     #[test]
+    fn relay_check_candidates_filter_host_unreachable_ipv4() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let raw = [
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer_a}"),
+            format!("/ip6/2001:db8::1/tcp/4001/p2p/{peer_b}"),
+        ]
+        .join("\n");
+        let candidates = relay_check_candidate_multiaddrs(&raw).expect("relay-check candidates");
+
+        let (kept, skipped) = filter_relay_validation_candidates(
+            candidates,
+            RelayCandidateReachability {
+                ipv4: false,
+                ipv6: true,
+            },
+        );
+
+        assert_eq!(
+            kept.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![format!("/ip6/2001:db8::1/tcp/4001/p2p/{peer_b}")]
+        );
+        assert_eq!(
+            skipped
+                .iter()
+                .map(|candidate| (&candidate.address, candidate.reason))
+                .collect::<Vec<_>>(),
+            vec![(
+                &format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer_a}"),
+                "ipv4_unreachable"
+            )]
+        );
+    }
+
+    #[test]
     fn relay_scan_write_config_requires_candidate_validation() {
         let mut args = RelayScanArgs {
             config_path: None,
@@ -4619,7 +4667,7 @@ mod tests {
                 .expect("dns4 candidate"),
         ];
 
-        let (kept, skipped) = filter_relay_scan_validation_candidates(
+        let (kept, skipped) = filter_relay_validation_candidates(
             candidates,
             RelayCandidateReachability {
                 ipv4: true,
@@ -4661,7 +4709,7 @@ mod tests {
                 .expect("ipv6 candidate"),
         ];
 
-        let (kept, skipped) = filter_relay_scan_validation_candidates(
+        let (kept, skipped) = filter_relay_validation_candidates(
             candidates,
             RelayCandidateReachability {
                 ipv4: true,
@@ -4689,7 +4737,7 @@ mod tests {
                 .expect("ipv6 candidate"),
         ];
 
-        let (kept, skipped) = filter_relay_scan_validation_candidates(
+        let (kept, skipped) = filter_relay_validation_candidates(
             candidates,
             RelayCandidateReachability {
                 ipv4: false,
