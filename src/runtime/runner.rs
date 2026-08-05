@@ -3390,6 +3390,22 @@ async fn send_dequeued_packet_plane_datagram(
                 context.metrics.record_outbound_quic_datagram();
             }
             Err(error) => {
+                if send_dequeued_packet_plane_fallback(
+                    swarm,
+                    forwarder,
+                    PacketPlaneFallbackAttempt {
+                        packet,
+                        peer_mtu,
+                        path,
+                        failed_backend: backend,
+                        frame: &frame,
+                    },
+                    context,
+                )
+                .await
+                {
+                    return;
+                }
                 if maybe_demote_packet_plane_send_path(
                     context.paths,
                     context.metrics,
@@ -3421,6 +3437,103 @@ async fn send_dequeued_packet_plane_datagram(
             eprintln!("dropping queued packet-plane outbound packet: {error:?}");
         }
     }
+}
+
+struct PacketPlaneFallbackAttempt<'a> {
+    packet: &'a crate::queue::Packet,
+    peer_mtu: u16,
+    path: PathKind,
+    failed_backend: PacketDatagramBackend,
+    frame: &'a Frame,
+}
+
+async fn send_dequeued_packet_plane_fallback(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    attempt: PacketPlaneFallbackAttempt<'_>,
+    context: &mut QueueDrainContext<'_>,
+) -> bool {
+    if let Some(backend) = packet_plane_send_fallback_backend(
+        attempt.failed_backend,
+        context.peer_capabilities,
+        context.packet_plane,
+        attempt.packet.peer(),
+    ) {
+        match send_packet_plane_frame(
+            context.packet_plane,
+            context.packet_plane_quic,
+            backend,
+            attempt.packet.peer(),
+            attempt.frame,
+        )
+        .await
+        {
+            Ok(_) => {
+                context.metrics.record_outbound_sent();
+                context.metrics.record_outbound_quic_datagram();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "packet_plane_backend_fallback",
+                    &[
+                        ("peer", &attempt.packet.peer().to_string()),
+                        ("from", packet_datagram_backend_name(attempt.failed_backend)),
+                        ("to", packet_datagram_backend_name(backend)),
+                    ],
+                );
+                return true;
+            }
+            Err(error) => {
+                if maybe_demote_packet_plane_send_path(
+                    context.paths,
+                    context.metrics,
+                    attempt.packet.peer(),
+                    attempt.path,
+                    &error,
+                ) && let Some(peer) = forwarder.transport_peer_for_overlay(attempt.packet.peer())
+                {
+                    redial_packet_plane_recovery_addresses(
+                        swarm,
+                        peer,
+                        context.configured_peer_addresses,
+                        context.discovered_peer_addresses,
+                        context.metrics,
+                    );
+                }
+                context
+                    .metrics
+                    .record_outbound_drop(packet_plane_send_drop_reason(&error));
+                eprintln!("dropping queued packet-plane fallback outbound packet: {error:?}");
+                return true;
+            }
+        }
+    }
+
+    if let Some(path) = packet_plane_send_stream_fallback_path(
+        context.paths,
+        context.peer_capabilities,
+        attempt.packet.peer(),
+    ) {
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_backend_fallback",
+            &[
+                ("peer", &attempt.packet.peer().to_string()),
+                ("from", packet_datagram_backend_name(attempt.failed_backend)),
+                ("to", path.wire_name()),
+            ],
+        );
+        send_dequeued_stream_fallback(
+            swarm,
+            forwarder,
+            attempt.packet,
+            attempt.peer_mtu,
+            path,
+            context,
+        );
+        return true;
+    }
+
+    false
 }
 
 async fn send_packet_plane_frame(
@@ -3800,6 +3913,34 @@ fn local_packet_datagram_backend(
         return Some(PacketDatagramBackend::OwnedUdp);
     }
     None
+}
+
+fn packet_plane_send_fallback_backend(
+    failed_backend: PacketDatagramBackend,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    peer: PeerId,
+) -> Option<PacketDatagramBackend> {
+    if failed_backend == PacketDatagramBackend::OwnedQuic
+        && packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        && peer_capabilities.supports_owned_udp_packet_plane_for(peer)
+    {
+        return Some(PacketDatagramBackend::OwnedUdp);
+    }
+    None
+}
+
+fn packet_plane_send_stream_fallback_path(
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    peer: PeerId,
+) -> Option<PathKind> {
+    paths
+        .best_supported_for(
+            peer,
+            packet_transport_support_with_local_datagrams(peer_capabilities, peer, false),
+        )
+        .and_then(|path| (!path.kind.requires_quic_datagrams()).then_some(path.kind))
 }
 
 fn packet_transport_support(
@@ -12698,6 +12839,216 @@ mod tests {
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 0);
         assert_eq!(inbound.peer, Some(local_overlay));
         assert_eq!(inbound.frame.payload, packet);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn quic_send_failure_falls_back_to_udp_packet_plane_when_session_exists() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut sender_udp =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender udp")])
+                .await
+                .expect("sender udp packet plane");
+        let mut receiver_udp =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver udp")])
+                .await
+                .expect("receiver udp packet plane");
+        let mut sender_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender quic"))
+                .expect("sender quic packet plane");
+        let mut receiver_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver quic"))
+                .expect("receiver quic packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_sessions(
+            &mut sender_udp,
+            &mut receiver_udp,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        );
+        establish_test_packet_plane_quic_sessions(
+            &mut sender_quic,
+            &mut receiver_quic,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        )
+        .await;
+        assert!(sender_quic.forget_connection(remote_overlay));
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet.clone())
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_owned_quic_packet_plane(true);
+        peer_capabilities.record(remote_overlay, capabilities);
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+        context.packet_plane = Some(&sender_udp);
+        context.packet_plane_quic = Some(&sender_quic);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+        let inbound = timeout(
+            TokioDuration::from_secs(1),
+            receiver_udp.recv_frame_from_peer(local_overlay),
+        )
+        .await
+        .expect("UDP fallback receive should not time out")
+        .expect("UDP fallback receive");
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.packet_plane_path_demotions, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(
+            paths.best_for(remote_overlay).expect("selected path").kind,
+            PathKind::DirectQuicDatagram
+        );
+        assert_eq!(inbound.peer, Some(local_overlay));
+        assert_eq!(inbound.frame.payload, packet);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn quic_send_failure_falls_back_to_stream_when_no_udp_session_exists() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut sender_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender quic"))
+                .expect("sender quic packet plane");
+        let mut receiver_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver quic"))
+                .expect("receiver quic packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_quic_sessions(
+            &mut sender_quic,
+            &mut receiver_quic,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        )
+        .await;
+        assert!(sender_quic.forget_connection(remote_overlay));
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay));
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_owned_quic_packet_plane(true);
+        peer_capabilities.record(remote_overlay, capabilities);
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+        context.packet_plane_quic = Some(&sender_quic);
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_quic_datagram_packets, 0);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_dropped_packets, 0);
+        assert_eq!(snapshot.packet_plane_path_demotions, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+        assert_eq!(
+            paths.best_for(remote_overlay).expect("selected path").kind,
+            PathKind::DirectQuicDatagram
+        );
     }
 
     #[tokio::test]

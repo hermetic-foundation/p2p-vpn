@@ -1459,6 +1459,10 @@ impl PacketPlaneQuicRuntime {
         self.sessions.contains_key(&peer)
     }
 
+    pub fn forget_connection(&mut self, peer: PeerId) -> bool {
+        self.connections.remove(&peer).is_some()
+    }
+
     #[must_use]
     pub fn session_mtu_for(&self, peer: PeerId) -> Option<u16> {
         self.sessions.get(&peer).map(|session| session.mtu)
