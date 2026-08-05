@@ -59,8 +59,10 @@ path.
    packet-plane sessions exist. Confirmed public libp2p external addresses are
    now filtered and combined with already-bound owned UDP/QUIC packet-plane
    listener ports to refresh endpoint capabilities for connected configured
-   peers; `nix develop -c cargo test packet_plane_endpoint` covers endpoint
-   ranking and observed-address derivation.
+   peers, and runtime/Prometheus metrics report accepted, rejected, UDP, and
+   QUIC observed endpoint derivation outcomes; `nix develop -c cargo test
+   packet_plane_endpoint` covers endpoint ranking and observed-address
+   derivation.
 2. Public libp2p/IPFS infrastructure is supported as discovery and reachability
    assistance, and public bootstrap reachability can now be checked with a
    rootless diagnostic that also covers configured relay reservation acceptance,

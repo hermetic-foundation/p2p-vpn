@@ -1785,6 +1785,22 @@ fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &Ru
         format!("dcutr_successes {}", snapshot.dcutr_successes),
         format!("dcutr_failures {}", snapshot.dcutr_failures),
         format!(
+            "observed_packet_plane_external_addresses {}",
+            snapshot.observed_packet_plane_external_addresses
+        ),
+        format!(
+            "observed_packet_plane_external_addresses_rejected {}",
+            snapshot.observed_packet_plane_external_addresses_rejected
+        ),
+        format!(
+            "observed_packet_plane_udp_endpoint_candidates {}",
+            snapshot.observed_packet_plane_udp_endpoint_candidates
+        ),
+        format!(
+            "observed_packet_plane_quic_endpoint_candidates {}",
+            snapshot.observed_packet_plane_quic_endpoint_candidates
+        ),
+        format!(
             "autonat_probes_scheduled {}",
             snapshot.autonat_probes_scheduled
         ),
@@ -4264,7 +4280,7 @@ async fn handle_swarm_event(
                 .packet_plane_quic
                 .as_deref()
                 .map(PacketPlaneQuicRuntime::snapshot);
-            if update_observed_packet_plane_endpoints(
+            let observed_endpoint_update = update_observed_packet_plane_endpoints(
                 context.local_capabilities,
                 &address,
                 context.packet_plane.primary_listener(),
@@ -4272,7 +4288,27 @@ async fn handle_swarm_event(
                     .as_ref()
                     .and_then(|snapshot| snapshot.listener),
                 packet_plane_quic_snapshot.and_then(|snapshot| snapshot.certificate_der),
-            ) {
+            );
+            if observed_endpoint_update.public_address_accepted {
+                context
+                    .metrics
+                    .record_observed_packet_plane_external_address();
+            } else {
+                context
+                    .metrics
+                    .record_observed_packet_plane_external_address_rejected();
+            }
+            if observed_endpoint_update.udp_candidate_added {
+                context
+                    .metrics
+                    .record_observed_packet_plane_udp_endpoint_candidate();
+            }
+            if observed_endpoint_update.quic_candidate_added {
+                context
+                    .metrics
+                    .record_observed_packet_plane_quic_endpoint_candidate();
+            }
+            if observed_endpoint_update.changed() {
                 log_runtime_event(
                     LogLevel::Info,
                     "observed_packet_plane_endpoints_advertised",
@@ -6138,9 +6174,12 @@ fn update_observed_packet_plane_endpoints(
     udp_listener: Option<SocketAddr>,
     quic_listener: Option<SocketAddr>,
     quic_certificate_der: Option<Vec<u8>>,
-) -> bool {
+) -> ObservedPacketPlaneEndpointUpdate {
     let endpoints = observed_packet_plane_endpoints(external_address, udp_listener, quic_listener);
-    let mut changed = false;
+    let mut update = ObservedPacketPlaneEndpointUpdate {
+        public_address_accepted: endpoints.public_address_accepted,
+        ..ObservedPacketPlaneEndpointUpdate::default()
+    };
 
     if let Some(endpoint) = endpoints.udp
         && !capabilities.packet_endpoint_candidates.contains(&endpoint)
@@ -6148,7 +6187,7 @@ fn update_observed_packet_plane_endpoints(
         capabilities.packet_endpoint_candidates.push(endpoint);
         capabilities.supports_owned_udp_packet_plane = true;
         capabilities.supports_quic_datagrams = true;
-        changed = true;
+        update.udp_candidate_added = true;
     }
 
     if let (Some(endpoint), Some(certificate_der)) = (endpoints.quic, quic_certificate_der)
@@ -6162,14 +6201,28 @@ fn update_observed_packet_plane_endpoints(
         capabilities.owned_quic_packet_plane_certificate_der = Some(certificate_der);
         capabilities.supports_owned_quic_packet_plane = true;
         capabilities.supports_quic_datagrams = true;
-        changed = true;
+        update.quic_candidate_added = true;
     }
 
-    changed
+    update
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ObservedPacketPlaneEndpointUpdate {
+    public_address_accepted: bool,
+    udp_candidate_added: bool,
+    quic_candidate_added: bool,
+}
+
+impl ObservedPacketPlaneEndpointUpdate {
+    fn changed(self) -> bool {
+        self.udp_candidate_added || self.quic_candidate_added
+    }
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct ObservedPacketPlaneEndpoints {
+    public_address_accepted: bool,
     udp: Option<String>,
     quic: Option<String>,
 }
@@ -6184,6 +6237,7 @@ fn observed_packet_plane_endpoints(
     };
 
     ObservedPacketPlaneEndpoints {
+        public_address_accepted: true,
         udp: udp_listener
             .filter(|listener| listener.port() != 0)
             .map(|listener| SocketAddr::new(ip, listener.port()).to_string()),
@@ -14166,6 +14220,7 @@ mod tests {
         assert_eq!(
             endpoints,
             ObservedPacketPlaneEndpoints {
+                public_address_accepted: true,
                 udp: Some("8.8.8.8:51820".to_owned()),
                 quic: Some("8.8.8.8:51821".to_owned())
             }
@@ -14199,13 +14254,20 @@ mod tests {
             .with_packet_endpoint_candidates(vec!["8.8.8.8:51820".to_owned()]);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
 
-        assert!(!update_observed_packet_plane_endpoints(
-            &mut capabilities,
-            &external_address,
-            Some("0.0.0.0:51820".parse().expect("udp listener")),
-            Some("0.0.0.0:51821".parse().expect("quic listener")),
-            None,
-        ));
+        assert_eq!(
+            update_observed_packet_plane_endpoints(
+                &mut capabilities,
+                &external_address,
+                Some("0.0.0.0:51820".parse().expect("udp listener")),
+                Some("0.0.0.0:51821".parse().expect("quic listener")),
+                None,
+            ),
+            ObservedPacketPlaneEndpointUpdate {
+                public_address_accepted: true,
+                udp_candidate_added: false,
+                quic_candidate_added: false,
+            }
+        );
         assert_eq!(
             capabilities.packet_endpoint_candidates,
             vec!["8.8.8.8:51820".to_owned()]
@@ -14217,13 +14279,20 @@ mod tests {
         );
         assert!(!capabilities.supports_owned_quic_packet_plane);
 
-        assert!(update_observed_packet_plane_endpoints(
-            &mut capabilities,
-            &external_address,
-            Some("0.0.0.0:51820".parse().expect("udp listener")),
-            Some("0.0.0.0:51821".parse().expect("quic listener")),
-            Some(vec![0x30, 0x01, 0x02]),
-        ));
+        assert_eq!(
+            update_observed_packet_plane_endpoints(
+                &mut capabilities,
+                &external_address,
+                Some("0.0.0.0:51820".parse().expect("udp listener")),
+                Some("0.0.0.0:51821".parse().expect("quic listener")),
+                Some(vec![0x30, 0x01, 0x02]),
+            ),
+            ObservedPacketPlaneEndpointUpdate {
+                public_address_accepted: true,
+                udp_candidate_added: false,
+                quic_candidate_added: true,
+            }
+        );
         assert_eq!(
             capabilities.packet_endpoint_candidates,
             vec!["8.8.8.8:51820".to_owned()]
@@ -14235,13 +14304,20 @@ mod tests {
         assert!(capabilities.supports_owned_quic_packet_plane);
         assert!(capabilities.supports_quic_datagrams);
 
-        assert!(!update_observed_packet_plane_endpoints(
-            &mut capabilities,
-            &external_address,
-            Some("0.0.0.0:51820".parse().expect("udp listener")),
-            Some("0.0.0.0:51821".parse().expect("quic listener")),
-            Some(vec![0x30, 0x01, 0x02]),
-        ));
+        assert_eq!(
+            update_observed_packet_plane_endpoints(
+                &mut capabilities,
+                &external_address,
+                Some("0.0.0.0:51820".parse().expect("udp listener")),
+                Some("0.0.0.0:51821".parse().expect("quic listener")),
+                Some(vec![0x30, 0x01, 0x02]),
+            ),
+            ObservedPacketPlaneEndpointUpdate {
+                public_address_accepted: true,
+                udp_candidate_added: false,
+                quic_candidate_added: false,
+            }
+        );
     }
 
     #[test]

@@ -139,6 +139,10 @@ pub struct RuntimeMetrics {
     external_address_candidates: AtomicU64,
     external_addresses_confirmed: AtomicU64,
     external_addresses_expired: AtomicU64,
+    observed_packet_plane_external_addresses: AtomicU64,
+    observed_packet_plane_external_addresses_rejected: AtomicU64,
+    observed_packet_plane_udp_endpoint_candidates: AtomicU64,
+    observed_packet_plane_quic_endpoint_candidates: AtomicU64,
     autonat_probes_scheduled: AtomicU64,
     autonat_status_unknown: AtomicU64,
     autonat_status_public: AtomicU64,
@@ -578,6 +582,26 @@ impl RuntimeMetrics {
 
     pub fn record_external_address_expired(&self) {
         self.external_addresses_expired
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_observed_packet_plane_external_address(&self) {
+        self.observed_packet_plane_external_addresses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_observed_packet_plane_external_address_rejected(&self) {
+        self.observed_packet_plane_external_addresses_rejected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_observed_packet_plane_udp_endpoint_candidate(&self) {
+        self.observed_packet_plane_udp_endpoint_candidates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_observed_packet_plane_quic_endpoint_candidate(&self) {
+        self.observed_packet_plane_quic_endpoint_candidates
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -1095,6 +1119,18 @@ impl RuntimeMetrics {
             self.external_addresses_confirmed.load(Ordering::Relaxed);
         snapshot.external_addresses_expired =
             self.external_addresses_expired.load(Ordering::Relaxed);
+        snapshot.observed_packet_plane_external_addresses = self
+            .observed_packet_plane_external_addresses
+            .load(Ordering::Relaxed);
+        snapshot.observed_packet_plane_external_addresses_rejected = self
+            .observed_packet_plane_external_addresses_rejected
+            .load(Ordering::Relaxed);
+        snapshot.observed_packet_plane_udp_endpoint_candidates = self
+            .observed_packet_plane_udp_endpoint_candidates
+            .load(Ordering::Relaxed);
+        snapshot.observed_packet_plane_quic_endpoint_candidates = self
+            .observed_packet_plane_quic_endpoint_candidates
+            .load(Ordering::Relaxed);
         snapshot.autonat_probes_scheduled = self.autonat_probes_scheduled.load(Ordering::Relaxed);
         snapshot.autonat_status_unknown = self.autonat_status_unknown.load(Ordering::Relaxed);
         snapshot.autonat_status_public = self.autonat_status_public.load(Ordering::Relaxed);
@@ -1328,6 +1364,10 @@ pub struct RuntimeSnapshot {
     pub external_address_candidates: u64,
     pub external_addresses_confirmed: u64,
     pub external_addresses_expired: u64,
+    pub observed_packet_plane_external_addresses: u64,
+    pub observed_packet_plane_external_addresses_rejected: u64,
+    pub observed_packet_plane_udp_endpoint_candidates: u64,
+    pub observed_packet_plane_quic_endpoint_candidates: u64,
     pub autonat_probes_scheduled: u64,
     pub autonat_status_unknown: u64,
     pub autonat_status_public: u64,
@@ -1666,6 +1706,28 @@ impl RuntimeSnapshot {
             format!(
                 "kademlia_bootstrap_failures {}",
                 self.kademlia_bootstrap_failures
+            ),
+        ]);
+        self.extend_observed_packet_plane_lines(lines);
+    }
+
+    fn extend_observed_packet_plane_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
+            format!(
+                "observed_packet_plane_external_addresses {}",
+                self.observed_packet_plane_external_addresses
+            ),
+            format!(
+                "observed_packet_plane_external_addresses_rejected {}",
+                self.observed_packet_plane_external_addresses_rejected
+            ),
+            format!(
+                "observed_packet_plane_udp_endpoint_candidates {}",
+                self.observed_packet_plane_udp_endpoint_candidates
+            ),
+            format!(
+                "observed_packet_plane_quic_endpoint_candidates {}",
+                self.observed_packet_plane_quic_endpoint_candidates
             ),
         ]);
     }
@@ -2137,6 +2199,10 @@ mod tests {
         metrics.record_external_address_candidate();
         metrics.record_external_address_confirmed();
         metrics.record_external_address_expired();
+        metrics.record_observed_packet_plane_external_address();
+        metrics.record_observed_packet_plane_external_address_rejected();
+        metrics.record_observed_packet_plane_udp_endpoint_candidate();
+        metrics.record_observed_packet_plane_quic_endpoint_candidate();
         metrics.record_autonat_probe_scheduled();
         metrics.record_autonat_status(AutoNatReachability::Public);
         metrics.record_autonat_status(AutoNatReachability::Private);
@@ -2231,6 +2297,16 @@ mod tests {
 
     fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
         assert!(snapshot.lines().contains(&line.to_owned()));
+    }
+
+    fn assert_observed_packet_plane_lines(snapshot: &RuntimeSnapshot) {
+        assert_metric_line(snapshot, "observed_packet_plane_external_addresses 1");
+        assert_metric_line(
+            snapshot,
+            "observed_packet_plane_external_addresses_rejected 1",
+        );
+        assert_metric_line(snapshot, "observed_packet_plane_udp_endpoint_candidates 1");
+        assert_metric_line(snapshot, "observed_packet_plane_quic_endpoint_candidates 1");
     }
 
     fn assert_kademlia_discovery_counters(snapshot: &RuntimeSnapshot) {
@@ -2498,6 +2574,13 @@ mod tests {
         assert_eq!(snapshot.external_address_candidates, 1);
         assert_eq!(snapshot.external_addresses_confirmed, 1);
         assert_eq!(snapshot.external_addresses_expired, 1);
+        assert_eq!(snapshot.observed_packet_plane_external_addresses, 1);
+        assert_eq!(
+            snapshot.observed_packet_plane_external_addresses_rejected,
+            1
+        );
+        assert_eq!(snapshot.observed_packet_plane_udp_endpoint_candidates, 1);
+        assert_eq!(snapshot.observed_packet_plane_quic_endpoint_candidates, 1);
         assert_eq!(snapshot.autonat_probes_scheduled, 1);
         assert_eq!(snapshot.autonat_status_unknown, 0);
         assert_eq!(snapshot.autonat_status_public, 0);
@@ -2626,6 +2709,7 @@ mod tests {
         assert_metric_line(&snapshot, "external_address_candidates 1");
         assert_metric_line(&snapshot, "external_addresses_confirmed 1");
         assert_metric_line(&snapshot, "external_addresses_expired 1");
+        assert_observed_packet_plane_lines(&snapshot);
         assert_metric_line(&snapshot, "autonat_probes_scheduled 1");
         assert_metric_line(&snapshot, "autonat_status_unknown 0");
         assert_metric_line(&snapshot, "autonat_status_public 0");
