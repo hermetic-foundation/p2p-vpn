@@ -1653,9 +1653,10 @@ fn merge_config_membership_records(
 ) -> MembershipRecordMergeStats {
     let mut stats = MembershipRecordMergeStats::default();
     for incoming_record in incoming {
-        let existing_index = records
-            .iter()
-            .position(|record| record.payload.member_peer == incoming_record.payload.member_peer);
+        let existing_index = records.iter().position(|record| {
+            record.payload.issuer_peer == incoming_record.payload.issuer_peer
+                && record.payload.member_peer == incoming_record.payload.member_peer
+        });
         if let Some(index) = existing_index {
             let existing = &records[index];
             if (
@@ -8747,6 +8748,57 @@ mod tests {
         let _ = fs::remove_file(&member_public);
         let _ = fs::remove_file(&member_record);
         let _ = fs::remove_file(&output);
+    }
+
+    #[test]
+    fn membership_record_install_keeps_distinct_issuer_records_for_same_member() {
+        let issuer_a = NodeIdentity::generate_ed25519().expect("issuer a");
+        let issuer_b = NodeIdentity::generate_ed25519().expect("issuer b");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let record_a = issue_membership_record_for_subject_at(
+            &issuer_a,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("record a");
+        let record_b = issue_membership_record_for_subject_at(
+            &issuer_b,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("record b");
+        let mut records = vec![record_a];
+
+        let stats =
+            install_config_membership_records(&mut records, std::slice::from_ref(&record_b));
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(stats.ignored_stale_or_equal, 0);
+        assert_eq!(records.len(), 2);
+
+        let stale = install_config_membership_records(&mut records, &[record_b]);
+
+        assert_eq!(stale.accepted, 0);
+        assert_eq!(stale.ignored_stale_or_equal, 1);
+        assert_eq!(records.len(), 2);
     }
 
     #[test]

@@ -69,11 +69,14 @@ peers advertise a bounded set of signed membership records during the
 authenticated control-plane capability exchange. Received records must verify
 for the current network and be signed by an issuer already trusted from local
 `network.member_records` before they are merged; newer `(membership_epoch,
-sequence)` records replace older records for the same member, stale records are
-ignored, retained records are capped, expired records are pruned by runtime
-maintenance, newer revocation records remove record-derived live overlay
-membership, packet authorization, and route-grant ownership in memory, and newer
-grant records can re-admit the member. Broader record gossip beyond connected
+sequence)` records replace older records for the same issuer/member pair, stale
+records are ignored, retained records are capped, expired records are pruned by
+runtime maintenance, and active records from multiple trusted issuers are unioned
+into the member's effective roles and route grants. Newer revocation records
+only tombstone that issuer's grant, so another trusted issuer's active grant can
+continue to admit the member for record-derived live overlay membership, packet
+authorization, and route-grant ownership in memory; newer grant records from the
+same issuer can re-admit the member. Broader record gossip beyond connected
 overlay peers is available through Kademlia value-record refresh when Kademlia
 is enabled; the DHT only distributes signed records and is not a trust root.
 Outbound packets are not drained to a peer until that peer has passed the
