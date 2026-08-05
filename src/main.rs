@@ -25,8 +25,8 @@ use p2p_vpn::{
     runtime::{
         bootstrap_check::{
             BootstrapCheckRequirements, BootstrapCheckThreshold, PUBLIC_RELAY_CANDIDATE_LIMIT,
-            PublicDcutrListenerDescriptor, PublicRelayProbeMode, check_config_bootstrap,
-            check_public_dcutr_descriptor, check_public_relay_candidates,
+            PublicDcutrListenerDescriptor, PublicDcutrReservationEvidence, PublicRelayProbeMode,
+            check_config_bootstrap, check_public_dcutr_descriptor, check_public_relay_candidates,
             parse_public_relay_addresses, parse_public_relay_addresses_with_limit,
             scan_public_relay_candidates, start_public_dcutr_listener,
         },
@@ -284,6 +284,8 @@ enum Command {
             default_value = "p2p-vpn-dcutr-listener.json"
         )]
         write_descriptor: PathBuf,
+        #[arg(long = "write-report")]
+        write_report: Option<PathBuf>,
         #[arg(long, default_value_t = 45)]
         reservation_timeout_seconds: u64,
         #[arg(long, default_value_t = 600)]
@@ -661,6 +663,7 @@ async fn main() -> Result<(), String> {
         Command::RelayDcutrListen {
             relay_candidate,
             write_descriptor,
+            write_report,
             reservation_timeout_seconds,
             serve_seconds,
             force,
@@ -668,6 +671,7 @@ async fn main() -> Result<(), String> {
             Box::pin(relay_dcutr_listen(RelayDcutrListenArgs {
                 relay_candidate,
                 write_descriptor,
+                write_report,
                 reservation_timeout_seconds,
                 serve_seconds,
                 force,
@@ -971,6 +975,7 @@ struct BootstrapCheckArgs {
 struct RelayDcutrListenArgs {
     relay_candidate: String,
     write_descriptor: PathBuf,
+    write_report: Option<PathBuf>,
     reservation_timeout_seconds: u64,
     serve_seconds: u64,
     force: bool,
@@ -2672,17 +2677,50 @@ async fn relay_dcutr_listen(args: RelayDcutrListenArgs) -> Result<(), String> {
     let relay_candidate = args
         .relay_candidate
         .parse::<libp2p::Multiaddr>()
-        .map_err(|error| format!("failed to parse --relay-candidate: {error}"))?;
-    let listener = start_public_dcutr_listener(
+        .map_err(|error| {
+            let message = format!("failed to parse --relay-candidate: {error}");
+            if let Some(output) = &args.write_report
+                && let Err(report_error) =
+                    write_public_dcutr_listen_report(&args, None, None, Some(&message), output)
+            {
+                return format!("{message}; additionally failed to write report: {report_error}");
+            }
+            message
+        })?;
+    let listener = match start_public_dcutr_listener(
         &relay_candidate,
         Duration::from_secs(args.reservation_timeout_seconds.max(1)),
     )
-    .await?;
+    .await
+    {
+        Ok(listener) => listener,
+        Err(error) => {
+            if let Some(output) = &args.write_report {
+                write_public_dcutr_listen_report(
+                    &args,
+                    None,
+                    error.reservation_evidence.as_ref(),
+                    Some(&error.message),
+                    output,
+                )?;
+            }
+            return Err(error.message);
+        }
+    };
     write_public_dcutr_listener_descriptor(
         listener.descriptor(),
         &args.write_descriptor,
         args.force,
     )?;
+    if let Some(output) = &args.write_report {
+        write_public_dcutr_listen_report(
+            &args,
+            Some(listener.descriptor()),
+            Some(listener.reservation_evidence()),
+            None,
+            output,
+        )?;
+    }
 
     println!("public dcutr listener: ready");
     println!(
@@ -2699,6 +2737,34 @@ async fn relay_dcutr_listen(args: RelayDcutrListenArgs) -> Result<(), String> {
     );
     Box::pin(listener.serve_for(Duration::from_secs(args.serve_seconds.max(1)))).await;
     println!("public dcutr listener: stopped");
+
+    Ok(())
+}
+
+fn write_public_dcutr_listen_report(
+    args: &RelayDcutrListenArgs,
+    descriptor: Option<&PublicDcutrListenerDescriptor>,
+    reservation_evidence: Option<&PublicDcutrReservationEvidence>,
+    error: Option<&str>,
+    output: &Path,
+) -> Result<(), String> {
+    if !args.force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    let rendered = serde_json::to_string_pretty(&public_dcutr_listen_report_json(
+        args,
+        descriptor,
+        reservation_evidence,
+        error,
+    ))
+    .map_err(|error| format!("failed to encode public dcutr listen report: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
 
     Ok(())
 }
@@ -2782,6 +2848,66 @@ fn write_public_dcutr_dial_report(
     println!("wrote {}", output.display());
 
     Ok(())
+}
+
+#[derive(Serialize)]
+#[allow(clippy::struct_excessive_bools)]
+struct PublicDcutrListenReportJson {
+    schema_version: u8,
+    mode: &'static str,
+    succeeded: bool,
+    relay_candidate: String,
+    relay_peer: Option<String>,
+    listener_peer: Option<String>,
+    reservation_timeout_seconds: u64,
+    serve_seconds: u64,
+    connected_to_relay: bool,
+    reservation_accepted: bool,
+    relayed_listen_address_observed: bool,
+    relayed_address: Option<String>,
+    listen_addresses: Vec<String>,
+    created_unix_seconds: u64,
+    error: Option<String>,
+}
+
+fn public_dcutr_listen_report_json(
+    args: &RelayDcutrListenArgs,
+    descriptor: Option<&PublicDcutrListenerDescriptor>,
+    reservation_evidence: Option<&PublicDcutrReservationEvidence>,
+    error: Option<&str>,
+) -> PublicDcutrListenReportJson {
+    PublicDcutrListenReportJson {
+        schema_version: 1,
+        mode: "public_dcutr_listen",
+        succeeded: error.is_none() && descriptor.is_some(),
+        relay_candidate: descriptor.map_or_else(
+            || args.relay_candidate.clone(),
+            |descriptor| descriptor.relay_candidate.clone(),
+        ),
+        relay_peer: descriptor.map(|descriptor| descriptor.relay_peer.clone()),
+        listener_peer: descriptor.map(|descriptor| descriptor.listener_peer.clone()),
+        reservation_timeout_seconds: args.reservation_timeout_seconds.max(1),
+        serve_seconds: args.serve_seconds.max(1),
+        connected_to_relay: reservation_evidence
+            .is_some_and(|evidence| evidence.connected_to_relay),
+        reservation_accepted: reservation_evidence
+            .is_some_and(|evidence| evidence.reservation_accepted),
+        relayed_listen_address_observed: reservation_evidence
+            .is_some_and(|evidence| evidence.relayed_listen_address_observed),
+        relayed_address: descriptor.map(|descriptor| descriptor.relayed_address.clone()),
+        listen_addresses: reservation_evidence
+            .map_or_else(Vec::new, |evidence| evidence.listen_addresses.clone()),
+        created_unix_seconds: descriptor.map_or_else(current_unix_seconds_lossy, |descriptor| {
+            descriptor.created_unix_seconds
+        }),
+        error: error.map(ToOwned::to_owned),
+    }
+}
+
+fn current_unix_seconds_lossy() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 #[derive(Serialize)]
@@ -6196,6 +6322,8 @@ mod tests {
             &relay,
             "--write-descriptor",
             "listener.json",
+            "--write-report",
+            "listen-report.json",
             "--reservation-timeout-seconds",
             "12",
             "--serve-seconds",
@@ -6207,6 +6335,7 @@ mod tests {
         let Command::RelayDcutrListen {
             relay_candidate,
             write_descriptor,
+            write_report,
             reservation_timeout_seconds,
             serve_seconds,
             force,
@@ -6217,6 +6346,7 @@ mod tests {
 
         assert_eq!(relay_candidate, relay);
         assert_eq!(write_descriptor, PathBuf::from("listener.json"));
+        assert_eq!(write_report, Some(PathBuf::from("listen-report.json")));
         assert_eq!(reservation_timeout_seconds, 12);
         assert_eq!(serve_seconds, 120);
         assert!(force);
@@ -6339,6 +6469,65 @@ mod tests {
                 .contains("pass --force")
         );
         fs::remove_file(&output).expect("remove descriptor");
+    }
+
+    #[test]
+    fn relay_dcutr_writes_machine_readable_listen_report() {
+        let descriptor = public_dcutr_listener_descriptor();
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-dcutr-listen-report-{}-{}.json",
+            std::process::id(),
+            "report"
+        ));
+        let _ = fs::remove_file(&output);
+        let args = RelayDcutrListenArgs {
+            relay_candidate: descriptor.relay_candidate.clone(),
+            write_descriptor: PathBuf::from("listener.json"),
+            write_report: Some(output.clone()),
+            reservation_timeout_seconds: 30,
+            serve_seconds: 120,
+            force: false,
+        };
+        let evidence = PublicDcutrReservationEvidence {
+            connected_to_relay: true,
+            reservation_accepted: true,
+            relayed_listen_address_observed: true,
+            listen_addresses: descriptor.listen_addresses.clone(),
+            last_error: None,
+        };
+
+        write_public_dcutr_listen_report(&args, Some(&descriptor), Some(&evidence), None, &output)
+            .expect("write report");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "public_dcutr_listen");
+        assert_eq!(value["succeeded"], true);
+        assert_eq!(value["relay_candidate"], descriptor.relay_candidate);
+        assert_eq!(value["relay_peer"], descriptor.relay_peer);
+        assert_eq!(value["listener_peer"], descriptor.listener_peer);
+        assert_eq!(value["reservation_timeout_seconds"], 30);
+        assert_eq!(value["serve_seconds"], 120);
+        assert_eq!(value["connected_to_relay"], true);
+        assert_eq!(value["reservation_accepted"], true);
+        assert_eq!(value["relayed_listen_address_observed"], true);
+        assert_eq!(value["relayed_address"], descriptor.relayed_address);
+        assert_eq!(value["listen_addresses"][0], descriptor.listen_addresses[0]);
+        assert_eq!(value["created_unix_seconds"], 1_786_230_000);
+        assert_eq!(value["error"], serde_json::Value::Null);
+        assert!(
+            write_public_dcutr_listen_report(
+                &args,
+                Some(&descriptor),
+                Some(&evidence),
+                None,
+                &output,
+            )
+            .expect_err("overwrite should require force")
+            .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove report");
     }
 
     #[test]

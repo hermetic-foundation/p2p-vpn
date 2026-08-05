@@ -426,7 +426,85 @@ pub struct PublicDcutrListenerDescriptor {
 
 pub struct PublicDcutrListener {
     descriptor: PublicDcutrListenerDescriptor,
+    reservation_evidence: PublicDcutrReservationEvidence,
     node: P2pNode,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PublicDcutrReservationEvidence {
+    pub connected_to_relay: bool,
+    pub reservation_accepted: bool,
+    pub relayed_listen_address_observed: bool,
+    pub listen_addresses: Vec<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicDcutrListenStartError {
+    pub message: String,
+    pub reservation_evidence: Option<PublicDcutrReservationEvidence>,
+}
+
+impl PublicDcutrListenStartError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            reservation_evidence: None,
+        }
+    }
+
+    fn with_reservation_evidence(
+        message: impl Into<String>,
+        reservation_evidence: PublicDcutrReservationEvidence,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            reservation_evidence: Some(reservation_evidence),
+        }
+    }
+}
+
+impl std::fmt::Display for PublicDcutrListenStartError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PublicDcutrListenStartError {}
+
+impl PublicDcutrReservationEvidence {
+    fn from_listener(
+        listener: &P2pNode,
+        connected_to_relay: bool,
+        reservation_accepted: bool,
+        relayed_listen_address_observed: bool,
+        last_error: Option<String>,
+    ) -> Self {
+        let mut listen_addresses = listener
+            .swarm
+            .listeners()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        listen_addresses.sort();
+        Self {
+            connected_to_relay,
+            reservation_accepted,
+            relayed_listen_address_observed,
+            listen_addresses,
+            last_error,
+        }
+    }
+
+    fn error_message(&self) -> String {
+        let last_error = self.last_error.as_deref().unwrap_or("none");
+        format!(
+            "relay reservation timed out connected {} accepted {} relayed_listen_address {} last_error {}",
+            self.connected_to_relay,
+            self.reservation_accepted,
+            self.relayed_listen_address_observed,
+            last_error
+        )
+    }
 }
 
 impl PublicDcutrListenerDescriptor {
@@ -485,6 +563,11 @@ impl PublicDcutrListener {
     #[must_use]
     pub const fn descriptor(&self) -> &PublicDcutrListenerDescriptor {
         &self.descriptor
+    }
+
+    #[must_use]
+    pub const fn reservation_evidence(&self) -> &PublicDcutrReservationEvidence {
+        &self.reservation_evidence
     }
 
     pub async fn serve_for(mut self, timeout: Duration) {
@@ -1027,7 +1110,10 @@ async fn live_public_relayed_peer_circuit(
     )
     .await
     .map_err(|error| {
-        PublicRelayProbeFailure::at_stage(PublicRelayCandidateFailureStage::RelayReservation, error)
+        PublicRelayProbeFailure::at_stage(
+            PublicRelayCandidateFailureStage::RelayReservation,
+            error.error_message(),
+        )
     })?;
 
     let _listener_task = tokio::spawn(async move {
@@ -1117,7 +1203,10 @@ async fn live_public_dcutr_success(
     )
     .await
     .map_err(|error| {
-        PublicRelayProbeFailure::at_stage(PublicRelayCandidateFailureStage::RelayReservation, error)
+        PublicRelayProbeFailure::at_stage(
+            PublicRelayCandidateFailureStage::RelayReservation,
+            error.error_message(),
+        )
     })?;
 
     let _listener_task = tokio::spawn(async move {
@@ -1171,13 +1260,15 @@ async fn live_public_dcutr_success(
 pub async fn start_public_dcutr_listener(
     relay_address: &Multiaddr,
     reservation_timeout: Duration,
-) -> Result<PublicDcutrListener, String> {
-    let relay_peer = address_peer(relay_address)
-        .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+) -> Result<PublicDcutrListener, PublicDcutrListenStartError> {
+    let relay_peer = address_peer(relay_address).ok_or_else(|| {
+        PublicDcutrListenStartError::new("live relay multiaddr must include /p2p/RELAY")
+    })?;
     let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
     let discovery = dcutr_probe_discovery();
     let mut node = build_node(&HostConfig {
-        identity: NodeIdentity::generate_ed25519().map_err(|error| format!("{error:?}"))?,
+        identity: NodeIdentity::generate_ed25519()
+            .map_err(|error| PublicDcutrListenStartError::new(format!("{error:?}")))?,
         network_name: "lab".to_owned(),
         membership_tag: None,
         mtu: 1280,
@@ -1193,24 +1284,21 @@ pub async fn start_public_dcutr_listener(
         resources: ResourceConfig::default(),
         discovery,
     })
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| PublicDcutrListenStartError::new(format!("{error:?}")))?;
 
     let listener_peer = node.local_peer_id;
     let relayed_address = relay_reservation.with(Protocol::P2p(listener_peer));
-    wait_for_external_relay_reservation(
+    let reservation_evidence = wait_for_external_relay_reservation(
         &mut node,
         relayed_address.clone(),
         relay_peer,
         reservation_timeout,
     )
-    .await?;
+    .await
+    .map_err(|evidence| {
+        PublicDcutrListenStartError::with_reservation_evidence(evidence.error_message(), evidence)
+    })?;
 
-    let mut listen_addresses = node
-        .swarm
-        .listeners()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    listen_addresses.sort();
     let created_unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
@@ -1222,9 +1310,10 @@ pub async fn start_public_dcutr_listener(
             relay_peer: relay_peer.to_string(),
             listener_peer: listener_peer.to_string(),
             relayed_address: relayed_address.to_string(),
-            listen_addresses,
+            listen_addresses: reservation_evidence.listen_addresses.clone(),
             created_unix_seconds,
         },
+        reservation_evidence,
         node,
     })
 }
@@ -1275,7 +1364,7 @@ async fn wait_for_external_relay_reservation(
     relayed_address: Multiaddr,
     relay_peer: Libp2pPeerId,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<PublicDcutrReservationEvidence, PublicDcutrReservationEvidence> {
     let mut listen_addr_reported = false;
     let mut reservation_accepted = false;
     let mut connected = listener.swarm.is_connected(&relay_peer);
@@ -1315,13 +1404,22 @@ async fn wait_for_external_relay_reservation(
         }
 
         if listen_addr_reported && reservation_accepted {
-            return Ok(());
+            return Ok(PublicDcutrReservationEvidence::from_listener(
+                listener,
+                connected,
+                reservation_accepted,
+                listen_addr_reported,
+                last_error,
+            ));
         }
     }
 
-    let last_error = last_error.as_deref().unwrap_or("none");
-    Err(format!(
-        "relay reservation timed out connected {connected} accepted {reservation_accepted} relayed_listen_address {listen_addr_reported} last_error {last_error}"
+    Err(PublicDcutrReservationEvidence::from_listener(
+        listener,
+        connected,
+        reservation_accepted,
+        listen_addr_reported,
+        last_error,
     ))
 }
 
@@ -2636,8 +2734,12 @@ mod tests {
         .await
         .expect_err("reservation should time out");
 
+        assert!(!error.connected_to_relay);
+        assert!(!error.reservation_accepted);
+        assert!(!error.relayed_listen_address_observed);
+        assert_eq!(error.last_error, None);
         assert_eq!(
-            error,
+            error.error_message(),
             "relay reservation timed out connected false accepted false relayed_listen_address false last_error none"
         );
     }

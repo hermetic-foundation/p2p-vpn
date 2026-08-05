@@ -137,6 +137,7 @@ phase fails without deleting earlier evidence.
 
    ```sh
    "$P2P_VPN_REPRO_DIR/repro-dcutr-listen-host-a.sh"
+   sed -n '1,220p' "$P2P_VPN_REPRO_DIR/public-relay-dcutr-listen-report.json"
    ```
 
    Copy `public-dcutr-listener.json` from Host A to the same path inside Host
@@ -150,6 +151,10 @@ phase fails without deleting earlier evidence.
    If the generated listener script does not contain a selected relay, set
    `P2P_VPN_REPRO_RELAY_CANDIDATE` to a direct `/p2p/RELAY` multiaddr and
    rerun `nix run .#public-relay-repro` or the generated listener script.
+   Compare Host A's `connected_to_relay`, `reservation_accepted`, and
+   `relayed_listen_address_observed` fields with Host B's relayed-circuit and
+   DCUtR fields before increasing timeouts; mismatches usually identify which
+   side failed before the actual hole punch.
 
 5. When a relay-assisted config is produced, inspect a live daemon through the
    control socket instead of scraping logs:
