@@ -117,6 +117,7 @@
           runtimeInputs = [
             package
             pkgs.coreutils
+            pkgs.iproute2
             pkgs.jq
           ];
           text = ''
@@ -132,6 +133,7 @@
             relay_config="$artifact_dir/public-relay-config.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
             metadata="$artifact_dir/repro-metadata.txt"
+            host_network="$artifact_dir/repro-host-network.txt"
             commands="$artifact_dir/repro-commands.sh"
             summary="$artifact_dir/repro-summary.txt"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
@@ -160,6 +162,44 @@
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
                 echo "P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=$max_validation"
               } > "$metadata"
+            }
+
+            route_available() {
+              family="$1"
+              target="$2"
+              if ip "$family" route get "$target" >/dev/null 2>&1; then
+                echo yes
+              else
+                echo no
+              fi
+            }
+
+            write_host_network() {
+              os_pretty_name=unknown
+              if [[ -r /etc/os-release ]]; then
+                # shellcheck disable=SC1091
+                . /etc/os-release
+                os_pretty_name="''${PRETTY_NAME:-unknown}"
+              fi
+
+              {
+                echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "os_pretty_name=$os_pretty_name"
+                echo "kernel_name=$(uname -s)"
+                echo "kernel_release=$(uname -r)"
+                echo "machine=$(uname -m)"
+                echo "ipv4_route_to_1_1_1_1=$(route_available -4 1.1.1.1)"
+                echo "ipv6_route_to_2606_4700_4700_1111=$(route_available -6 2606:4700:4700::1111)"
+                echo
+                echo "[ip -br addr]"
+                ip -br addr || true
+                echo
+                echo "[ip route show]"
+                ip route show || true
+                echo
+                echo "[ip -6 route show]"
+                ip -6 route show || true
+              } > "$host_network"
             }
 
             write_commands() {
@@ -246,6 +286,7 @@
                 echo "p2p-vpn public relay repro summary"
                 echo "artifact_dir=$artifact_dir"
                 echo "metadata=$metadata"
+                echo "host_network=$host_network"
                 echo "commands=$commands"
                 echo "candidate_file=$candidates"
                 echo "relay_assisted_config=$relay_config"
@@ -280,6 +321,7 @@
 
             echo "writing public relay repro artifacts to $artifact_dir" >&2
             write_metadata
+            write_host_network
             write_commands
             run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
               p2p-vpn relay-scan \
@@ -322,6 +364,7 @@
             echo "DCUtR report: $dcutr_report" >&2
             write_summary
             echo "metadata: $metadata" >&2
+            echo "host network: $host_network" >&2
             echo "replay commands: $commands" >&2
             echo "summary: $summary" >&2
             exit "$status"

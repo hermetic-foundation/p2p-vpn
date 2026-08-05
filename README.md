@@ -997,12 +997,15 @@ nix run .#public-relay-repro
 ```
 
 In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
-`repro-metadata.txt`, `repro-commands.sh`, and `repro-summary.txt`. The summary
-captures phase exit statuses, candidate counts, skipped-candidate counts,
-routing-peer counts, failure-stage counts, and the first candidate error from
-each report. The commands file records the exact probe commands and environment
-limits used for the run so the same candidate set can be replayed without
-starting over from memory.
+`repro-metadata.txt`, `repro-host-network.txt`, `repro-commands.sh`, and
+`repro-summary.txt`. The summary captures phase exit statuses, candidate
+counts, skipped-candidate counts, routing-peer counts, failure-stage counts,
+and the first candidate error from each report. The host-network file captures
+OS/kernel, IPv4/IPv6 route availability, interface addresses, and route tables
+so public relay and DCUtR failures can be compared across machines. The
+commands file records the exact probe commands and environment limits used for
+the run so the same candidate set can be replayed without starting over from
+memory.
 
 The ignored tests run the same kind of probe from the test harness:
 
