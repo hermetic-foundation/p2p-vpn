@@ -1237,23 +1237,27 @@ Once `public-relay-repro` writes `public-vpn-host-a.json` and
 
 ```sh
 P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$P2P_VPN_REPRO_DIR" \
-P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
 nix run .#public-vpn-repro
 ```
 
 The generated Host A/Host B scripts start `p2p-vpn up`, wait on daemon health
 requirements, capture daemon state, peer, route, path, MTU, capability, status,
-Prometheus, JSON view, final post-ping, and host-network artifacts, run a ping
-proof when `P2P_VPN_VPN_REPRO_PING_TARGET` is set, and write stable logs for
-comparing the same public relay-assisted overlay across two machines. Each host
-also writes `vpn-repro-evidence.json`, a compact summary of health, ping,
-direct/relay path evidence, packet-plane session counts, QUIC session counts,
-DCUtR successes, and direct path promotions for quick machine comparison.
+Prometheus, JSON view, final post-ping, and host-network artifacts, infer each
+host's ping proof target from the remote host's first advertised local route,
+and write stable logs for comparing the same public relay-assisted overlay
+across two machines. Each host also writes `vpn-repro-evidence.json`, a compact
+summary of health, ping, direct/relay path evidence, packet-plane session
+counts, QUIC session counts, DCUtR successes, and direct path promotions for
+quick machine comparison.
 Use `P2P_VPN_VPN_REPRO_HOST_A_CONFIG` and
 `P2P_VPN_VPN_REPRO_HOST_B_CONFIG` when the host configs live outside the
 `public-relay-repro` artifact directory. The legacy
 `P2P_VPN_VPN_REPRO_CONFIG` still generates both scripts against one shared
-config.
+config. Override inferred ping targets with
+`P2P_VPN_VPN_REPRO_HOST_A_PING_TARGET` and
+`P2P_VPN_VPN_REPRO_HOST_B_PING_TARGET`; use the legacy
+`P2P_VPN_VPN_REPRO_PING_TARGET` only when both scripts should ping the same
+address.
 
 The ignored tests run the same kind of probe from the test harness:
 

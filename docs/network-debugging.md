@@ -328,7 +328,6 @@ After `public-relay-repro` writes `public-vpn-host-a.json` and
 ```sh
 export P2P_VPN_VPN_REPRO_DIR="/tmp/p2p-vpn-public-vpn-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)"
 export P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$P2P_VPN_REPRO_DIR"
-export P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2
 nix run .#public-vpn-repro
 ```
 
@@ -336,7 +335,12 @@ Use `P2P_VPN_VPN_REPRO_CONFIG=/path/to/p2p-vpn.json` instead of
 `P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR` when both hosts already have their final
 overlay configs. Use `P2P_VPN_VPN_REPRO_HOST_A_CONFIG` and
 `P2P_VPN_VPN_REPRO_HOST_B_CONFIG` when the hosts need distinct configs outside
-a `public-relay-repro` artifact directory. Set
+a `public-relay-repro` artifact directory. By default, Host A pings Host B's
+first advertised local route and Host B pings Host A's first advertised local
+route. Override those with `P2P_VPN_VPN_REPRO_HOST_A_PING_TARGET` and
+`P2P_VPN_VPN_REPRO_HOST_B_PING_TARGET`, or use the legacy
+`P2P_VPN_VPN_REPRO_PING_TARGET` when both generated scripts should use the same
+target. Set
 `P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION=0` when the run is intentionally
 proving stream fallback over a relayed circuit. Set
 `P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION=1` when the expected result is an owned
@@ -356,7 +360,8 @@ daemon log tail, records command exit statuses, starts `p2p-vpn up`, waits on
 `daemon-state`, `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`,
 `daemon-capabilities`, line-oriented metrics, Prometheus metrics, matching JSON
 view envelopes, and final post-ping status/path snapshots even when health or
-ping fails. It then pings `P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The
+ping fails. It then pings the inferred or overridden role-specific target when
+one is available. The
 evidence JSON condenses health readiness, ping status, direct and relay path
 lines, packet-plane counts, QUIC packet-plane counts, DCUtR successes, and
 direct promotion counters so failed two-host runs can be compared without

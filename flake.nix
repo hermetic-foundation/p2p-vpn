@@ -1032,6 +1032,16 @@ EOF
               config="$host_a_config"
             fi
 
+            route_ping_target_from_config() {
+              config_path="$1"
+              jq -r '
+                [(.network.routes // [])[].prefix // ""]
+                | map(select(length > 0))
+                | .[0] // ""
+                | sub("/.*$"; "")
+              ' "$config_path" 2>/dev/null || true
+            }
+
             metadata="$artifact_dir/vpn-repro-metadata.txt"
             host_network="$artifact_dir/vpn-repro-host-network.txt"
             host_network_before="$artifact_dir/vpn-repro-host-network-before.txt"
@@ -1045,6 +1055,20 @@ EOF
             evidence_json="$artifact_dir/vpn-repro-evidence.json"
             result_log="$artifact_dir/vpn-repro-result.txt"
             ping_target="''${P2P_VPN_VPN_REPRO_PING_TARGET:-}"
+            host_a_ping_target="''${P2P_VPN_VPN_REPRO_HOST_A_PING_TARGET:-}"
+            host_b_ping_target="''${P2P_VPN_VPN_REPRO_HOST_B_PING_TARGET:-}"
+            if [[ -z "$host_a_ping_target" && -n "$ping_target" ]]; then
+              host_a_ping_target="$ping_target"
+            fi
+            if [[ -z "$host_b_ping_target" && -n "$ping_target" ]]; then
+              host_b_ping_target="$ping_target"
+            fi
+            if [[ -z "$host_a_ping_target" ]]; then
+              host_a_ping_target="$(route_ping_target_from_config "$host_b_config")"
+            fi
+            if [[ -z "$host_b_ping_target" ]]; then
+              host_b_ping_target="$(route_ping_target_from_config "$host_a_config")"
+            fi
             ping_count="''${P2P_VPN_VPN_REPRO_PING_COUNT:-3}"
             ping_timeout="''${P2P_VPN_VPN_REPRO_PING_TIMEOUT_SECONDS:-2}"
             health_wait="''${P2P_VPN_VPN_REPRO_HEALTH_WAIT_SECONDS:-60}"
@@ -1151,6 +1175,8 @@ EOF
                 echo "host_network_after=$host_network_after"
                 echo "result_log=$result_log"
                 echo "ping_target=$ping_target"
+                echo "host_a_ping_target=$host_a_ping_target"
+                echo "host_b_ping_target=$host_b_ping_target"
                 echo "ping_count=$ping_count"
                 echo "ping_timeout_seconds=$ping_timeout"
                 echo "health_wait_seconds=$health_wait"
@@ -1170,6 +1196,7 @@ EOF
               script="$1"
               role="$2"
               runner_config="$3"
+              runner_ping_target="$4"
               {
                 echo "#!/usr/bin/env bash"
                 echo "set -euo pipefail"
@@ -1204,7 +1231,7 @@ EOF
                 printf "daemon_log_tail=%q\n" "$daemon_log_tail"
                 printf "result_log=%q\n" "$result_log"
                 printf "ping_log=%q\n" "$ping_log"
-                printf "ping_target=%q\n" "$ping_target"
+                printf "ping_target=%q\n" "$runner_ping_target"
                 printf "ping_count=%q\n" "$ping_count"
                 printf "ping_timeout=%q\n" "$ping_timeout"
                 printf "health_wait=%q\n" "$health_wait"
@@ -1432,7 +1459,7 @@ EOF
                 echo "    exit \"\$ping_status\""
                 echo "  fi"
                 echo "else"
-                echo "  echo \"set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address to prove data forwarding\" | tee \"\$ping_log\""
+                echo "  echo \"set the role-specific ping target to the remote tunnel address to prove data forwarding\" | tee \"\$ping_log\""
                 echo "  record_status ping 2"
                 echo "fi"
                 printf "echo %q\n" "$role complete; artifacts in $artifact_dir"
@@ -1518,10 +1545,14 @@ EOF
                 printf "export P2P_VPN_VPN_REPRO_DIR=%q\n" "$artifact_dir"
                 printf "export P2P_VPN_VPN_REPRO_HOST_A_CONFIG=%q\n" "$host_a_config"
                 printf "export P2P_VPN_VPN_REPRO_HOST_B_CONFIG=%q\n" "$host_b_config"
+                printf "export P2P_VPN_VPN_REPRO_HOST_A_PING_TARGET=%q\n" "$host_a_ping_target"
+                printf "export P2P_VPN_VPN_REPRO_HOST_B_PING_TARGET=%q\n" "$host_b_ping_target"
                 printf "export P2P_VPN_VPN_REPRO_CONTROL_SOCKET=%q\n" "$control_socket"
                 printf "export P2P_VPN_VPN_REPRO_PIDFILE=%q\n" "$pidfile"
                 printf "export P2P_VPN_VPN_REPRO_DAEMON_LOG=%q\n" "$daemon_log"
-                printf "export P2P_VPN_VPN_REPRO_PING_TARGET=%q\n" "$ping_target"
+                if [[ -n "$ping_target" ]]; then
+                  printf "export P2P_VPN_VPN_REPRO_PING_TARGET=%q\n" "$ping_target"
+                fi
                 printf "export P2P_VPN_VPN_REPRO_PING_COUNT=%q\n" "$ping_count"
                 printf "export P2P_VPN_VPN_REPRO_PING_TIMEOUT_SECONDS=%q\n" "$ping_timeout"
                 printf "export P2P_VPN_VPN_REPRO_HEALTH_WAIT_SECONDS=%q\n" "$health_wait"
@@ -1546,6 +1577,8 @@ EOF
                 echo "config=$config"
                 echo "host_a_config=$host_a_config"
                 echo "host_b_config=$host_b_config"
+                echo "host_a_ping_target=$host_a_ping_target"
+                echo "host_b_ping_target=$host_b_ping_target"
                 echo "metadata=$metadata"
                 echo "host_network=$host_network"
                 echo "host_network_before=$host_network_before"
@@ -1582,7 +1615,7 @@ EOF
                 echo
                 echo "workflow:"
                 echo "  1. Copy the overlay config to both hosts or point both hosts at equivalent configs."
-                echo "  2. Set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address on each host."
+                echo "  2. Confirm each generated script's ping target is the remote tunnel address for that host."
                 echo "  3. Run the generated host script with sudo on each host."
                 echo "  4. Compare evidence_json first, then health, routes, paths, MTU, capabilities, status, JSON snapshots, daemon logs, host network, and ping output."
               } > "$summary"
@@ -1591,8 +1624,8 @@ EOF
             echo "writing public VPN repro artifacts to $artifact_dir" >&2
             write_metadata
             write_host_network
-            write_runner "$host_a_script" "Host A" "$host_a_config"
-            write_runner "$host_b_script" "Host B" "$host_b_config"
+            write_runner "$host_a_script" "Host A" "$host_a_config" "$host_a_ping_target"
+            write_runner "$host_b_script" "Host B" "$host_b_config" "$host_b_ping_target"
             write_collect
             write_shutdown
             write_commands
@@ -2005,22 +2038,32 @@ EOF
             ];
           } ''
             config="$TMPDIR/public-vpn-repro-config.json"
+            host_a_config="$TMPDIR/public-vpn-repro-host-a-config.json"
+            host_b_config="$TMPDIR/public-vpn-repro-host-b-config.json"
             artifacts="$TMPDIR/public-vpn-repro"
             public_relay_artifacts="$TMPDIR/public-relay-repro"
             mkdir -p "$public_relay_artifacts"
             p2p-vpn init-config \
-              --output "$config" \
+              --output "$host_a_config" \
               --network public-vpn-repro-structure \
               --interface hs-repro0 \
+              --local-route 10.42.0.1/32 \
               --disable-mdns \
               --disable-kademlia \
               --force
-            cp "$config" "$public_relay_artifacts/public-vpn-host-a.json"
-            cp "$config" "$public_relay_artifacts/public-vpn-host-b.json"
+            p2p-vpn init-config \
+              --output "$host_b_config" \
+              --network public-vpn-repro-structure \
+              --interface hs-repro0 \
+              --local-route 10.42.0.2/32 \
+              --disable-mdns \
+              --disable-kademlia \
+              --force
+            cp "$host_a_config" "$public_relay_artifacts/public-vpn-host-a.json"
+            cp "$host_b_config" "$public_relay_artifacts/public-vpn-host-b.json"
 
             P2P_VPN_VPN_REPRO_DIR="$artifacts" \
               P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR="$public_relay_artifacts" \
-              P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
               p2p-vpn-public-vpn-repro
 
             for script in \
@@ -2041,12 +2084,18 @@ EOF
             grep -q 'record_status daemon_health "$health_status"' "$artifacts/vpn-repro-host-a.sh"
             grep -q "config=$public_relay_artifacts/public-vpn-host-a.json" "$artifacts/vpn-repro-host-a.sh"
             grep -q "config=$public_relay_artifacts/public-vpn-host-b.json" "$artifacts/vpn-repro-host-b.sh"
+            grep -q 'ping_target=10.42.0.2' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'ping_target=10.42.0.1' "$artifacts/vpn-repro-host-b.sh"
             grep -q 'P2P_VPN_VPN_REPRO_HOST_A_CONFIG' "$artifacts/vpn-repro-commands.sh"
             grep -q 'P2P_VPN_VPN_REPRO_HOST_B_CONFIG' "$artifacts/vpn-repro-commands.sh"
+            grep -q 'P2P_VPN_VPN_REPRO_HOST_A_PING_TARGET' "$artifacts/vpn-repro-commands.sh"
+            grep -q 'P2P_VPN_VPN_REPRO_HOST_B_PING_TARGET' "$artifacts/vpn-repro-commands.sh"
             grep -q 'daemon_log_tail=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'result_log=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'host_a_config=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'host_b_config=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_a_ping_target=10.42.0.2' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_b_ping_target=10.42.0.1' "$artifacts/vpn-repro-summary.txt"
             grep -q 'evidence_json=' "$artifacts/vpn-repro-summary.txt"
             grep -q 'vpn-repro-evidence.json' "$artifacts/vpn-repro-summary.txt"
             grep -q 'write_evidence_summary' "$artifacts/vpn-repro-host-a.sh"
