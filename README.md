@@ -483,6 +483,9 @@ cargo run -- membership-record-verify \
 cargo run -- membership-record-install \
   --config node-a.json \
   --record node-b.member.json
+
+cargo run -- membership-record-list \
+  --config node-a.json
 ```
 
 To revoke a record-derived member, issue a newer tombstone for the same subject:
@@ -510,7 +513,10 @@ updates `network.member_records` idempotently by keeping the newest
 config is the explicit trust action for that issuer; configured records also
 define trusted issuer peer IDs for dynamic record exchange over the
 authenticated control plane and DHT membership-record bundles. The record is
-not a secret.
+not a secret. `membership-record-list` validates the configured records and
+prints trusted issuer peer IDs, raw grant/revocation records, effective overlay
+members, and route grants so trust-root and revocation state can be audited
+without hand-reading JSON.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to

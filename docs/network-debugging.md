@@ -149,6 +149,11 @@ By default the script invokes the CLI through `nix develop -c cargo run
 --quiet --`; set `P2P_VPN_BIN=/path/to/p2p-vpn` to reproduce with a specific
 built binary.
 
+Use `p2p-vpn membership-record-list --config CONFIG` on preserved configs to
+audit configured trust roots, active grants, revocation tombstones, effective
+overlay members, and record-derived route grants without hand-reading
+`network.member_records` JSON.
+
 ## Public Relay Smoke
 
 Use the packaged repro when the goal is to compare public relay, DCUtR, and

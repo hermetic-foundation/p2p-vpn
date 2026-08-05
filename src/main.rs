@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
@@ -430,6 +431,10 @@ enum Command {
         output: Option<PathBuf>,
         #[arg(long)]
         force: bool,
+    },
+    MembershipRecordList {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
     },
     DaemonStatus {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -899,6 +904,7 @@ async fn main() -> Result<(), String> {
             output,
             force,
         } => membership_record_install(&config, &records, output.as_deref(), force),
+        Command::MembershipRecordList { config } => membership_record_list(&config),
         Command::DaemonStatus {
             socket,
             timeout_seconds,
@@ -1501,6 +1507,126 @@ fn membership_record_install(
     }
 
     Ok(())
+}
+
+fn membership_record_list(config_path: &Path) -> Result<(), String> {
+    let config =
+        Config::load(config_path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    for line in membership_record_lines(&config)? {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn membership_record_lines(config: &Config) -> Result<Vec<String>, String> {
+    let now = current_unix_seconds_lossy();
+    validate_membership_records_at(&config.network.member_records, &config.network.name, now)
+        .map_err(|error| format!("membership record invalid: {error:?}"))?;
+    let mut issuers = BTreeSet::new();
+    for record in &config.network.member_records {
+        issuers.insert(record.payload.issuer_peer.clone());
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "membership records configured: {}",
+        config.network.member_records.len()
+    ));
+    lines.push("membership records valid: true".to_owned());
+    lines.push(format!("trusted issuers: {}", issuers.len()));
+    for issuer in issuers {
+        lines.push(format!("trusted issuer: {issuer}"));
+    }
+
+    let mut records = config.network.member_records.iter().collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.payload
+            .member_peer
+            .cmp(&right.payload.member_peer)
+            .then(
+                left.payload
+                    .membership_epoch
+                    .cmp(&right.payload.membership_epoch),
+            )
+            .then(left.payload.sequence.cmp(&right.payload.sequence))
+    });
+    lines.push(format!(
+        "membership record entries: {}",
+        config.network.member_records.len()
+    ));
+    for record in records {
+        push_membership_record_line(&mut lines, record);
+    }
+
+    let effective = config
+        .effective_membership()
+        .map_err(|error| format!("failed to compute effective membership: {error:?}"))?;
+    let mut effective_members = effective.overlay_members().collect::<Vec<_>>();
+    effective_members.sort_by_key(|member| member.transport_peer.to_string());
+    lines.push(format!(
+        "effective overlay members: {}",
+        effective_members.len()
+    ));
+    for member in effective_members {
+        lines.push(format!(
+            "effective member: {} epoch {} sequence {} roles {} route_grants {}",
+            member.transport_peer,
+            member.membership_epoch,
+            member.sequence,
+            membership_roles_text(&member.roles),
+            member.route_grants.len()
+        ));
+        for route in &member.route_grants {
+            lines.push(format!(
+                "effective member route grant: {} {} metric {}",
+                member.transport_peer, route.prefix, route.metric
+            ));
+        }
+    }
+
+    Ok(lines)
+}
+
+fn push_membership_record_line(lines: &mut Vec<String>, record: &SignedMembershipRecord) {
+    let payload = &record.payload;
+    let state = if payload.revoked { "revoked" } else { "active" };
+    let trust_root = payload.issuer_peer == payload.member_peer;
+    let expires_at = payload
+        .expires_at_unix_seconds
+        .map_or_else(|| "never".to_owned(), |expires| expires.to_string());
+    lines.push(format!(
+        "membership record: member {} issuer {} epoch {} sequence {} state {} roles {} route_grants {} expires_at {} trust_root {}",
+        payload.member_peer,
+        payload.issuer_peer,
+        payload.membership_epoch,
+        payload.sequence,
+        state,
+        membership_roles_text(&payload.roles),
+        payload.route_grants.len(),
+        expires_at,
+        trust_root
+    ));
+    for route in &payload.route_grants {
+        lines.push(format!(
+            "membership record route grant: member {} {} metric {}",
+            payload.member_peer, route.prefix, route.metric
+        ));
+    }
+}
+
+fn membership_roles_text(roles: &[MembershipRole]) -> String {
+    if roles.is_empty() {
+        return "none".to_owned();
+    }
+    roles
+        .iter()
+        .map(|role| match role {
+            MembershipRole::OverlayMember => "overlay_member",
+            MembershipRole::RouteAuthority => "route_authority",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn read_membership_record(path: &Path) -> Result<SignedMembershipRecord, String> {
@@ -8211,6 +8337,22 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_membership_record_list_command() {
+        let list = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership-record-list",
+            "--config",
+            "node-a.json",
+        ])
+        .expect("list cli");
+        let Command::MembershipRecordList { config } = list.command else {
+            panic!("expected membership-record-list command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+    }
+
+    #[test]
     fn cli_parses_membership_record_self_issue_flag() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -8671,6 +8813,133 @@ mod tests {
         let _ = fs::remove_file(&issuer_config);
         let _ = fs::remove_file(&member_public);
         let _ = fs::remove_file(&member_record);
+    }
+
+    struct MembershipRecordListFixture {
+        config: Config,
+        issuer: NodeIdentity,
+        member: NodeIdentity,
+        revoked: NodeIdentity,
+    }
+
+    fn membership_record_list_fixture() -> MembershipRecordListFixture {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let revoked = NodeIdentity::generate_ed25519().expect("revoked");
+        let root_record = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&issuer).expect("issuer subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("root record");
+        let member_record = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 2,
+                sequence: 3,
+                revoked: false,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 55,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("member record");
+        let revocation = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&revoked).expect("revoked subject"),
+                membership_epoch: 2,
+                sequence: 4,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("revocation");
+        let mut config = InitConfigTemplate {
+            identity: issuer.clone(),
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        config.network.member_records = vec![root_record, member_record, revocation];
+
+        MembershipRecordListFixture {
+            config,
+            issuer,
+            member,
+            revoked,
+        }
+    }
+
+    #[test]
+    fn membership_record_lines_report_trust_roots_grants_and_revocations() {
+        let fixture = membership_record_list_fixture();
+
+        let lines = membership_record_lines(&fixture.config).expect("membership record lines");
+
+        assert!(lines.contains(&"membership records configured: 3".to_owned()));
+        assert!(lines.contains(&"membership records valid: true".to_owned()));
+        assert!(lines.contains(&"trusted issuers: 1".to_owned()));
+        assert!(lines.contains(&format!("trusted issuer: {}", fixture.issuer.peer_id)));
+        assert!(lines.contains(&"effective overlay members: 2".to_owned()));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "membership record: member {} issuer {} epoch 1 sequence 1 state active roles overlay_member route_grants 0 expires_at never trust_root true",
+                fixture.issuer.peer_id, fixture.issuer.peer_id
+            )
+        }));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "membership record: member {} issuer {} epoch 2 sequence 3 state active roles overlay_member,route_authority route_grants 1 expires_at never trust_root false",
+                fixture.member.peer_id, fixture.issuer.peer_id
+            )
+        }));
+        assert!(lines.contains(&format!(
+            "membership record route grant: member {} 10.77.0.0/24 metric 55",
+            fixture.member.peer_id
+        )));
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "membership record: member {} issuer {} epoch 2 sequence 4 state revoked roles none route_grants 0 expires_at never trust_root false",
+                fixture.revoked.peer_id, fixture.issuer.peer_id
+            )
+        }));
+        assert!(lines.contains(&format!(
+            "effective member route grant: {} 10.77.0.0/24 metric 55",
+            fixture.member.peer_id
+        )));
     }
 
     #[test]
