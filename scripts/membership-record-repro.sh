@@ -24,7 +24,30 @@ member_identity="$artifact_dir/member.identity.json"
 member_record="$artifact_dir/member.record.json"
 issuer_installed_config="$artifact_dir/issuer.with-member-record.json"
 commands="$artifact_dir/repro-commands.sh"
+metadata="$artifact_dir/repro-metadata.txt"
 summary="$artifact_dir/repro-summary.txt"
+summary_json="$artifact_dir/repro-summary.json"
+
+command_metadata() {
+  local label="$1"
+  shift
+  {
+    echo
+    echo "[$label]"
+    if output="$("$@" 2>&1)"; then
+      echo "status: 0"
+      echo "stdout:"
+      printf '%s\n' "$output"
+      echo "stderr:"
+    else
+      local status="$?"
+      echo "status: $status"
+      echo "stdout:"
+      echo "stderr:"
+      printf '%s\n' "$output"
+    fi
+  } >>"$metadata"
+}
 
 run_p2p() {
   if [[ -n "${P2P_VPN_BIN:-}" ]]; then
@@ -63,6 +86,20 @@ fi
   echo "scripts/membership-record-repro.sh"
 } >"$commands"
 chmod +x "$commands"
+
+{
+  echo "membership_record_repro_metadata_version=1"
+  echo "artifact_dir=$artifact_dir"
+  echo "network=$network"
+  echo "route_grant=$route_grant"
+  echo "membership_epoch=$membership_epoch"
+  echo "sequence=$sequence"
+  echo "expires_at_unix_seconds=${expires_at:-none}"
+  echo "p2p_vpn_bin=${P2P_VPN_BIN:-nix develop -c cargo run --quiet --}"
+} >"$metadata"
+command_metadata "git rev-parse HEAD" git rev-parse HEAD
+command_metadata "git status --short" git status --short
+command_metadata "uname -a" uname -a
 
 run_p2p init-config \
   --network "$network" \
@@ -117,6 +154,45 @@ printf '%s\n' "$install_output" >"$artifact_dir/membership-record-install.txt"
   echo "verify_output=$artifact_dir/membership-record-verify.txt"
   echo "install_output=$artifact_dir/membership-record-install.txt"
   echo "replay_commands=$commands"
+  echo "metadata=$metadata"
+  echo "summary_json=$summary_json"
 } >"$summary"
+
+jq -n \
+  --arg artifact_dir "$artifact_dir" \
+  --arg network "$network" \
+  --arg route_grant "$route_grant" \
+  --arg membership_epoch "$membership_epoch" \
+  --arg sequence "$sequence" \
+  --arg expires_at_unix_seconds "$expires_at" \
+  --arg issuer_config "$issuer_config" \
+  --arg issuer_installed_config "$issuer_installed_config" \
+  --arg member_config "$member_config" \
+  --arg member_identity "$member_identity" \
+  --arg member_record "$member_record" \
+  --arg verify_output "$artifact_dir/membership-record-verify.txt" \
+  --arg install_output "$artifact_dir/membership-record-install.txt" \
+  --arg replay_commands "$commands" \
+  --arg metadata "$metadata" \
+  '{
+    schema_version: 1,
+    artifact_dir: $artifact_dir,
+    network: $network,
+    route_grant: $route_grant,
+    membership_epoch: ($membership_epoch | tonumber),
+    sequence: ($sequence | tonumber),
+    expires_at_unix_seconds: (if $expires_at_unix_seconds == "" then null else ($expires_at_unix_seconds | tonumber) end),
+    artifacts: {
+      issuer_config: $issuer_config,
+      issuer_installed_config: $issuer_installed_config,
+      member_config: $member_config,
+      member_identity: $member_identity,
+      member_record: $member_record,
+      verify_output: $verify_output,
+      install_output: $install_output,
+      replay_commands: $replay_commands,
+      metadata: $metadata
+    }
+  }' >"$summary_json"
 
 cat "$summary"

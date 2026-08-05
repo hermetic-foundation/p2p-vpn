@@ -134,6 +134,17 @@
             exec p2p-vpn-tun-e2e "$@"
           '';
         };
+        membershipRecordRepro = pkgs.writeShellApplication {
+          name = "p2p-vpn-membership-record-repro";
+          runtimeInputs = [
+            pkgs.bash
+            pkgs.jq
+          ];
+          text = ''
+            export P2P_VPN_BIN="${package}/bin/p2p-vpn"
+            exec bash ${./scripts/membership-record-repro.sh} "$@"
+          '';
+        };
         publicRelayRepro = pkgs.writeShellApplication {
           name = "p2p-vpn-public-relay-repro";
           runtimeInputs = [
@@ -1458,6 +1469,7 @@ EOF
         packages = {
           default = package;
           check-fast = checkFast;
+          membership-record-repro = membershipRecordRepro;
 
           releaseArchive = pkgs.runCommand "p2p-vpn-0.1.0-${system}.tar.gz" {
           nativeBuildInputs = [ pkgs.gnutar ];
@@ -1501,6 +1513,13 @@ EOF
             program = "${checkFast}/bin/p2p-vpn-check-fast";
             meta = {
               description = "Run formatter, tests, and clippy in the Nix tool environment";
+            };
+          };
+          membership-record-repro = {
+            type = "app";
+            program = "${membershipRecordRepro}/bin/p2p-vpn-membership-record-repro";
+            meta = {
+              description = "Generate signed membership-record repro artifacts";
             };
           };
         } // lib.optionalAttrs pkgs.stdenv.isLinux {

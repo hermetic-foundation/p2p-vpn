@@ -142,20 +142,23 @@ Use the local helper when debugging the membership-record CLI flow without
 starting daemons or requiring TUN privileges:
 
 ```sh
-scripts/membership-record-repro.sh
+nix run .#membership-record-repro
 ```
 
-The script creates disposable issuer and member configs, exports the member's
-public identity, issues a signed record with a route grant, verifies it against
-the selected network, installs it into a derived issuer config, and preserves
-the generated JSON plus replay commands in one artifact directory. Set
+The flake app runs the helper with the packaged `p2p-vpn` binary so the repro
+does not rebuild through `cargo run` on every iteration. The helper creates
+disposable issuer and member configs, exports the member's public identity,
+issues a signed record with a route grant, verifies it against the selected
+network, installs it into a derived issuer config, and preserves the generated
+JSON, `repro-metadata.txt`, `repro-summary.txt`, `repro-summary.json`, and
+replay commands in one artifact directory. Set
 `P2P_VPN_MEMBERSHIP_REPRO_DIR` to choose that directory,
 `P2P_VPN_MEMBERSHIP_REPRO_NETWORK` to change the network name,
 `P2P_VPN_MEMBERSHIP_REPRO_ROUTE_GRANT` to change the granted route, and
 `P2P_VPN_MEMBERSHIP_REPRO_EXPIRES_AT_UNIX_SECONDS` to exercise expiry metadata.
-By default the script invokes the CLI through `nix develop -c cargo run
---quiet --`; set `P2P_VPN_BIN=/path/to/p2p-vpn` to reproduce with a specific
-built binary.
+Run `scripts/membership-record-repro.sh` directly when you want the script's
+default `nix develop -c cargo run --quiet --` path, or set
+`P2P_VPN_BIN=/path/to/p2p-vpn` to reproduce with a specific built binary.
 
 Use `p2p-vpn membership-record-list --config CONFIG` on preserved configs to
 audit configured trust roots, active grants, revocation tombstones, effective

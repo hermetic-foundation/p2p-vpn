@@ -519,7 +519,9 @@ authenticated control plane and DHT membership-record bundles. The record is
 not a secret. `membership-record-list` validates the configured records and
 prints trusted issuer peer IDs, raw grant/revocation records, effective overlay
 members, and route grants so trust-root and revocation state can be audited
-without hand-reading JSON.
+without hand-reading JSON. Use `nix run .#membership-record-repro` to generate a
+disposable issuer/member record flow with preserved JSON outputs and replay
+commands.
 
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
