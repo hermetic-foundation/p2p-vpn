@@ -195,14 +195,17 @@ recovery dials to the peer's configured and discovered addresses, including
 when a fallback libp2p connection is still up, and records
 `packet_plane_path_recovery_dial_attempts` and
 `packet_plane_path_recovery_dial_failures`.
-The drain decision is explicit: owned UDP packet-plane datagram, libp2p stream
-fallback, or blocked with a reason. The locked libp2p-quic transport currently
-disables QUIC datagram receive buffers internally, so the daemon advertises
-native libp2p QUIC datagrams as unsupported and cannot expose a real application
-datagram sender or receiver through the libp2p `Swarm`. When peers have an
+The drain decision is explicit: owned UDP packet-plane datagram, owned QUIC
+packet-plane datagram, libp2p stream fallback, or blocked with a reason. The
+locked libp2p 0.56 / libp2p-quic 0.13.1 transport disables QUIC datagram
+receive buffers internally and exposes only stream muxing through the libp2p
+`Swarm`, so the daemon's local native-libp2p datagram capability gate remains
+closed: it advertises native libp2p QUIC datagrams as unsupported and cannot
+claim a native application datagram sender or receiver. When peers have an
 established direct libp2p path, compatible packet-plane capabilities, and an
-authenticated UDP packet-plane session, packet frames are sent over the owned
-UDP session. Otherwise, the operational fallback is identity-keyed streams: each
+authenticated owned UDP or owned QUIC packet-plane session, packet frames are
+sent over that owned datagram session. Otherwise, the operational fallback is
+identity-keyed streams: each
 packet frame is sent over libp2p's authenticated request-response channel to the
 configured peer ID, and the receiver still applies the overlay allowlist, replay
 window, source-route ownership, and local-destination checks before writing to
@@ -312,10 +315,10 @@ peer. The packet protocol also enforces
 `resources.max_inbound_packets_per_peer_per_second` as a per-peer inbound token
 bucket before writing any accepted packet to TUN; over-limit frames receive a
 compact `rate_limited` packet rejection and are counted separately in metrics.
-Runtime validation rejects zero per-peer packet queue capacity, zero inbound
-packet rate capacity, and zero total or per-peer established connection
-capacity, because those settings would make an otherwise valid node unable to
-forward VPN traffic.
+Runtime validation rejects zero per-peer packet queue capacity, zero concurrent
+stream capacity, zero pending handshake capacity, zero inbound packet rate
+capacity, and zero total or per-peer established connection capacity, because
+those settings would make an otherwise valid node unable to forward VPN traffic.
 When `relay.server` is enabled, runtime validation also requires non-zero relay
 reservation, circuit, duration, and byte limits so the relay can actually accept
 reservations and carry fallback traffic.
@@ -498,14 +501,18 @@ Build a reproducible release archive for the current system:
 
 ```sh
 nix build .#releaseArchive
-tar -tzf result
+system=$(nix eval --raw --impure --expr builtins.currentSystem)
+nix build ".#checks.${system}.releaseArchiveSanity"
 ```
 
 The archive contains the packaged `p2p-vpn` binary, README, flake lock, NixOS
 module, the feature matrix, and the `nixos-mesh` deployment template. Release
 builds should also run `nix flake check` so the binary package, release archive,
-formatter, clippy check, and NixOS module evaluation are all verified before
-publishing.
+release-archive sanity check, formatter, clippy check, and NixOS module
+evaluation are all verified before publishing. The release sanity check unpacks
+the archive, verifies the expected operational docs, NixOS module, and template
+are present, rejects unsafe archive paths, and confirms the archived CLI can
+print its help text.
 
 The current feature-completeness audit lives in
 [`docs/feature-matrix.md`](docs/feature-matrix.md). It links each major
@@ -841,6 +848,10 @@ cargo run -- relay-scan \
   --timeout-seconds 30
 
 cargo run -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --timeout-seconds 45
+
+cargo run -- relay-check \
   --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
   --timeout-seconds 45
 
@@ -878,7 +889,8 @@ cycling through alternate addresses. Within each relay peer, validation tries
 QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
 spend early attempts on the transports most likely to support hole punching.
 Pass `--write-candidates PATH` to write the ordered direct relay candidates as
-newline-separated multiaddrs for later `relay-check --relay-candidate` runs.
+newline-separated multiaddrs for repeatable `relay-check --relay-candidates-file
+PATH` runs.
 Validation skips relay candidates that require IPv4 or IPv6 when the local host
 has no usable route for that address family and prints each skip as
 `public relay scan validation skipped: ... reason ipv4_unreachable` or
@@ -905,7 +917,11 @@ non-relayed connection to the target peer. Repeat `--relay-candidate` to try a s
 candidate set; the command tries candidates round-robin by relay peer, with
 QUIC-capable addresses before TCP alternates for the same relay, then stops
 after the first usable relay and prints candidate-level failures when none
-work. Before probing, it skips relay candidates that require IPv4 or IPv6 when
+work. Use `--relay-candidates-file PATH` to consume the newline-separated
+candidate file produced by `relay-scan --write-candidates`; file candidates can
+be combined with repeated `--relay-candidate` flags and use the same
+round-robin ordering before validation. Before probing, it skips relay
+candidates that require IPv4 or IPv6 when
 the local host has no usable route for that address family and prints each skip
 as `public relay check skipped: ... reason ipv4_unreachable` or
 `reason ipv6_unreachable`. Use `--max-validation-candidates N` to bound the

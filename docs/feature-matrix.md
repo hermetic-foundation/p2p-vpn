@@ -35,7 +35,7 @@ path.
 | Remote status/control CLI | operational | `src/runtime/remote.rs` and `src/main.rs` query peers for service status, live paths, routes, capabilities, MTU-related state, reported packet-plane session TTL/replay-window limit, and packet-plane payload/overhead limits without requiring daemon-local socket access. Older service responses without those fields decode as unknown. | `nix develop -c cargo test runtime::remote::tests::query_peer_status_exchanges_live_control_and_service_status`; service compatibility: `nix develop -c cargo test status_response_decodes_missing_packet_plane_limits_as_unknown`; CLI line coverage: `nix develop -c cargo test peer_live` |
 | Security audit logging | operational | `src/runtime/runner.rs` emits structured audit fields for rejected packets without logging packet payload bytes. Metrics classify rejection reasons. | `nix develop -c cargo test runtime::runner::tests::packet_rejection_audit_fields_include_safe_packet_metadata` |
 | NixOS integration | operational | `nix/nixos-module.nix` defines instances, systemd units, runtime directories, firewall ports, TUN kernel module, control socket shutdown, and restart behavior. | `nix flake check` |
-| Release packaging | operational | `flake.nix` builds the binary package and reproducible release archive with README, flake files, NixOS module, examples, and this matrix. | `nix build .#releaseArchive && tar -tzf result` |
+| Release packaging | operational | `flake.nix` builds the binary package and reproducible release archive with README, flake files, NixOS module, examples, and this matrix. The `releaseArchiveSanity` check unpacks the archive, rejects unsafe paths, verifies the expected operational files are present, and confirms the archived CLI can print help. | `nix build .#releaseArchive`; `system=$(nix eval --raw --impure --expr builtins.currentSystem); nix build ".#checks.${system}.releaseArchiveSanity"`; full gate: `nix flake check` |
 
 ## Remaining Non-Trivial Gaps
 
@@ -69,7 +69,10 @@ path.
    distinct relay peers when a newly identified relay can replace duplicate
    addresses from an already represented relay. It can also write the ordered
    direct relay candidate set as newline-separated multiaddrs for repeatable
-   follow-up `relay-check` runs. `relay-scan --check-candidates` can
+   follow-up `relay-check --relay-candidates-file` runs. `relay-check` can
+   combine that file with explicit `--relay-candidate` flags before applying
+   the same ordering, host reachability filtering, and validation limits.
+   `relay-scan --check-candidates` can
    immediately test scanned candidates with the same reservation/circuit/DCUtR
    proof path as `relay-check`, while both scan validation and manual
    `relay-check` skip IPv4-only or IPv6-only validation candidates on hosts
