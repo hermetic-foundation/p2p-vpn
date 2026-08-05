@@ -69,9 +69,10 @@ path.
    distinct relay peers when a newly identified relay can replace duplicate
    addresses from an already represented relay. `relay-scan --check-candidates` can
    immediately test scanned candidates with the same reservation/circuit/DCUtR
-   proof path as `relay-check`, while skipping IPv6-only validation candidates
-   on hosts without a usable IPv6 route and optionally bounding how many
-   host-reachable candidates a validation pass probes. Each validated candidate
+   proof path as `relay-check`, while skipping IPv4-only or IPv6-only
+   validation candidates on hosts without a usable route for that address
+   family and optionally bounding how many host-reachable candidates a
+   validation pass probes. Each validated candidate
    uses one end-to-end timeout budget across relay reservation setup and the
    subsequent relayed-circuit or DCUtR proof. Validation preserves relay-peer
    diversity and tries QUIC-capable addresses before TCP alternates within each

@@ -104,7 +104,8 @@ addresses for one relay still tests other relays before cycling through that
 peer's alternate addresses. Within each relay peer, validation tries
 QUIC-capable addresses before TCP addresses so bounded public DCUtR searches
 spend early attempts on transports more likely to hole punch. Hosts without a
-usable IPv6 route skip IPv6-only relay candidates during validation and print each skip with
+usable IPv4 or IPv6 route skip relay candidates that require that address
+family during validation and print each skip with `reason ipv4_unreachable` or
 `reason ipv6_unreachable`, while still showing the candidate in the scan output.
 Use `--max-validation-candidates N` to bound each validation pass after host
 reachability filtering; this is especially useful with `--require-dcutr-success`

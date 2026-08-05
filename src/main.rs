@@ -805,6 +805,7 @@ struct RelayCheckArgs {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RelayCandidateReachability {
+    ipv4: bool,
     ipv6: bool,
 }
 
@@ -2465,7 +2466,12 @@ fn filter_relay_scan_validation_candidates(
     let mut skipped = Vec::new();
 
     for candidate in candidates {
-        if candidate_requires_ipv6(&candidate) && !reachability.ipv6 {
+        if candidate_requires_ipv4(&candidate) && !reachability.ipv4 {
+            skipped.push(SkippedRelayCandidate {
+                address: candidate.to_string(),
+                reason: "ipv4_unreachable",
+            });
+        } else if candidate_requires_ipv6(&candidate) && !reachability.ipv6 {
             skipped.push(SkippedRelayCandidate {
                 address: candidate.to_string(),
                 reason: "ipv6_unreachable",
@@ -2508,6 +2514,7 @@ fn limit_relay_scan_validation_candidates(
 
 fn local_relay_candidate_reachability() -> RelayCandidateReachability {
     RelayCandidateReachability {
+        ipv4: local_udp_route_available("0.0.0.0:0", "1.1.1.1:53"),
         ipv6: local_udp_route_available("[::]:0", "[2001:4860:4860::8888]:53"),
     }
 }
@@ -2516,6 +2523,15 @@ fn local_udp_route_available(bind: &str, target: &str) -> bool {
     UdpSocket::bind(bind)
         .and_then(|socket| socket.connect(target))
         .is_ok()
+}
+
+fn candidate_requires_ipv4(candidate: &libp2p::Multiaddr) -> bool {
+    candidate.iter().any(|protocol| {
+        matches!(
+            protocol,
+            libp2p::multiaddr::Protocol::Ip4(_) | libp2p::multiaddr::Protocol::Dns4(_)
+        )
+    })
 }
 
 fn candidate_requires_ipv6(candidate: &libp2p::Multiaddr) -> bool {
@@ -4548,7 +4564,10 @@ mod tests {
 
         let (kept, skipped) = filter_relay_scan_validation_candidates(
             candidates,
-            RelayCandidateReachability { ipv6: false },
+            RelayCandidateReachability {
+                ipv4: true,
+                ipv6: false,
+            },
         );
 
         assert_eq!(
@@ -4587,11 +4606,60 @@ mod tests {
 
         let (kept, skipped) = filter_relay_scan_validation_candidates(
             candidates,
-            RelayCandidateReachability { ipv6: true },
+            RelayCandidateReachability {
+                ipv4: true,
+                ipv6: true,
+            },
         );
 
         assert_eq!(kept.len(), 1);
         assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn relay_scan_validation_candidates_skip_ipv4_when_host_lacks_ipv4_route() {
+        let peer_a = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let peer_b = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        let candidates = vec![
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer_a}")
+                .parse()
+                .expect("ipv4 candidate"),
+            format!("/dns4/relay.example.net/tcp/4001/p2p/{peer_b}")
+                .parse()
+                .expect("dns4 candidate"),
+            format!("/ip6/2001:db8::1/tcp/4001/p2p/{peer_a}")
+                .parse()
+                .expect("ipv6 candidate"),
+        ];
+
+        let (kept, skipped) = filter_relay_scan_validation_candidates(
+            candidates,
+            RelayCandidateReachability {
+                ipv4: false,
+                ipv6: true,
+            },
+        );
+
+        assert_eq!(
+            kept.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![format!("/ip6/2001:db8::1/tcp/4001/p2p/{peer_a}")]
+        );
+        assert_eq!(
+            skipped
+                .iter()
+                .map(|candidate| (&candidate.address, candidate.reason))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    &format!("/ip4/203.0.113.10/tcp/4001/p2p/{peer_a}"),
+                    "ipv4_unreachable"
+                ),
+                (
+                    &format!("/dns4/relay.example.net/tcp/4001/p2p/{peer_b}"),
+                    "ipv4_unreachable"
+                ),
+            ]
+        );
     }
 
     #[test]
