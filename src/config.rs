@@ -156,6 +156,26 @@ impl Config {
                 ResourceValidationError::EmptyQueueBytes,
             ));
         }
+        if self.resources.max_concurrent_control_streams == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoConcurrentControlStreams,
+            ));
+        }
+        if self.resources.max_concurrent_packet_streams == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoConcurrentPacketStreams,
+            ));
+        }
+        if self.resources.max_pending_incoming_connections == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoPendingIncomingConnections,
+            ));
+        }
+        if self.resources.max_pending_outgoing_connections == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoPendingOutgoingConnections,
+            ));
+        }
         if self.resources.max_established_connections_per_peer == 0 {
             return Err(ConfigError::Resource(
                 ResourceValidationError::NoEstablishedConnectionsPerPeer,
@@ -770,6 +790,10 @@ pub enum InterfaceValidationError {
 pub enum ResourceValidationError {
     EmptyQueuePackets,
     EmptyQueueBytes,
+    NoConcurrentControlStreams,
+    NoConcurrentPacketStreams,
+    NoPendingIncomingConnections,
+    NoPendingOutgoingConnections,
     NoEstablishedConnectionsPerPeer,
     NoEstablishedConnections,
     NoInboundPacketsPerPeerPerSecond,
@@ -2242,7 +2266,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_validation_rejects_zero_established_connection_capacity() {
+    fn runtime_validation_rejects_zero_resource_capacity() {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: NetworkConfig {
@@ -2268,6 +2292,42 @@ mod tests {
             resources: default_resources(),
         };
 
+        config.resources.max_concurrent_control_streams = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoConcurrentControlStreams
+            ))
+        ));
+
+        config.resources.max_concurrent_control_streams = 64;
+        config.resources.max_concurrent_packet_streams = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoConcurrentPacketStreams
+            ))
+        ));
+
+        config.resources.max_concurrent_packet_streams = 256;
+        config.resources.max_pending_incoming_connections = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoPendingIncomingConnections
+            ))
+        ));
+
+        config.resources.max_pending_incoming_connections = 64;
+        config.resources.max_pending_outgoing_connections = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoPendingOutgoingConnections
+            ))
+        ));
+
+        config.resources.max_pending_outgoing_connections = 64;
         config.resources.max_established_connections_per_peer = 0;
         assert!(matches!(
             config.validate_runtime(),
