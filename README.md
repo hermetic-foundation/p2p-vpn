@@ -480,8 +480,10 @@ nix flake check
 nix build .#default
 ```
 
-`nix flake check` builds and tests the package, checks formatting, and runs
-clippy with warnings denied.
+`nix flake check` builds and tests the package, checks formatting, runs clippy
+with warnings denied, evaluates the NixOS module, and on Linux runs a NixOS VM
+smoke check that starts the packaged systemd service and queries its daemon
+control socket.
 
 Build or run the packaged CLI with Nix:
 
@@ -1123,7 +1125,10 @@ The NixOS module exports named systemd units such as `p2p-vpn-node-a.service`,
 loads the `tun` kernel module, runs `p2p-vpn up --config ...`, adds `iproute2`
 to the unit path for interface setup, grants `CAP_NET_ADMIN` and `CAP_NET_RAW`,
 restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
-firewall. Keep JSON configs that contain `network.private_key` or
+firewall. The Linux flake checks include `checks.x86_64-linux.nixos-vm-smoke`,
+which boots a NixOS VM, starts a module-managed instance, queries
+`daemon-status` over its control socket, stops the unit, and confirms orderly
+socket cleanup. Keep JSON configs that contain `network.private_key` or
 `network.membership_key` outside the Nix store, for example under
 `/etc/p2p-vpn`, with permissions managed by your deployment system. Those JSON
 configs can tune packet-plane expiry with

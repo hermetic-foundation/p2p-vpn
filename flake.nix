@@ -316,6 +316,56 @@
             )
           ];
         };
+        nixosSmokeConfig = pkgs.runCommand "p2p-vpn-nixos-smoke-config.json" {
+          nativeBuildInputs = [ package ];
+        } ''
+          p2p-vpn init-config \
+            --output "$out" \
+            --network nixos-smoke \
+            --interface hs-smoke0 \
+            --disable-mdns \
+            --disable-kademlia \
+            --force
+        '';
+        nixosVmSmoke = pkgs.testers.nixosTest {
+          name = "p2p-vpn-nixos-module-smoke";
+          nodes.machine =
+            { pkgs, ... }:
+            {
+              imports = [ self.nixosModules.default ];
+
+              system.stateVersion = "25.11";
+              environment.systemPackages = [ package ];
+              environment.etc."p2p-vpn/smoke.json".source = nixosSmokeConfig;
+
+              services.p2p-vpn.instances.smoke = {
+                enable = true;
+                configFile = "/etc/p2p-vpn/smoke.json";
+                metricsIntervalSeconds = 1;
+                controlSocket = "/run/p2p-vpn-smoke/control.sock";
+              };
+            };
+
+          testScript = ''
+            machine.start()
+            machine.wait_for_unit("multi-user.target")
+            machine.wait_for_unit("p2p-vpn-smoke.service")
+            machine.wait_for_file("/run/p2p-vpn-smoke/control.sock")
+
+            machine.succeed(
+                "p2p-vpn daemon-status "
+                "--socket /run/p2p-vpn-smoke/control.sock "
+                "--timeout-seconds 5 | tee /tmp/p2p-vpn-status"
+            )
+            machine.succeed("grep -q '^tun_read_packets ' /tmp/p2p-vpn-status")
+            machine.succeed("grep -q '^packet_plane_session_ttl_seconds ' /tmp/p2p-vpn-status")
+            machine.succeed("grep -q '^packet_plane_sessions ' /tmp/p2p-vpn-status")
+
+            machine.succeed("systemctl stop p2p-vpn-smoke.service")
+            machine.wait_until_fails("test -S /run/p2p-vpn-smoke/control.sock")
+            machine.succeed("test \"$(systemctl show p2p-vpn-smoke.service -p Result --value)\" = success")
+          '';
+        };
       in
       {
         packages = {
@@ -498,6 +548,7 @@
             esac
             touch $out
           '';
+          nixos-vm-smoke = nixosVmSmoke;
         };
 
         devShells.default = pkgs.mkShell {
