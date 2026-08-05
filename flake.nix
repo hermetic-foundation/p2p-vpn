@@ -81,6 +81,7 @@
           runtimeInputs = [
             package
             pkgs.coreutils
+            pkgs.jq
           ];
           text = ''
             artifact_dir="''${P2P_VPN_REPRO_DIR:-}"
@@ -94,6 +95,9 @@
             relay_report="$artifact_dir/public-relay-check-report.json"
             relay_config="$artifact_dir/public-relay-config.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
+            metadata="$artifact_dir/repro-metadata.txt"
+            commands="$artifact_dir/repro-commands.sh"
+            summary="$artifact_dir/repro-summary.txt"
             scan_timeout="''${P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS:-30}"
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
@@ -104,6 +108,124 @@
               relay_check_base_args=(--config "$base_config")
             fi
             status=0
+            phase_results=()
+
+            write_metadata() {
+              {
+                echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "working_directory=$(pwd)"
+                echo "system=$(uname -a)"
+                echo "p2p_vpn_binary=$(command -v p2p-vpn)"
+                echo "p2p_vpn_version=$(p2p-vpn --version 2>/dev/null || echo unknown)"
+                echo "P2P_VPN_REPRO_DIR=$artifact_dir"
+                echo "P2P_VPN_REPRO_BASE_CONFIG=$base_config"
+                echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
+                echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
+                echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
+                echo "P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=$max_validation"
+              } > "$metadata"
+            }
+
+            write_commands() {
+              {
+                echo "#!/usr/bin/env bash"
+                echo "set -euo pipefail"
+                printf "export P2P_VPN_REPRO_DIR=%q\n" "$artifact_dir"
+                if [[ -n "$base_config" ]]; then
+                  printf "export P2P_VPN_REPRO_BASE_CONFIG=%q\n" "$base_config"
+                fi
+                printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
+                printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
+                printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
+                printf "export P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=%q\n" "$max_validation"
+                echo
+                echo "p2p-vpn relay-scan \\"
+                echo "  --ipfs-bootstrap-peers \\"
+                printf "  --timeout-seconds %q \\\\\n" "$scan_timeout"
+                printf "  --max-candidates %q \\\\\n" "$max_candidates"
+                printf "  --write-candidates %q \\\\\n" "$candidates"
+                printf "  --write-report %q \\\\\n" "$scan_report"
+                echo "  --force"
+                echo
+                echo "p2p-vpn relay-check \\"
+                if [[ -n "$base_config" ]]; then
+                  printf "  --config %q \\\\\n" "$base_config"
+                fi
+                printf "  --relay-candidates-file %q \\\\\n" "$candidates"
+                printf "  --timeout-seconds %q \\\\\n" "$candidate_timeout"
+                printf "  --max-validation-candidates %q \\\\\n" "$max_validation"
+                printf "  --write-report %q \\\\\n" "$relay_report"
+                printf "  --write-config %q \\\\\n" "$relay_config"
+                echo "  --force"
+                echo
+                echo "p2p-vpn relay-check \\"
+                if [[ -n "$base_config" ]]; then
+                  printf "  --config %q \\\\\n" "$base_config"
+                fi
+                printf "  --relay-candidates-file %q \\\\\n" "$candidates"
+                printf "  --timeout-seconds %q \\\\\n" "$candidate_timeout"
+                printf "  --max-validation-candidates %q \\\\\n" "$max_validation"
+                echo "  --require-dcutr-success \\"
+                printf "  --write-report %q \\\\\n" "$dcutr_report"
+                echo "  --force"
+              } > "$commands"
+              chmod +x "$commands"
+            }
+
+            append_report_summary() {
+              label="$1"
+              report="$2"
+              if [[ ! -s "$report" ]]; then
+                echo "$label report: missing" >> "$summary"
+                return
+              fi
+
+              echo "$label report: $report" >> "$summary"
+              jq -r '
+                "  succeeded=" + ((.succeeded // false) | tostring),
+                "  candidates=" + (((.candidates // []) | length) | tostring),
+                "  skipped_candidates=" + (((.skipped_candidates // []) | length) | tostring),
+                "  host_reachable_candidates=" + (((.host_reachable_candidates // []) | length) | tostring),
+                "  discovered_routing_peers=" + ((.discovered_routing_peers // "n/a") | tostring),
+                "  dialed_routing_peers=" + ((.dialed_routing_peers // "n/a") | tostring),
+                "  closest_peer_results=" + ((.closest_peer_results // "n/a") | tostring),
+                "  failure_stages=" + (
+                  [(.candidates // [])[].failure_stage | select(. != null)]
+                  | if length == 0 then "none"
+                    else group_by(.) | map("\(.[0])=\(length)") | join(",")
+                    end
+                ),
+                "  first_error=" + (
+                  (
+                    [(.candidates // [])[].error, (.peer_results // [])[].last_error]
+                    | map(select(. != null and . != ""))
+                    | first
+                  ) // "none"
+                )
+              ' "$report" >> "$summary"
+            }
+
+            write_summary() {
+              {
+                echo "p2p-vpn public relay repro summary"
+                echo "artifact_dir=$artifact_dir"
+                echo "metadata=$metadata"
+                echo "commands=$commands"
+                echo "candidate_file=$candidates"
+                echo "relay_assisted_config=$relay_config"
+                echo
+                echo "phase results:"
+                if [[ "''${#phase_results[@]}" -eq 0 ]]; then
+                  echo "  none"
+                else
+                  printf "  %s\n" "''${phase_results[@]}"
+                fi
+                echo
+              } > "$summary"
+              append_report_summary "scan" "$scan_report"
+              append_report_summary "relay-check" "$relay_report"
+              append_report_summary "dcutr" "$dcutr_report"
+            }
 
             run_phase() {
               phase="$1"
@@ -117,9 +239,12 @@
                 echo "$phase failed with exit status $phase_status" >&2
                 status=1
               fi
+              phase_results+=("$phase status=$phase_status")
             }
 
             echo "writing public relay repro artifacts to $artifact_dir" >&2
+            write_metadata
+            write_commands
             run_phase "scanning IPFS-compatible bootstrap peers for public relay candidates" \
               p2p-vpn relay-scan \
               --ipfs-bootstrap-peers \
@@ -159,6 +284,10 @@
             echo "relay-check report: $relay_report" >&2
             echo "relay-assisted config: $relay_config" >&2
             echo "DCUtR report: $dcutr_report" >&2
+            write_summary
+            echo "metadata: $metadata" >&2
+            echo "replay commands: $commands" >&2
+            echo "summary: $summary" >&2
             exit "$status"
           '';
         };

@@ -86,6 +86,14 @@ relay-assisted config generated from the validated public relay. It exits
 nonzero if any phase fails, but earlier artifacts remain in the repro
 directory.
 
+Every repro directory also contains `repro-metadata.txt`, `repro-commands.sh`,
+and `repro-summary.txt`. Start with the summary when triaging a failure: it
+records each phase status, candidate counts, skipped candidates, routing-peer
+counts, failure-stage counts, and the first candidate error from each report.
+Use the metadata file to compare the exact timeout/candidate-limit environment
+between runs. Use the commands file to replay the same scan, relay-circuit, and
+DCUtR probes against the preserved candidate file.
+
 Probe candidates and write a machine-readable report:
 
 ```sh
@@ -106,6 +114,7 @@ p2p-vpn relay-check \
   --write-report /tmp/p2p-vpn-dcutr-report.json
 ```
 
-Inspect scan report peer counts, routing peer counts, candidate addresses,
-candidate peer results, `failure_stage`, bootstrap details, relay readiness,
-DCUtR counters, direct connection counts, and `last_error` fields.
+Inspect `repro-summary.txt` first, then the scan report peer counts, routing
+peer counts, candidate addresses, candidate peer results, `failure_stage`,
+bootstrap details, relay readiness, DCUtR counters, direct connection counts,
+and `last_error` fields.

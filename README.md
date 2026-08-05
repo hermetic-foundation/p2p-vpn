@@ -979,6 +979,23 @@ infrastructure only and is not added as a VPN peer or route owner. Use
 must be the relay's direct address with its `/p2p/RELAY` peer ID and without
 `/p2p-circuit`.
 
+The packaged public relay repro app is the preferred way to collect a
+repeatable failure bundle:
+
+```sh
+P2P_VPN_REPRO_DIR=public-relay-repro \
+P2P_VPN_REPRO_BASE_CONFIG=p2p-vpn.json \
+nix run .#public-relay-repro
+```
+
+In addition to the scan/check/DCUtR JSON reports and candidate file, it writes
+`repro-metadata.txt`, `repro-commands.sh`, and `repro-summary.txt`. The summary
+captures phase exit statuses, candidate counts, skipped-candidate counts,
+routing-peer counts, failure-stage counts, and the first candidate error from
+each report. The commands file records the exact probe commands and environment
+limits used for the run so the same candidate set can be replayed without
+starting over from memory.
+
 The ignored tests run the same kind of probe from the test harness:
 
 ```sh
