@@ -1757,6 +1757,19 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         "peer live owned quic packet plane: {} {}",
         status.peer, status.service.supports_owned_quic_packet_plane
     ));
+    push_peer_live_packet_plane_lines(lines, status);
+    lines.push(format!(
+        "peer live preferred path: {} {}",
+        status.peer,
+        path_name(
+            PathKind::from_wire_name(&status.capabilities.preferred_path)
+                .unwrap_or(PathKind::DirectQuicStream)
+        )
+    ));
+    push_peer_live_advertised_route_lines(lines, status);
+}
+
+fn push_peer_live_packet_plane_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
     lines.push(format!(
         "peer live owned quic packet plane certificate bytes: {} {}",
         status.peer,
@@ -1804,14 +1817,9 @@ fn push_peer_live_status_lines(lines: &mut Vec<String>, status: &RemotePeerStatu
         status.peer,
         optional_usize(status.service.packet_plane_replay_windows_per_session)
     ));
-    lines.push(format!(
-        "peer live preferred path: {} {}",
-        status.peer,
-        path_name(
-            PathKind::from_wire_name(&status.capabilities.preferred_path)
-                .unwrap_or(PathKind::DirectQuicStream)
-        )
-    ));
+}
+
+fn push_peer_live_advertised_route_lines(lines: &mut Vec<String>, status: &RemotePeerStatus) {
     lines.push(format!(
         "peer live advertised routes: {} {}",
         status.peer,
