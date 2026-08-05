@@ -1408,6 +1408,7 @@ EOF
             pkgs.rust-analyzer
             pkgs.pkg-config
             pkgs.jujutsu
+            pkgs.jq
             pkgs.iproute2
             pkgs.iputils
             pkgs.procps

@@ -60,7 +60,15 @@ The preserved directory is printed on stderr. It contains `node-a.log`,
 replays the focused test with `P2P_VPN_TUN_E2E_KEEP_TEMP=1` and includes a
 direct `unshare` invocation for the already-built test binary. The metadata
 records the test name, artifact directory, current test binary, timeout knobs,
-kernel, `unshare`, and `ip` versions.
+Git revision, dirty status, kernel, `unshare`, and `ip` versions.
+
+To triage an existing preserved run, start by listing the directory and reading
+the metadata:
+
+```sh
+find "$ARTIFACT_DIR" -maxdepth 1 -type f | sort
+sed -n '1,220p' "$ARTIFACT_DIR/repro-metadata.txt"
+```
 
 Failed tests already include node logs, `ip addr`, and route-table output in
 the assertion message.

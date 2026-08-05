@@ -854,6 +854,8 @@ fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Resu
     )
     .expect("write metadata line");
     writeln!(metadata, "wait_timeout_scale: {timeout_scale}").expect("write metadata line");
+    metadata.push_str(&command_metadata("git", &["rev-parse", "HEAD"]));
+    metadata.push_str(&command_metadata("git", &["status", "--short"]));
     metadata.push_str(&command_metadata("uname", &["-a"]));
     metadata.push_str(&command_metadata("unshare", &["--version"]));
     metadata.push_str(&command_metadata("ip", &["-V"]));
