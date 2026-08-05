@@ -569,6 +569,14 @@
             machine.succeed("grep -q '^packet_plane_session_ttl_seconds ' /tmp/p2p-vpn-status")
             machine.succeed("grep -q '^packet_plane_sessions ' /tmp/p2p-vpn-status")
             machine.succeed(
+                "p2p-vpn daemon-status "
+                "--socket /run/p2p-vpn-smoke/control.sock "
+                "--timeout-seconds 5 "
+                "--format prometheus | tee /tmp/p2p-vpn-prometheus"
+            )
+            machine.succeed("grep -q '^p2p_vpn_tun_read_packets ' /tmp/p2p-vpn-prometheus")
+            machine.succeed("grep -q '^p2p_vpn_packet_plane_sessions ' /tmp/p2p-vpn-prometheus")
+            machine.succeed(
                 "p2p-vpn daemon-health "
                 "--socket /run/p2p-vpn-smoke/control.sock "
                 "--timeout-seconds 5 | tee /tmp/p2p-vpn-health"

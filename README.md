@@ -1088,6 +1088,7 @@ Inspect the runtime metric names and startup snapshot:
 
 ```sh
 cargo run -- metrics --config p2p-vpn.json
+cargo run -- metrics --config p2p-vpn.json --format prometheus
 ```
 
 The metrics output includes control-plane exchange counters, capability
@@ -1119,6 +1120,9 @@ asynchronous outgoing connection error counts, healthy path counts by transport
 kind, configured peers with and without a currently supported packet path, and
 queue-drain stalls caused by peers having no currently supported packet path or a
 full packet stream send window.
+Use `--format prometheus` on `metrics` or `daemon-status` to emit only
+Prometheus-compatible numeric samples with the `p2p_vpn_` prefix, suitable for
+textfile collection or ad hoc scrape validation.
 Those counters are intended to show whether a deployment is
 exchanging capabilities, checking service status, probing and advertising
 observed public addresses, refreshing DHT discovery, rejecting bad discovered
@@ -1247,6 +1251,7 @@ sudo target/debug/p2p-vpn up \
   --control-socket /run/p2p-vpn/control.sock
 
 cargo run -- daemon-status --socket /run/p2p-vpn/control.sock
+cargo run -- daemon-status --socket /run/p2p-vpn/control.sock --format prometheus
 cargo run -- daemon-state --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-peers --socket /run/p2p-vpn/control.sock
 cargo run -- daemon-routes --socket /run/p2p-vpn/control.sock

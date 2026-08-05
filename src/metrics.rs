@@ -1391,6 +1391,11 @@ impl RuntimeSnapshot {
         lines
     }
 
+    #[must_use]
+    pub fn prometheus_lines(&self) -> Vec<String> {
+        prometheus_lines_from_metric_lines(&self.lines())
+    }
+
     fn extend_transport_lines(&self, lines: &mut Vec<String>) {
         lines.extend([
             format!("outbound_failures {}", self.outbound_failures),
@@ -1897,6 +1902,38 @@ impl RuntimeSnapshot {
     }
 }
 
+#[must_use]
+pub fn prometheus_lines_from_metric_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter_map(|line| prometheus_line_from_metric_line(line))
+        .collect()
+}
+
+fn prometheus_line_from_metric_line(line: &str) -> Option<String> {
+    let (name, value) = line.split_once(' ')?;
+    if value.contains(' ') || !value.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    if !is_prometheus_metric_suffix(name) {
+        return None;
+    }
+
+    Some(format!("p2p_vpn_{name} {value}"))
+}
+
+fn is_prometheus_metric_suffix(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2089,6 +2126,38 @@ mod tests {
 
     fn assert_metric_line(snapshot: &RuntimeSnapshot, line: &str) {
         assert!(snapshot.lines().contains(&line.to_owned()));
+    }
+
+    #[test]
+    fn snapshot_prometheus_lines_prefix_numeric_metrics() {
+        let snapshot = populated_snapshot();
+        let lines = snapshot.prometheus_lines();
+
+        assert!(lines.contains(&"p2p_vpn_tun_read_packets 1".to_owned()));
+        assert!(lines.contains(&"p2p_vpn_tun_read_bytes 20".to_owned()));
+        assert!(lines.contains(&"p2p_vpn_queue_queued_packets 2".to_owned()));
+        assert!(lines.contains(&"p2p_vpn_path_peers_with_supported_path 5".to_owned()));
+    }
+
+    #[test]
+    fn prometheus_lines_filter_human_status_lines() {
+        let lines = prometheus_lines_from_metric_lines(&[
+            "network: lab".to_owned(),
+            "runtime metrics:".to_owned(),
+            "tun_read_packets 7".to_owned(),
+            "packet_plane_session_ttl_seconds 600".to_owned(),
+            "peer state: abc".to_owned(),
+            "invalid-metric 1".to_owned(),
+            "queue_queued_packets not-a-number".to_owned(),
+        ]);
+
+        assert_eq!(
+            lines,
+            vec![
+                "p2p_vpn_tun_read_packets 7".to_owned(),
+                "p2p_vpn_packet_plane_session_ttl_seconds 600".to_owned(),
+            ]
+        );
     }
 
     fn assert_packet_drop_counters(snapshot: &RuntimeSnapshot) {

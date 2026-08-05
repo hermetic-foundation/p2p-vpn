@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
@@ -20,7 +20,7 @@ use p2p_vpn::{
         InviteExportOptions, InviteImportOptions, SignedInvite, export_signed_invite,
         import_invite_config,
     },
-    metrics::RuntimeMetrics,
+    metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     queue::QueueStats,
     runtime::{
         bootstrap_check::{
@@ -207,6 +207,8 @@ enum Command {
     Metrics {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         config: PathBuf,
+        #[arg(long, value_enum, default_value_t = MetricsFormat::Text)]
+        format: MetricsFormat,
     },
     Peers {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -360,6 +362,8 @@ enum Command {
         socket: PathBuf,
         #[arg(long, default_value_t = 5)]
         timeout_seconds: u64,
+        #[arg(long, value_enum, default_value_t = MetricsFormat::Text)]
+        format: MetricsFormat,
     },
     DaemonState {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
@@ -570,7 +574,7 @@ async fn main() -> Result<(), String> {
             live,
             timeout_seconds,
         } => Box::pin(mtu(&config, live, timeout_seconds)).await,
-        Command::Metrics { config } => metrics(&config),
+        Command::Metrics { config, format } => metrics(&config, format),
         Command::Peers {
             config,
             live,
@@ -745,7 +749,8 @@ async fn main() -> Result<(), String> {
         Command::DaemonStatus {
             socket,
             timeout_seconds,
-        } => Box::pin(daemon_status(&socket, timeout_seconds)).await,
+            format,
+        } => Box::pin(daemon_status(&socket, timeout_seconds, format)).await,
         Command::DaemonState {
             socket,
             timeout_seconds,
@@ -965,6 +970,12 @@ struct RelayCandidateReachability {
 struct SkippedRelayCandidate {
     address: String,
     reason: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum MetricsFormat {
+    Text,
+    Prometheus,
 }
 
 impl FromStr for EndpointArg {
@@ -1738,16 +1749,25 @@ fn route_source(configured_routes: &[RouteConfig], route: p2p_vpn::route::Route)
     }
 }
 
-fn metrics(path: &PathBuf) -> Result<(), String> {
+fn metrics(path: &PathBuf, format: MetricsFormat) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     let snapshot = RuntimeMetrics::default().snapshot(QueueStats::default());
 
-    println!("network: {}", config.network.name);
-    println!("runtime metrics:");
-    for line in snapshot.lines() {
-        println!("{line}");
+    match format {
+        MetricsFormat::Text => {
+            println!("network: {}", config.network.name);
+            println!("runtime metrics:");
+            for line in snapshot.lines() {
+                println!("{line}");
+            }
+            println!("live output: run `up --metrics-interval-seconds N`");
+        }
+        MetricsFormat::Prometheus => {
+            for line in snapshot.prometheus_lines() {
+                println!("{line}");
+            }
+        }
     }
-    println!("live output: run `up --metrics-interval-seconds N`");
     Ok(())
 }
 
@@ -3588,7 +3608,11 @@ fn relay_scan_config(
     Ok(config)
 }
 
-async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String> {
+async fn daemon_status(
+    socket: &Path,
+    timeout_seconds: u64,
+    format: MetricsFormat,
+) -> Result<(), String> {
     let lines = p2p_vpn::runtime::control_socket::query_status(
         socket,
         Duration::from_secs(timeout_seconds.max(1)),
@@ -3596,8 +3620,17 @@ async fn daemon_status(socket: &Path, timeout_seconds: u64) -> Result<(), String
     .await
     .map_err(|error| format!("daemon status query failed: {error:?}"))?;
 
-    for line in lines {
-        println!("{line}");
+    match format {
+        MetricsFormat::Text => {
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        MetricsFormat::Prometheus => {
+            for line in prometheus_lines_from_metric_lines(&lines) {
+                println!("{line}");
+            }
+        }
     }
 
     Ok(())
@@ -5394,6 +5427,26 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_metrics_command_format() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "metrics",
+            "--config",
+            "node-a.json",
+            "--format",
+            "prometheus",
+        ])
+        .expect("cli");
+
+        let Command::Metrics { config, format } = cli.command else {
+            panic!("expected metrics command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(format, MetricsFormat::Prometheus);
+    }
+
+    #[test]
     fn cli_parses_daemon_status_command() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -5402,12 +5455,15 @@ mod tests {
             "/run/p2p-vpn-node-a/control.sock",
             "--timeout-seconds",
             "3",
+            "--format",
+            "prometheus",
         ])
         .expect("cli");
 
         let Command::DaemonStatus {
             socket,
             timeout_seconds,
+            format,
         } = cli.command
         else {
             panic!("expected daemon-status command");
@@ -5415,6 +5471,7 @@ mod tests {
 
         assert_eq!(socket, PathBuf::from("/run/p2p-vpn-node-a/control.sock"));
         assert_eq!(timeout_seconds, 3);
+        assert_eq!(format, MetricsFormat::Prometheus);
     }
 
     #[test]
