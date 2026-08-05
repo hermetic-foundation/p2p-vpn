@@ -125,7 +125,7 @@ For packet-plane failures, check for `event=packet_plane_session_established`,
 `p2p-vpn daemon-state --socket ... --format json` to
 compare `observed_rtt_ms` across healthy path candidates after packet-plane
 path probes have started flowing. From another configured peer, use
-`p2p-vpn peer-live-paths --config ...` to compare the remote daemon's reported
+`p2p-vpn paths --config ... --live` to compare the remote daemon's reported
 selected path, score, MTU, and RTT without direct access to its control socket.
 
 ## Membership Record Repro
@@ -271,11 +271,14 @@ The app writes `vpn-repro-host-a.sh`, `vpn-repro-host-b.sh`,
 `vpn-repro-collect.sh`, `vpn-repro-shutdown.sh`, `vpn-repro-metadata.txt`,
 `vpn-repro-host-network.txt`, and `vpn-repro-summary.txt`. Run the generated
 Host A and Host B scripts with the privileges needed to create the TUN device.
-Each host script starts `p2p-vpn up`, waits on `daemon-health`, captures
+Each host script records before/after host-network snapshots, preserves a
+daemon log tail, records command exit statuses, starts `p2p-vpn up`, waits on
+`daemon-health`, captures
 `daemon-state`, `daemon-peers`, `daemon-routes`, `daemon-paths`, `daemon-mtu`,
 `daemon-capabilities`, line-oriented metrics, Prometheus metrics, matching JSON
-view envelopes, and final post-ping status/path snapshots. It then pings
-`P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The artifact names are stable
+view envelopes, and final post-ping status/path snapshots even when health or
+ping fails. It then pings `P2P_VPN_VPN_REPRO_PING_TARGET` when it is set. The
+artifact names are stable
 so two hosts can exchange directories and compare the selected path,
 packet-plane session state, drops, queue state, route ownership, MTU ceilings,
 capability negotiation, host topology, and ping result directly.

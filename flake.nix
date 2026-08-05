@@ -570,12 +570,15 @@ EOF
 
             metadata="$artifact_dir/vpn-repro-metadata.txt"
             host_network="$artifact_dir/vpn-repro-host-network.txt"
+            host_network_before="$artifact_dir/vpn-repro-host-network-before.txt"
+            host_network_after="$artifact_dir/vpn-repro-host-network-after.txt"
             commands="$artifact_dir/vpn-repro-commands.sh"
             host_a_script="$artifact_dir/vpn-repro-host-a.sh"
             host_b_script="$artifact_dir/vpn-repro-host-b.sh"
             collect_script="$artifact_dir/vpn-repro-collect.sh"
             shutdown_script="$artifact_dir/vpn-repro-shutdown.sh"
             summary="$artifact_dir/vpn-repro-summary.txt"
+            result_log="$artifact_dir/vpn-repro-result.txt"
             ping_target="''${P2P_VPN_VPN_REPRO_PING_TARGET:-}"
             ping_count="''${P2P_VPN_VPN_REPRO_PING_COUNT:-3}"
             ping_timeout="''${P2P_VPN_VPN_REPRO_PING_TIMEOUT_SECONDS:-2}"
@@ -603,6 +606,7 @@ EOF
             final_prometheus_log="$artifact_dir/daemon-status-prometheus-final.txt"
             final_state_json="$artifact_dir/daemon-state-final.json"
             final_paths_json="$artifact_dir/daemon-paths-final.json"
+            daemon_log_tail="$artifact_dir/p2p-vpn-daemon-tail.txt"
             ping_log="$artifact_dir/ping.txt"
             require_packet_session="''${P2P_VPN_VPN_REPRO_REQUIRE_PACKET_SESSION:-1}"
             require_quic_session="''${P2P_VPN_VPN_REPRO_REQUIRE_QUIC_SESSION:-0}"
@@ -675,6 +679,10 @@ EOF
                 echo "control_socket=$control_socket"
                 echo "pidfile=$pidfile"
                 echo "daemon_log=$daemon_log"
+                echo "daemon_log_tail=$daemon_log_tail"
+                echo "host_network_before=$host_network_before"
+                echo "host_network_after=$host_network_after"
+                echo "result_log=$result_log"
                 echo "ping_target=$ping_target"
                 echo "ping_count=$ping_count"
                 echo "ping_timeout_seconds=$ping_timeout"
@@ -716,6 +724,10 @@ EOF
                 printf "final_prometheus_log=%q\n" "$final_prometheus_log"
                 printf "final_state_json=%q\n" "$final_state_json"
                 printf "final_paths_json=%q\n" "$final_paths_json"
+                printf "host_network_before=%q\n" "$host_network_before"
+                printf "host_network_after=%q\n" "$host_network_after"
+                printf "daemon_log_tail=%q\n" "$daemon_log_tail"
+                printf "result_log=%q\n" "$result_log"
                 printf "ping_log=%q\n" "$ping_log"
                 printf "ping_target=%q\n" "$ping_target"
                 printf "ping_count=%q\n" "$ping_count"
@@ -755,18 +767,89 @@ EOF
                 echo "  p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$status_log\""
                 echo "  p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$prometheus_log\""
                 echo "}"
-                # shellcheck disable=SC2016
-                echo 'p2p-vpn daemon-health "''${health_args[@]}" | tee "$health_log"'
+                echo "record_status() {"
+                echo "  label=\"\$1\""
+                echo "  status=\"\$2\""
+                printf "%s\n" "  printf '%s %s exit=%s\\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"\$label\" \"\$status\" >> \"\$result_log\""
+                echo "}"
+                echo "capture_host_network() {"
+                echo "  target=\"\$1\""
+                echo "  {"
+                echo "    echo \"captured_utc=\$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+                echo "    echo \"system=\$(uname -a)\""
+                echo "    echo"
+                echo "    echo \"[ip -br addr]\""
+                echo "    ip -br addr || true"
+                echo "    echo"
+                echo "    echo \"[ip -d addr]\""
+                echo "    ip -d addr || true"
+                echo "    echo"
+                echo "    echo \"[ip -s link]\""
+                echo "    ip -s link || true"
+                echo "    echo"
+                echo "    echo \"[ip route show]\""
+                echo "    ip route show || true"
+                echo "    echo"
+                echo "    echo \"[ip -6 route show]\""
+                echo "    ip -6 route show || true"
+                echo "    if [[ -n \"\$ping_target\" ]]; then"
+                echo "      echo"
+                echo "      echo \"[ip route get \$ping_target]\""
+                echo "      ip route get \"\$ping_target\" || true"
+                echo "    fi"
+                echo "    echo"
+                echo "    echo \"[ss -lunp]\""
+                echo "    ss -lunp || true"
+                echo "    echo"
+                echo "    echo \"[ps -o pid,ppid,stat,comm,args -C p2p-vpn]\""
+                echo "    ps -o pid,ppid,stat,comm,args -C p2p-vpn || true"
+                echo "  } > \"\$target\" 2>&1"
+                echo "}"
+                echo "capture_final_artifacts() {"
+                echo "  if [[ -r \"\$daemon_log\" ]]; then"
+                echo "    tail -n 200 \"\$daemon_log\" > \"\$daemon_log_tail\" 2>/dev/null || true"
+                echo "  fi"
+                echo "  if [[ ! -S \"\$control_socket\" ]]; then"
+                echo "    record_status final_artifacts 2"
+                echo "    return"
+                echo "  fi"
+                echo "  p2p-vpn daemon-status --socket \"\$control_socket\" > \"\$final_status_log\" 2> \"\$final_status_log.stderr\"; record_status final_status \"\$?\""
+                echo "  p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus > \"\$final_prometheus_log\" 2> \"\$final_prometheus_log.stderr\"; record_status final_prometheus \"\$?\""
+                echo "  p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$final_state_json\" 2> \"\$final_state_json.stderr\"; record_status final_state_json \"\$?\""
+                echo "  p2p-vpn daemon-paths --socket \"\$control_socket\" --format json > \"\$final_paths_json\" 2> \"\$final_paths_json.stderr\"; record_status final_paths_json \"\$?\""
+                echo "}"
+                echo "on_exit() {"
+                echo "  status=\"\$?\""
+                echo "  set +e"
+                echo "  record_status script_exit \"\$status\""
+                echo "  capture_host_network \"\$host_network_after\""
+                echo "  capture_final_artifacts"
+                echo "  exit \"\$status\""
+                echo "}"
+                echo "trap on_exit EXIT"
+                echo "capture_host_network \"\$host_network_before\""
+                echo "set +e"
+                echo "p2p-vpn daemon-health \"\''${health_args[@]}\" | tee \"\$health_log\""
+                echo "health_status=\"\''${PIPESTATUS[0]}\""
+                echo "set -e"
+                echo "record_status daemon_health \"\$health_status\""
+                echo "if [[ \"\$health_status\" -ne 0 ]]; then"
+                echo "  exit \"\$health_status\""
+                echo "fi"
                 echo "capture_daemon_views"
                 echo "if [[ -n \"\$ping_target\" ]]; then"
+                echo "  set +e"
                 echo "  ping -c \"\$ping_count\" -W \"\$ping_timeout\" \"\$ping_target\" | tee \"\$ping_log\""
+                echo "  ping_status=\"\''${PIPESTATUS[0]}\""
+                echo "  set -e"
+                echo "  record_status ping \"\$ping_status\""
+                echo "  if [[ \"\$ping_status\" -ne 0 ]]; then"
+                echo "    exit \"\$ping_status\""
+                echo "  fi"
                 echo "else"
                 echo "  echo \"set P2P_VPN_VPN_REPRO_PING_TARGET to the remote tunnel address to prove data forwarding\" | tee \"\$ping_log\""
+                echo "  record_status ping 2"
                 echo "fi"
-                echo "p2p-vpn daemon-status --socket \"\$control_socket\" | tee \"\$final_status_log\""
-                echo "p2p-vpn daemon-status --socket \"\$control_socket\" --format prometheus | tee \"\$final_prometheus_log\""
-                echo "p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$final_state_json\""
-                echo "p2p-vpn daemon-paths --socket \"\$control_socket\" --format json > \"\$final_paths_json\""
                 printf "echo %q\n" "$role complete; artifacts in $artifact_dir"
               } > "$script"
               chmod +x "$script"
@@ -777,6 +860,7 @@ EOF
                 echo "#!/usr/bin/env bash"
                 echo "set -euo pipefail"
                 printf "control_socket=%q\n" "$control_socket"
+                printf "host_network_after=%q\n" "$host_network_after"
                 printf "health_log=%q\n" "$health_log"
                 printf "state_log=%q\n" "$state_log"
                 printf "state_json=%q\n" "$state_json"
@@ -792,6 +876,21 @@ EOF
                 printf "capabilities_json=%q\n" "$capabilities_json"
                 printf "status_log=%q\n" "$status_log"
                 printf "prometheus_log=%q\n" "$prometheus_log"
+                echo "{"
+                echo "  echo \"captured_utc=\$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+                echo "  echo \"[ip -br addr]\""
+                echo "  ip -br addr || true"
+                echo "  echo \"[ip -d addr]\""
+                echo "  ip -d addr || true"
+                echo "  echo \"[ip -s link]\""
+                echo "  ip -s link || true"
+                echo "  echo \"[ip route show]\""
+                echo "  ip route show || true"
+                echo "  echo \"[ip -6 route show]\""
+                echo "  ip -6 route show || true"
+                echo "  echo \"[ss -lunp]\""
+                echo "  ss -lunp || true"
+                echo "} > \"\$host_network_after\" 2>&1"
                 echo "p2p-vpn daemon-health --socket \"\$control_socket\" | tee \"\$health_log\""
                 echo "p2p-vpn daemon-state --socket \"\$control_socket\" | tee \"\$state_log\""
                 echo "p2p-vpn daemon-state --socket \"\$control_socket\" --format json > \"\$state_json\""
@@ -860,6 +959,8 @@ EOF
                 echo "config=$config"
                 echo "metadata=$metadata"
                 echo "host_network=$host_network"
+                echo "host_network_before=$host_network_before"
+                echo "host_network_after=$host_network_after"
                 echo "commands=$commands"
                 echo "host_a_script=$host_a_script"
                 echo "host_b_script=$host_b_script"
@@ -885,6 +986,8 @@ EOF
                 echo "final_prometheus_log=$final_prometheus_log"
                 echo "final_state_json=$final_state_json"
                 echo "final_paths_json=$final_paths_json"
+                echo "daemon_log_tail=$daemon_log_tail"
+                echo "result_log=$result_log"
                 echo "ping_log=$ping_log"
                 echo
                 echo "workflow:"
@@ -1250,6 +1353,50 @@ EOF
             touch $out
           '';
           nixos-vm-smoke = nixosVmSmoke;
+          public-vpn-repro-structure = pkgs.runCommand "p2p-vpn-public-vpn-repro-structure" {
+            nativeBuildInputs = [
+              package
+              publicVpnRepro
+            ];
+          } ''
+            config="$TMPDIR/public-vpn-repro-config.json"
+            artifacts="$TMPDIR/public-vpn-repro"
+            p2p-vpn init-config \
+              --output "$config" \
+              --network public-vpn-repro-structure \
+              --interface hs-repro0 \
+              --disable-mdns \
+              --disable-kademlia \
+              --force
+
+            P2P_VPN_VPN_REPRO_DIR="$artifacts" \
+              P2P_VPN_VPN_REPRO_CONFIG="$config" \
+              P2P_VPN_VPN_REPRO_PING_TARGET=10.42.0.2 \
+              p2p-vpn-public-vpn-repro
+
+            for script in \
+              "$artifacts/vpn-repro-host-a.sh" \
+              "$artifacts/vpn-repro-host-b.sh" \
+              "$artifacts/vpn-repro-collect.sh" \
+              "$artifacts/vpn-repro-shutdown.sh" \
+              "$artifacts/vpn-repro-commands.sh"
+            do
+              test -x "$script"
+            done
+
+            grep -q '^trap on_exit EXIT$' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'capture_host_network "$host_network_before"' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'capture_host_network "$host_network_after"' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'capture_final_artifacts' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'record_status daemon_health "$health_status"' "$artifacts/vpn-repro-host-a.sh"
+            grep -q 'daemon_log_tail=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'result_log=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_network_before=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_network_after=' "$artifacts/vpn-repro-summary.txt"
+            grep -q 'host_network_after=' "$artifacts/vpn-repro-collect.sh"
+
+            touch $out
+          '';
         };
 
         devShells.default = pkgs.mkShell {
