@@ -600,6 +600,13 @@ processes, a machine-readable summary, and replay commands into a temporary
 artifact directory. Set `P2P_VPN_DEBUG_BUNDLE_DIR` to choose the directory, or
 set `P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=1` to include the `check-fast` output
 and exit status in the same bundle.
+Set `P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET=/run/p2p-vpn/control.sock` to also
+capture daemon health, text and JSON daemon views, Prometheus status, and a
+control summary. Use `P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` plus
+readiness gates such as `P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION=1`, or
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=1` when collecting
+comparable public bootstrap, relay, or packet-plane failure evidence.
 
 `check-fast` runs `cargo fmt -- --check`, `cargo test`, and
 `cargo clippy --all-targets -- -D warnings` with the Rust toolchain and native

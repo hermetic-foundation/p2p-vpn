@@ -23,6 +23,19 @@ summary="$artifact_dir/debug-summary.txt"
 summary_json="$artifact_dir/debug-summary.json"
 check_stdout="$artifact_dir/check-fast.stdout"
 check_stderr="$artifact_dir/check-fast.stderr"
+control_socket="${P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET:-}"
+daemon_health="$artifact_dir/daemon-health.txt"
+daemon_status="$artifact_dir/daemon-status.txt"
+daemon_status_prometheus="$artifact_dir/daemon-status-prometheus.txt"
+daemon_state="$artifact_dir/daemon-state.txt"
+daemon_state_json="$artifact_dir/daemon-state.json"
+daemon_paths="$artifact_dir/daemon-paths.txt"
+daemon_paths_json="$artifact_dir/daemon-paths.json"
+daemon_mtu="$artifact_dir/daemon-mtu.txt"
+daemon_mtu_json="$artifact_dir/daemon-mtu.json"
+daemon_capabilities="$artifact_dir/daemon-capabilities.txt"
+daemon_capabilities_json="$artifact_dir/daemon-capabilities.json"
+daemon_control_summary="$artifact_dir/daemon-control-summary.txt"
 
 command_metadata() {
   local label="$1"
@@ -109,17 +122,93 @@ capture_flake_show() {
   fi
 }
 
+capture_daemon_control() {
+  {
+    echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "control_socket=$control_socket"
+    if [[ -z "$control_socket" ]]; then
+      echo "enabled=false"
+      echo "reason=P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET unset"
+      return 0
+    fi
+    echo "enabled=true"
+    if [[ ! -S "$control_socket" ]]; then
+      echo "socket_present=false"
+      echo "reason=control socket is missing or is not a socket"
+      {
+        echo "daemon_health_ready false"
+        echo "check control_socket ok=false value=0 detail=\"control socket is missing or is not a socket\""
+      } >"$daemon_health"
+      return 0
+    fi
+    echo "socket_present=true"
+  } >"$daemon_control_summary"
+
+  if [[ -z "$control_socket" || ! -S "$control_socket" ]]; then
+    return 0
+  fi
+
+  local wait_seconds="${P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS:-1}"
+  local health_args=(--socket "$control_socket" --wait-seconds "$wait_seconds")
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS:-0}" == 1 ]]; then
+    health_args+=(--require-validated-peers)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_SUPPORTED_PATHS:-0}" == 1 ]]; then
+    health_args+=(--require-supported-paths)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION:-0}" == 1 ]]; then
+    health_args+=(--require-packet-plane-session)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION:-0}" == 1 ]]; then
+    health_args+=(--require-packet-plane-quic-session)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT:-0}" == 1 ]]; then
+    health_args+=(--require-observed-packet-plane-udp-endpoint)
+  fi
+  if [[ "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT:-0}" == 1 ]]; then
+    health_args+=(--require-observed-packet-plane-quic-endpoint)
+  fi
+
+  {
+    printf "health_args:"
+    printf " %q" "${health_args[@]}"
+    printf "\n"
+  } >>"$daemon_control_summary"
+
+  p2p-vpn daemon-health "${health_args[@]}" >"$daemon_health" 2>"$daemon_health.stderr" || true
+  p2p-vpn daemon-status --socket "$control_socket" >"$daemon_status" 2>"$daemon_status.stderr" || true
+  p2p-vpn daemon-status --socket "$control_socket" --format prometheus >"$daemon_status_prometheus" 2>"$daemon_status_prometheus.stderr" || true
+  p2p-vpn daemon-state --socket "$control_socket" >"$daemon_state" 2>"$daemon_state.stderr" || true
+  p2p-vpn daemon-state --socket "$control_socket" --format json >"$daemon_state_json" 2>"$daemon_state_json.stderr" || true
+  p2p-vpn daemon-paths --socket "$control_socket" >"$daemon_paths" 2>"$daemon_paths.stderr" || true
+  p2p-vpn daemon-paths --socket "$control_socket" --format json >"$daemon_paths_json" 2>"$daemon_paths_json.stderr" || true
+  p2p-vpn daemon-mtu --socket "$control_socket" >"$daemon_mtu" 2>"$daemon_mtu.stderr" || true
+  p2p-vpn daemon-mtu --socket "$control_socket" --format json >"$daemon_mtu_json" 2>"$daemon_mtu_json.stderr" || true
+  p2p-vpn daemon-capabilities --socket "$control_socket" >"$daemon_capabilities" 2>"$daemon_capabilities.stderr" || true
+  p2p-vpn daemon-capabilities --socket "$control_socket" --format json >"$daemon_capabilities_json" 2>"$daemon_capabilities_json.stderr" || true
+}
+
 write_commands() {
   {
     echo "#!/usr/bin/env bash"
     echo "set -euo pipefail"
     printf "export P2P_VPN_DEBUG_BUNDLE_DIR=%q\n" "$artifact_dir"
     printf "export P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=%q\n" "${P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET=%q\n" "$control_socket"
+    printf "export P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=%q\n" "${P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS:-1}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_SUPPORTED_PATHS=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_SUPPORTED_PATHS:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT:-0}"
+    printf "export P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=%q\n" "${P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT:-0}"
     echo
     echo "nix run .#debug-bundle"
     echo "sed -n '1,220p' \"$metadata\""
     echo "sed -n '1,220p' \"$toolchain\""
     echo "sed -n '1,220p' \"$host\""
+    echo "sed -n '1,220p' \"$daemon_control_summary\""
+    echo "sed -n '1,220p' \"$daemon_health\""
     echo "sed -n '1,220p' \"$summary\""
     echo "jq . \"$summary_json\""
   } >"$commands"
@@ -148,6 +237,7 @@ run_check_fast() {
   echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "working_directory=$(pwd)"
   echo "run_check_fast=${P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST:-0}"
+  echo "control_socket=$control_socket"
 } >"$metadata"
 command_metadata "git rev-parse HEAD" git rev-parse HEAD
 command_metadata "git status --short" git status --short
@@ -157,6 +247,7 @@ command_metadata "cargo metadata --no-deps --format-version 1" cargo metadata --
 capture_host
 capture_toolchain
 capture_flake_show
+capture_daemon_control
 write_commands
 
 set +e
@@ -173,6 +264,20 @@ set -e
   echo "flake_show=$flake_show"
   echo "commands=$commands"
   echo "summary_json=$summary_json"
+  echo "daemon_control_summary=$daemon_control_summary"
+  if [[ -n "$control_socket" ]]; then
+    echo "daemon_health=$daemon_health"
+    echo "daemon_status=$daemon_status"
+    echo "daemon_status_prometheus=$daemon_status_prometheus"
+    echo "daemon_state=$daemon_state"
+    echo "daemon_state_json=$daemon_state_json"
+    echo "daemon_paths=$daemon_paths"
+    echo "daemon_paths_json=$daemon_paths_json"
+    echo "daemon_mtu=$daemon_mtu"
+    echo "daemon_mtu_json=$daemon_mtu_json"
+    echo "daemon_capabilities=$daemon_capabilities"
+    echo "daemon_capabilities_json=$daemon_capabilities_json"
+  fi
   echo "check_fast_enabled=${P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST:-0}"
   echo "check_fast_status=$check_status"
   if [[ "${P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST:-0}" == 1 ]]; then
@@ -189,8 +294,23 @@ jq -n \
   --arg flake_show "$flake_show" \
   --arg commands "$commands" \
   --arg summary "$summary" \
+  --arg control_socket "$control_socket" \
+  --arg daemon_control_summary "$daemon_control_summary" \
+  --arg daemon_health "$daemon_health" \
+  --arg daemon_status "$daemon_status" \
+  --arg daemon_status_prometheus "$daemon_status_prometheus" \
+  --arg daemon_state "$daemon_state" \
+  --arg daemon_state_json "$daemon_state_json" \
+  --arg daemon_paths "$daemon_paths" \
+  --arg daemon_paths_json "$daemon_paths_json" \
+  --arg daemon_mtu "$daemon_mtu" \
+  --arg daemon_mtu_json "$daemon_mtu_json" \
+  --arg daemon_capabilities "$daemon_capabilities" \
+  --arg daemon_capabilities_json "$daemon_capabilities_json" \
   --arg check_stdout "$check_stdout" \
   --arg check_stderr "$check_stderr" \
+  --argjson daemon_control_enabled "$([[ -n "$control_socket" ]] && echo true || echo false)" \
+  --argjson daemon_control_socket_present "$([[ -n "$control_socket" && -S "$control_socket" ]] && echo true || echo false)" \
   --argjson check_fast_enabled "$([[ "${P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST:-0}" == 1 ]] && echo true || echo false)" \
   --argjson check_fast_status "$check_status" \
   '{
@@ -203,8 +323,25 @@ jq -n \
       flake_show: $flake_show,
       replay_commands: $commands,
       summary: $summary,
+      daemon_control_summary: $daemon_control_summary,
+      daemon_health: (if $daemon_control_enabled then $daemon_health else null end),
+      daemon_status: (if $daemon_control_enabled then $daemon_status else null end),
+      daemon_status_prometheus: (if $daemon_control_enabled then $daemon_status_prometheus else null end),
+      daemon_state: (if $daemon_control_enabled then $daemon_state else null end),
+      daemon_state_json: (if $daemon_control_enabled then $daemon_state_json else null end),
+      daemon_paths: (if $daemon_control_enabled then $daemon_paths else null end),
+      daemon_paths_json: (if $daemon_control_enabled then $daemon_paths_json else null end),
+      daemon_mtu: (if $daemon_control_enabled then $daemon_mtu else null end),
+      daemon_mtu_json: (if $daemon_control_enabled then $daemon_mtu_json else null end),
+      daemon_capabilities: (if $daemon_control_enabled then $daemon_capabilities else null end),
+      daemon_capabilities_json: (if $daemon_control_enabled then $daemon_capabilities_json else null end),
       check_fast_stdout: (if $check_fast_enabled then $check_stdout else null end),
       check_fast_stderr: (if $check_fast_enabled then $check_stderr else null end)
+    },
+    daemon_control: {
+      enabled: $daemon_control_enabled,
+      socket: (if $daemon_control_enabled then $control_socket else null end),
+      socket_present: $daemon_control_socket_present
     },
     check_fast: {
       enabled: $check_fast_enabled,

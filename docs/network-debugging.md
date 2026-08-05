@@ -26,6 +26,26 @@ P2P_VPN_DEBUG_BUNDLE_RUN_CHECK_FAST=1 nix run .#debug-bundle
 That mode records `check-fast.stdout` and `check-fast.stderr`, then exits with
 the fast-check status.
 
+To attach a running daemon snapshot to the same bundle, pass its control
+socket:
+
+```sh
+P2P_VPN_DEBUG_BUNDLE_CONTROL_SOCKET=/run/p2p-vpn/control.sock \
+nix run .#debug-bundle
+```
+
+This also writes `daemon-health.txt`, text and JSON daemon views, Prometheus
+status output, and `daemon-control-summary.txt`. Set
+`P2P_VPN_DEBUG_BUNDLE_HEALTH_WAIT_SECONDS=30` when the daemon is still
+converging, and enable readiness gates such as
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_VALIDATED_PEERS=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_SUPPORTED_PATHS=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_PACKET_SESSION=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_QUIC_SESSION=1`,
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_UDP_ENDPOINT=1`, or
+`P2P_VPN_DEBUG_BUNDLE_REQUIRE_OBSERVED_QUIC_ENDPOINT=1` when comparing public
+bootstrap, relay, or packet-plane failures.
+
 Before running slower namespace or public relay repros, run the reproducible
 local feedback loop:
 
