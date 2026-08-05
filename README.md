@@ -596,7 +596,10 @@ before the broader Nix checks.
 `nix flake check` builds and tests the package, checks formatting, runs clippy
 with warnings denied, evaluates the NixOS module, and on Linux runs a NixOS VM
 smoke check that starts the packaged systemd service and queries its daemon
-control socket.
+control socket. Linux checks also include `namespace-smoke-preflighted`, which
+records namespace/TUN preflight output and runs the shortest direct TUN namespace
+smoke when the build host permits it; otherwise it writes a skipped status
+artifact instead of failing for missing host kernel privileges.
 
 Build or run the packaged CLI with Nix:
 
@@ -689,9 +692,11 @@ nix run .#namespace-repro
 Recorded namespace E2E smoke evidence is kept in
 `docs/namespace-e2e-smoke.md`.
 
-These tests intentionally stay outside `nix flake check` because they need a
-host kernel that permits user namespaces, network namespaces, veth setup, and
-`/dev/net/tun`.
+The full namespace suite intentionally stays outside `nix flake check` because
+it needs a host kernel that permits user namespaces, network namespaces, veth
+setup, and `/dev/net/tun`. The Linux `namespace-smoke-preflighted` check gives
+CI a reproducible preflight artifact and runs the shortest direct case when
+those privileges are available.
 
 ## Example Config
 

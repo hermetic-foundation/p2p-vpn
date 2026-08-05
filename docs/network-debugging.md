@@ -21,7 +21,13 @@ Check host namespace/TUN prerequisites before running the slower ignored suite:
 
 ```sh
 nix run .#namespace-preflight
+nix build --print-out-paths ".#checks.$(nix eval --raw --impure --expr builtins.currentSystem).namespace-smoke-preflighted"
 ```
+
+The `namespace-smoke-preflighted` check writes `preflight.stdout`,
+`preflight.stderr`, and `status.txt` to its output path. It runs the shortest
+direct namespace smoke only when preflight succeeds; otherwise it records a
+skipped status so CI can distinguish host capability gaps from test failures.
 
 Run the whole Linux namespace suite:
 

@@ -158,5 +158,7 @@ path.
    focused owned-QUIC packet-plane path, but they still
    require a Linux kernel with user namespaces, network namespaces, veth, and
    `/dev/net/tun`. `nix run .#namespace-preflight` now checks those host
-   prerequisites before running the slower ignored namespace suite, and
-   `nix run .#tun-e2e` runs the same preflight by default.
+   prerequisites before running the slower ignored namespace suite,
+   `nix run .#tun-e2e` runs the same preflight by default, and the Linux
+   `namespace-smoke-preflighted` check records preflight output while running the
+   shortest direct namespace smoke when host privileges allow it.

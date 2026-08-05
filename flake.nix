@@ -1764,6 +1764,64 @@ EOF
             machine.succeed("test \"$(systemctl show p2p-vpn-smoke.service -p Result --value)\" = success")
           '';
         };
+        namespaceSmokePreflighted = pkgs.rustPlatform.buildRustPackage {
+          pname = "p2p-vpn-namespace-smoke-preflighted";
+          version = "0.1.0";
+          src = self;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            namespacePreflight
+            pkgs.iproute2
+            pkgs.iputils
+            pkgs.procps
+            pkgs.util-linux
+          ];
+          checkPhase = ''
+            runHook preCheck
+
+            mkdir -p "$TMPDIR/namespace-smoke"
+            preflight_stdout="$TMPDIR/namespace-smoke/preflight.stdout"
+            preflight_stderr="$TMPDIR/namespace-smoke/preflight.stderr"
+            smoke_log="$TMPDIR/namespace-smoke/smoke.log"
+            status_file="$TMPDIR/namespace-smoke/status.txt"
+
+            set +e
+            p2p-vpn-namespace-preflight >"$preflight_stdout" 2>"$preflight_stderr"
+            preflight_status="$?"
+            set -e
+
+            if [[ "$preflight_status" -ne 0 ]]; then
+              {
+                echo "status=skipped"
+                echo "reason=namespace preflight failed"
+                echo "preflight_status=$preflight_status"
+              } > "$status_file"
+              cat "$preflight_stderr" >&2
+            else
+              {
+                echo "status=running"
+                echo "test=tun_namespace_ping_crosses_two_node_overlay"
+              } > "$status_file"
+              set -o pipefail
+              cargo test --test tun_namespace tun_namespace_ping_crosses_two_node_overlay -- --ignored --exact --nocapture 2>&1 | tee "$smoke_log"
+              {
+                echo "status=passed"
+                echo "test=tun_namespace_ping_crosses_two_node_overlay"
+              } > "$status_file"
+            fi
+
+            runHook postCheck
+          '';
+          installPhase = ''
+            runHook preInstall
+
+            mkdir -p "$out"
+            cp -R "$TMPDIR/namespace-smoke/." "$out/"
+
+            runHook postInstall
+          '';
+        };
       in
       {
         packages = {
@@ -2241,6 +2299,8 @@ EOF
 
             touch $out
           '';
+        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          namespace-smoke-preflighted = namespaceSmokePreflighted;
         };
 
         devShells.default = pkgs.mkShell {
