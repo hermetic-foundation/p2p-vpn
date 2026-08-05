@@ -56,7 +56,11 @@ path.
    packet-plane session state, encrypted datagram frame primitives, socket-level
    UDP send/receive primitives, daemon outbound queue sends over an established
    packet-plane session, and daemon inbound handling for established
-   packet-plane sessions exist.
+   packet-plane sessions exist. Confirmed public libp2p external addresses are
+   now filtered and combined with already-bound owned UDP/QUIC packet-plane
+   listener ports to refresh endpoint capabilities for connected configured
+   peers; `nix develop -c cargo test packet_plane_endpoint` covers endpoint
+   ranking and observed-address derivation.
 2. Public libp2p/IPFS infrastructure is supported as discovery and reachability
    assistance, and public bootstrap reachability can now be checked with a
    rootless diagnostic that also covers configured relay reservation acceptance,

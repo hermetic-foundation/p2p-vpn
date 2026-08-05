@@ -3422,6 +3422,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn bootstrap_check_lines_report_ipfs_compatible_thresholds() {
         let peer = Keypair::generate_ed25519().public().to_peer_id();
         let report = BootstrapCheckReport {

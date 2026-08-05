@@ -146,6 +146,8 @@ For DCUtR or path-promotion failures, check peer logs for `event=dcutr_enabled`,
 `event=path_promoted_to_direct`.
 
 For packet-plane failures, check for `event=packet_plane_session_established`,
+`event=observed_packet_plane_endpoints_advertised` when relying on libp2p
+observed public reachability instead of static packet-plane endpoints,
 `backend=owned_quic` when testing owned QUIC, positive
 `path_healthy_direct_quic_datagram_paths`, and positive packet counters such as
 `outbound_quic_datagram_packets` or `inbound_accepted_packets`. Use

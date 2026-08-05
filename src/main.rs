@@ -4024,6 +4024,7 @@ fn write_public_relay_config_from_base(
     write_config_output(&config, output, force)
 }
 
+#[allow(clippy::similar_names)]
 fn write_public_relay_two_host_configs_from_relay_check(
     args: &RelayCheckArgs,
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
@@ -4055,6 +4056,7 @@ fn write_public_relay_two_host_configs_from_relay_check(
     Ok(())
 }
 
+#[allow(clippy::similar_names)]
 fn public_relay_two_host_configs(
     args: &RelayCheckArgs,
     relay: &EndpointArg,

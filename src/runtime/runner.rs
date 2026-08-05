@@ -2906,6 +2906,7 @@ fn relay_ready_configured_peer_targets(
     addresses
 }
 
+#[allow(clippy::too_many_arguments)]
 fn redial_selected_addresses(
     swarm: &mut Swarm<Behaviour>,
     selected_peers: &HashSet<Libp2pPeerId>,
@@ -4259,6 +4260,49 @@ async fn handle_swarm_event(
         }
         SwarmEvent::ExternalAddrConfirmed { address } => {
             context.metrics.record_external_address_confirmed();
+            let packet_plane_quic_snapshot = context
+                .packet_plane_quic
+                .as_deref()
+                .map(PacketPlaneQuicRuntime::snapshot);
+            if update_observed_packet_plane_endpoints(
+                context.local_capabilities,
+                &address,
+                context.packet_plane.primary_listener(),
+                packet_plane_quic_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.listener),
+                packet_plane_quic_snapshot.and_then(|snapshot| snapshot.certificate_der),
+            ) {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "observed_packet_plane_endpoints_advertised",
+                    &[
+                        ("address", &address.to_string()),
+                        (
+                            "udp_candidates",
+                            &context
+                                .local_capabilities
+                                .packet_endpoint_candidates
+                                .len()
+                                .to_string(),
+                        ),
+                        (
+                            "quic_candidates",
+                            &context
+                                .local_capabilities
+                                .owned_quic_packet_endpoint_candidates
+                                .len()
+                                .to_string(),
+                        ),
+                    ],
+                );
+                send_control_capabilities_to_connected_peers(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+            }
             log_runtime_event(
                 LogLevel::Info,
                 "external_address_confirmed",
@@ -6076,6 +6120,105 @@ fn endpoint_is_advertised_for_backend(
     }
 }
 
+fn send_control_capabilities_to_connected_peers(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    local_capabilities: &ControlCapabilities,
+    metrics: &RuntimeMetrics,
+) {
+    let peers = swarm.connected_peers().copied().collect::<Vec<_>>();
+    for peer in peers {
+        send_control_capabilities(swarm, forwarder, peer, local_capabilities, metrics);
+    }
+}
+
+fn update_observed_packet_plane_endpoints(
+    capabilities: &mut ControlCapabilities,
+    external_address: &Multiaddr,
+    udp_listener: Option<SocketAddr>,
+    quic_listener: Option<SocketAddr>,
+    quic_certificate_der: Option<Vec<u8>>,
+) -> bool {
+    let endpoints = observed_packet_plane_endpoints(external_address, udp_listener, quic_listener);
+    let mut changed = false;
+
+    if let Some(endpoint) = endpoints.udp
+        && !capabilities.packet_endpoint_candidates.contains(&endpoint)
+    {
+        capabilities.packet_endpoint_candidates.push(endpoint);
+        capabilities.supports_owned_udp_packet_plane = true;
+        capabilities.supports_quic_datagrams = true;
+        changed = true;
+    }
+
+    if let (Some(endpoint), Some(certificate_der)) = (endpoints.quic, quic_certificate_der)
+        && !capabilities
+            .owned_quic_packet_endpoint_candidates
+            .contains(&endpoint)
+    {
+        capabilities
+            .owned_quic_packet_endpoint_candidates
+            .push(endpoint);
+        capabilities.owned_quic_packet_plane_certificate_der = Some(certificate_der);
+        capabilities.supports_owned_quic_packet_plane = true;
+        capabilities.supports_quic_datagrams = true;
+        changed = true;
+    }
+
+    changed
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct ObservedPacketPlaneEndpoints {
+    udp: Option<String>,
+    quic: Option<String>,
+}
+
+fn observed_packet_plane_endpoints(
+    external_address: &Multiaddr,
+    udp_listener: Option<SocketAddr>,
+    quic_listener: Option<SocketAddr>,
+) -> ObservedPacketPlaneEndpoints {
+    let Some(ip) = public_ip_from_external_address(external_address) else {
+        return ObservedPacketPlaneEndpoints::default();
+    };
+
+    ObservedPacketPlaneEndpoints {
+        udp: udp_listener
+            .filter(|listener| listener.port() != 0)
+            .map(|listener| SocketAddr::new(ip, listener.port()).to_string()),
+        quic: quic_listener
+            .filter(|listener| listener.port() != 0)
+            .map(|listener| SocketAddr::new(ip, listener.port()).to_string()),
+    }
+}
+
+fn public_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+    {
+        return None;
+    }
+
+    for protocol in address {
+        let ip = match protocol {
+            Protocol::Ip4(address) => IpAddr::V4(address),
+            Protocol::Ip6(address) => IpAddr::V6(address),
+            _ => continue,
+        };
+        if is_public_packet_endpoint_ip(ip) {
+            return Some(ip);
+        }
+    }
+
+    None
+}
+
+fn is_public_packet_endpoint_ip(address: IpAddr) -> bool {
+    packet_endpoint_reachability_rank(address) == 0 && !address.is_multicast()
+}
+
 fn resolve_packet_plane_endpoint_candidate(candidate: &str) -> Vec<SocketAddr> {
     if let Ok(endpoint) = candidate.parse() {
         return vec![endpoint];
@@ -6978,6 +7121,7 @@ fn record_relay_client_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
@@ -14007,6 +14151,96 @@ mod tests {
         assert!(!endpoint_is_advertised(
             &capabilities,
             "127.0.0.1:51821".parse().expect("other endpoint")
+        ));
+    }
+
+    #[test]
+    fn observed_packet_plane_endpoints_use_confirmed_public_ip_with_listener_ports() {
+        let external_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("multiaddr");
+        let endpoints = observed_packet_plane_endpoints(
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+        );
+
+        assert_eq!(
+            endpoints,
+            ObservedPacketPlaneEndpoints {
+                udp: Some("8.8.8.8:51820".to_owned()),
+                quic: Some("8.8.8.8:51821".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn observed_packet_plane_endpoints_reject_private_or_relayed_external_addresses() {
+        let private_address: Multiaddr = "/ip4/192.168.1.10/tcp/4001"
+            .parse()
+            .expect("private multiaddr");
+        let relayed_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001/p2p-circuit"
+            .parse()
+            .expect("relayed multiaddr");
+        let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
+
+        assert_eq!(
+            observed_packet_plane_endpoints(&private_address, udp_listener, None),
+            ObservedPacketPlaneEndpoints::default()
+        );
+        assert_eq!(
+            observed_packet_plane_endpoints(&relayed_address, udp_listener, None),
+            ObservedPacketPlaneEndpoints::default()
+        );
+    }
+
+    #[test]
+    fn observed_packet_plane_endpoint_update_is_deduplicated_and_certificate_gated() {
+        let external_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("multiaddr");
+        let mut capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec!["8.8.8.8:51820".to_owned()]);
+        capabilities = capabilities.with_owned_udp_packet_plane(true);
+
+        assert!(!update_observed_packet_plane_endpoints(
+            &mut capabilities,
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+            None,
+        ));
+        assert_eq!(
+            capabilities.packet_endpoint_candidates,
+            vec!["8.8.8.8:51820".to_owned()]
+        );
+        assert!(
+            capabilities
+                .owned_quic_packet_endpoint_candidates
+                .is_empty()
+        );
+        assert!(!capabilities.supports_owned_quic_packet_plane);
+
+        assert!(update_observed_packet_plane_endpoints(
+            &mut capabilities,
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+            Some(vec![0x30, 0x01, 0x02]),
+        ));
+        assert_eq!(
+            capabilities.packet_endpoint_candidates,
+            vec!["8.8.8.8:51820".to_owned()]
+        );
+        assert_eq!(
+            capabilities.owned_quic_packet_endpoint_candidates,
+            vec!["8.8.8.8:51821".to_owned()]
+        );
+        assert!(capabilities.supports_owned_quic_packet_plane);
+        assert!(capabilities.supports_quic_datagrams);
+
+        assert!(!update_observed_packet_plane_endpoints(
+            &mut capabilities,
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+            Some(vec![0x30, 0x01, 0x02]),
         ));
     }
 

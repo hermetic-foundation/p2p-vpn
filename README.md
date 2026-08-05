@@ -117,7 +117,12 @@ endpoints are advertised as packet endpoint candidates in the capability
 exchange. The daemon binds the configured packet-plane UDP listeners during
 startup, binds at most one configured owned QUIC packet-plane listener, logs the
 bound listener addresses, and exposes UDP and QUIC packet-plane listener state
-through daemon status, state, and capability views. Packet-plane negotiation
+through daemon status, state, and capability views. When libp2p confirms a
+public external address for the node, the runtime derives owned UDP and owned
+QUIC packet-plane endpoint candidates from that public IP plus the already-bound
+packet-plane listener ports, rejects private, wildcard, multicast, link-local,
+loopback, and relayed observations, and refreshes capabilities to connected
+configured peers. Packet-plane negotiation
 resolves advertised DNS-style
 `host:port` endpoint candidates to concrete socket endpoints, ranks the resolved
 endpoints before signing the packet-plane handshake, preferring public-style
@@ -1405,7 +1410,9 @@ restarts on failure, and can open declared TCP/UDP listen ports in the NixOS
 firewall. Use `tcpPorts` and `udpPorts` for libp2p transports, then use
 `packetPlaneUdpPorts` and `packetPlaneQuicPorts` for owned packet-plane
 listeners declared in `network.packet_plane.listen` and
-`network.packet_plane.quic_listen`. The Linux flake checks include
+`network.packet_plane.quic_listen`. When the libp2p transport confirms a public
+external address, these listener ports can also be advertised automatically as
+packet-plane endpoint candidates. The Linux flake checks include
 `checks.x86_64-linux.nixos-vm-smoke`,
 which boots a NixOS VM, starts a module-managed instance, queries
 `daemon-status` and `daemon-health` over its control socket, stops the unit, and
