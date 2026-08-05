@@ -118,6 +118,7 @@ pub struct RuntimeMetrics {
     outbound_path_mtu_probe_confirmations: AtomicU64,
     unauthorized_connections_dropped: AtomicU64,
     relay_reservations_accepted: AtomicU64,
+    relay_reservations_lost: AtomicU64,
     auto_relay_infrastructure_candidates: AtomicU64,
     auto_relay_infrastructure_dial_attempts: AtomicU64,
     auto_relay_infrastructure_dial_failures: AtomicU64,
@@ -470,6 +471,10 @@ impl RuntimeMetrics {
     pub fn record_relay_reservation_accepted(&self) {
         self.relay_reservations_accepted
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_relay_reservation_lost(&self) {
+        self.relay_reservations_lost.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_auto_relay_infrastructure_candidate(&self) {
@@ -998,6 +1003,7 @@ impl RuntimeMetrics {
             .load(Ordering::Relaxed);
         snapshot.relay_reservations_accepted =
             self.relay_reservations_accepted.load(Ordering::Relaxed);
+        snapshot.relay_reservations_lost = self.relay_reservations_lost.load(Ordering::Relaxed);
         snapshot.auto_relay_infrastructure_candidates = self
             .auto_relay_infrastructure_candidates
             .load(Ordering::Relaxed);
@@ -1238,6 +1244,7 @@ pub struct RuntimeSnapshot {
     pub outbound_path_mtu_probe_confirmations: u64,
     pub unauthorized_connections_dropped: u64,
     pub relay_reservations_accepted: u64,
+    pub relay_reservations_lost: u64,
     pub auto_relay_infrastructure_candidates: u64,
     pub auto_relay_infrastructure_dial_attempts: u64,
     pub auto_relay_infrastructure_dial_failures: u64,
@@ -1429,6 +1436,7 @@ impl RuntimeSnapshot {
                 "relay_reservations_accepted {}",
                 self.relay_reservations_accepted
             ),
+            format!("relay_reservations_lost {}", self.relay_reservations_lost),
             format!(
                 "relay_outbound_circuits_established {}",
                 self.relay_outbound_circuits_established
@@ -1973,6 +1981,7 @@ mod tests {
         metrics.record_outbound_path_mtu_probe_confirmation();
         metrics.record_unauthorized_connection_dropped();
         metrics.record_relay_reservation_accepted();
+        metrics.record_relay_reservation_lost();
         metrics.record_auto_relay_infrastructure_candidate();
         metrics.record_auto_relay_infrastructure_dial_attempt();
         metrics.record_auto_relay_infrastructure_dial_failure();
@@ -2256,6 +2265,7 @@ mod tests {
         assert_eq!(snapshot.relayed_connections_established, 1);
         assert_eq!(snapshot.unauthorized_connections_dropped, 1);
         assert_eq!(snapshot.relay_reservations_accepted, 1);
+        assert_eq!(snapshot.relay_reservations_lost, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
@@ -2401,6 +2411,7 @@ mod tests {
         assert_metric_line(&snapshot, "outbound_path_mtu_updates 1");
         assert_metric_line(&snapshot, "outbound_path_mtu_probe_confirmations 1");
         assert_metric_line(&snapshot, "unauthorized_connections_dropped 1");
+        assert_metric_line(&snapshot, "relay_reservations_lost 1");
         assert_metric_line(&snapshot, "relay_server_reservations_denied 1");
         assert_metric_line(&snapshot, "relay_server_reservations_closed 1");
         assert_metric_line(&snapshot, "relay_server_reservations_timed_out 1");

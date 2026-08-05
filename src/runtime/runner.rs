@@ -2436,6 +2436,22 @@ impl RelayReadiness {
         self.relayed_listen_addresses.insert(relay);
     }
 
+    fn record_relay_listen_address_lost(&mut self, relay: Libp2pPeerId) -> bool {
+        self.relayed_listen_addresses.remove(&relay)
+    }
+
+    fn record_relay_reservation_lost(&mut self, relay: Libp2pPeerId) -> bool {
+        let removed_reservation = self.accepted_reservations.remove(&relay);
+        let removed_listen_address = self.relayed_listen_addresses.remove(&relay);
+        if removed_reservation || removed_listen_address {
+            self.attempted_ready_dials
+                .retain(|(attempted_relay, _, _)| *attempted_relay != relay);
+            true
+        } else {
+            false
+        }
+    }
+
     fn relay_ready(&self, relay: Libp2pPeerId) -> bool {
         self.accepted_reservations.contains(&relay)
             && self.relayed_listen_addresses.contains(&relay)
@@ -3584,6 +3600,17 @@ async fn handle_swarm_event(
                 context
                     .packet_plane_negotiator
                     .remove_peer(PeerId::from_libp2p(peer_id));
+                if context
+                    .relay_readiness
+                    .record_relay_reservation_lost(peer_id)
+                {
+                    context.metrics.record_relay_reservation_lost();
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "relay_reservation_readiness_lost",
+                        &[("relay", &peer_id.to_string())],
+                    );
+                }
             }
             log_runtime_event(
                 LogLevel::Info,
@@ -3648,6 +3675,40 @@ async fn handle_swarm_event(
                         ("address", &address.to_string()),
                     ],
                 );
+            }
+        }
+        SwarmEvent::ExpiredListenAddr { address, .. } => {
+            if let Some(relay) = relayed_address_relay_peer(&address)
+                && context
+                    .relay_readiness
+                    .record_relay_listen_address_lost(relay)
+            {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "relay_listen_address_lost",
+                    &[
+                        ("relay", &relay.to_string()),
+                        ("address", &address.to_string()),
+                    ],
+                );
+            }
+        }
+        SwarmEvent::ListenerClosed { addresses, .. } => {
+            for address in addresses {
+                if let Some(relay) = relayed_address_relay_peer(&address)
+                    && context
+                        .relay_readiness
+                        .record_relay_listen_address_lost(relay)
+                {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "relay_listen_address_lost",
+                        &[
+                            ("relay", &relay.to_string()),
+                            ("address", &address.to_string()),
+                        ],
+                    );
+                }
             }
         }
         _ => {}
@@ -7881,6 +7942,38 @@ mod tests {
         assert!(readiness.relay_ready(relay));
         assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
         assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+    }
+
+    #[test]
+    fn relay_readiness_clears_on_lost_listen_address_and_reservation() {
+        let relay = peer_id();
+        let peer = peer_id();
+        let address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+        let mut readiness = RelayReadiness::default();
+
+        readiness.record_reservation_accepted(relay);
+        readiness.record_relay_listen_address(relay);
+        assert!(readiness.relay_ready(relay));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+
+        assert!(readiness.record_relay_listen_address_lost(relay));
+        assert!(!readiness.relay_ready(relay));
+        assert!(!readiness.record_relay_listen_address_lost(relay));
+
+        readiness.record_relay_listen_address(relay);
+        assert!(readiness.relay_ready(relay));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+
+        assert!(readiness.record_relay_reservation_lost(relay));
+        assert!(!readiness.relay_ready(relay));
+        assert!(!readiness.record_relay_reservation_lost(relay));
+
+        readiness.record_reservation_accepted(relay);
+        readiness.record_relay_listen_address(relay);
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
     }
 
     #[test]

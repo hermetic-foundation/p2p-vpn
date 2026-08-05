@@ -264,7 +264,11 @@ reservations and relay connections can come up before the node attempts the
 relayed peer circuit. Once the daemon observes both relay reservation acceptance
 and a relayed listen address for that relay, it immediately dials configured
 peers that use the ready relay instead of waiting for the next periodic redial
-tick.
+tick. If the relayed listen address expires, the relay stops being treated as
+ready until a replacement address is observed. If the direct connection to the
+relay closes with no remaining connection, the daemon clears that relay's
+reservation readiness and previous ready-dial attempts so a renewed reservation
+can trigger fresh relayed-peer dials.
 Relay peers named by configured reservation addresses are also kept as
 infrastructure redial targets, so relay fallback can recover even when the
 relay is not a packet-routing VPN peer. Generated configs can use
@@ -1013,7 +1017,8 @@ frames, expired outbound queue packets, stream fallback sends, attempted native
 QUIC datagram sends, datagram-unavailable queue stalls, direct versus
 relayed connection counts, selected-path promotions to direct, selected-path
 fallbacks to relay, packet-plane path demotions, relay reservation/circuit
-counts, auto-relay candidate/reservation attempt/failure counts,
+counts including client-side `relay_reservations_lost`, auto-relay
+candidate/reservation attempt/failure counts,
 auto-relay infrastructure candidate/dial/failure counts, packet-plane
 recovery dial attempts/failures, relay-server
 accept/deny/close/timeout counts, DCUtR success/failure counts, observed
