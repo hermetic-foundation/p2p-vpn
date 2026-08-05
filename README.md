@@ -1164,6 +1164,24 @@ peer or route owner. Use
 must be the relay's direct address with its `/p2p/RELAY` peer ID and without
 `/p2p-circuit`.
 
+For a first public two-host VPN proof, `relay-check` can also write a matched
+pair of static Host A/Host B configs from the winning relay:
+
+```sh
+cargo run -- relay-check \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --write-host-a-config host-a.json \
+  --write-host-b-config host-b.json \
+  --host-a-route 10.42.0.1/32 \
+  --host-b-route 10.42.0.2/32 \
+  --force
+```
+
+Those configs add the relay as bootstrap/reservation infrastructure and add
+the other host as the only VPN peer through a reciprocal
+`/p2p-circuit/p2p/PEER` address, so TUN traffic can prove relay stream fallback
+before DCUtR or the owned UDP/QUIC packet plane succeeds.
+
 The packaged public relay repro app is the preferred way to collect a
 repeatable failure bundle:
 

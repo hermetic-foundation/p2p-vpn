@@ -300,6 +300,22 @@ enum Command {
         write_report: Option<PathBuf>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
+        #[arg(long = "write-host-a-config")]
+        write_host_a_config: Option<PathBuf>,
+        #[arg(long = "write-host-b-config")]
+        write_host_b_config: Option<PathBuf>,
+        #[arg(long = "two-host-network", default_value = "public-vpn-repro")]
+        two_host_network: String,
+        #[arg(long = "host-a-interface", default_value = "hs0")]
+        host_a_interface: String,
+        #[arg(long = "host-b-interface", default_value = "hs0")]
+        host_b_interface: String,
+        #[arg(long = "host-a-route", default_value = "10.42.0.1/32")]
+        host_a_route: String,
+        #[arg(long = "host-b-route", default_value = "10.42.0.2/32")]
+        host_b_route: String,
+        #[arg(long = "two-host-mtu", default_value_t = 1280)]
+        two_host_mtu: u16,
         #[arg(long)]
         force: bool,
     },
@@ -762,6 +778,14 @@ async fn main() -> Result<(), String> {
             max_validation_candidates,
             write_report,
             write_config,
+            write_host_a_config,
+            write_host_b_config,
+            two_host_network,
+            host_a_interface,
+            host_b_interface,
+            host_a_route,
+            host_b_route,
+            two_host_mtu,
             force,
         } => {
             let mode = if require_dcutr_success {
@@ -778,6 +802,14 @@ async fn main() -> Result<(), String> {
                 max_validation_candidates,
                 write_report,
                 write_config,
+                write_host_a_config,
+                write_host_b_config,
+                two_host_network,
+                host_a_interface,
+                host_b_interface,
+                host_a_route,
+                host_b_route,
+                two_host_mtu,
                 force,
             }))
             .await
@@ -1181,6 +1213,14 @@ struct RelayCheckArgs {
     max_validation_candidates: Option<usize>,
     write_report: Option<PathBuf>,
     write_config: Option<PathBuf>,
+    write_host_a_config: Option<PathBuf>,
+    write_host_b_config: Option<PathBuf>,
+    two_host_network: String,
+    host_a_interface: String,
+    host_b_interface: String,
+    host_a_route: String,
+    host_b_route: String,
+    two_host_mtu: u16,
     force: bool,
 }
 
@@ -3283,6 +3323,9 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
         if let Some(output) = &args.write_config {
             write_public_relay_config_from_relay_check(&args, &report, output)?;
         }
+        if args.write_host_a_config.is_some() || args.write_host_b_config.is_some() {
+            write_public_relay_two_host_configs_from_relay_check(&args, &report)?;
+        }
         Ok(())
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
@@ -3312,6 +3355,14 @@ fn validate_relay_check_args(args: &RelayCheckArgs) -> Result<(), String> {
     }
     if args.max_validation_candidates == Some(0) {
         return Err("--max-validation-candidates must be greater than zero".to_owned());
+    }
+    if args.write_host_a_config.is_some() != args.write_host_b_config.is_some() {
+        return Err(
+            "--write-host-a-config and --write-host-b-config must be supplied together".to_owned(),
+        );
+    }
+    if args.two_host_mtu == 0 {
+        return Err("--two-host-mtu must be greater than zero".to_owned());
     }
     Ok(())
 }
@@ -3973,6 +4024,158 @@ fn write_public_relay_config_from_base(
     write_config_output(&config, output, force)
 }
 
+fn write_public_relay_two_host_configs_from_relay_check(
+    args: &RelayCheckArgs,
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+) -> Result<(), String> {
+    let Some(host_a_output) = &args.write_host_a_config else {
+        return Ok(());
+    };
+    let Some(host_b_output) = &args.write_host_b_config else {
+        return Ok(());
+    };
+    ensure_config_output_writable(host_a_output, args.force)?;
+    ensure_config_output_writable(host_b_output, args.force)?;
+
+    let relay = public_relay_probe_winner(report)?;
+    let (host_a, host_b) = public_relay_two_host_configs(args, &relay)?;
+    write_config_output(&host_a, host_a_output, args.force)?;
+    write_config_output(&host_b, host_b_output, args.force)?;
+    println!("Host A local peer: {}", host_a.network.local_peer);
+    println!("Host B local peer: {}", host_b.network.local_peer);
+    println!(
+        "Host A ping target: {}",
+        route_ping_target(&args.host_b_route, "Host B")?
+    );
+    println!(
+        "Host B ping target: {}",
+        route_ping_target(&args.host_a_route, "Host A")?
+    );
+
+    Ok(())
+}
+
+fn public_relay_two_host_configs(
+    args: &RelayCheckArgs,
+    relay: &EndpointArg,
+) -> Result<(Config, Config), String> {
+    let host_a_identity = NodeIdentity::generate_ed25519()
+        .map_err(|error| format!("failed to generate Host A identity: {error:?}"))?;
+    let host_b_identity = NodeIdentity::generate_ed25519()
+        .map_err(|error| format!("failed to generate Host B identity: {error:?}"))?;
+    let host_a_route = RouteConfig {
+        prefix: args.host_a_route.clone(),
+        metric: 100,
+    };
+    let host_b_route = RouteConfig {
+        prefix: args.host_b_route.clone(),
+        metric: 100,
+    };
+
+    let host_a_relayed = public_relay_peer_circuit_address(relay, &host_a_identity)?;
+    let host_b_relayed = public_relay_peer_circuit_address(relay, &host_b_identity)?;
+    let relay_bootstrap = InitPeer {
+        id: relay.id.clone(),
+        address: relay.address.clone(),
+        routes: Vec::new(),
+    };
+    let relay_config = RelayConfig {
+        reservations: vec![relay_reservation_address(relay)?],
+        ..RelayConfig::default()
+    };
+    let discovery = public_ipfs_relay_discovery_config();
+
+    let host_a = InitConfigTemplate {
+        identity: host_a_identity.clone(),
+        network_name: args.two_host_network.clone(),
+        membership_key: None,
+        local_routes: vec![host_a_route.clone()],
+        interface_name: args.host_a_interface.clone(),
+        mtu: args.two_host_mtu,
+        listen_addresses: Vec::new(),
+        external_addresses: Vec::new(),
+        packet_plane: PacketPlaneConfig::default(),
+        bootstrap_peers: vec![relay_bootstrap.clone()],
+        peers: vec![InitPeer {
+            id: host_b_identity.peer_id.clone(),
+            address: Some(host_b_relayed),
+            routes: vec![host_b_route.clone()],
+        }],
+        discovery: discovery.clone(),
+        relay: relay_config.clone(),
+    }
+    .into_config();
+
+    let host_b = InitConfigTemplate {
+        identity: host_b_identity,
+        network_name: args.two_host_network.clone(),
+        membership_key: None,
+        local_routes: vec![host_b_route],
+        interface_name: args.host_b_interface.clone(),
+        mtu: args.two_host_mtu,
+        listen_addresses: Vec::new(),
+        external_addresses: Vec::new(),
+        packet_plane: PacketPlaneConfig::default(),
+        bootstrap_peers: vec![relay_bootstrap],
+        peers: vec![InitPeer {
+            id: host_a_identity.peer_id.clone(),
+            address: Some(host_a_relayed),
+            routes: vec![host_a_route],
+        }],
+        discovery,
+        relay: relay_config,
+    }
+    .into_config();
+
+    host_a
+        .validate_runtime()
+        .map_err(|error| format!("generated Host A config is invalid: {error:?}"))?;
+    host_b
+        .validate_runtime()
+        .map_err(|error| format!("generated Host B config is invalid: {error:?}"))?;
+
+    Ok((host_a, host_b))
+}
+
+fn public_ipfs_relay_discovery_config() -> DiscoveryConfig {
+    InitDiscoveryFlags {
+        disable_mdns: true,
+        disable_kademlia: false,
+        disable_kademlia_provider_advertisement: true,
+        disable_dcutr: false,
+        disable_autonat: false,
+    }
+    .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), false, true)
+}
+
+fn public_relay_peer_circuit_address(
+    relay: &EndpointArg,
+    peer: &NodeIdentity,
+) -> Result<String, String> {
+    let Some(address) = &relay.address else {
+        return Err(format!(
+            "relay peer {} must include an address as PEER_ID=MULTIADDR",
+            relay.id
+        ));
+    };
+    let mut address = address
+        .parse::<libp2p::Multiaddr>()
+        .map_err(|error| format!("relay peer address for {} is invalid: {error:?}", relay.id))?;
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        return Err("validated relay candidate must be a direct relay address".to_owned());
+    }
+    let peer_id = peer
+        .peer_id
+        .parse::<libp2p::PeerId>()
+        .map_err(|error| format!("generated peer id {} is invalid: {error}", peer.peer_id))?;
+    address.push(libp2p::multiaddr::Protocol::P2pCircuit);
+    address.push(libp2p::multiaddr::Protocol::P2p(peer_id));
+    Ok(address.to_string())
+}
+
 fn public_relay_probe_winner(
     report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
 ) -> Result<EndpointArg, String> {
@@ -4065,12 +4268,7 @@ fn add_public_relay_infrastructure(config: &mut Config, relay: &EndpointArg) -> 
 }
 
 fn write_config_output(config: &Config, output: &Path, force: bool) -> Result<(), String> {
-    if !force && output.to_string_lossy() != "-" && output.exists() {
-        return Err(format!(
-            "{} already exists; pass --force to overwrite it",
-            output.display()
-        ));
-    }
+    ensure_config_output_writable(output, force)?;
     config
         .validate_runtime()
         .map_err(|error| format!("generated config is invalid: {error:?}"))?;
@@ -4087,6 +4285,27 @@ fn write_config_output(config: &Config, output: &Path, force: bool) -> Result<()
     }
 
     Ok(())
+}
+
+fn ensure_config_output_writable(output: &Path, force: bool) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    Ok(())
+}
+
+fn route_ping_target(route: &str, label: &str) -> Result<String, String> {
+    route
+        .split_once('/')
+        .map_or(route, |(address, _)| address)
+        .parse::<IpAddr>()
+        .map(|address| address.to_string())
+        .map_err(|error| {
+            format!("{label} route {route} does not start with an IP address: {error}")
+        })
 }
 
 async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
@@ -5464,6 +5683,28 @@ fn path_name(path: PathKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn relay_check_args_for_test() -> RelayCheckArgs {
+        RelayCheckArgs {
+            config_path: None,
+            relay_candidates: Vec::new(),
+            relay_candidates_file: None,
+            timeout_seconds: 45,
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            max_validation_candidates: None,
+            write_report: None,
+            write_config: None,
+            write_host_a_config: None,
+            write_host_b_config: None,
+            two_host_network: "public-vpn-repro".to_owned(),
+            host_a_interface: "hs0".to_owned(),
+            host_b_interface: "hs0".to_owned(),
+            host_a_route: "10.42.0.1/32".to_owned(),
+            host_b_route: "10.42.0.2/32".to_owned(),
+            two_host_mtu: 1280,
+            force: false,
+        }
+    }
 
     #[test]
     fn peer_route_arg_parses_default_and_explicit_metric() {
@@ -7502,6 +7743,22 @@ mod tests {
             "relay-report.json",
             "--write-config",
             "relay-config.json",
+            "--write-host-a-config",
+            "host-a.json",
+            "--write-host-b-config",
+            "host-b.json",
+            "--two-host-network",
+            "public-lab",
+            "--host-a-interface",
+            "hs-a",
+            "--host-b-interface",
+            "hs-b",
+            "--host-a-route",
+            "10.44.0.1/32",
+            "--host-b-route",
+            "10.44.0.2/32",
+            "--two-host-mtu",
+            "1420",
             "--force",
         ])
         .expect("cli");
@@ -7515,6 +7772,14 @@ mod tests {
             max_validation_candidates,
             write_report,
             write_config,
+            write_host_a_config,
+            write_host_b_config,
+            two_host_network,
+            host_a_interface,
+            host_b_interface,
+            host_a_route,
+            host_b_route,
+            two_host_mtu,
             force,
         } = cli.command
         else {
@@ -7533,6 +7798,14 @@ mod tests {
         assert_eq!(max_validation_candidates, Some(3));
         assert_eq!(write_report, Some(PathBuf::from("relay-report.json")));
         assert_eq!(write_config, Some(PathBuf::from("relay-config.json")));
+        assert_eq!(write_host_a_config, Some(PathBuf::from("host-a.json")));
+        assert_eq!(write_host_b_config, Some(PathBuf::from("host-b.json")));
+        assert_eq!(two_host_network, "public-lab");
+        assert_eq!(host_a_interface, "hs-a");
+        assert_eq!(host_b_interface, "hs-b");
+        assert_eq!(host_a_route, "10.44.0.1/32");
+        assert_eq!(host_b_route, "10.44.0.2/32");
+        assert_eq!(two_host_mtu, 1420);
         assert!(force);
     }
 
@@ -7871,15 +8144,9 @@ mod tests {
         let _ = fs::remove_file(&output);
         fs::write(&output, format!("{file_candidate}\n")).expect("write candidates");
         let args = RelayCheckArgs {
-            config_path: None,
             relay_candidates: vec![inline.clone()],
             relay_candidates_file: Some(output.clone()),
-            timeout_seconds: 45,
-            mode: PublicRelayProbeMode::RelayedPeerCircuit,
-            max_validation_candidates: None,
-            write_report: None,
-            write_config: None,
-            force: false,
+            ..relay_check_args_for_test()
         };
 
         let raw = relay_check_candidate_input(&args).expect("candidate input");
@@ -7926,15 +8193,11 @@ mod tests {
         ));
         let _ = fs::remove_file(&output);
         let args = RelayCheckArgs {
-            config_path: None,
             relay_candidates: vec![candidate.clone()],
-            relay_candidates_file: None,
-            timeout_seconds: 45,
             mode: PublicRelayProbeMode::DcutrSuccess,
             max_validation_candidates: Some(1),
             write_report: Some(output.clone()),
-            write_config: None,
-            force: false,
+            ..relay_check_args_for_test()
         };
 
         write_public_relay_probe_report(
@@ -8264,18 +8527,12 @@ mod tests {
     #[test]
     fn relay_check_validation_limit_rejects_zero() {
         let args = RelayCheckArgs {
-            config_path: None,
             relay_candidates: vec![
                 "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
                     .to_owned(),
             ],
-            relay_candidates_file: None,
-            timeout_seconds: 45,
-            mode: PublicRelayProbeMode::RelayedPeerCircuit,
             max_validation_candidates: Some(0),
-            write_report: None,
-            write_config: None,
-            force: false,
+            ..relay_check_args_for_test()
         };
 
         assert_eq!(
@@ -8287,15 +8544,7 @@ mod tests {
     #[test]
     fn relay_check_requires_candidate_or_candidate_file() {
         let args = RelayCheckArgs {
-            config_path: None,
-            relay_candidates: Vec::new(),
-            relay_candidates_file: None,
-            timeout_seconds: 45,
-            mode: PublicRelayProbeMode::RelayedPeerCircuit,
-            max_validation_candidates: None,
-            write_report: None,
-            write_config: None,
-            force: false,
+            ..relay_check_args_for_test()
         };
 
         assert_eq!(
@@ -10009,6 +10258,53 @@ mod tests {
         assert!(config.network.discovery.autonat);
     }
 
+    #[test]
+    fn public_relay_two_host_configs_are_reciprocal_runtime_configs() {
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+        let relay = relay_candidate_endpoint_arg(&relay_address).expect("relay endpoint arg");
+        let args = RelayCheckArgs {
+            two_host_network: "public-lab".to_owned(),
+            host_a_interface: "hs-a".to_owned(),
+            host_b_interface: "hs-b".to_owned(),
+            host_a_route: "10.44.0.1/32".to_owned(),
+            host_b_route: "10.44.0.2/32".to_owned(),
+            two_host_mtu: 1420,
+            ..relay_check_args_for_test()
+        };
+
+        let (host_a, host_b) =
+            public_relay_two_host_configs(&args, &relay).expect("two-host configs");
+
+        host_a.validate_runtime().expect("Host A runtime config");
+        host_b.validate_runtime().expect("Host B runtime config");
+        assert_eq!(host_a.network.name, "public-lab");
+        assert_eq!(host_b.network.name, "public-lab");
+        assert_eq!(host_a.interface.name, "hs-a");
+        assert_eq!(host_b.interface.name, "hs-b");
+        assert_eq!(host_a.interface.mtu, 1420);
+        assert_eq!(host_b.interface.mtu, 1420);
+        assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
+        assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
+        assert_eq!(host_a.peers[0].id, host_b.network.local_peer);
+        assert_eq!(host_b.peers[0].id, host_a.network.local_peer);
+        assert_eq!(host_a.peers[0].routes[0].prefix, "10.44.0.2/32");
+        assert_eq!(host_b.peers[0].routes[0].prefix, "10.44.0.1/32");
+        assert!(host_a.peers[0].addresses[0].contains("/p2p-circuit/p2p/"));
+        assert!(host_b.peers[0].addresses[0].contains("/p2p-circuit/p2p/"));
+        assert!(host_a.network.bootstrap_peers.iter().any(|peer| {
+            peer.id == relay.id && Some(peer.address.as_str()) == relay.address.as_deref()
+        }));
+        assert_eq!(
+            host_a.network.relay.reservations,
+            vec![format!("{relay_address}/p2p-circuit")]
+        );
+        assert_eq!(
+            route_ping_target(&args.host_b_route, "Host B").unwrap(),
+            "10.44.0.2"
+        );
+    }
+
     fn public_relay_probe_report(
         address: String,
     ) -> p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport {
@@ -10142,13 +10438,9 @@ mod tests {
         let args = RelayCheckArgs {
             config_path: Some(base_output.clone()),
             relay_candidates: vec![relay_address.clone()],
-            relay_candidates_file: None,
-            timeout_seconds: 45,
-            mode: PublicRelayProbeMode::RelayedPeerCircuit,
-            max_validation_candidates: None,
-            write_report: None,
             write_config: Some(output.clone()),
             force: true,
+            ..relay_check_args_for_test()
         };
 
         write_public_relay_config_from_relay_check(&args, &report, &output)
