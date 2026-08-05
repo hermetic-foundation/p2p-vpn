@@ -250,6 +250,8 @@ enum Command {
         require_relayed_peer_circuits: bool,
     },
     RelayCheck {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
         #[arg(long = "relay-candidate")]
         relay_candidates: Vec<String>,
         #[arg(long = "relay-candidates-file")]
@@ -568,6 +570,7 @@ async fn main() -> Result<(), String> {
             .await
         }
         Command::RelayCheck {
+            config,
             relay_candidates,
             relay_candidates_file,
             require_dcutr_success,
@@ -583,6 +586,7 @@ async fn main() -> Result<(), String> {
                 PublicRelayProbeMode::RelayedPeerCircuit
             };
             Box::pin(relay_check(RelayCheckArgs {
+                config_path: config,
                 relay_candidates,
                 relay_candidates_file,
                 timeout_seconds,
@@ -821,6 +825,7 @@ struct RelayScanArgs {
 
 #[derive(Clone, Debug)]
 struct RelayCheckArgs {
+    config_path: Option<PathBuf>,
     relay_candidates: Vec<String>,
     relay_candidates_file: Option<PathBuf>,
     timeout_seconds: u64,
@@ -2267,12 +2272,26 @@ async fn relay_check(args: RelayCheckArgs) -> Result<(), String> {
     }
 
     if succeeded {
-        if let Some(output) = args.write_config {
-            write_public_relay_config_from_probe(&report, &output, args.force)?;
+        if let Some(output) = &args.write_config {
+            write_public_relay_config_from_relay_check(&args, &report, output)?;
         }
         Ok(())
     } else {
         Err("public relay check did not find a usable candidate".to_owned())
+    }
+}
+
+fn write_public_relay_config_from_relay_check(
+    args: &RelayCheckArgs,
+    report: &p2p_vpn::runtime::bootstrap_check::PublicRelayProbeReport,
+    output: &Path,
+) -> Result<(), String> {
+    if let Some(config_path) = &args.config_path {
+        let config = Config::load(config_path)
+            .map_err(|error| format!("failed to load config: {error:?}"))?;
+        write_public_relay_config_from_base(report, config, output, args.force)
+    } else {
+        write_public_relay_config_from_probe(report, output, args.force)
     }
 }
 
@@ -4807,6 +4826,8 @@ mod tests {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
             "relay-check",
+            "--config",
+            "base-config.json",
             "--relay-candidate",
             "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
             "--relay-candidates-file",
@@ -4825,6 +4846,7 @@ mod tests {
         .expect("cli");
 
         let Command::RelayCheck {
+            config,
             relay_candidates,
             relay_candidates_file,
             require_dcutr_success,
@@ -4838,6 +4860,7 @@ mod tests {
             panic!("expected relay-check command");
         };
 
+        assert_eq!(config, Some(PathBuf::from("base-config.json")));
         assert_eq!(relay_candidates.len(), 1);
         assert!(relay_candidates[0].contains("relay.example.net"));
         assert_eq!(
@@ -4991,6 +5014,7 @@ mod tests {
         let _ = fs::remove_file(&output);
         fs::write(&output, format!("{file_candidate}\n")).expect("write candidates");
         let args = RelayCheckArgs {
+            config_path: None,
             relay_candidates: vec![inline.clone()],
             relay_candidates_file: Some(output.clone()),
             timeout_seconds: 45,
@@ -5044,6 +5068,7 @@ mod tests {
         ));
         let _ = fs::remove_file(&output);
         let args = RelayCheckArgs {
+            config_path: None,
             relay_candidates: vec![candidate.clone()],
             relay_candidates_file: None,
             timeout_seconds: 45,
@@ -5263,6 +5288,7 @@ mod tests {
     #[test]
     fn relay_check_validation_limit_rejects_zero() {
         let args = RelayCheckArgs {
+            config_path: None,
             relay_candidates: vec![
                 "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
                     .to_owned(),
@@ -5285,6 +5311,7 @@ mod tests {
     #[test]
     fn relay_check_requires_candidate_or_candidate_file() {
         let args = RelayCheckArgs {
+            config_path: None,
             relay_candidates: Vec::new(),
             relay_candidates_file: None,
             timeout_seconds: 45,
@@ -6157,6 +6184,84 @@ mod tests {
         let report = public_relay_probe_report(relay_address.clone());
 
         write_public_relay_config_from_base(&report, base.clone(), &output, true)
+            .expect("write updated config");
+
+        let updated = Config::load(&output).expect("load updated config");
+        let _ = std::fs::remove_file(&base_output);
+        let _ = std::fs::remove_file(&output);
+
+        updated.validate_runtime().expect("runtime-valid config");
+        assert_eq!(updated.network.local_peer, base.network.local_peer);
+        assert_eq!(updated.network.routes, base.network.routes);
+        assert_eq!(updated.peers, base.peers);
+        assert_eq!(
+            updated.network.relay.reservations,
+            vec![format!("{relay_address}/p2p-circuit")]
+        );
+        assert_eq!(
+            updated.network.bootstrap_peers,
+            vec![BootstrapPeerConfig {
+                id: relay.peer_id,
+                address: relay_address,
+            }]
+        );
+    }
+
+    #[test]
+    fn relay_check_write_config_can_preserve_base_overlay_config() {
+        let base_output = temp_config_path("p2p-vpn-relay-check-base-config");
+        let output = temp_config_path("p2p-vpn-relay-check-updated-config");
+        let peer = NodeIdentity::generate_ed25519().expect("peer identity");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let relay_address = format!("/ip4/127.0.0.1/tcp/4002/p2p/{}", relay.peer_id);
+
+        init_config(InitConfigArgs {
+            output: base_output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            interface: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
+            peers: vec![EndpointArg {
+                id: peer.peer_id.clone(),
+                address: None,
+            }],
+            local_routes: vec![LocalRouteArg {
+                route: RouteConfig {
+                    prefix: "10.43.0.0/24".to_owned(),
+                    metric: 80,
+                },
+            }],
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init base config");
+        let base = Config::load(&base_output).expect("load base config");
+        let report = public_relay_probe_report(relay_address.clone());
+        let args = RelayCheckArgs {
+            config_path: Some(base_output.clone()),
+            relay_candidates: vec![relay_address.clone()],
+            relay_candidates_file: None,
+            timeout_seconds: 45,
+            mode: PublicRelayProbeMode::RelayedPeerCircuit,
+            max_validation_candidates: None,
+            write_report: None,
+            write_config: Some(output.clone()),
+            force: true,
+        };
+
+        write_public_relay_config_from_relay_check(&args, &report, &output)
             .expect("write updated config");
 
         let updated = Config::load(&output).expect("load updated config");

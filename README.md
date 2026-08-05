@@ -853,6 +853,7 @@ cargo run -- relay-scan \
   --timeout-seconds 30
 
 cargo run -- relay-check \
+  --config p2p-vpn.json \
   --relay-candidates-file public-relay-candidates.txt \
   --write-report public-relay-check.json \
   --write-config p2p-vpn-public-relay.json \
@@ -969,11 +970,13 @@ each candidate that reached the bootstrap-check phase. Successful candidates als
 `public relay candidate config:` line containing the exact
 `--relay-peer PEER=MULTIADDR` shortcut value and matching full
 `--relay-reservation .../p2p-circuit` address for `init-config`. Pass
-`--write-config PATH` to write a default runtime-valid config from the first
-validated relay candidate; the relay is added as bootstrap/AutoNAT/relay
-infrastructure only and is not added as a VPN peer or route owner. Use `--force`
-to overwrite an existing output file. Each supplied relay multiaddr must be the
-relay's direct address with its `/p2p/RELAY` peer ID and without
+`--write-config PATH` to write a runtime-valid config from the first validated
+relay candidate; add `--config p2p-vpn.json` when that output should preserve
+an existing overlay's identity, membership, peers, routes, queue limits, and
+packet-plane settings. The relay is added as bootstrap/AutoNAT/relay
+infrastructure only and is not added as a VPN peer or route owner. Use
+`--force` to overwrite an existing output file. Each supplied relay multiaddr
+must be the relay's direct address with its `/p2p/RELAY` peer ID and without
 `/p2p-circuit`.
 
 The ignored tests run the same kind of probe from the test harness:

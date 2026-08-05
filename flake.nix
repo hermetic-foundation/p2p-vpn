@@ -98,6 +98,11 @@
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
             max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
+            base_config="''${P2P_VPN_REPRO_BASE_CONFIG:-}"
+            relay_check_base_args=()
+            if [[ -n "$base_config" ]]; then
+              relay_check_base_args=(--config "$base_config")
+            fi
             status=0
 
             run_phase() {
@@ -127,6 +132,7 @@
             if [[ -s "$candidates" ]]; then
               run_phase "probing candidates for relay reservation and relayed-circuit evidence" \
                 p2p-vpn relay-check \
+                "''${relay_check_base_args[@]}" \
                 --relay-candidates-file "$candidates" \
                 --timeout-seconds "$candidate_timeout" \
                 --max-validation-candidates "$max_validation" \
@@ -136,6 +142,7 @@
 
               run_phase "probing candidates for DCUtR success evidence" \
                 p2p-vpn relay-check \
+                "''${relay_check_base_args[@]}" \
                 --relay-candidates-file "$candidates" \
                 --timeout-seconds "$candidate_timeout" \
                 --max-validation-candidates "$max_validation" \

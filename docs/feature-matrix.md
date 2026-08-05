@@ -98,16 +98,20 @@ path.
    relay probe as JSON with mode, timeout, validation cap, host-reachable
    candidates, skipped candidates, per-candidate failure stages, errors, and
    bootstrap/DCUtR summary fields for candidates that reached the
-   bootstrap-check phase. `relay-check` can also consume larger bounded
-   `relay-scan --write-candidates` artifacts when a validation cap is set, so
-   broad public scans can feed repeatable smaller proof runs without manual
-   file trimming. The packaged `public-relay-repro` app now runs discovery,
+   bootstrap-check phase. `relay-check --config BASE --write-config OUTPUT`
+   can preserve an existing overlay config while adding the first validated
+   public relay as bootstrap/AutoNAT/relay infrastructure. `relay-check` can
+   also consume larger bounded `relay-scan --write-candidates` artifacts when a
+   validation cap is set, so broad public scans can feed repeatable smaller
+   proof runs without manual file trimming. The packaged `public-relay-repro`
+   app now runs discovery,
    relay-circuit validation, and DCUtR validation as separate phases, preserving
    the scan, relay-check, and DCUtR JSON reports even when a later phase fails,
    and writing a runnable relay-assisted config when the relay-circuit phase
-   succeeds, so public topology failures can be compared across hosts while
-   still preserving the strongest usable fallback found. A report-driven
-   live run on 2026-08-04 found one public relay
+   succeeds. When `P2P_VPN_REPRO_BASE_CONFIG` is set, that relay-assisted
+   config preserves the supplied overlay. Public topology failures can be
+   compared across hosts while still preserving the strongest usable fallback
+   found. A report-driven live run on 2026-08-04 found one public relay
    candidate that accepted a reservation, carried a relayed circuit, and wrote
    a relay-assisted config; the paired DCUtR-required report tested eight
    host-reachable candidates, with four reservation timeouts and four

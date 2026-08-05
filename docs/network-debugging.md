@@ -74,7 +74,10 @@ The app writes artifacts to a temporary directory and prints that path. Set
 `P2P_VPN_REPRO_DIR` to choose the directory. Tune long-running network probes
 with `P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS`,
 `P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS`, `P2P_VPN_RELAY_MAX_CANDIDATES`, and
-`P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES`. The repro runs discovery,
+`P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES`. Set
+`P2P_VPN_REPRO_BASE_CONFIG` to an existing overlay config when a successful
+relay-circuit phase should preserve that identity, membership, routes, peers,
+and packet-plane settings in the generated config. The repro runs discovery,
 relay-circuit validation, and DCUtR validation as separate phases and preserves
 `public-relay-scan-report.json`, `public-relay-check-report.json`, and
 `public-relay-dcutr-report.json` when those phases can run. If relay-circuit
@@ -87,8 +90,10 @@ Probe candidates and write a machine-readable report:
 
 ```sh
 p2p-vpn relay-check \
+  --config p2p-vpn.json \
   --relay-candidates-file /tmp/p2p-vpn-relays.txt \
-  --write-report /tmp/p2p-vpn-relay-report.json
+  --write-report /tmp/p2p-vpn-relay-report.json \
+  --write-config /tmp/p2p-vpn-public-relay-config.json
 ```
 
 When debugging hole punching, require DCUtR evidence so the command fails at
