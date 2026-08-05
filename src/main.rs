@@ -20,6 +20,11 @@ use p2p_vpn::{
         InviteExportOptions, InviteImportOptions, SignedInvite, export_signed_invite,
         import_invite_config,
     },
+    membership::{
+        MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+        SignedMembershipRecord, issue_membership_record_for_subject_at,
+        validate_membership_records_at,
+    },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     queue::QueueStats,
     runtime::{
@@ -39,7 +44,7 @@ use p2p_vpn::{
     },
     wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
 const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
@@ -78,6 +83,16 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 enum Command {
     Keygen,
+    IdentityPublic {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        private_key: Option<String>,
+        #[arg(short, long, default_value = "-")]
+        output: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
     InitConfig {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         output: PathBuf,
@@ -363,6 +378,38 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    MembershipRecordIssue {
+        #[arg(long = "issuer-config", default_value = "p2p-vpn.json")]
+        issuer_config: PathBuf,
+        #[arg(long = "member-identity")]
+        member_identity: Option<PathBuf>,
+        #[arg(long = "member-peer")]
+        member_peer: Option<String>,
+        #[arg(long = "member-public-key")]
+        member_public_key: Option<String>,
+        #[arg(short, long, default_value = "p2p-vpn-member-record.json")]
+        output: PathBuf,
+        #[arg(long)]
+        network: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        membership_epoch: u64,
+        #[arg(long, default_value_t = 1)]
+        sequence: u64,
+        #[arg(long = "role", value_enum)]
+        roles: Vec<MembershipRecordRoleArg>,
+        #[arg(long = "route-grant")]
+        route_grants: Vec<LocalRouteArg>,
+        #[arg(long)]
+        expires_at_unix_seconds: Option<u64>,
+        #[arg(long)]
+        force: bool,
+    },
+    MembershipRecordVerify {
+        #[arg(short, long, default_value = "p2p-vpn-member-record.json")]
+        input: PathBuf,
+        #[arg(long)]
+        network: Option<String>,
+    },
     DaemonStatus {
         #[arg(long, default_value = "/run/p2p-vpn/control.sock")]
         socket: PathBuf,
@@ -461,6 +508,17 @@ async fn main() -> Result<(), String> {
 
     match cli.command {
         Command::Keygen => keygen(),
+        Command::IdentityPublic {
+            config,
+            private_key,
+            output,
+            force,
+        } => identity_public(IdentityPublicArgs {
+            config,
+            private_key,
+            output,
+            force,
+        }),
         Command::InitConfig {
             output,
             network,
@@ -760,6 +818,36 @@ async fn main() -> Result<(), String> {
             peer_name,
             force,
         }),
+        Command::MembershipRecordIssue {
+            issuer_config,
+            member_identity,
+            member_peer,
+            member_public_key,
+            output,
+            network,
+            membership_epoch,
+            sequence,
+            roles,
+            route_grants,
+            expires_at_unix_seconds,
+            force,
+        } => membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config,
+            member_identity,
+            member_peer,
+            member_public_key,
+            output,
+            network,
+            membership_epoch,
+            sequence,
+            roles,
+            route_grants,
+            expires_at_unix_seconds,
+            force,
+        }),
+        Command::MembershipRecordVerify { input, network } => {
+            membership_record_verify(&input, network.as_deref())
+        }
         Command::DaemonStatus {
             socket,
             timeout_seconds,
@@ -919,6 +1007,14 @@ struct PeerRouteArg {
 }
 
 #[derive(Clone, Debug)]
+struct IdentityPublicArgs {
+    config: Option<PathBuf>,
+    private_key: Option<String>,
+    output: PathBuf,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
 struct InviteImportArgs {
     invite: PathBuf,
     output: PathBuf,
@@ -928,6 +1024,28 @@ struct InviteImportArgs {
     local_routes: Vec<LocalRouteArg>,
     peer_name: Option<String>,
     force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MembershipRecordIssueArgs {
+    issuer_config: PathBuf,
+    member_identity: Option<PathBuf>,
+    member_peer: Option<String>,
+    member_public_key: Option<String>,
+    output: PathBuf,
+    network: Option<String>,
+    membership_epoch: u64,
+    sequence: u64,
+    roles: Vec<MembershipRecordRoleArg>,
+    route_grants: Vec<LocalRouteArg>,
+    expires_at_unix_seconds: Option<u64>,
+    force: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum MembershipRecordRoleArg {
+    OverlayMember,
+    RouteAuthority,
 }
 
 #[derive(Clone, Debug)]
@@ -1007,6 +1125,15 @@ enum MetricsFormat {
     Prometheus,
 }
 
+impl From<MembershipRecordRoleArg> for MembershipRole {
+    fn from(role: MembershipRecordRoleArg) -> Self {
+        match role {
+            MembershipRecordRoleArg::OverlayMember => Self::OverlayMember,
+            MembershipRecordRoleArg::RouteAuthority => Self::RouteAuthority,
+        }
+    }
+}
+
 impl FromStr for EndpointArg {
     type Err = String;
 
@@ -1084,6 +1211,190 @@ fn keygen() -> Result<(), String> {
 
     println!("peer_id: {}", identity.peer_id);
     println!("private_key: {}", identity.private_key);
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PublicIdentityJson {
+    peer_id: String,
+    public_key: String,
+}
+
+fn identity_public(args: IdentityPublicArgs) -> Result<(), String> {
+    let identity = identity_from_config_or_private_key(args.config.as_deref(), args.private_key)?;
+    let public = public_identity_json(&identity)?;
+    write_json_output(&public, &args.output, args.force, "public identity")?;
+    if args.output.to_string_lossy() != "-" {
+        println!("peer_id: {}", public.peer_id);
+    }
+    Ok(())
+}
+
+fn public_identity_json(identity: &NodeIdentity) -> Result<PublicIdentityJson, String> {
+    let subject = MembershipRecordSubject::from_identity(identity)
+        .map_err(|error| format!("failed to derive public identity: {error:?}"))?;
+    Ok(PublicIdentityJson {
+        peer_id: subject.peer_id,
+        public_key: subject.public_key,
+    })
+}
+
+fn identity_from_config_or_private_key(
+    config_path: Option<&Path>,
+    private_key: Option<String>,
+) -> Result<NodeIdentity, String> {
+    match (config_path, private_key) {
+        (Some(_), Some(_)) => Err("pass either --config or --private-key, not both".to_owned()),
+        (Some(path), None) => Config::load(path)
+            .map_err(|error| format!("failed to load config: {error:?}"))?
+            .identity()
+            .map_err(|error| format!("failed to read identity from config: {error:?}")),
+        (None, Some(private_key)) => NodeIdentity::from_private_key(&private_key)
+            .map_err(|error| format!("failed to decode private key: {error:?}")),
+        (None, None) => Err("pass --config or --private-key".to_owned()),
+    }
+}
+
+fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String> {
+    let issuer_config = Config::load(&args.issuer_config)
+        .map_err(|error| format!("failed to load issuer config: {error:?}"))?;
+    let issuer = issuer_config
+        .identity()
+        .map_err(|error| format!("failed to read issuer identity: {error:?}"))?;
+    let member = membership_record_subject_from_args(&args)?;
+    let route_grants = args
+        .route_grants
+        .into_iter()
+        .map(|route| route.route)
+        .collect::<Vec<_>>();
+    let roles = membership_record_roles(args.roles, !route_grants.is_empty());
+    let network_name = args
+        .network
+        .unwrap_or_else(|| issuer_config.network.name.clone());
+    let record = issue_membership_record_for_subject_at(
+        &issuer,
+        MembershipRecordIssueOptions {
+            network_name,
+            member,
+            membership_epoch: args.membership_epoch,
+            sequence: args.sequence,
+            roles,
+            route_grants,
+            expires_at_unix_seconds: args.expires_at_unix_seconds,
+        },
+        current_unix_seconds_lossy(),
+    )
+    .map_err(|error| format!("failed to issue membership record: {error:?}"))?;
+
+    write_json_output(&record, &args.output, args.force, "membership record")?;
+    if args.output.to_string_lossy() != "-" {
+        println!("member peer: {}", record.payload.member_peer);
+        println!("issuer peer: {}", record.payload.issuer_peer);
+        println!("membership epoch: {}", record.payload.membership_epoch);
+        println!("sequence: {}", record.payload.sequence);
+    }
+    Ok(())
+}
+
+fn membership_record_subject_from_args(
+    args: &MembershipRecordIssueArgs,
+) -> Result<MembershipRecordSubject, String> {
+    match (
+        &args.member_identity,
+        &args.member_peer,
+        &args.member_public_key,
+    ) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(
+            "pass either --member-identity or --member-peer with --member-public-key".to_owned(),
+        ),
+        (Some(path), None, None) => {
+            read_public_identity(path).map(|identity| MembershipRecordSubject {
+                peer_id: identity.peer_id,
+                public_key: identity.public_key,
+            })
+        }
+        (None, Some(peer_id), Some(public_key)) => Ok(MembershipRecordSubject {
+            peer_id: peer_id.clone(),
+            public_key: public_key.clone(),
+        }),
+        (None, Some(_), None) => Err("--member-peer requires --member-public-key".to_owned()),
+        (None, None, Some(_)) => Err("--member-public-key requires --member-peer".to_owned()),
+        (None, None, None) => {
+            Err("pass --member-identity or --member-peer with --member-public-key".to_owned())
+        }
+    }
+}
+
+fn read_public_identity(path: &Path) -> Result<PublicIdentityJson, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+fn membership_record_roles(
+    roles: Vec<MembershipRecordRoleArg>,
+    include_route_authority: bool,
+) -> Vec<MembershipRole> {
+    let mut roles = roles
+        .into_iter()
+        .map(MembershipRole::from)
+        .collect::<Vec<_>>();
+    if roles.is_empty() {
+        roles.push(MembershipRole::OverlayMember);
+    }
+    if include_route_authority && !roles.contains(&MembershipRole::RouteAuthority) {
+        roles.push(MembershipRole::RouteAuthority);
+    }
+    roles.dedup();
+    roles
+}
+
+fn membership_record_verify(input: &Path, network: Option<&str>) -> Result<(), String> {
+    let bytes =
+        fs::read(input).map_err(|error| format!("failed to read {}: {error}", input.display()))?;
+    let record: SignedMembershipRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse record: {error}"))?;
+    let now = current_unix_seconds_lossy();
+    if let Some(network) = network {
+        validate_membership_records_at(std::slice::from_ref(&record), network, now)
+            .map_err(|error| format!("membership record invalid: {error:?}"))?;
+    } else {
+        record
+            .verify_at(now)
+            .map_err(|error| format!("membership record invalid: {error:?}"))?;
+    }
+
+    println!("membership record: valid");
+    println!("network: {}", record.payload.network_name);
+    println!("member peer: {}", record.payload.member_peer);
+    println!("issuer peer: {}", record.payload.issuer_peer);
+    println!("membership epoch: {}", record.payload.membership_epoch);
+    println!("sequence: {}", record.payload.sequence);
+    Ok(())
+}
+
+fn write_json_output<T: Serialize>(
+    value: &T,
+    output: &Path,
+    force: bool,
+    label: &str,
+) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    let rendered = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("failed to render {label}: {error}"))?;
+    if output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+    }
     Ok(())
 }
 
@@ -7516,6 +7827,157 @@ mod tests {
         assert_eq!(local_routes[0].route.prefix, "10.42.0.0/24");
         assert_eq!(peer_name.as_deref(), Some("node-a"));
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_membership_record_commands() {
+        let issue = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership-record-issue",
+            "--issuer-config",
+            "issuer.json",
+            "--member-identity",
+            "member-public.json",
+            "--output",
+            "member-record.json",
+            "--network",
+            "lab",
+            "--membership-epoch",
+            "7",
+            "--sequence",
+            "42",
+            "--role",
+            "overlay-member",
+            "--route-grant",
+            "10.77.0.0/24,55",
+            "--force",
+        ])
+        .expect("issue cli");
+        let Command::MembershipRecordIssue {
+            issuer_config,
+            member_identity,
+            output,
+            network,
+            membership_epoch,
+            sequence,
+            roles,
+            route_grants,
+            force,
+            ..
+        } = issue.command
+        else {
+            panic!("expected membership-record-issue command");
+        };
+
+        assert_eq!(issuer_config, PathBuf::from("issuer.json"));
+        assert_eq!(member_identity, Some(PathBuf::from("member-public.json")));
+        assert_eq!(output, PathBuf::from("member-record.json"));
+        assert_eq!(network.as_deref(), Some("lab"));
+        assert_eq!(membership_epoch, 7);
+        assert_eq!(sequence, 42);
+        assert_eq!(roles, vec![MembershipRecordRoleArg::OverlayMember]);
+        assert_eq!(route_grants[0].route.prefix, "10.77.0.0/24");
+        assert_eq!(route_grants[0].route.metric, 55);
+        assert!(force);
+
+        let verify = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership-record-verify",
+            "--input",
+            "member-record.json",
+            "--network",
+            "lab",
+        ])
+        .expect("verify cli");
+        let Command::MembershipRecordVerify { input, network } = verify.command else {
+            panic!("expected membership-record-verify command");
+        };
+
+        assert_eq!(input, PathBuf::from("member-record.json"));
+        assert_eq!(network.as_deref(), Some("lab"));
+    }
+
+    #[test]
+    fn membership_record_issue_and_verify_round_trip() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let issuer_config = temp_config_path("p2p-vpn-membership-issuer");
+        let member_public = temp_config_path("p2p-vpn-membership-member-public");
+        let record_path = temp_config_path("p2p-vpn-membership-record");
+        let issuer_config_value = InitConfigTemplate {
+            identity: issuer,
+            network_name: "lab".to_owned(),
+            membership_key: None,
+            local_routes: Vec::new(),
+            interface_name: "hs0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: Vec::new(),
+            peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+        }
+        .into_config();
+        write_config_output(&issuer_config_value, &issuer_config, false).expect("issuer config");
+        identity_public(IdentityPublicArgs {
+            config: None,
+            private_key: Some(member.private_key),
+            output: member_public.clone(),
+            force: false,
+        })
+        .expect("member public identity");
+
+        membership_record_issue(MembershipRecordIssueArgs {
+            issuer_config: issuer_config.clone(),
+            member_identity: Some(member_public.clone()),
+            member_peer: None,
+            member_public_key: None,
+            output: record_path.clone(),
+            network: None,
+            membership_epoch: 7,
+            sequence: 42,
+            roles: vec![MembershipRecordRoleArg::OverlayMember],
+            route_grants: vec![LocalRouteArg {
+                route: RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 55,
+                },
+            }],
+            expires_at_unix_seconds: None,
+            force: false,
+        })
+        .expect("issue record");
+        membership_record_verify(&record_path, Some("lab")).expect("verify record");
+
+        let mut record: SignedMembershipRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("record file"))
+                .expect("record json");
+        assert_eq!(record.payload.membership_epoch, 7);
+        assert_eq!(record.payload.sequence, 42);
+        assert!(
+            record
+                .payload
+                .roles
+                .contains(&MembershipRole::OverlayMember)
+        );
+        assert!(
+            record
+                .payload
+                .roles
+                .contains(&MembershipRole::RouteAuthority)
+        );
+        assert_eq!(record.payload.route_grants[0].prefix, "10.77.0.0/24");
+        record.payload.sequence += 1;
+        let rendered = serde_json::to_string_pretty(&record).expect("render tampered record");
+        fs::write(&record_path, format!("{rendered}\n")).expect("write tampered record");
+
+        assert!(membership_record_verify(&record_path, Some("lab")).is_err());
+
+        let _ = fs::remove_file(&issuer_config);
+        let _ = fs::remove_file(&member_public);
+        let _ = fs::remove_file(&record_path);
     }
 
     #[test]

@@ -80,6 +80,26 @@ path probes have started flowing. From another configured peer, use
 `p2p-vpn peer-live-paths --config ...` to compare the remote daemon's reported
 selected path, score, MTU, and RTT without direct access to its control socket.
 
+## Membership Record Repro
+
+Use the local helper when debugging the membership-record CLI flow without
+starting daemons or requiring TUN privileges:
+
+```sh
+scripts/membership-record-repro.sh
+```
+
+The script creates disposable issuer and member configs, exports the member's
+public identity, issues a signed record with a route grant, verifies it against
+the selected network, and preserves the generated JSON plus replay commands in
+one artifact directory. Set `P2P_VPN_MEMBERSHIP_REPRO_DIR` to choose that
+directory, `P2P_VPN_MEMBERSHIP_REPRO_NETWORK` to change the network name,
+`P2P_VPN_MEMBERSHIP_REPRO_ROUTE_GRANT` to change the granted route, and
+`P2P_VPN_MEMBERSHIP_REPRO_EXPIRES_AT_UNIX_SECONDS` to exercise expiry metadata.
+By default the script invokes the CLI through `nix develop -c cargo run
+--quiet --`; set `P2P_VPN_BIN=/path/to/p2p-vpn` to reproduce with a specific
+built binary.
+
 ## Public Relay Smoke
 
 Use the packaged repro when the goal is to compare public relay, DCUtR, and

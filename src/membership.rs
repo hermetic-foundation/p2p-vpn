@@ -86,9 +86,56 @@ pub struct MembershipRecordOptions {
     pub expires_at_unix_seconds: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MembershipRecordSubject {
+    pub peer_id: String,
+    pub public_key: String,
+}
+
+impl MembershipRecordSubject {
+    pub fn from_identity(identity: &NodeIdentity) -> Result<Self, MembershipRecordError> {
+        Ok(Self {
+            peer_id: identity.peer_id.clone(),
+            public_key: STANDARD.encode(identity.public_key_protobuf()?),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MembershipRecordIssueOptions {
+    pub network_name: String,
+    pub member: MembershipRecordSubject,
+    pub membership_epoch: u64,
+    pub sequence: u64,
+    pub roles: Vec<MembershipRole>,
+    pub route_grants: Vec<RouteConfig>,
+    pub expires_at_unix_seconds: Option<u64>,
+}
+
 pub fn issue_membership_record_at(
     issuer: &NodeIdentity,
     options: MembershipRecordOptions,
+    issued_at_unix_seconds: u64,
+) -> Result<SignedMembershipRecord, MembershipRecordError> {
+    let member = MembershipRecordSubject::from_identity(&options.member)?;
+    issue_membership_record_for_subject_at(
+        issuer,
+        MembershipRecordIssueOptions {
+            network_name: options.network_name,
+            member,
+            membership_epoch: options.membership_epoch,
+            sequence: options.sequence,
+            roles: options.roles,
+            route_grants: options.route_grants,
+            expires_at_unix_seconds: options.expires_at_unix_seconds,
+        },
+        issued_at_unix_seconds,
+    )
+}
+
+pub fn issue_membership_record_for_subject_at(
+    issuer: &NodeIdentity,
+    options: MembershipRecordIssueOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<SignedMembershipRecord, MembershipRecordError> {
     if let Some(expires_at) = options.expires_at_unix_seconds
@@ -99,8 +146,8 @@ pub fn issue_membership_record_at(
     let payload = MembershipRecordPayload {
         version: MEMBERSHIP_RECORD_VERSION,
         network_name: options.network_name,
-        member_peer: options.member.peer_id.clone(),
-        member_public_key: STANDARD.encode(options.member.public_key_protobuf()?),
+        member_peer: options.member.peer_id,
+        member_public_key: options.member.public_key,
         issuer_peer: issuer.peer_id.clone(),
         issuer_public_key: STANDARD.encode(issuer.public_key_protobuf()?),
         membership_epoch: options.membership_epoch.max(1),
@@ -112,8 +159,9 @@ pub fn issue_membership_record_at(
     };
     validate_payload(&payload, issued_at_unix_seconds)?;
     let signature = STANDARD.encode(issuer.sign(&signing_message(&payload)?)?);
-
-    Ok(SignedMembershipRecord { payload, signature })
+    let record = SignedMembershipRecord { payload, signature };
+    record.verify_at(issued_at_unix_seconds)?;
+    Ok(record)
 }
 
 pub fn validate_membership_records_at(

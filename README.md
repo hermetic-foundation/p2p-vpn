@@ -428,6 +428,34 @@ validation accepts relayed inviter addresses shaped as
 `/p2p/<relay>/p2p-circuit/p2p/<inviter>` while rejecting malformed relay
 reservation payloads.
 
+For overlays that should authorize members without distributing a shared
+membership secret in every onboarding artifact, export the joining node's public
+identity and issue a signed membership record from an authority node:
+
+```sh
+cargo run -- identity-public \
+  --config node-b.json \
+  --output node-b.identity.json
+
+cargo run -- membership-record-issue \
+  --issuer-config node-a.json \
+  --member-identity node-b.identity.json \
+  --output node-b.member.json \
+  --route-grant 10.77.0.0/24,100
+
+cargo run -- membership-record-verify \
+  --input node-b.member.json \
+  --network lab
+```
+
+`identity-public` writes only the peer ID and public key for a node identity.
+`membership-record-issue` signs that subject with the issuer identity from
+`--issuer-config`, defaults the record network to the issuer config's network,
+and automatically adds the `route_authority` role when `--route-grant` is used.
+Place valid records in `network.member_records` on nodes that should trust them.
+The record is not a secret, but explicit revocation and dynamic record exchange
+are still follow-up work.
+
 Use `--private-key` to regenerate a config for an existing identity, `--force`
 to overwrite an existing file, and `--output -` to print the generated JSON to
 stdout. Use the same `--membership-key` value on every node that should join
