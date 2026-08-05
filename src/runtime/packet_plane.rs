@@ -701,9 +701,15 @@ pub enum PacketPlaneQuicError {
     ClientVerifier(rustls::client::VerifierBuilderError),
     Connect(quinn::ConnectError),
     Connection(quinn::ConnectionError),
+    PeerConnection {
+        peer: PeerId,
+        source: quinn::ConnectionError,
+    },
     EndpointClosed,
     NoSessions,
-    NoConnection { peer: PeerId },
+    NoConnection {
+        peer: PeerId,
+    },
     SendDatagram(quinn::SendDatagramError),
     Datagram(PacketPlaneDatagramError),
     Session(PacketPlaneSessionError),
@@ -1463,6 +1469,21 @@ impl PacketPlaneQuicRuntime {
         self.connections.remove(&peer).is_some()
     }
 
+    pub fn forget_peer(&mut self, peer: PeerId) -> bool {
+        let removed_connection = self.connections.remove(&peer).is_some();
+        let removed_session = self.sessions.remove(&peer).is_some();
+        removed_connection || removed_session
+    }
+
+    #[cfg(test)]
+    pub fn close_connection(&mut self, peer: PeerId) -> bool {
+        let Some(connection) = self.connections.get(&peer) else {
+            return false;
+        };
+        connection.close(0u32.into(), b"closed by test");
+        true
+    }
+
     #[must_use]
     pub fn session_mtu_for(&self, peer: PeerId) -> Option<u16> {
         self.sessions.get(&peer).map(|session| session.mtu)
@@ -1590,15 +1611,21 @@ impl PacketPlaneQuicRuntime {
         &mut self,
         peer: PeerId,
     ) -> Result<PacketPlaneReceivedFrame, PacketPlaneQuicError> {
-        let session = self
-            .sessions
-            .get_mut(&peer)
-            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
         let connection = self
             .connections
             .get(&peer)
             .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
-        let datagram = connection.read_datagram().await?;
+        let datagram = match connection.read_datagram().await {
+            Ok(datagram) => datagram,
+            Err(source) => {
+                self.forget_peer(peer);
+                return Err(PacketPlaneQuicError::PeerConnection { peer, source });
+            }
+        };
+        let session = self
+            .sessions
+            .get_mut(&peer)
+            .ok_or(PacketPlaneQuicError::NoConnection { peer })?;
         let frame = session
             .keys
             .open
@@ -1638,7 +1665,13 @@ impl PacketPlaneQuicRuntime {
             }));
         }
         let ((peer, remote_addr, datagram), _, _) = select_all(reads).await;
-        let datagram = datagram?;
+        let datagram = match datagram {
+            Ok(datagram) => datagram,
+            Err(source) => {
+                self.forget_peer(peer);
+                return Err(PacketPlaneQuicError::PeerConnection { peer, source });
+            }
+        };
         let session = self
             .sessions
             .get_mut(&peer)
@@ -2670,6 +2703,60 @@ mod tests {
         assert_eq!(expired[0].peer, accept.peer);
         assert!(!sender.has_session(accept.peer));
         assert!(!sender.can_receive());
+    }
+
+    #[tokio::test]
+    async fn quic_runtime_receive_connection_error_forgets_peer() {
+        let mut sender =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("sender socket"))
+                .expect("sender bind");
+        let mut receiver =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("receiver socket"))
+                .expect("receiver bind");
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+        let receiver_certificate = receiver.server_certificate();
+        let (initiator_secret, responder_secret, hello, accept) =
+            verified_session_pair_with_endpoints(sender_addr, receiver_addr, 1280);
+
+        let (connect, accept_connection) = tokio::join!(
+            sender.connect_peer(accept.peer, receiver_addr, receiver_certificate),
+            receiver.accept_peer(hello.peer)
+        );
+        connect.expect("sender connection");
+        accept_connection.expect("receiver connection");
+
+        sender
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("sender session");
+        receiver
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &accept,
+                &hello,
+            )
+            .expect("receiver session");
+        assert!(receiver.has_session(hello.peer));
+        assert!(receiver.can_receive());
+
+        assert!(sender.close_connection(accept.peer));
+        let error = timeout(Duration::from_secs(2), receiver.recv_frame_from_session())
+            .await
+            .expect("receive failure should not time out")
+            .expect_err("closed peer should fail receive");
+
+        assert!(matches!(
+            error,
+            PacketPlaneQuicError::PeerConnection { peer, .. } if peer == hello.peer
+        ));
+        assert!(!receiver.has_session(hello.peer));
+        assert!(!receiver.can_receive());
     }
 
     #[tokio::test]

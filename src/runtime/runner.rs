@@ -662,7 +662,9 @@ where
                         };
                         handle_packet_plane_received(&mut packet_plane_context, &received).await?;
                     }
-                    Err(error) => handle_packet_plane_quic_receive_error(&metrics, &error),
+                    Err(error) => {
+                        handle_packet_plane_quic_receive_error(&mut paths, &metrics, &error);
+                    }
                 }
             }
             _ = timers.redial.tick() => {
@@ -4689,10 +4691,17 @@ fn handle_packet_plane_receive_error(metrics: &RuntimeMetrics, error: &PacketPla
     }
 }
 
-fn handle_packet_plane_quic_receive_error(metrics: &RuntimeMetrics, error: &PacketPlaneQuicError) {
+fn handle_packet_plane_quic_receive_error(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    error: &PacketPlaneQuicError,
+) {
+    maybe_demote_packet_plane_quic_receive_path(paths, metrics, error);
+
     match error {
         PacketPlaneQuicError::Io(_)
         | PacketPlaneQuicError::Connection(_)
+        | PacketPlaneQuicError::PeerConnection { .. }
         | PacketPlaneQuicError::EndpointClosed => {
             metrics.record_inbound_failure();
             log_runtime_event(
@@ -6332,6 +6341,41 @@ fn maybe_demote_packet_plane_send_path(
     true
 }
 
+fn maybe_demote_packet_plane_quic_receive_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    error: &PacketPlaneQuicError,
+) -> bool {
+    let Some(peer) = packet_plane_quic_receive_error_peer(error) else {
+        return false;
+    };
+
+    let path = PathKind::DirectQuicDatagram;
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_packet_plane_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "packet_plane_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", packet_plane_quic_error_name(error)),
+        ],
+    );
+    true
+}
+
+fn packet_plane_quic_receive_error_peer(error: &PacketPlaneQuicError) -> Option<PeerId> {
+    match error {
+        PacketPlaneQuicError::PeerConnection { peer, .. }
+        | PacketPlaneQuicError::NoConnection { peer } => Some(*peer),
+        _ => None,
+    }
+}
+
 fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChange) {
     let peer = change.peer.to_string();
     let previous = change
@@ -7221,6 +7265,7 @@ fn packet_plane_send_drop_reason(error: &PacketPlaneSendError) -> PacketDropReas
             | PacketPlaneQuicError::EndpointClosed
             | PacketPlaneQuicError::Connect(_)
             | PacketPlaneQuicError::Connection(_)
+            | PacketPlaneQuicError::PeerConnection { .. }
             | PacketPlaneQuicError::SendDatagram(_)
             | PacketPlaneQuicError::Io(_),
         ) => PacketDropReason::NoTransportPeer,
@@ -7334,6 +7379,7 @@ fn packet_plane_send_error_demotes_path(error: &PacketPlaneSendError) -> bool {
                 | PacketPlaneQuicError::NoSessions
                 | PacketPlaneQuicError::Connect(_)
                 | PacketPlaneQuicError::Connection(_)
+                | PacketPlaneQuicError::PeerConnection { .. }
                 | PacketPlaneQuicError::SendDatagram(_)
                 | PacketPlaneQuicError::Io(_)
         ),
@@ -7509,6 +7555,7 @@ fn packet_plane_quic_error_name(error: &PacketPlaneQuicError) -> &'static str {
         PacketPlaneQuicError::ClientVerifier(_) => "client_verifier_error",
         PacketPlaneQuicError::Connect(_) => "connect_error",
         PacketPlaneQuicError::Connection(_) => "connection_error",
+        PacketPlaneQuicError::PeerConnection { .. } => "peer_connection_error",
         PacketPlaneQuicError::EndpointClosed => "endpoint_closed",
         PacketPlaneQuicError::NoSessions => "no_sessions",
         PacketPlaneQuicError::NoConnection { .. } => "no_connection",
@@ -10436,6 +10483,36 @@ mod tests {
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.packet_plane_path_demotions, 0);
         assert_eq!(snapshot.path_fallbacks_to_relay, 0);
+    }
+
+    #[test]
+    fn quic_receive_peer_error_demotes_datagram_path_to_relay() {
+        let peer = PeerId::from_bytes([11; 32]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::CircuitRelay,
+        ));
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::DirectQuicDatagram,
+        ));
+
+        maybe_demote_packet_plane_quic_receive_path(
+            &mut paths,
+            &metrics,
+            &PacketPlaneQuicError::NoConnection { peer },
+        );
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
     }
 
     #[tokio::test]
