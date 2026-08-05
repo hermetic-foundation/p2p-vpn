@@ -55,8 +55,15 @@ namespaces, veth setup, and `/dev/net/tun`.
 
 The preserved directory is printed on stderr. It contains `node-a.log`,
 `node-b.log`, and, for relay or bootstrap scenarios, `node-relay.log` or
-`node-bootstrap.log`. Failed tests already include node logs, `ip addr`, and
-route-table output in the assertion message.
+`node-bootstrap.log`. Each namespace orchestrator also writes
+`repro-commands.sh` and `repro-metadata.txt` at startup. The command script
+replays the focused test with `P2P_VPN_TUN_E2E_KEEP_TEMP=1` and includes a
+direct `unshare` invocation for the already-built test binary. The metadata
+records the test name, artifact directory, current test binary, timeout knobs,
+kernel, `unshare`, and `ip` versions.
+
+Failed tests already include node logs, `ip addr`, and route-table output in
+the assertion message.
 Namespace peer nodes also expose per-role daemon control sockets in that
 directory as `control-a.sock` and `control-b.sock`. The orchestrator uses those
 sockets to wait for validated peers, supported paths, and packet-plane sessions
@@ -68,6 +75,18 @@ best-effort daemon snapshots next to the logs: `daemon-status-ROLE.txt`,
 `daemon-capabilities-ROLE.txt`. These files capture stdout, stderr, and command
 status for each reachable control socket so path selection, MTU, route, and
 capability state can be compared after the failed run exits.
+
+On slower or heavily loaded hosts, keep the default timings for comparable
+results and scale them only when diagnosing infrastructure latency:
+
+```sh
+P2P_VPN_TUN_E2E_WAIT_SCALE=2 nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
+P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS=240 nix run .#tun-e2e -- tun_namespace_relay_overlay_promotes_to_direct_path -- --ignored --exact --nocapture
+```
+
+`P2P_VPN_TUN_E2E_WAIT_SCALE` multiplies namespace readiness, control-socket,
+snapshot, and helper-command waits. `P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS`
+overrides only the outer `unshare` wrapper timeout.
 
 ## What To Inspect
 

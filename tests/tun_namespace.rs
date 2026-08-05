@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    fmt::Write as _,
+    fs,
     fs::File,
     io,
     net::Ipv4Addr,
@@ -32,6 +34,8 @@ use p2p_vpn::{
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
+const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
+const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
 const DIRECT_TEST_NAME: &str = "tun_namespace_ping_crosses_two_node_overlay";
 const DIRECT_QUIC_TEST_NAME: &str = "tun_namespace_ping_crosses_owned_quic_packet_plane";
 const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay";
@@ -137,13 +141,40 @@ fn daemon_snapshot_capture_records_missing_control_sockets() {
     let _ = fs::remove_dir_all(temp_dir);
 }
 
+#[test]
+fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-namespace-repro-artifacts-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+    write_namespace_repro_artifacts(&temp_dir, DIRECT_TEST_NAME).expect("write repro artifacts");
+
+    let commands =
+        fs::read_to_string(temp_dir.join("repro-commands.sh")).expect("repro commands artifact");
+    let metadata =
+        fs::read_to_string(temp_dir.join("repro-metadata.txt")).expect("repro metadata artifact");
+
+    assert!(commands.contains(DIRECT_TEST_NAME));
+    assert!(commands.contains("nix run .#tun-e2e"));
+    assert!(commands.contains(KEEP_TEMP_ENV));
+    assert!(metadata.contains(DIRECT_TEST_NAME));
+    assert!(metadata.contains("temp_dir:"));
+    assert!(metadata.contains("current_exe:"));
+
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
-    let timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
+    let default_timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
     } else {
         Duration::from_secs(90)
     };
+    let timeout = env_duration_override(ORCHESTRATOR_TIMEOUT_ENV).unwrap_or(default_timeout);
     let output = command_output(
         "unshare",
         &[
@@ -158,7 +189,7 @@ fn reexec_orchestrator(test_name: &str) {
             "--nocapture",
         ],
         &[(CHILD_ENV, "orchestrator")],
-        timeout,
+        scaled_wait_timeout(timeout),
     )
     .expect("failed to execute unshare");
 
@@ -169,7 +200,7 @@ fn run_direct_orchestrator(test_name: &str) {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-{test_name}-{}", std::process::id()));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, test_name);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
@@ -267,7 +298,7 @@ fn run_mdns_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-mdns-tun-e2e-{}", std::process::id()));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, MDNS_TEST_NAME);
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
 
@@ -343,7 +374,7 @@ fn run_relay_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-relay-tun-e2e-{}", std::process::id()));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, RELAY_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -434,7 +465,7 @@ fn run_invite_relay_orchestrator() {
         "p2p-vpn-invite-relay-tun-e2e-{}",
         std::process::id()
     ));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, INVITE_RELAY_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -532,7 +563,7 @@ fn run_relay_promotion_orchestrator() {
         "p2p-vpn-relay-promotion-tun-e2e-{}",
         std::process::id()
     ));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, RELAY_PROMOTION_TEST_NAME);
     let start_relay = temp_dir.join("start-relay");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -634,7 +665,7 @@ fn run_dht_orchestrator() {
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
     let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
     let temp_dir = env::temp_dir().join(format!("p2p-vpn-dht-tun-e2e-{}", std::process::id()));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
+    init_namespace_temp_dir(&temp_dir, DHT_TEST_NAME);
     let start_bootstrap = temp_dir.join("start-bootstrap");
     let start_a = temp_dir.join("start-a");
     let start_b = temp_dir.join("start-b");
@@ -760,9 +791,139 @@ fn cleanup_temp_dir(temp_dir: PathBuf) {
     }
 }
 
+fn init_namespace_temp_dir(temp_dir: &Path, test_name: &str) {
+    fs::create_dir_all(temp_dir).expect("create temp dir");
+    write_namespace_repro_artifacts(temp_dir, test_name).expect("write namespace repro artifacts");
+}
+
+fn write_namespace_repro_artifacts(temp_dir: &Path, test_name: &str) -> io::Result<()> {
+    let commands_path = temp_dir.join("repro-commands.sh");
+    let metadata_path = temp_dir.join("repro-metadata.txt");
+    let test_name_quoted = shell_quote(test_name);
+    let temp_dir_quoted = shell_quote(&temp_dir.to_string_lossy());
+    let current_exe = env::current_exe().map_or_else(
+        |error| format!("unavailable: {error}"),
+        |path| path.display().to_string(),
+    );
+    let current_exe_quoted = shell_quote(&current_exe);
+
+    let commands = format!(
+        "#!/usr/bin/env sh\n\
+         set -eu\n\
+         # Re-run the focused namespace E2E test and preserve artifacts.\n\
+         export {KEEP_TEMP_ENV}=1\n\
+         nix run .#tun-e2e -- {test_name_quoted} -- --ignored --exact --nocapture\n\
+         \n\
+         # Re-run the same already-built test binary inside unshare.\n\
+         {CHILD_ENV}=orchestrator unshare --user --map-root-user --mount --net {current_exe_quoted} --ignored {test_name_quoted} --exact --nocapture\n\
+         \n\
+         # Inspect this artifact directory.\n\
+         ls -la {temp_dir_quoted}\n",
+    );
+    fs::write(&commands_path, commands)?;
+    make_executable(&commands_path)?;
+
+    let mut metadata = String::new();
+    let orchestrator_timeout_seconds = env_duration_override(ORCHESTRATOR_TIMEOUT_ENV).map_or_else(
+        || "default".to_owned(),
+        |duration| duration.as_secs().to_string(),
+    );
+    let timeout_scale =
+        wait_timeout_scale().map_or_else(|| "default".to_owned(), |scale| scale.to_string());
+    writeln!(metadata, "test_name: {test_name}").expect("write metadata line");
+    writeln!(metadata, "temp_dir: {}", temp_dir.display()).expect("write metadata line");
+    writeln!(metadata, "current_exe: {current_exe}").expect("write metadata line");
+    writeln!(metadata, "pid: {}", std::process::id()).expect("write metadata line");
+    writeln!(metadata, "keep_temp_env: {KEEP_TEMP_ENV}").expect("write metadata line");
+    writeln!(
+        metadata,
+        "orchestrator_timeout_env: {ORCHESTRATOR_TIMEOUT_ENV}"
+    )
+    .expect("write metadata line");
+    writeln!(metadata, "wait_timeout_scale_env: {WAIT_TIMEOUT_SCALE_ENV}")
+        .expect("write metadata line");
+    writeln!(
+        metadata,
+        "orchestrator_timeout_seconds: {orchestrator_timeout_seconds}"
+    )
+    .expect("write metadata line");
+    writeln!(metadata, "wait_timeout_scale: {timeout_scale}").expect("write metadata line");
+    metadata.push_str(&command_metadata("uname", &["-a"]));
+    metadata.push_str(&command_metadata("unshare", &["--version"]));
+    metadata.push_str(&command_metadata("ip", &["-V"]));
+    fs::write(metadata_path, metadata)?;
+
+    Ok(())
+}
+
+fn command_metadata(program: &str, args: &[&str]) -> String {
+    let label = if args.is_empty() {
+        program.to_owned()
+    } else {
+        format!("{program} {}", args.join(" "))
+    };
+    match command_output(program, args, &[], Duration::from_secs(3)) {
+        Ok(output) => format!(
+            "\n[{label}]\nstatus: {}\nstdout:\n{}stderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        Err(error) => format!("\n[{label}]\nerror: {error}\n"),
+    }
+}
+
+fn make_executable(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn keep_temp_artifacts() -> bool {
     env::var(KEEP_TEMP_ENV)
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+fn env_duration_override(name: &str) -> Option<Duration> {
+    let value = env::var(name).ok()?;
+    let seconds = value.parse::<u64>().unwrap_or_else(|error| {
+        panic!("{name} must be a positive integer number of seconds, got `{value}`: {error}")
+    });
+    assert!(seconds > 0, "{name} must be greater than zero");
+    Some(Duration::from_secs(seconds))
+}
+
+fn scaled_wait_timeout(timeout: Duration) -> Duration {
+    let Some(scale) = wait_timeout_scale() else {
+        return timeout;
+    };
+    timeout.mul_f64(scale)
+}
+
+fn wait_timeout_scale() -> Option<f64> {
+    let value = env::var(WAIT_TIMEOUT_SCALE_ENV).ok()?;
+    let scale = value.parse::<f64>().unwrap_or_else(|error| {
+        panic!("{WAIT_TIMEOUT_SCALE_ENV} must be a positive number, got `{value}`: {error}")
+    });
+    assert!(
+        scale.is_finite() && scale > 0.0,
+        "{WAIT_TIMEOUT_SCALE_ENV} must be positive"
+    );
+    Some(scale)
 }
 
 fn assert_packet_plane_datagrams_used(context: &str, log: &str, peer_log: &str) {
@@ -786,7 +947,7 @@ fn assert_owned_quic_packet_plane_datagrams_used(context: &str, log: &str, peer_
 fn wait_for_owned_quic_packet_plane_sessions(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(12));
     loop {
         let initiator_log = read_log(&node_a_path);
         let responder_log = read_log(&node_b_path);
@@ -805,7 +966,7 @@ fn wait_for_owned_quic_packet_plane_sessions(temp_dir: &Path) -> (String, String
 fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(8));
     loop {
         let initiator_log = read_log(&node_a_path);
         let responder_log = read_log(&node_b_path);
@@ -824,7 +985,7 @@ fn wait_for_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
 fn wait_for_owned_quic_packet_plane_datagrams(temp_dir: &Path) -> (String, String) {
     let node_a_path = temp_dir.join("node-a.log");
     let node_b_path = temp_dir.join("node-b.log");
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(8));
     loop {
         let initiator_log = read_log(&node_a_path);
         let responder_log = read_log(&node_b_path);
@@ -844,7 +1005,7 @@ fn wait_for_daemon_running(temp_dir: &Path, role: &str) {
     wait_for_daemon_state(
         temp_dir,
         role,
-        Duration::from_secs(10),
+        scaled_wait_timeout(Duration::from_secs(10)),
         "daemon running",
         |lines| lines.iter().any(|line| line == "daemon state: running"),
     );
@@ -854,7 +1015,7 @@ fn wait_for_peer_ready(temp_dir: &Path, role: &str) {
     wait_for_daemon_state(
         temp_dir,
         role,
-        Duration::from_secs(15),
+        scaled_wait_timeout(Duration::from_secs(15)),
         "validated peer with supported path",
         |lines| {
             state_colon_count(lines, "validated peers").is_some_and(|count| count >= 1)
@@ -868,7 +1029,7 @@ fn wait_for_packet_plane_sessions(temp_dir: &Path, role: &str) {
     wait_for_daemon_state(
         temp_dir,
         role,
-        Duration::from_secs(15),
+        scaled_wait_timeout(Duration::from_secs(15)),
         "validated peer with packet-plane session",
         |lines| {
             state_colon_count(lines, "validated peers").is_some_and(|count| count >= 1)
@@ -884,7 +1045,7 @@ fn wait_for_direct_promotion(temp_dir: &Path, role: &str) {
     wait_for_daemon_state(
         temp_dir,
         role,
-        Duration::from_secs(30),
+        scaled_wait_timeout(Duration::from_secs(30)),
         "relay path promoted to direct path",
         |lines| {
             state_metric_count(lines, "dcutr_successes").is_some_and(|count| count >= 1)
@@ -959,7 +1120,7 @@ fn capture_daemon_snapshots_for_role(temp_dir: &Path, role: &str) {
                 current_test_binary(),
                 &[*command, "--socket", &socket_arg, "--timeout-seconds", "1"],
                 &[],
-                Duration::from_secs(3),
+                scaled_wait_timeout(Duration::from_secs(3)),
             )
             .map_or_else(
                 |error| format!("failed to execute {command}: {error}\n"),
@@ -1114,7 +1275,7 @@ fn spawn_node(
 
 fn wait_for_child_namespace(pid: u32) {
     let namespace = PathBuf::from(format!("/proc/{pid}/ns/net"));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(5));
     while Instant::now() < deadline {
         if namespace.exists() {
             return;
@@ -1778,7 +1939,7 @@ async fn wait_for_listen_address(node: &mut p2p_vpn::runtime::p2p::P2pNode) {
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(10));
     while Instant::now() < deadline {
         if path.exists() {
             return;
@@ -2004,12 +2165,23 @@ fn ns_command_output(pid: u32, program: &str, args: &[&str]) -> Output {
     let pid = pid.to_string();
     let mut nsenter_args = vec!["-t", pid.as_str(), "-n", program];
     nsenter_args.extend_from_slice(args);
-    command_output("nsenter", &nsenter_args, &[], Duration::from_secs(20)).expect("execute nsenter")
+    command_output(
+        "nsenter",
+        &nsenter_args,
+        &[],
+        scaled_wait_timeout(Duration::from_secs(20)),
+    )
+    .expect("execute nsenter")
 }
 
 fn run_command(program: &str, args: &[&str]) {
-    let output = command_output(program, args, &[], Duration::from_secs(20))
-        .unwrap_or_else(|error| panic!("failed to execute `{program}`: {error}"));
+    let output = command_output(
+        program,
+        args,
+        &[],
+        scaled_wait_timeout(Duration::from_secs(20)),
+    )
+    .unwrap_or_else(|error| panic!("failed to execute `{program}`: {error}"));
     assert_output_success(program, &output);
 }
 
