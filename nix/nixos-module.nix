@@ -163,10 +163,30 @@ let
           "CAP_NET_ADMIN"
           "CAP_NET_RAW"
         ];
+        DevicePolicy = "closed";
         DeviceAllow = [ "/dev/net/tun rw" ];
         RuntimeDirectory = "p2p-vpn-${name}";
         RuntimeDirectoryMode = "0750";
         NoNewPrivileges = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        PrivateTmp = true;
+        ProtectClock = true;
+        ProtectHome = "read-only";
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [
+          "AF_INET"
+          "AF_INET6"
+          "AF_NETLINK"
+          "AF_UNIX"
+        ];
+        RestrictRealtime = true;
+        SystemCallArchitectures = "native";
+        UMask = "0077";
       };
     };
 in
