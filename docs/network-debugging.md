@@ -141,6 +141,35 @@ p2p-vpn relay-check \
   --write-report /tmp/p2p-vpn-dcutr-report.json
 ```
 
+For a real public hole-punch proof, split the probe across two hosts instead of
+running both temporary nodes on one machine. On Host A, reserve the public relay
+and keep the listener running:
+
+```sh
+p2p-vpn relay-dcutr-listen \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --write-descriptor /tmp/p2p-vpn-dcutr-listener.json \
+  --serve-seconds 900 \
+  --force
+```
+
+Move `/tmp/p2p-vpn-dcutr-listener.json` to Host B while Host A is still
+serving, then dial it from Host B:
+
+```sh
+p2p-vpn relay-dcutr-dial \
+  --descriptor /tmp/p2p-vpn-dcutr-listener.json \
+  --timeout-seconds 90 \
+  --write-report /tmp/p2p-vpn-dcutr-dial-report.json \
+  --force
+```
+
+The listener descriptor is a small JSON handoff containing the selected relay,
+relay peer ID, listener peer ID, relayed target address, and listener bind
+addresses. The dial report includes the descriptor plus the same bootstrap
+report fields as `relay-check --require-dcutr-success`, including direct and
+relayed connection address lists.
+
 Inspect `repro-summary.txt` first, then the scan report peer counts, routing
 peer counts, candidate addresses, candidate peer results, `failure_stage`,
 bootstrap details, relay readiness, DCUtR counters, direct and relayed

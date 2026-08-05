@@ -25,9 +25,10 @@ use p2p_vpn::{
     runtime::{
         bootstrap_check::{
             BootstrapCheckRequirements, BootstrapCheckThreshold, PUBLIC_RELAY_CANDIDATE_LIMIT,
-            PublicRelayProbeMode, check_config_bootstrap, check_public_relay_candidates,
+            PublicDcutrListenerDescriptor, PublicRelayProbeMode, check_config_bootstrap,
+            check_public_dcutr_descriptor, check_public_relay_candidates,
             parse_public_relay_addresses, parse_public_relay_addresses_with_limit,
-            scan_public_relay_candidates,
+            scan_public_relay_candidates, start_public_dcutr_listener,
         },
         forward::session_id_for_peer,
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
@@ -266,6 +267,31 @@ enum Command {
         write_report: Option<PathBuf>,
         #[arg(long = "write-config")]
         write_config: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
+    },
+    RelayDcutrListen {
+        #[arg(long = "relay-candidate")]
+        relay_candidate: String,
+        #[arg(
+            long = "write-descriptor",
+            default_value = "p2p-vpn-dcutr-listener.json"
+        )]
+        write_descriptor: PathBuf,
+        #[arg(long, default_value_t = 45)]
+        reservation_timeout_seconds: u64,
+        #[arg(long, default_value_t = 600)]
+        serve_seconds: u64,
+        #[arg(long)]
+        force: bool,
+    },
+    RelayDcutrDial {
+        #[arg(long = "descriptor", default_value = "p2p-vpn-dcutr-listener.json")]
+        descriptor: PathBuf,
+        #[arg(long, default_value_t = 45)]
+        timeout_seconds: u64,
+        #[arg(long = "write-report")]
+        write_report: Option<PathBuf>,
         #[arg(long)]
         force: bool,
     },
@@ -598,6 +624,36 @@ async fn main() -> Result<(), String> {
             }))
             .await
         }
+        Command::RelayDcutrListen {
+            relay_candidate,
+            write_descriptor,
+            reservation_timeout_seconds,
+            serve_seconds,
+            force,
+        } => {
+            Box::pin(relay_dcutr_listen(RelayDcutrListenArgs {
+                relay_candidate,
+                write_descriptor,
+                reservation_timeout_seconds,
+                serve_seconds,
+                force,
+            }))
+            .await
+        }
+        Command::RelayDcutrDial {
+            descriptor,
+            timeout_seconds,
+            write_report,
+            force,
+        } => {
+            Box::pin(relay_dcutr_dial(RelayDcutrDialArgs {
+                descriptor,
+                timeout_seconds,
+                write_report,
+                force,
+            }))
+            .await
+        }
         Command::RelayScan {
             config,
             bootstrap_peers,
@@ -833,6 +889,23 @@ struct RelayCheckArgs {
     max_validation_candidates: Option<usize>,
     write_report: Option<PathBuf>,
     write_config: Option<PathBuf>,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RelayDcutrListenArgs {
+    relay_candidate: String,
+    write_descriptor: PathBuf,
+    reservation_timeout_seconds: u64,
+    serve_seconds: u64,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RelayDcutrDialArgs {
+    descriptor: PathBuf,
+    timeout_seconds: u64,
+    write_report: Option<PathBuf>,
     force: bool,
 }
 
@@ -2454,6 +2527,147 @@ fn relay_check_candidate_input(args: &RelayCheckArgs) -> Result<String, String> 
     }
 
     Ok(sources.join("\n"))
+}
+
+async fn relay_dcutr_listen(args: RelayDcutrListenArgs) -> Result<(), String> {
+    let relay_candidate = args
+        .relay_candidate
+        .parse::<libp2p::Multiaddr>()
+        .map_err(|error| format!("failed to parse --relay-candidate: {error}"))?;
+    let listener = start_public_dcutr_listener(
+        &relay_candidate,
+        Duration::from_secs(args.reservation_timeout_seconds.max(1)),
+    )
+    .await?;
+    write_public_dcutr_listener_descriptor(
+        listener.descriptor(),
+        &args.write_descriptor,
+        args.force,
+    )?;
+
+    println!("public dcutr listener: ready");
+    println!(
+        "public dcutr listener peer: {}",
+        listener.descriptor().listener_peer
+    );
+    println!(
+        "public dcutr relayed address: {}",
+        listener.descriptor().relayed_address
+    );
+    println!(
+        "public dcutr listener serving_seconds: {}",
+        args.serve_seconds.max(1)
+    );
+    Box::pin(listener.serve_for(Duration::from_secs(args.serve_seconds.max(1)))).await;
+    println!("public dcutr listener: stopped");
+
+    Ok(())
+}
+
+fn write_public_dcutr_listener_descriptor(
+    descriptor: &PublicDcutrListenerDescriptor,
+    output: &Path,
+    force: bool,
+) -> Result<(), String> {
+    if !force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    descriptor.validate()?;
+    let rendered = serde_json::to_string_pretty(descriptor)
+        .map_err(|error| format!("failed to encode public dcutr listener descriptor: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
+
+    Ok(())
+}
+
+async fn relay_dcutr_dial(args: RelayDcutrDialArgs) -> Result<(), String> {
+    let descriptor = read_public_dcutr_listener_descriptor(&args.descriptor)?;
+    let report = check_public_dcutr_descriptor(
+        &descriptor,
+        Duration::from_secs(args.timeout_seconds.max(1)),
+    )
+    .await
+    .map_err(|error| format!("public dcutr dial failed to start: {error}"))?;
+    let succeeded = report.succeeded();
+
+    for line in report.lines() {
+        println!("{line}");
+    }
+
+    if let Some(output) = &args.write_report {
+        write_public_dcutr_dial_report(&args, &descriptor, &report, output)?;
+    }
+
+    if succeeded {
+        Ok(())
+    } else {
+        Err("public dcutr dial did not meet success threshold".to_owned())
+    }
+}
+
+fn read_public_dcutr_listener_descriptor(
+    path: &Path,
+) -> Result<PublicDcutrListenerDescriptor, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let descriptor: PublicDcutrListenerDescriptor = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    descriptor.validate()?;
+    Ok(descriptor)
+}
+
+fn write_public_dcutr_dial_report(
+    args: &RelayDcutrDialArgs,
+    descriptor: &PublicDcutrListenerDescriptor,
+    report: &p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
+    output: &Path,
+) -> Result<(), String> {
+    if !args.force && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+
+    let rendered =
+        serde_json::to_string_pretty(&public_dcutr_dial_report_json(args, descriptor, report))
+            .map_err(|error| format!("failed to encode public dcutr dial report: {error}"))?;
+    fs::write(output, format!("{rendered}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    println!("wrote {}", output.display());
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PublicDcutrDialReportJson<'a> {
+    schema_version: u8,
+    mode: &'static str,
+    succeeded: bool,
+    timeout_seconds: u64,
+    descriptor: &'a PublicDcutrListenerDescriptor,
+    bootstrap: BootstrapCheckReportJson<'a>,
+}
+
+fn public_dcutr_dial_report_json<'a>(
+    args: &RelayDcutrDialArgs,
+    descriptor: &'a PublicDcutrListenerDescriptor,
+    report: &'a p2p_vpn::runtime::bootstrap_check::BootstrapCheckReport,
+) -> PublicDcutrDialReportJson<'a> {
+    PublicDcutrDialReportJson {
+        schema_version: 1,
+        mode: "public_dcutr_dial",
+        succeeded: report.succeeded(),
+        timeout_seconds: args.timeout_seconds.max(1),
+        descriptor,
+        bootstrap: bootstrap_check_report_json(report),
+    }
 }
 
 fn relay_check_candidate_multiaddrs(
@@ -5109,6 +5323,74 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_relay_dcutr_listen_command() {
+        let peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let relay = format!("/dns4/relay.example.net/tcp/4001/p2p/{peer}");
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-dcutr-listen",
+            "--relay-candidate",
+            &relay,
+            "--write-descriptor",
+            "listener.json",
+            "--reservation-timeout-seconds",
+            "12",
+            "--serve-seconds",
+            "120",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::RelayDcutrListen {
+            relay_candidate,
+            write_descriptor,
+            reservation_timeout_seconds,
+            serve_seconds,
+            force,
+        } = cli.command
+        else {
+            panic!("expected relay-dcutr-listen command");
+        };
+
+        assert_eq!(relay_candidate, relay);
+        assert_eq!(write_descriptor, PathBuf::from("listener.json"));
+        assert_eq!(reservation_timeout_seconds, 12);
+        assert_eq!(serve_seconds, 120);
+        assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_relay_dcutr_dial_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-dcutr-dial",
+            "--descriptor",
+            "listener.json",
+            "--timeout-seconds",
+            "30",
+            "--write-report",
+            "dial-report.json",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::RelayDcutrDial {
+            descriptor,
+            timeout_seconds,
+            write_report,
+            force,
+        } = cli.command
+        else {
+            panic!("expected relay-dcutr-dial command");
+        };
+
+        assert_eq!(descriptor, PathBuf::from("listener.json"));
+        assert_eq!(timeout_seconds, 30);
+        assert_eq!(write_report, Some(PathBuf::from("dial-report.json")));
+        assert!(force);
+    }
+
+    #[test]
     fn cli_parses_relay_scan_command() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -5171,6 +5453,71 @@ mod tests {
         assert_eq!(write_report, Some(PathBuf::from("relay-scan-report.json")));
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
+    }
+
+    #[test]
+    fn relay_dcutr_writes_and_reads_listener_descriptor() {
+        let descriptor = public_dcutr_listener_descriptor();
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-dcutr-listener-{}-{}.json",
+            std::process::id(),
+            "descriptor"
+        ));
+        let _ = fs::remove_file(&output);
+
+        write_public_dcutr_listener_descriptor(&descriptor, &output, false)
+            .expect("write descriptor");
+        let read = read_public_dcutr_listener_descriptor(&output).expect("read descriptor");
+
+        assert_eq!(read, descriptor);
+        assert!(
+            write_public_dcutr_listener_descriptor(&descriptor, &output, false)
+                .expect_err("overwrite should require force")
+                .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove descriptor");
+    }
+
+    #[test]
+    fn relay_dcutr_writes_machine_readable_dial_report() {
+        let descriptor = public_dcutr_listener_descriptor();
+        let report = failed_public_dcutr_bootstrap_report();
+        let output = std::env::temp_dir().join(format!(
+            "p2p-vpn-dcutr-dial-report-{}-{}.json",
+            std::process::id(),
+            "report"
+        ));
+        let _ = fs::remove_file(&output);
+        let args = RelayDcutrDialArgs {
+            descriptor: PathBuf::from("listener.json"),
+            timeout_seconds: 30,
+            write_report: Some(output.clone()),
+            force: false,
+        };
+
+        write_public_dcutr_dial_report(&args, &descriptor, &report, &output).expect("write report");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).expect("report file")).expect("json report");
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["mode"], "public_dcutr_dial");
+        assert_eq!(value["succeeded"], false);
+        assert_eq!(value["timeout_seconds"], 30);
+        assert_eq!(
+            value["descriptor"]["relay_candidate"],
+            descriptor.relay_candidate
+        );
+        assert_eq!(
+            value["descriptor"]["listener_peer"],
+            descriptor.listener_peer
+        );
+        assert_failed_public_dcutr_bootstrap_json(&value["bootstrap"]);
+        assert!(
+            write_public_dcutr_dial_report(&args, &descriptor, &report, &output)
+                .expect_err("overwrite should require force")
+                .contains("pass --force")
+        );
+        fs::remove_file(&output).expect("remove report");
     }
 
     #[test]
@@ -5454,6 +5801,22 @@ mod tests {
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results: Vec::new(),
+        }
+    }
+
+    fn public_dcutr_listener_descriptor() -> PublicDcutrListenerDescriptor {
+        let relay_peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let listener_peer = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        PublicDcutrListenerDescriptor {
+            schema_version: PublicDcutrListenerDescriptor::SCHEMA_VERSION,
+            relay_candidate: format!("/dns4/relay.example.net/tcp/4001/p2p/{relay_peer}"),
+            relay_peer: relay_peer.to_owned(),
+            listener_peer: listener_peer.to_owned(),
+            relayed_address: format!(
+                "/dns4/relay.example.net/tcp/4001/p2p/{relay_peer}/p2p-circuit/p2p/{listener_peer}"
+            ),
+            listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_owned()],
+            created_unix_seconds: 1_786_230_000,
         }
     }
 

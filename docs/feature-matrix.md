@@ -110,7 +110,10 @@ path.
    the scan, relay-check, and DCUtR JSON reports even when a later phase fails.
    Relay-check JSON reports include per-candidate elapsed milliseconds and
    observed path addresses so timeout signatures and direct-promotion evidence
-   can be compared across hosts. The repro summary records
+   can be compared across hosts. `relay-dcutr-listen` and `relay-dcutr-dial`
+   now provide a two-host public DCUtR handoff: Host A reserves a selected
+   public relay and writes a listener descriptor, while Host B consumes that
+   descriptor and writes a bootstrap/DCUtR dial report. The repro summary records
    per-phase elapsed seconds, per-report candidate elapsed ranges, and observed
    relayed/direct connection address counts so public topology failures can be
    triaged without hand-parsing each JSON artifact.

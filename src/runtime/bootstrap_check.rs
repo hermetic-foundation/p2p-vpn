@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures::StreamExt as _;
@@ -8,6 +8,7 @@ use libp2p::{
     Multiaddr, PeerId as Libp2pPeerId, autonat, core::ConnectedPoint, dcutr, identify, kad,
     multiaddr::Protocol, relay, swarm::SwarmEvent,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{
@@ -410,6 +411,95 @@ pub struct PublicRelayScanPeer {
     pub candidate_addresses: usize,
     pub dial_failures: usize,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PublicDcutrListenerDescriptor {
+    pub schema_version: u8,
+    pub relay_candidate: String,
+    pub relay_peer: String,
+    pub listener_peer: String,
+    pub relayed_address: String,
+    pub listen_addresses: Vec<String>,
+    pub created_unix_seconds: u64,
+}
+
+pub struct PublicDcutrListener {
+    descriptor: PublicDcutrListenerDescriptor,
+    node: P2pNode,
+}
+
+impl PublicDcutrListenerDescriptor {
+    pub const SCHEMA_VERSION: u8 = 1;
+
+    pub fn listener_peer_id(&self) -> Result<Libp2pPeerId, String> {
+        self.listener_peer
+            .parse()
+            .map_err(|error| format!("invalid listener peer id: {error}"))
+    }
+
+    pub fn relayed_multiaddr(&self) -> Result<Multiaddr, String> {
+        let address = self
+            .relayed_address
+            .parse::<Multiaddr>()
+            .map_err(|error| format!("invalid relayed address: {error}"))?;
+        if relay_peer_from_relayed_address(&address).is_none() {
+            return Err("relayed address must include /p2p-circuit".to_owned());
+        }
+        let address_peer = relayed_target_peer(&address)
+            .ok_or_else(|| "relayed address must include /p2p/LISTENER".to_owned())?;
+        let listener_peer = self.listener_peer_id()?;
+        if address_peer != listener_peer {
+            return Err(format!(
+                "relayed address peer {address_peer} does not match listener peer {listener_peer}"
+            ));
+        }
+        Ok(address)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != Self::SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported public DCUtR listener descriptor schema {}",
+                self.schema_version
+            ));
+        }
+        let relay = self
+            .relay_candidate
+            .parse::<Multiaddr>()
+            .map_err(|error| format!("invalid relay candidate: {error}"))?;
+        let relay_peer = address_peer(&relay)
+            .ok_or_else(|| "relay candidate must include /p2p/RELAY".to_owned())?;
+        if relay_peer.to_string() != self.relay_peer {
+            return Err(format!(
+                "relay candidate peer {relay_peer} does not match relay peer {}",
+                self.relay_peer
+            ));
+        }
+        self.relayed_multiaddr()?;
+        Ok(())
+    }
+}
+
+impl PublicDcutrListener {
+    #[must_use]
+    pub const fn descriptor(&self) -> &PublicDcutrListenerDescriptor {
+        &self.descriptor
+    }
+
+    pub async fn serve_for(mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let Ok(()) = tokio::time::timeout(remaining, async {
+                let _ = self.node.swarm.select_next_some().await;
+            })
+            .await
+            else {
+                break;
+            };
+        }
+    }
 }
 
 impl PublicRelayProbeReport {
@@ -1076,6 +1166,96 @@ async fn live_public_dcutr_success(
             report,
         ))
     }
+}
+
+pub async fn start_public_dcutr_listener(
+    relay_address: &Multiaddr,
+    reservation_timeout: Duration,
+) -> Result<PublicDcutrListener, String> {
+    let relay_peer = address_peer(relay_address)
+        .ok_or_else(|| "live relay multiaddr must include /p2p/RELAY".to_owned())?;
+    let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
+    let discovery = dcutr_probe_discovery();
+    let mut node = build_node(&HostConfig {
+        identity: NodeIdentity::generate_ed25519().map_err(|error| format!("{error:?}"))?,
+        network_name: "lab".to_owned(),
+        membership_tag: None,
+        mtu: 1280,
+        max_concurrent_control_streams: 64,
+        max_concurrent_packet_streams: 256,
+        listen_addresses: dcutr_probe_listen_addresses(),
+        external_addresses: Vec::new(),
+        bootstrap_peers: Vec::new(),
+        known_peers: Vec::new(),
+        relay_reservations: vec![relay_reservation.clone()],
+        relay_server: false,
+        relay_resources: crate::config::RelayResourceConfig::default(),
+        resources: ResourceConfig::default(),
+        discovery,
+    })
+    .map_err(|error| format!("{error:?}"))?;
+
+    let listener_peer = node.local_peer_id;
+    let relayed_address = relay_reservation.with(Protocol::P2p(listener_peer));
+    wait_for_external_relay_reservation(
+        &mut node,
+        relayed_address.clone(),
+        relay_peer,
+        reservation_timeout,
+    )
+    .await?;
+
+    let mut listen_addresses = node
+        .swarm
+        .listeners()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    listen_addresses.sort();
+    let created_unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+
+    Ok(PublicDcutrListener {
+        descriptor: PublicDcutrListenerDescriptor {
+            schema_version: PublicDcutrListenerDescriptor::SCHEMA_VERSION,
+            relay_candidate: relay_address.to_string(),
+            relay_peer: relay_peer.to_string(),
+            listener_peer: listener_peer.to_string(),
+            relayed_address: relayed_address.to_string(),
+            listen_addresses,
+            created_unix_seconds,
+        },
+        node,
+    })
+}
+
+pub async fn check_public_dcutr_descriptor(
+    descriptor: &PublicDcutrListenerDescriptor,
+    timeout: Duration,
+) -> Result<BootstrapCheckReport, String> {
+    descriptor.validate()?;
+    let listener_peer = descriptor.listener_peer_id()?;
+    let relayed_address = descriptor.relayed_multiaddr()?;
+    let mut config = relay_probe_config_with_relayed_peer_discovery(
+        listener_peer,
+        &relayed_address,
+        dcutr_probe_discovery(),
+    )?;
+    config.network.listen_addresses = dcutr_probe_listen_address_strings();
+    check_config_bootstrap(
+        &config,
+        timeout,
+        BootstrapCheckThreshold::Any,
+        BootstrapCheckRequirements {
+            relay_reservations: false,
+            autonat_status: false,
+            dcutr_ready: false,
+            dcutr_success: true,
+            relayed_peer_circuits: true,
+        },
+    )
+    .await
+    .map_err(|error| format!("{error:?}"))
 }
 
 fn public_relay_candidate_deadline(timeout: Duration) -> Instant {
@@ -1921,6 +2101,18 @@ fn relay_peer_from_relayed_address(address: &libp2p::Multiaddr) -> Option<Libp2p
     None
 }
 
+fn relayed_target_peer(address: &libp2p::Multiaddr) -> Option<Libp2pPeerId> {
+    let mut after_circuit = false;
+    for protocol in address {
+        match protocol {
+            Protocol::P2pCircuit => after_circuit = true,
+            Protocol::P2p(peer) if after_circuit => return Some(peer),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn relayed_peer_addresses(
     configured_peer_addresses: &[(Libp2pPeerId, libp2p::Multiaddr)],
 ) -> Vec<(Libp2pPeerId, libp2p::Multiaddr)> {
@@ -1989,6 +2181,56 @@ mod tests {
 
     const LIVE_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
     const LIVE_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
+
+    #[test]
+    fn public_dcutr_listener_descriptor_validates_relayed_address() {
+        let descriptor = public_dcutr_listener_descriptor();
+
+        assert_eq!(
+            descriptor.listener_peer_id().expect("listener peer"),
+            descriptor
+                .listener_peer
+                .parse::<Libp2pPeerId>()
+                .expect("listener peer id")
+        );
+        assert_eq!(
+            descriptor
+                .relayed_multiaddr()
+                .expect("relayed address")
+                .to_string(),
+            descriptor.relayed_address
+        );
+        descriptor.validate().expect("descriptor validates");
+    }
+
+    #[test]
+    fn public_dcutr_listener_descriptor_rejects_mismatched_relay_peer() {
+        let mut descriptor = public_dcutr_listener_descriptor();
+        descriptor.relay_peer = "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb".to_owned();
+
+        assert!(
+            descriptor
+                .validate()
+                .expect_err("mismatched relay peer should fail")
+                .contains("does not match relay peer")
+        );
+    }
+
+    #[test]
+    fn public_dcutr_listener_descriptor_rejects_direct_listener_address() {
+        let mut descriptor = public_dcutr_listener_descriptor();
+        descriptor.relayed_address = format!(
+            "/ip4/203.0.113.10/tcp/4001/p2p/{}",
+            descriptor.listener_peer
+        );
+
+        assert!(
+            descriptor
+                .validate()
+                .expect_err("direct listener address should fail")
+                .contains("/p2p-circuit")
+        );
+    }
 
     #[tokio::test]
     async fn bootstrap_check_connects_to_configured_bootstrap_peer() {
@@ -3384,6 +3626,22 @@ mod tests {
             peer_results: Vec::new(),
             relay_results: Vec::new(),
             relayed_peer_results,
+        }
+    }
+
+    fn public_dcutr_listener_descriptor() -> PublicDcutrListenerDescriptor {
+        let relay_peer = "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN";
+        let listener_peer = "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa";
+        PublicDcutrListenerDescriptor {
+            schema_version: PublicDcutrListenerDescriptor::SCHEMA_VERSION,
+            relay_candidate: format!("/dns4/relay.example.net/tcp/4001/p2p/{relay_peer}"),
+            relay_peer: relay_peer.to_owned(),
+            listener_peer: listener_peer.to_owned(),
+            relayed_address: format!(
+                "/dns4/relay.example.net/tcp/4001/p2p/{relay_peer}/p2p-circuit/p2p/{listener_peer}"
+            ),
+            listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_owned()],
+            created_unix_seconds: 1_786_230_000,
         }
     }
 }

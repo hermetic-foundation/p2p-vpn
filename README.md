@@ -893,6 +893,37 @@ cargo run -- relay-check \
   --timeout-seconds 45
 ```
 
+To prove public-relay-assisted DCUtR across a real two-host topology, keep a
+listener alive on Host A and dial its descriptor from Host B. First choose a
+validated relay candidate from `relay-scan --write-candidates` or
+`relay-check`.
+
+On Host A:
+
+```sh
+cargo run -- relay-dcutr-listen \
+  --relay-candidate /dns4/relay.example.net/tcp/4001/p2p/RELAY \
+  --write-descriptor public-dcutr-listener.json \
+  --serve-seconds 900 \
+  --force
+```
+
+Copy `public-dcutr-listener.json` to Host B while Host A is still serving, then
+run:
+
+```sh
+cargo run -- relay-dcutr-dial \
+  --descriptor public-dcutr-listener.json \
+  --timeout-seconds 90 \
+  --write-report public-dcutr-dial-report.json \
+  --force
+```
+
+The descriptor contains the relay candidate, relay peer ID, listener peer ID,
+and relayed listener address. The dial report wraps the usual bootstrap/DCUtR
+report with that descriptor so two-machine results can be compared without
+hand-copying logs.
+
 `relay-scan` is rootless. It dials configured or supplied bootstrap peers,
 waits for libp2p Identify responses, and prints direct relay candidate
 TCP/QUIC multiaddrs for peers that advertise the circuit-relay v2 hop protocol.
