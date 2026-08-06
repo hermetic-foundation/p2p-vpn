@@ -106,7 +106,7 @@ enum Command {
         membership_key: Option<String>,
         #[arg(long = "previous-membership-tag")]
         previous_membership_tags: Vec<String>,
-        #[arg(long, default_value = "hs0")]
+        #[arg(long, default_value = "pv0")]
         interface: String,
         #[arg(long, default_value_t = 1_280)]
         mtu: u16,
@@ -306,9 +306,9 @@ enum Command {
         write_host_b_config: Option<PathBuf>,
         #[arg(long = "two-host-network", default_value = "public-vpn-repro")]
         two_host_network: String,
-        #[arg(long = "host-a-interface", default_value = "hs0")]
+        #[arg(long = "host-a-interface", default_value = "pv0")]
         host_a_interface: String,
-        #[arg(long = "host-b-interface", default_value = "hs0")]
+        #[arg(long = "host-b-interface", default_value = "pv0")]
         host_b_interface: String,
         #[arg(long = "host-a-route", default_value = "10.42.0.1/32")]
         host_a_route: String,
@@ -395,7 +395,7 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         private_key: Option<String>,
-        #[arg(long, default_value = "hs0")]
+        #[arg(long, default_value = "pv0")]
         interface: String,
         #[arg(long, default_value_t = 1_280)]
         mtu: u16,
@@ -4099,6 +4099,7 @@ fn public_relay_two_host_configs(
 
     let host_a_relayed = public_relay_peer_circuit_address(relay, &host_a_identity)?;
     let host_b_relayed = public_relay_peer_circuit_address(relay, &host_b_identity)?;
+    let direct_listen_addresses = vec!["/ip4/0.0.0.0/tcp/4001".to_owned()];
     let relay_bootstrap = InitPeer {
         id: relay.id.clone(),
         address: relay.address.clone(),
@@ -4108,7 +4109,8 @@ fn public_relay_two_host_configs(
         reservations: vec![relay_reservation_address(relay)?],
         ..RelayConfig::default()
     };
-    let discovery = public_ipfs_relay_discovery_config();
+    let mut discovery = public_ipfs_relay_discovery_config();
+    discovery.mdns = true;
 
     let host_a = InitConfigTemplate {
         identity: host_a_identity.clone(),
@@ -4117,7 +4119,7 @@ fn public_relay_two_host_configs(
         local_routes: vec![host_a_route.clone()],
         interface_name: args.host_a_interface.clone(),
         mtu: args.two_host_mtu,
-        listen_addresses: Vec::new(),
+        listen_addresses: direct_listen_addresses.clone(),
         external_addresses: Vec::new(),
         packet_plane: PacketPlaneConfig::default(),
         bootstrap_peers: vec![relay_bootstrap.clone()],
@@ -4138,7 +4140,7 @@ fn public_relay_two_host_configs(
         local_routes: vec![host_b_route],
         interface_name: args.host_b_interface.clone(),
         mtu: args.two_host_mtu,
-        listen_addresses: Vec::new(),
+        listen_addresses: direct_listen_addresses,
         external_addresses: Vec::new(),
         packet_plane: PacketPlaneConfig::default(),
         bootstrap_peers: vec![relay_bootstrap],
@@ -4237,7 +4239,7 @@ fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) ->
         private_key: None,
         membership_key: None,
         previous_membership_tags: Vec::new(),
-        interface: "hs0".to_owned(),
+        interface: "pv0".to_owned(),
         mtu: 1280,
         listen_addresses: Vec::new(),
         external_addresses: Vec::new(),
@@ -4781,7 +4783,7 @@ fn relay_scan_config(
                     network_name: "relay-scan".to_owned(),
                     membership_key: None,
                     local_routes: Vec::new(),
-                    interface_name: "hs0".to_owned(),
+                    interface_name: "pv0".to_owned(),
                     mtu: 1280,
                     listen_addresses: Vec::new(),
                     external_addresses: Vec::new(),
@@ -5782,8 +5784,8 @@ mod tests {
             write_host_a_config: None,
             write_host_b_config: None,
             two_host_network: "public-vpn-repro".to_owned(),
-            host_a_interface: "hs0".to_owned(),
-            host_b_interface: "hs0".to_owned(),
+            host_a_interface: "pv0".to_owned(),
+            host_b_interface: "pv0".to_owned(),
             host_a_route: "10.42.0.1/32".to_owned(),
             host_b_route: "10.42.0.2/32".to_owned(),
             two_host_mtu: 1280,
@@ -6921,6 +6923,47 @@ mod tests {
         assert_eq!(max_concurrent_packet_streams, 22);
         assert_eq!(max_inbound_packets_per_peer_per_second, 333);
         assert_eq!(max_established_connections, 88);
+    }
+
+    #[test]
+    fn cli_uses_pv0_interface_defaults() {
+        let init = Cli::try_parse_from(["p2p-vpn", "init-config"]).expect("init cli");
+        let Command::InitConfig {
+            interface: init_interface,
+            ..
+        } = init.command
+        else {
+            panic!("expected init-config command");
+        };
+        assert_eq!(init_interface, "pv0");
+
+        let relay = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-check",
+            "--relay-candidate",
+            "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        ])
+        .expect("relay-check cli");
+        let Command::RelayCheck {
+            host_a_interface,
+            host_b_interface,
+            ..
+        } = relay.command
+        else {
+            panic!("expected relay-check command");
+        };
+        assert_eq!(host_a_interface, "pv0");
+        assert_eq!(host_b_interface, "pv0");
+
+        let invite = Cli::try_parse_from(["p2p-vpn", "invite-import"]).expect("invite cli");
+        let Command::InviteImport {
+            interface: invite_interface,
+            ..
+        } = invite.command
+        else {
+            panic!("expected invite-import command");
+        };
+        assert_eq!(invite_interface, "pv0");
     }
 
     #[test]
@@ -10419,6 +10462,20 @@ mod tests {
         assert_eq!(host_b.interface.name, "hs-b");
         assert_eq!(host_a.interface.mtu, 1420);
         assert_eq!(host_b.interface.mtu, 1420);
+        assert_eq!(
+            host_a.network.listen_addresses,
+            vec!["/ip4/0.0.0.0/tcp/4001"]
+        );
+        assert_eq!(
+            host_b.network.listen_addresses,
+            vec!["/ip4/0.0.0.0/tcp/4001"]
+        );
+        assert!(host_a.network.discovery.mdns);
+        assert!(host_b.network.discovery.mdns);
+        assert_eq!(
+            host_a.network.discovery.kademlia_protocol,
+            IPFS_KADEMLIA_PROTOCOL
+        );
         assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
         assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
         assert_eq!(host_a.peers[0].id, host_b.network.local_peer);

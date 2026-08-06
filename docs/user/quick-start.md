@@ -44,7 +44,7 @@ Defaults fill in:
 
 | Field | Default |
 | --- | --- |
-| TUN interface | `hs0` |
+| TUN interface | `pv0` |
 | MTU | `1280` |
 | libp2p listener | `/ip4/0.0.0.0/tcp/4001` |
 | Discovery | mDNS, Kademlia, DCUtR, AutoNAT enabled |
@@ -108,7 +108,7 @@ Run this on Node A:
 nix run .# -- init-config \
   --output host-a.json \
   --network lab \
-  --interface hs0 \
+  --interface pv0 \
   --force
 ```
 
@@ -118,7 +118,7 @@ Run this on Node B:
 nix run .# -- init-config \
   --output host-b.json \
   --network lab \
-  --interface hs0 \
+  --interface pv0 \
   --force
 ```
 
@@ -163,7 +163,7 @@ Example for Node A:
 nix run .# -- init-config \
   --output host-a.json \
   --network lab \
-  --interface hs0 \
+  --interface pv0 \
   --listen-address /ip4/0.0.0.0/tcp/4001 \
   --peer NODE_B_PEER_ID=/ip4/NODE_B_LAN_IP/tcp/4001/p2p/NODE_B_PEER_ID \
   --peer-route NODE_B_PEER_ID=10.44.0.2/32 \
@@ -177,7 +177,7 @@ Example for Node B:
 nix run .# -- init-config \
   --output host-b.json \
   --network lab \
-  --interface hs0 \
+  --interface pv0 \
   --listen-address /ip4/0.0.0.0/tcp/4001 \
   --peer NODE_A_PEER_ID=/ip4/NODE_A_LAN_IP/tcp/4001/p2p/NODE_A_PEER_ID \
   --peer-route NODE_A_PEER_ID=10.44.0.1/32 \
@@ -212,13 +212,13 @@ sudo ./result/bin/p2p-vpn daemon-health \
 From Node A:
 
 ```sh
-ping -I hs0 10.44.0.2
+ping -I pv0 10.44.0.2
 ```
 
 From Node B:
 
 ```sh
-ping -I hs0 10.44.0.1
+ping -I pv0 10.44.0.1
 ```
 
 ## Stop The Daemon

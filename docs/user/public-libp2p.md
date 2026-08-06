@@ -91,6 +91,33 @@ The relay is added as infrastructure.
 
 It is not added to `peers[]`.
 
+## Generate Two Host Configs
+
+Use this for a mobile LAN-to-hotspot test:
+
+```sh
+nix run .# -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --write-host-a-config host-a.json \
+  --write-host-b-config host-b.json \
+  --timeout-seconds 45 \
+  --force
+```
+
+The generated configs use:
+
+| Setting | Value |
+| --- | --- |
+| Interface | `pv0` |
+| Direct listener | `/ip4/0.0.0.0/tcp/4001` |
+| LAN discovery | mDNS enabled |
+| Public routing | `/ipfs/kad/1.0.0` |
+| Relay fallback | selected relay reservation |
+
+This is the normal mobile profile.
+
+To force relay-only testing, disable direct listeners and mDNS in a copy.
+
 ## Interpret Results
 
 | Field | Meaning |

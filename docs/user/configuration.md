@@ -21,7 +21,7 @@ Everything else can be omitted for the default profile.
 
 | Field | Default |
 | --- | --- |
-| `interface.name` | `hs0` |
+| `interface.name` | `pv0` |
 | `interface.mtu` | `1280` |
 | `peers[].name` | unset |
 | `peers[].addresses` | empty |
