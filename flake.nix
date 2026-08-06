@@ -602,6 +602,7 @@
               } >> "$summary"
             }
 
+            # shellcheck disable=SC2329
             check_two_host_vpn_relay_reservations() {
               if [[ ! -s "$vpn_host_a_config" || ! -s "$vpn_host_b_config" ]]; then
                 echo "generated Host A/B VPN configs are missing; cannot check relay reservations" >&2
