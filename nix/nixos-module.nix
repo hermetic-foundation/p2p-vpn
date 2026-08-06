@@ -10,6 +10,7 @@ let
   inherit (lib)
     attrValues
     concatMap
+    concatMapAttrs
     filterAttrs
     mapAttrs'
     mkEnableOption
@@ -23,7 +24,17 @@ let
 
   packageForSystem = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
   enabledInstances = filterAttrs (_: instance: instance.enable) cfg.instances;
-  firewallInstances = attrValues (filterAttrs (_: instance: instance.enable && instance.openFirewall) cfg.instances);
+  firewallInstances = attrValues (
+    filterAttrs (_: instance: instance.enable && instance.openFirewall) cfg.instances
+  );
+  settingsInstances = filterAttrs (
+    _: instance: instance.enable && instance.settings != null
+  ) cfg.instances;
+
+  generatedConfigFile = name: "/etc/p2p-vpn/${name}.json";
+  effectiveConfigFile =
+    name: instance:
+    if instance.configFile != null then instance.configFile else generatedConfigFile name;
 
   instanceOptions =
     { name, ... }:
@@ -32,12 +43,39 @@ let
         enable = mkEnableOption "the ${name} p2p-vpn instance";
 
         configFile = mkOption {
-          type = types.str;
+          type = types.nullOr types.str;
+          default = null;
           example = "/etc/p2p-vpn/${name}.json";
           description = ''
-            Runtime path to the p2p-vpn JSON config. Use a path outside the
-            Nix store when the config contains private keys or membership
-            material.
+            Runtime path to an existing p2p-vpn JSON config.
+
+            Use this instead of settings when the config contains private keys,
+            membership keys, or other secret material.
+          '';
+        };
+
+        settings = mkOption {
+          type = types.nullOr (types.attrsOf types.anything);
+          default = null;
+          example = {
+            network = {
+              name = "lab";
+              local_peer = "LOCAL_PEER_ID";
+              private_key = "BASE64_PRIVATE_KEY";
+            };
+            peers = [
+              {
+                id = "REMOTE_PEER_ID";
+                ip = "192.168.0.203";
+              }
+            ];
+          };
+          description = ''
+            Declarative p2p-vpn JSON config.
+
+            The module writes this to /etc/p2p-vpn/<instance>.json. Values are
+            copied into the Nix store, so do not use this for private keys on
+            real deployments.
           '';
         };
 
@@ -131,7 +169,7 @@ let
             "${cfg.package}/bin/p2p-vpn"
             "up"
             "--config"
-            instance.configFile
+            (effectiveConfigFile name instance)
           ]
           ++ optionals (instance.metricsIntervalSeconds != null) [
             "--metrics-interval-seconds"
@@ -224,7 +262,29 @@ in
         assertion = pkgs.stdenv.isLinux;
         message = "services.p2p-vpn is only supported on Linux because it requires TUN devices and iproute2.";
       }
-    ];
+    ]
+    ++ concatMap (
+      name:
+      let
+        instance = enabledInstances.${name};
+      in
+      [
+        {
+          assertion = instance.configFile != null || instance.settings != null;
+          message = "services.p2p-vpn.instances.${name} requires configFile or settings.";
+        }
+        {
+          assertion = instance.configFile == null || instance.settings == null;
+          message = "services.p2p-vpn.instances.${name} cannot set both configFile and settings.";
+        }
+      ]
+    ) (builtins.attrNames enabledInstances);
+
+    environment.etc = concatMapAttrs (name: instance: {
+      "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
+        builtins.toJSON instance.settings
+      );
+    }) settingsInstances;
 
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
 
@@ -232,9 +292,9 @@ in
       concatMap (instance: instance.tcpPorts) firewallInstances
     );
     networking.firewall.allowedUDPPorts = unique (
-      concatMap
-        (instance: instance.udpPorts ++ instance.packetPlaneUdpPorts ++ instance.packetPlaneQuicPorts)
-        firewallInstances
+      concatMap (
+        instance: instance.udpPorts ++ instance.packetPlaneUdpPorts ++ instance.packetPlaneQuicPorts
+      ) firewallInstances
     );
 
     boot.kernelModules = [ "tun" ];

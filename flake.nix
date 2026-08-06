@@ -1831,6 +1831,21 @@ EOF
                   configFile = "/etc/p2p-vpn/node-b.json";
                   controlSocket = null;
                 };
+                services.p2p-vpn.instances.node-c = {
+                  enable = true;
+                  settings = {
+                    network = {
+                      name = "nixos-module";
+                      local_peer = "0000000000000000000000000000000000000000000000000000000000000000";
+                    };
+                    peers = [
+                      {
+                        id = "1111111111111111111111111111111111111111111111111111111111111111";
+                        ip = "192.168.0.203";
+                      }
+                    ];
+                  };
+                };
               }
             )
           ];
@@ -1983,6 +1998,7 @@ EOF
           cp ${./docs/user/README.md} "$release_dir/docs/user/README.md"
           cp ${./docs/user/quick-start.md} "$release_dir/docs/user/quick-start.md"
           cp ${./docs/user/configuration.md} "$release_dir/docs/user/configuration.md"
+          cp ${./docs/user/nixos.md} "$release_dir/docs/user/nixos.md"
           cp ${./docs/user/operations.md} "$release_dir/docs/user/operations.md"
           cp ${./docs/user/public-libp2p.md} "$release_dir/docs/user/public-libp2p.md"
           cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
@@ -2114,6 +2130,7 @@ EOF
               "$root/docs/user/README.md" \
               "$root/docs/user/quick-start.md" \
               "$root/docs/user/configuration.md" \
+              "$root/docs/user/nixos.md" \
               "$root/docs/user/operations.md" \
               "$root/docs/user/public-libp2p.md" \
               "$root/docs/developer/README.md" \
@@ -2176,8 +2193,10 @@ EOF
           nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
+            execStartSettings = moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStart;
             execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
             execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
+            generatedSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-c.json".source;
             killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
             timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
             runtimeDirectory = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectory;
@@ -2212,6 +2231,14 @@ EOF
               *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
               *"p2p-vpn up --config /etc/p2p-vpn/node-b.json"*) ;;
               *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
+            esac
+            case "$execStartSettings" in
+              *"p2p-vpn up --config /etc/p2p-vpn/node-c.json --control-socket /run/p2p-vpn-node-c/control.sock"*) ;;
+              *) echo "unexpected settings ExecStart: $execStartSettings" >&2; exit 1 ;;
+            esac
+            case "$generatedSettings" in
+              *'"name":"nixos-module"'*'"ip":"192.168.0.203"'*) ;;
+              *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
             esac
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;
