@@ -2334,6 +2334,12 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
         context.metrics.record_kademlia_membership_record_lookup();
     }
 
+    for peer in context.forwarder.configured_transport_peers() {
+        if peer != *swarm.local_peer_id() {
+            swarm.behaviour_mut().kad.get_closest_peers(peer);
+        }
+    }
+
     if context.auto_relay.private_reachability() {
         query_auto_relay_infrastructure(swarm, context.metrics, "kademlia_refresh");
     }
@@ -6973,9 +6979,12 @@ fn handle_behaviour_event(
                     forwarder: context.forwarder,
                     membership: context.membership,
                     infrastructure_peers: context.infrastructure_peers,
+                    discovered_peer_addresses: context.discovered_peer_addresses,
+                    paths: context.paths,
                     local_capabilities: context.local_capabilities,
                     previous_membership_tags: context.previous_membership_tags,
                     metrics: context.metrics,
+                    discovery: context.discovery,
                 },
                 event,
             );
@@ -7140,9 +7149,12 @@ struct KademliaEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
     infrastructure_peers: &'a mut InfrastructurePeers,
+    discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
+    paths: &'a PathSet,
     local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
     metrics: &'a RuntimeMetrics,
+    discovery: &'a DiscoveryConfig,
 }
 
 fn handle_kademlia_event(
@@ -7162,8 +7174,12 @@ fn handle_kademlia_event(
             handle_kademlia_membership_record_result(&result, &mut context);
             handle_kademlia_closest_peer_result(
                 swarm,
+                context.forwarder,
                 context.infrastructure_peers,
+                context.discovered_peer_addresses,
+                context.paths,
                 context.metrics,
+                context.discovery,
                 &result,
             );
             eprintln!("kademlia query progressed: {result:?}");
@@ -7264,8 +7280,12 @@ fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::Que
 
 fn handle_kademlia_closest_peer_result(
     swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
+    discovery: &DiscoveryConfig,
     result: &kad::QueryResult,
 ) {
     if let kad::QueryResult::GetClosestPeers(
@@ -7274,6 +7294,18 @@ fn handle_kademlia_closest_peer_result(
     ) = result
     {
         for peer in peers {
+            for address in &peer.addrs {
+                learn_peer_address(
+                    swarm,
+                    forwarder,
+                    discovered_peer_addresses,
+                    paths,
+                    metrics,
+                    peer.peer_id,
+                    address.clone(),
+                    discovery,
+                );
+            }
             admit_kademlia_relay_infrastructure_peer(
                 swarm,
                 infrastructure_peers,
@@ -9487,6 +9519,70 @@ mod tests {
         assert_eq!(snapshot.kademlia_providers_ignored, 1);
         assert_eq!(snapshot.kademlia_provider_dial_attempts, 1);
         assert_eq!(snapshot.kademlia_provider_dial_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn kademlia_closest_peer_results_learn_configured_peer_addresses() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let unconfigured = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let unconfigured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let result = kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk {
+            key: configured.to_bytes(),
+            peers: vec![
+                kad::PeerInfo {
+                    peer_id: configured,
+                    addrs: vec![configured_address.clone()],
+                },
+                kad::PeerInfo {
+                    peer_id: unconfigured,
+                    addrs: vec![unconfigured_address],
+                },
+            ],
+        }));
+
+        handle_kademlia_closest_peer_result(
+            &mut node.swarm,
+            &forwarder,
+            &mut infrastructure_peers,
+            &mut discovered,
+            &paths,
+            &metrics,
+            &DiscoveryConfig::default(),
+            &result,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 1);
+        assert_eq!(snapshot.discovered_address_dial_failures, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 0);
+        assert_eq!(discovered.as_vec(), vec![(configured, configured_address)]);
     }
 
     #[test]

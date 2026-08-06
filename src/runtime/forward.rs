@@ -207,6 +207,10 @@ impl Forwarder {
         self.peers.keys().copied()
     }
 
+    pub fn configured_transport_peers(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        self.peers.values().copied()
+    }
+
     pub fn merge_membership_records(
         &mut self,
         records: &[SignedMembershipRecord],
