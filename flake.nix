@@ -214,6 +214,7 @@
             candidate_timeout="''${P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS:-45}"
             max_candidates="''${P2P_VPN_RELAY_MAX_CANDIDATES:-8}"
             max_validation="''${P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES:-8}"
+            phase_timeout="''${P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS:-}"
             base_config="''${P2P_VPN_REPRO_BASE_CONFIG:-}"
             repro_candidates_file="''${P2P_VPN_REPRO_CANDIDATES_FILE:-}"
             repro_relay_candidate="''${P2P_VPN_REPRO_RELAY_CANDIDATE:-}"
@@ -229,6 +230,9 @@
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
+            fi
+            if [[ -z "$phase_timeout" ]]; then
+              phase_timeout="$((candidate_timeout * max_validation + 60))"
             fi
             status=0
             phase_index=0
@@ -259,6 +263,7 @@
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
                 echo "P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=$max_validation"
+                echo "P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS=$phase_timeout"
                 echo
                 echo "[git rev-parse HEAD]"
                 git rev-parse HEAD 2>&1 || true
@@ -342,6 +347,7 @@
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
                 printf "export P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=%q\n" "$max_validation"
+                printf "export P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS=%q\n" "$phase_timeout"
                 echo
                 if [[ -n "$repro_candidates_file" ]]; then
                   printf "cp %q %q\n" "$repro_candidates_file" "$candidates"
@@ -1018,7 +1024,7 @@
               phase_started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               phase_started="$(date +%s)"
               set +e
-              "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
+              timeout --kill-after=5s "''${phase_timeout}s" "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
               phase_status="$?"
               set -e
               phase_finished="$(date +%s)"
@@ -2315,6 +2321,8 @@ EOF
             grep -q 'public-vpn-host-a-relay-reservation-check.json' "$script"
             grep -q 'public-vpn-host-b-relay-reservation-check.json' "$script"
             grep -q 'P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS' "$script"
+            grep -q 'P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS' "$script"
+            grep -q 'timeout --kill-after=5s' "$script"
             grep -q 'checking generated two-host VPN relay reservations' "$script"
             grep -q 'write_bootstrap_summary_json' "$script"
             grep -q -- '--write-host-a-config' "$script"

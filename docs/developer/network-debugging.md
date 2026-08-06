@@ -100,3 +100,24 @@ nix run .#tun-e2e -- \
 Read the generated `repro-metadata.txt`.
 
 Run `repro-commands.sh` from the artifact directory to replay the case.
+
+## Public Relay Repro
+
+Run a bounded public relay probe:
+
+```sh
+P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS=210 \
+nix run .#public-relay-repro
+```
+
+Useful knobs:
+
+| Variable | Use |
+| --- | --- |
+| `P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS` | Wall-clock cap for each repro phase. |
+| `P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS` | Per-candidate protocol timeout. |
+| `P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES` | Number of relay candidates to probe. |
+
+Each phase writes separate stdout and stderr logs.
+
+The manifest is `repro-phase-logs.tsv`.
