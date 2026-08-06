@@ -3758,7 +3758,7 @@ fn send_dequeued_stream_fallback(
 ) {
     match forwarder.send_queued_packet_with_mtu(swarm, packet, peer_mtu) {
         Ok(request_id) => {
-            context.packet_in_flight.record(packet, request_id);
+            context.packet_in_flight.record(packet, request_id, path);
             context.metrics.record_outbound_sent();
             context.metrics.record_outbound_stream_fallback();
         }
@@ -3869,8 +3869,15 @@ impl QueueRuntimeState {
 #[derive(Debug)]
 struct PacketInFlight {
     limit_per_peer: usize,
-    requests: HashMap<request_response::OutboundRequestId, (PeerId, FlowShard)>,
+    requests: HashMap<request_response::OutboundRequestId, PacketInFlightRequest>,
     peers: HashMap<PeerId, PeerInFlight>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PacketInFlightRequest {
+    peer: PeerId,
+    shard: FlowShard,
+    path: PathKind,
 }
 
 impl PacketInFlight {
@@ -3898,24 +3905,34 @@ impl PacketInFlight {
         &mut self,
         packet: &crate::queue::Packet,
         request_id: request_response::OutboundRequestId,
+        path: PathKind,
     ) {
-        self.requests
-            .insert(request_id, (packet.peer(), packet.flow_shard()));
+        self.requests.insert(
+            request_id,
+            PacketInFlightRequest {
+                peer: packet.peer(),
+                shard: packet.flow_shard(),
+                path,
+            },
+        );
         self.peers
             .entry(packet.peer())
             .or_default()
             .record(packet.flow_shard());
     }
 
-    fn complete(&mut self, request_id: request_response::OutboundRequestId) -> Option<PeerId> {
-        let (peer, shard) = self.requests.remove(&request_id)?;
-        if let Some(state) = self.peers.get_mut(&peer) {
-            state.complete(shard);
+    fn complete(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+    ) -> Option<PacketInFlightRequest> {
+        let request = self.requests.remove(&request_id)?;
+        if let Some(state) = self.peers.get_mut(&request.peer) {
+            state.complete(request.shard);
             if state.total == 0 {
-                self.peers.remove(&peer);
+                self.peers.remove(&request.peer);
             }
         }
-        Some(peer)
+        Some(request)
     }
 
     fn stats(&self) -> PacketInFlightStats {
@@ -4684,8 +4701,27 @@ fn handle_packet_event(
             error,
             ..
         } => {
-            context.packet_in_flight.complete(request_id);
+            let in_flight = context.packet_in_flight.complete(request_id);
             context.metrics.record_outbound_failure();
+            if let Some(request) = in_flight {
+                maybe_demote_stream_fallback_path(
+                    context.paths,
+                    context.metrics,
+                    request.peer,
+                    request.path,
+                    &error,
+                );
+                if let Some(peer) = context.forwarder.transport_peer_for_overlay(request.peer) {
+                    let discovered_addresses = context.discovered_peer_addresses.as_vec();
+                    redial_packet_plane_recovery_addresses(
+                        swarm,
+                        peer,
+                        context.configured_peer_addresses,
+                        &discovered_addresses,
+                        context.metrics,
+                    );
+                }
+            }
             eprintln!("packet request to {peer} failed: {error}");
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
@@ -6737,6 +6773,40 @@ fn maybe_demote_packet_plane_send_path(
         ],
     );
     true
+}
+
+fn maybe_demote_stream_fallback_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    path: PathKind,
+    error: &request_response::OutboundFailure,
+) -> bool {
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_stream_fallback_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "stream_fallback_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", stream_fallback_failure_name(error)),
+        ],
+    );
+    true
+}
+
+const fn stream_fallback_failure_name(error: &request_response::OutboundFailure) -> &'static str {
+    match error {
+        request_response::OutboundFailure::DialFailure => "dial_failure",
+        request_response::OutboundFailure::Timeout => "timeout",
+        request_response::OutboundFailure::ConnectionClosed => "connection_closed",
+        request_response::OutboundFailure::UnsupportedProtocols => "unsupported_protocols",
+        request_response::OutboundFailure::Io(_) => "io",
+    }
 }
 
 fn maybe_demote_packet_plane_quic_receive_path(
@@ -11181,6 +11251,38 @@ mod tests {
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
+    fn stream_fallback_timeout_demotes_direct_path_to_relay() {
+        let peer = PeerId::from_bytes([12; 32]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::CircuitRelay,
+        ));
+        paths.upsert(crate::path::PathCandidate::new(
+            peer,
+            PathKind::DirectTcpStream,
+        ));
+
+        maybe_demote_stream_fallback_path(
+            &mut paths,
+            &metrics,
+            peer,
+            PathKind::DirectTcpStream,
+            &request_response::OutboundFailure::Timeout,
+        );
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
     }
 

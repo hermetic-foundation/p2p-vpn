@@ -112,6 +112,7 @@ pub struct RuntimeMetrics {
     path_promotions_to_direct: AtomicU64,
     path_fallbacks_to_relay: AtomicU64,
     packet_plane_path_demotions: AtomicU64,
+    stream_fallback_path_demotions: AtomicU64,
     packet_plane_path_recovery_dial_attempts: AtomicU64,
     packet_plane_path_recovery_dial_failures: AtomicU64,
     outbound_path_mtu_updates: AtomicU64,
@@ -452,6 +453,11 @@ impl RuntimeMetrics {
 
     pub fn record_packet_plane_path_demotion(&self) {
         self.packet_plane_path_demotions
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_stream_fallback_path_demotion(&self) {
+        self.stream_fallback_path_demotions
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -1060,6 +1066,8 @@ impl RuntimeMetrics {
         snapshot.path_fallbacks_to_relay = self.path_fallbacks_to_relay.load(Ordering::Relaxed);
         snapshot.packet_plane_path_demotions =
             self.packet_plane_path_demotions.load(Ordering::Relaxed);
+        snapshot.stream_fallback_path_demotions =
+            self.stream_fallback_path_demotions.load(Ordering::Relaxed);
         snapshot.packet_plane_path_recovery_dial_attempts = self
             .packet_plane_path_recovery_dial_attempts
             .load(Ordering::Relaxed);
@@ -1345,6 +1353,7 @@ pub struct RuntimeSnapshot {
     pub path_promotions_to_direct: u64,
     pub path_fallbacks_to_relay: u64,
     pub packet_plane_path_demotions: u64,
+    pub stream_fallback_path_demotions: u64,
     pub packet_plane_path_recovery_dial_attempts: u64,
     pub packet_plane_path_recovery_dial_failures: u64,
     pub outbound_path_mtu_updates: u64,
@@ -1535,6 +1544,10 @@ impl RuntimeSnapshot {
             format!(
                 "packet_plane_path_demotions {}",
                 self.packet_plane_path_demotions
+            ),
+            format!(
+                "stream_fallback_path_demotions {}",
+                self.stream_fallback_path_demotions
             ),
             format!(
                 "packet_plane_path_recovery_dial_attempts {}",
@@ -2189,6 +2202,7 @@ mod tests {
         metrics.record_path_promotion_to_direct();
         metrics.record_path_fallback_to_relay();
         metrics.record_packet_plane_path_demotion();
+        metrics.record_stream_fallback_path_demotion();
         metrics.record_packet_plane_path_recovery_dial_attempt();
         metrics.record_packet_plane_path_recovery_dial_failure();
         metrics.record_outbound_path_mtu_update();
@@ -2672,6 +2686,7 @@ mod tests {
         assert_eq!(snapshot.path_promotions_to_direct, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
         assert_eq!(snapshot.packet_plane_path_recovery_dial_attempts, 1);
         assert_eq!(snapshot.packet_plane_path_recovery_dial_failures, 1);
         assert_eq!(snapshot.outbound_path_mtu_updates, 1);
@@ -2718,6 +2733,7 @@ mod tests {
         assert_metric_line(&snapshot, "path_promotions_to_direct 1");
         assert_metric_line(&snapshot, "path_fallbacks_to_relay 1");
         assert_metric_line(&snapshot, "packet_plane_path_demotions 1");
+        assert_metric_line(&snapshot, "stream_fallback_path_demotions 1");
         assert_metric_line(&snapshot, "packet_plane_path_recovery_dial_attempts 1");
         assert_metric_line(&snapshot, "packet_plane_path_recovery_dial_failures 1");
         assert_metric_line(&snapshot, "outbound_path_mtu_updates 1");
