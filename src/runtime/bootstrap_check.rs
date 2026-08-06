@@ -1778,6 +1778,7 @@ fn relay_probe_config_with_relayed_peer_discovery(
         peers: vec![PeerConfig {
             id: peer.to_string(),
             name: Some("relay-probe-listener".to_owned()),
+            ip: None,
             addresses: vec![address.to_string()],
             routes: Vec::new(),
         }],
@@ -4158,6 +4159,7 @@ mod tests {
         config.peers = vec![PeerConfig {
             id: peer.to_string(),
             name: Some("listener".to_owned()),
+            ip: None,
             addresses: vec![address.to_string()],
             routes: Vec::new(),
         }];

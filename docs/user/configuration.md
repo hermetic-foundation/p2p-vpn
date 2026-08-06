@@ -27,7 +27,7 @@ Everything else can be omitted for the default profile.
 | `peers[].addresses` | empty |
 | `peers[].routes` | empty |
 | `network.routes` | empty |
-| `network.listen_addresses` | empty |
+| `network.listen_addresses` | `/ip4/0.0.0.0/tcp/4001` |
 | `network.external_addresses` | empty |
 | `network.bootstrap_peers` | empty |
 | `network.discovery` | enabled defaults |
@@ -103,12 +103,15 @@ Addresses and routes are optional.
 | --- | --- |
 | `id` | Remote peer ID. Required. |
 | `name` | Optional label. |
+| `ip` | Optional direct IP. Uses TCP port `4001`. |
 | `addresses` | Optional direct or relayed libp2p multiaddrs. |
 | `routes` | Optional prefixes this peer may originate. |
 
 Use peer IDs as the core trust boundary.
 
-Use addresses only as reachability hints.
+Use `ip` for ordinary LAN peers on the default port.
+
+Use `addresses` for custom ports, DNS, QUIC, or relay paths.
 
 ## Route Rules
 

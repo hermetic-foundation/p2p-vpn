@@ -348,9 +348,18 @@ impl Config {
     pub fn peer_multiaddrs(&self) -> Result<Vec<(libp2p::PeerId, libp2p::Multiaddr)>, ConfigError> {
         self.peers
             .iter()
-            .flat_map(|peer| peer.addresses.iter().map(|address| (&peer.id, address)))
-            .map(|(peer, address)| parse_peer_address(peer, address))
-            .collect()
+            .map(PeerConfig::peer_addresses)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|addresses| addresses.into_iter().flatten().collect())
+    }
+
+    pub fn peer_address_count(&self) -> Result<usize, ConfigError> {
+        self.peers
+            .iter()
+            .map(PeerConfig::peer_addresses)
+            .try_fold(0_usize, |count, addresses| {
+                addresses.map(|addresses| count + addresses.len())
+            })
     }
 
     pub fn relay_reservation_multiaddrs(&self) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
@@ -401,7 +410,7 @@ pub struct NetworkConfig {
     pub member_records: Vec<SignedMembershipRecord>,
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
-    #[serde(default)]
+    #[serde(default = "default_listen_addresses")]
     pub listen_addresses: Vec<String>,
     #[serde(default)]
     pub external_addresses: Vec<String>,
@@ -580,7 +589,9 @@ impl RelayResourceConfig {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InterfaceConfig {
+    #[serde(default = "default_interface_name")]
     pub name: String,
+    #[serde(default = "default_mtu")]
     pub mtu: u16,
 }
 
@@ -590,6 +601,8 @@ pub struct PeerConfig {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
     pub addresses: Vec<String>,
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
@@ -598,6 +611,14 @@ pub struct PeerConfig {
 impl PeerConfig {
     pub fn peer_id(&self) -> Result<PeerId, ConfigError> {
         PeerId::from_str(&self.id).map_err(ConfigError::PeerId)
+    }
+
+    pub fn peer_addresses(&self) -> Result<Vec<(libp2p::PeerId, libp2p::Multiaddr)>, ConfigError> {
+        self.addresses
+            .iter()
+            .map(|address| parse_peer_address(&self.id, address))
+            .chain(self.ip.iter().map(|ip| parse_peer_ip(&self.id, ip)))
+            .collect()
     }
 }
 
@@ -878,6 +899,10 @@ pub enum AddressValidationError {
     UnexpectedRelayTarget {
         address: String,
     },
+    InvalidPeerIp {
+        peer: String,
+        ip: String,
+    },
     UnreachablePeer {
         peer: String,
     },
@@ -929,6 +954,7 @@ pub enum MembershipKeyError {
 }
 
 const MIN_MEMBERSHIP_KEY_LEN: usize = 32;
+const DEFAULT_DIRECT_TCP_PORT: u16 = 4001;
 
 fn default_queue() -> QueueConfig {
     QueueConfig {
@@ -1021,6 +1047,18 @@ fn default_kademlia_protocol() -> String {
     "/p2p-vpn/kad/1".to_owned()
 }
 
+fn default_listen_addresses() -> Vec<String> {
+    vec![format!("/ip4/0.0.0.0/tcp/{DEFAULT_DIRECT_TCP_PORT}")]
+}
+
+fn default_interface_name() -> String {
+    "hs0".to_owned()
+}
+
+const fn default_mtu() -> u16 {
+    1_280
+}
+
 const fn default_max_relay_reservations() -> usize {
     128
 }
@@ -1102,8 +1140,8 @@ fn validate_relay_server_resources(
 
 fn default_interface() -> InterfaceConfig {
     InterfaceConfig {
-        name: "hs0".to_owned(),
-        mtu: 1_280,
+        name: default_interface_name(),
+        mtu: default_mtu(),
     }
 }
 
@@ -1238,6 +1276,30 @@ fn parse_peer_address(
     Ok((peer, address))
 }
 
+fn parse_peer_ip(peer: &str, ip: &str) -> Result<(libp2p::PeerId, libp2p::Multiaddr), ConfigError> {
+    let peer_id = peer.parse().map_err(ConfigError::Libp2pPeerId)?;
+    let address = match IpAddr::from_str(ip) {
+        Ok(IpAddr::V4(address)) => libp2p::Multiaddr::empty()
+            .with(Protocol::Ip4(address))
+            .with(Protocol::Tcp(DEFAULT_DIRECT_TCP_PORT))
+            .with(Protocol::P2p(peer_id)),
+        Ok(IpAddr::V6(address)) => libp2p::Multiaddr::empty()
+            .with(Protocol::Ip6(address))
+            .with(Protocol::Tcp(DEFAULT_DIRECT_TCP_PORT))
+            .with(Protocol::P2p(peer_id)),
+        Err(_) => {
+            return Err(ConfigError::Address(
+                AddressValidationError::InvalidPeerIp {
+                    peer: peer.to_owned(),
+                    ip: ip.to_owned(),
+                },
+            ));
+        }
+    };
+
+    Ok((peer_id, address))
+}
+
 fn parse_relay_reservation_multiaddrs(
     input: &[String],
 ) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
@@ -1367,6 +1429,7 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
     peers.push(PeerConfig {
         id: peer.id,
         name: None,
+        ip: None,
         addresses: peer.address.into_iter().collect(),
         routes: peer.routes,
     });
@@ -1395,6 +1458,117 @@ fn ipv6_mask(prefix_len: u8) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_listen_addresses_default_to_direct_tcp_listener() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "peers": [
+                    { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert_eq!(
+            config.network.listen_addresses,
+            vec!["/ip4/0.0.0.0/tcp/4001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn explicit_empty_listen_addresses_disable_listening() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "listen_addresses": []
+                },
+                "peers": [
+                    { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert!(config.network.listen_addresses.is_empty());
+    }
+
+    #[test]
+    fn partial_interface_config_uses_default_mtu() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "interface": { "name": "pvpnA" }
+            }"#,
+        )
+        .expect("partial interface config");
+
+        assert_eq!(config.interface.name, "pvpnA");
+        assert_eq!(config.interface.mtu, 1280);
+    }
+
+    #[test]
+    fn peer_ip_synthesizes_default_direct_tcp_multiaddr() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "peers": [
+                    {
+                        "id": "12D3KooWP7jte6xTZJeG2bSDpxbsxHoyFZjHgBxyzvGkd3UGdheB",
+                        "ip": "192.168.0.203"
+                    }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        let addresses = config.peer_multiaddrs().expect("peer addresses");
+
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(
+            addresses[0].1.to_string(),
+            "/ip4/192.168.0.203/tcp/4001/p2p/12D3KooWP7jte6xTZJeG2bSDpxbsxHoyFZjHgBxyzvGkd3UGdheB"
+        );
+        assert_eq!(config.peer_address_count().expect("address count"), 1);
+    }
+
+    #[test]
+    fn peer_ip_rejects_invalid_ip_literals() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "peers": [
+                    {
+                        "id": "12D3KooWP7jte6xTZJeG2bSDpxbsxHoyFZjHgBxyzvGkd3UGdheB",
+                        "ip": "node-b.local"
+                    }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert!(matches!(
+            config.peer_multiaddrs(),
+            Err(ConfigError::Address(
+                AddressValidationError::InvalidPeerIp { .. }
+            ))
+        ));
+    }
 
     #[test]
     fn membership_keys_are_validated_and_tagged() {
@@ -1808,6 +1982,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
                 name: Some("one".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.7.99/24".to_owned(),
@@ -1869,6 +2044,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
                 name: Some("one".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.9.0/24".to_owned(),
@@ -2047,6 +2223,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -2099,6 +2276,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.peer_id,
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -2141,6 +2319,7 @@ mod tests {
                     id: "0100000000000000000000000000000000000000000000000000000000000000"
                         .to_owned(),
                     name: Some("one".to_owned()),
+                    ip: None,
                     addresses: Vec::new(),
                     routes: vec![RouteConfig {
                         prefix: "10.42.0.0/16".to_owned(),
@@ -2151,6 +2330,7 @@ mod tests {
                     id: "0200000000000000000000000000000000000000000000000000000000000000"
                         .to_owned(),
                     name: Some("two".to_owned()),
+                    ip: None,
                     addresses: Vec::new(),
                     routes: vec![RouteConfig {
                         prefix: "10.42.9.0/24".to_owned(),
@@ -2215,6 +2395,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
                 routes: Vec::new(),
             }],
@@ -2873,6 +3054,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -2935,6 +3117,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: configured.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],

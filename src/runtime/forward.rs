@@ -773,6 +773,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],

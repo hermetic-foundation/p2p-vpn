@@ -2390,6 +2390,7 @@ fn peer_config(
     PeerConfig {
         id: identity.peer_id.clone(),
         name: None,
+        ip: None,
         addresses: address.into_iter().map(str::to_owned).collect(),
         routes,
     }

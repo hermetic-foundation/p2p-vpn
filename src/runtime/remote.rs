@@ -479,6 +479,7 @@ mod tests {
             vec![PeerConfig {
                 id: client_identity.peer_id.clone(),
                 name: Some("client".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -512,6 +513,7 @@ mod tests {
             vec![PeerConfig {
                 id: listener_peer.to_string(),
                 name: Some("listener".to_owned()),
+                ip: None,
                 addresses: vec![listener_address.to_string()],
                 routes: Vec::new(),
             }],

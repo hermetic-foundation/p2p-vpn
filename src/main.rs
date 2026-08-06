@@ -2160,10 +2160,8 @@ fn status_lines(config: &Config) -> Result<Vec<String>, String> {
     lines.push(format!(
         "configured peer addresses: {}",
         config
-            .peers
-            .iter()
-            .map(|peer| peer.addresses.len())
-            .sum::<usize>()
+            .peer_address_count()
+            .map_err(|error| format!("{error:?}"))?
     ));
     lines.push(format!(
         "configured local routes: {}",
@@ -5912,6 +5910,7 @@ mod tests {
             peers: vec![p2p_vpn::config::PeerConfig {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -6000,6 +5999,7 @@ mod tests {
             peers: vec![p2p_vpn::config::PeerConfig {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -6113,6 +6113,7 @@ mod tests {
             peers: vec![p2p_vpn::config::PeerConfig {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: vec![
                     "/ip4/127.0.0.1/tcp/4001".to_owned(),
                     format!(
@@ -6318,6 +6319,7 @@ mod tests {
             peers: vec![p2p_vpn::config::PeerConfig {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
+                ip: None,
                 addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -6496,6 +6498,7 @@ mod tests {
                 p2p_vpn::config::PeerConfig {
                     id: remote.peer_id.clone(),
                     name: Some("remote".to_owned()),
+                    ip: None,
                     addresses: vec![
                         "/ip4/127.0.0.1/udp/4001/quic-v1".to_owned(),
                         "/ip4/127.0.0.1/tcp/4001".to_owned(),
@@ -6509,6 +6512,7 @@ mod tests {
                 p2p_vpn::config::PeerConfig {
                     id: relay.peer_id.clone(),
                     name: Some("discovered".to_owned()),
+                    ip: None,
                     addresses: Vec::new(),
                     routes: Vec::new(),
                 },

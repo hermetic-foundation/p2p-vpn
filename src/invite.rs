@@ -212,6 +212,7 @@ pub fn import_invite_config_at(
         peers: vec![PeerConfig {
             id: invite.payload.inviter_peer.clone(),
             name: options.peer_name,
+            ip: None,
             addresses: invite.payload.inviter_addresses.clone(),
             routes: invite.payload.inviter_routes.clone(),
         }],

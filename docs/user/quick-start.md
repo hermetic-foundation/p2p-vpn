@@ -46,6 +46,7 @@ Defaults fill in:
 | --- | --- |
 | TUN interface | `hs0` |
 | MTU | `1280` |
+| libp2p listener | `/ip4/0.0.0.0/tcp/4001` |
 | Discovery | mDNS, Kademlia, DCUtR, AutoNAT enabled |
 | Queue and resource limits | built-in safe defaults |
 | Packet plane listeners | disabled unless configured |
@@ -71,15 +72,17 @@ This is the "ID plus IP" shape:
 }
 ```
 
-If discovery cannot find the peer, add a dial address:
+If discovery cannot find the peer, add only the LAN IP:
 
 ```json
 {
   "id": "REMOTE_PEER_ID",
-  "addresses": ["/ip4/REMOTE_IP/tcp/4001/p2p/REMOTE_PEER_ID"],
+  "ip": "REMOTE_IP",
   "routes": [{ "prefix": "10.44.0.2/32" }]
 }
 ```
+
+Use `addresses` only for non-default ports or relayed multiaddrs.
 
 ## 1. Build The Binary
 
@@ -106,7 +109,6 @@ nix run .# -- init-config \
   --output host-a.json \
   --network lab \
   --interface hs0 \
-  --listen-address /ip4/0.0.0.0/tcp/4001 \
   --force
 ```
 
@@ -117,7 +119,6 @@ nix run .# -- init-config \
   --output host-b.json \
   --network lab \
   --interface hs0 \
-  --listen-address /ip4/0.0.0.0/tcp/4001 \
   --force
 ```
 

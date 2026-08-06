@@ -32,12 +32,22 @@ pub struct TunRuntimeConfig {
     pub name: String,
     pub mtu: u16,
     pub addresses: TunAddresses,
+    pub additional_addresses: Vec<IpCidr>,
     pub routes: Vec<Route>,
 }
 
 impl TunRuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
         let local_peer = config.local_peer_id()?;
+        let additional_addresses = config
+            .network
+            .routes
+            .iter()
+            .map(RouteConfigExt::host_address)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let routes = config
             .compile_routes()?
             .routes()
@@ -50,6 +60,7 @@ impl TunRuntimeConfig {
             name: config.interface.name.clone(),
             mtu: effective_packet_mtu(config.interface.mtu),
             addresses: TunAddresses::for_peer(local_peer),
+            additional_addresses,
             routes,
         })
     }
@@ -63,11 +74,33 @@ impl TunRuntimeConfig {
         )];
 
         commands.extend(
+            self.additional_addresses
+                .iter()
+                .copied()
+                .map(|prefix| IpCommand::addr_replace(self.name.clone(), prefix)),
+        );
+        commands.extend(
             self.routes
                 .iter()
                 .map(|route| IpCommand::route_replace(self.name.clone(), route.prefix, self.mtu)),
         );
         commands
+    }
+}
+
+trait RouteConfigExt {
+    fn host_address(&self) -> Result<Option<IpCidr>, crate::config::ConfigError>;
+}
+
+impl RouteConfigExt for crate::config::RouteConfig {
+    fn host_address(&self) -> Result<Option<IpCidr>, crate::config::ConfigError> {
+        let prefix = self.prefix()?;
+        let is_host_route = match prefix.address() {
+            IpAddr::V4(_) => prefix.prefix_len() == 32,
+            IpAddr::V6(_) => prefix.prefix_len() == 128,
+        };
+
+        Ok(is_host_route.then_some(prefix))
     }
 }
 
@@ -79,16 +112,23 @@ pub struct IpCommand {
 impl IpCommand {
     #[must_use]
     pub fn addr_add_v6(interface: String, prefix: IpCidr) -> Self {
-        Self {
-            args: vec![
-                "-6".to_owned(),
-                "addr".to_owned(),
-                "replace".to_owned(),
-                prefix.to_string(),
-                "dev".to_owned(),
-                interface,
-            ],
+        Self::addr_replace(interface, prefix)
+    }
+
+    #[must_use]
+    pub fn addr_replace(interface: String, prefix: IpCidr) -> Self {
+        let mut args = Vec::new();
+        if prefix.address().is_ipv6() {
+            args.push("-6".to_owned());
         }
+        args.extend([
+            "addr".to_owned(),
+            "replace".to_owned(),
+            prefix.to_string(),
+            "dev".to_owned(),
+            interface,
+        ]);
+        Self { args }
     }
 
     #[must_use]
@@ -438,6 +478,7 @@ mod tests {
         assert_eq!(runtime.name, "hs0");
         assert_eq!(runtime.mtu, 1280);
         assert_eq!(runtime.addresses.ipv4, builtin_ipv4(local));
+        assert!(runtime.additional_addresses.is_empty());
     }
 
     #[test]
@@ -508,6 +549,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: Some("node-b".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -541,6 +583,81 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_assigns_local_host_routes_as_addresses() {
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: peer_hex(1),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                routes: vec![
+                    RouteConfig {
+                        prefix: "10.44.0.1/32".to_owned(),
+                        metric: 0,
+                    },
+                    RouteConfig {
+                        prefix: "fd00::44/128".to_owned(),
+                        metric: 0,
+                    },
+                    RouteConfig {
+                        prefix: "10.45.0.0/24".to_owned(),
+                        metric: 0,
+                    },
+                ],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "hs0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+
+        let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
+        let commands = runtime
+            .route_commands()
+            .into_iter()
+            .map(|command| command.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            runtime.additional_addresses,
+            vec![
+                IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 44, 0, 1)), 32).expect("IPv4 host"),
+                IpCidr::new("fd00::44".parse().expect("IPv6 host"), 128).expect("IPv6 host"),
+            ]
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "ip addr replace 10.44.0.1/32 dev hs0")
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "ip -6 addr replace fd00::44/128 dev hs0")
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| command == "ip addr replace 10.45.0.0/24 dev hs0")
+        );
+    }
+
+    #[test]
     fn route_commands_install_ipv6_address_and_peer_routes() {
         let config = Config {
             network: NetworkConfig {
@@ -569,6 +686,7 @@ mod tests {
                 ])
                 .to_string(),
                 name: Some("node-b".to_owned()),
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.99/24".to_owned(),

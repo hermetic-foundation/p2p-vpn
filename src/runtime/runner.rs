@@ -8323,6 +8323,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: peer.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -9259,6 +9260,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: configured.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -10097,6 +10099,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: configured.to_string(),
                 name: None,
+                ip: None,
                 addresses: vec![format!(
                     "/ip4/127.0.0.1/tcp/4003/p2p/{peer_address_relay}/p2p-circuit/p2p/{configured}"
                 )],
@@ -11222,6 +11225,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11409,6 +11413,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11470,6 +11475,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11533,6 +11539,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11597,6 +11604,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11652,6 +11660,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11714,6 +11723,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -11774,6 +11784,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11867,6 +11878,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: trusted.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -11987,6 +11999,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: trusted.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12092,6 +12105,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: trusted.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12246,6 +12260,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: trusted.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12301,6 +12316,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12352,6 +12368,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12403,6 +12420,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12457,6 +12475,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: configured.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12508,6 +12527,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12568,6 +12588,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12657,6 +12678,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12757,6 +12779,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12852,6 +12875,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -12952,6 +12976,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -13070,6 +13095,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -13169,6 +13195,7 @@ mod tests {
             peers: vec![PeerConfig {
                 id: remote.to_string(),
                 name: None,
+                ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -14797,12 +14824,14 @@ mod tests {
                 PeerConfig {
                     id: stream_peer.to_string(),
                     name: None,
+                    ip: None,
                     addresses: Vec::new(),
                     routes: Vec::new(),
                 },
                 PeerConfig {
                     id: datagram_peer.to_string(),
                     name: None,
+                    ip: None,
                     addresses: Vec::new(),
                     routes: Vec::new(),
                 },
