@@ -1,8 +1,10 @@
 # Configuration
 
-Use `init-config` to generate configs.
+Use `init-config` to generate full configs.
 
-Manual JSON edits are supported, but generated configs include safe defaults.
+Manual JSON can be much smaller.
+
+Most sections have defaults.
 
 ## Required Fields
 
@@ -11,23 +13,102 @@ Manual JSON edits are supported, but generated configs include safe defaults.
 | `network.name` | yes | Overlay name. Peers must match. |
 | `network.local_peer` | yes | Local libp2p peer ID. |
 | `network.private_key` | yes | Base64 local identity key. |
-| `network.listen_addresses` | usually | Libp2p listen multiaddrs. |
-| `interface.name` | yes | TUN interface name. |
-| `interface.mtu` | yes | TUN MTU. Default is `1280`. |
-| `peers[]` | for VPN traffic | Authorized remote overlay peers. |
+| `peers[].id` | for VPN traffic | Authorized remote overlay peer. |
+
+Everything else can be omitted for the default profile.
+
+## Defaulted Fields
+
+| Field | Default |
+| --- | --- |
+| `interface.name` | `hs0` |
+| `interface.mtu` | `1280` |
+| `peers[].name` | unset |
+| `peers[].addresses` | empty |
+| `peers[].routes` | empty |
+| `network.routes` | empty |
+| `network.listen_addresses` | empty |
+| `network.external_addresses` | empty |
+| `network.bootstrap_peers` | empty |
+| `network.discovery` | enabled defaults |
+| `network.relay` | disabled relay server, no reservations |
+| `network.packet_plane` | no owned datagram listeners |
+| `queue` | built-in bounded queue defaults |
+| `resources` | built-in connection and stream limits |
+
+## Minimal Shapes
+
+### Identity And Membership
+
+This authorizes one remote peer.
+
+It relies on discovery for reachability:
+
+```json
+{
+  "network": {
+    "name": "lab",
+    "local_peer": "LOCAL_PEER_ID",
+    "private_key": "BASE64_PRIVATE_KEY"
+  },
+  "peers": [
+    { "id": "REMOTE_PEER_ID" }
+  ]
+}
+```
+
+### Stable Overlay IPs
+
+Add route ownership for human-chosen VPN IPs:
+
+```json
+{
+  "network": {
+    "name": "lab",
+    "local_peer": "LOCAL_PEER_ID",
+    "private_key": "BASE64_PRIVATE_KEY",
+    "routes": [{ "prefix": "10.44.0.1/32" }]
+  },
+  "peers": [
+    {
+      "id": "REMOTE_PEER_ID",
+      "routes": [{ "prefix": "10.44.0.2/32" }]
+    }
+  ]
+}
+```
+
+This is optional.
+
+Without it, `status` shows built-in IPs derived from peer IDs.
+
+### Explicit Dial Address
+
+Add `addresses` when discovery cannot find the peer:
+
+```json
+{
+  "id": "REMOTE_PEER_ID",
+  "addresses": ["/ip4/REMOTE_IP/tcp/4001/p2p/REMOTE_PEER_ID"]
+}
+```
 
 ## Peer Entries
 
 Each peer entry grants overlay membership to one peer ID.
 
-It also defines how to dial that peer and which routes it owns.
+Addresses and routes are optional.
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Remote peer ID. |
+| `id` | Remote peer ID. Required. |
 | `name` | Optional label. |
-| `addresses` | Direct or relayed libp2p multiaddrs. |
-| `routes` | Prefixes this peer may originate. |
+| `addresses` | Optional direct or relayed libp2p multiaddrs. |
+| `routes` | Optional prefixes this peer may originate. |
+
+Use peer IDs as the core trust boundary.
+
+Use addresses only as reachability hints.
 
 ## Route Rules
 
@@ -41,6 +122,10 @@ The daemon rejects overlapping prefixes owned by different peers.
 | `peers[].routes[]` | That peer. |
 | Built-in IPv4 host route | Derived from peer ID. |
 | Built-in IPv6 host route | Derived from peer ID. |
+
+You only need explicit route entries for stable, chosen IPs.
+
+Without them, peers still get built-in host routes.
 
 ## Discovery
 
