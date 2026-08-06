@@ -394,6 +394,21 @@ pub fn kademlia_membership_records_key(
     kad::RecordKey::new(&key)
 }
 
+#[must_use]
+pub fn kademlia_peer_addresses_key(
+    network_name: &str,
+    membership_tag: Option<&str>,
+    peer: PeerId,
+) -> kad::RecordKey {
+    let key = membership_tag.map_or_else(
+        || format!("/p2p-vpn/{network_name}/peer-addresses/{peer}/1"),
+        |membership_tag| {
+            format!("/p2p-vpn/{network_name}/members/{membership_tag}/peer-addresses/{peer}/1")
+        },
+    );
+    kad::RecordKey::new(&key)
+}
+
 fn kademlia_stream_protocol(protocol: &str) -> Result<libp2p::StreamProtocol, P2pBuildError> {
     libp2p::StreamProtocol::try_from_owned(protocol.to_owned())
         .map_err(|_| P2pBuildError::InvalidKademliaProtocol(protocol.to_owned()))
