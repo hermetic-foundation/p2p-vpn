@@ -79,12 +79,26 @@ impl TunRuntimeConfig {
                 .copied()
                 .map(|prefix| IpCommand::addr_replace(self.name.clone(), prefix)),
         );
-        commands.extend(
-            self.routes
-                .iter()
-                .map(|route| IpCommand::route_replace(self.name.clone(), route.prefix, self.mtu)),
-        );
+        commands.extend(self.routes.iter().map(|route| {
+            IpCommand::route_replace(
+                self.name.clone(),
+                route.prefix,
+                self.route_source(route.prefix),
+                self.mtu,
+            )
+        }));
         commands
+    }
+
+    fn route_source(&self, prefix: IpCidr) -> IpAddr {
+        self.additional_addresses
+            .iter()
+            .map(|prefix| prefix.address())
+            .find(|address| address.is_ipv4() == prefix.address().is_ipv4())
+            .unwrap_or(match prefix.address() {
+                IpAddr::V4(_) => IpAddr::V4(self.addresses.ipv4),
+                IpAddr::V6(_) => IpAddr::V6(self.addresses.ipv6),
+            })
     }
 }
 
@@ -132,7 +146,7 @@ impl IpCommand {
     }
 
     #[must_use]
-    pub fn route_replace(interface: String, prefix: IpCidr, mtu: u16) -> Self {
+    pub fn route_replace(interface: String, prefix: IpCidr, source: IpAddr, mtu: u16) -> Self {
         let mut args = Vec::new();
         if prefix.address().is_ipv6() {
             args.push("-6".to_owned());
@@ -143,6 +157,8 @@ impl IpCommand {
             prefix.to_string(),
             "dev".to_owned(),
             interface,
+            "src".to_owned(),
+            source.to_string(),
             "metric".to_owned(),
             "3000".to_owned(),
             "mtu".to_owned(),
@@ -713,13 +729,74 @@ mod tests {
                 |command| command.starts_with("ip -6 addr replace fd00:6879:7072:7370:6163:65")
             )
         );
-        assert!(commands.iter().any(|command| command
-            == "ip route replace 10.42.0.0/24 dev hs0 metric 3000 mtu 1280 advmss 1240"));
+        assert!(commands.iter().any(|command| *command
+            == format!(
+                "ip route replace 10.42.0.0/24 dev hs0 src {} metric 3000 mtu 1280 advmss 1240",
+                runtime.addresses.ipv4
+            )));
         assert!(runtime.routes.iter().any(|route| {
             route
                 .prefix
                 .contains(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 10)))
         }));
+    }
+
+    #[test]
+    fn route_commands_prefer_configured_local_host_route_as_source() {
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: peer_hex(1),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.1/32".to_owned(),
+                    metric: 100,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: PeerId::from_bytes([
+                    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                ])
+                .to_string(),
+                name: Some("node-b".to_owned()),
+                ip: None,
+                addresses: Vec::new(),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.2/32".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+
+        let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
+        let commands = runtime
+            .route_commands()
+            .into_iter()
+            .map(|command| command.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(commands.iter().any(|command| command
+            == "ip route replace 10.42.0.2/32 dev pv0 src 10.42.0.1 metric 3000 mtu 1280 advmss 1240"));
     }
 
     #[test]
@@ -733,12 +810,13 @@ mod tests {
                 112,
             )
             .expect("IPv6 CIDR"),
+            "fd00::1".parse().expect("IPv6 source"),
             1280,
         );
 
         assert_eq!(
             command.to_string(),
-            "ip -6 route replace fd00:6879:7072:7370:6163:6500:4200:0/112 dev hs0 metric 3000 mtu 1280 advmss 1220"
+            "ip -6 route replace fd00:6879:7072:7370:6163:6500:4200:0/112 dev hs0 src fd00::1 metric 3000 mtu 1280 advmss 1220"
         );
     }
 
@@ -747,12 +825,13 @@ mod tests {
         let command = IpCommand::route_replace(
             "hs0".to_owned(),
             IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 24).expect("IPv4 CIDR"),
+            "10.42.0.1".parse().expect("IPv4 source"),
             39,
         );
 
         assert_eq!(
             command.to_string(),
-            "ip route replace 10.42.0.0/24 dev hs0 metric 3000 mtu 39"
+            "ip route replace 10.42.0.0/24 dev hs0 src 10.42.0.1 metric 3000 mtu 39"
         );
     }
 }
