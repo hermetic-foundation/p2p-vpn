@@ -189,6 +189,8 @@
             relay_config="$artifact_dir/public-relay-config.json"
             vpn_host_a_config="$artifact_dir/public-vpn-host-a.json"
             vpn_host_b_config="$artifact_dir/public-vpn-host-b.json"
+            vpn_host_a_relay_reservation_report="$artifact_dir/public-vpn-host-a-relay-reservation-check.json"
+            vpn_host_b_relay_reservation_report="$artifact_dir/public-vpn-host-b-relay-reservation-check.json"
             dcutr_report="$artifact_dir/public-relay-dcutr-report.json"
             membership_config="$artifact_dir/public-membership-dht-config.json"
             membership_root_record="$artifact_dir/public-membership-root.record.json"
@@ -223,6 +225,7 @@
             vpn_host_a_route="''${P2P_VPN_REPRO_VPN_HOST_A_ROUTE:-10.42.0.1/32}"
             vpn_host_b_route="''${P2P_VPN_REPRO_VPN_HOST_B_ROUTE:-10.42.0.2/32}"
             vpn_network="''${P2P_VPN_REPRO_VPN_NETWORK:-public-vpn-repro}"
+            require_vpn_relay_reservations="''${P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS:-1}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -251,6 +254,7 @@
                 echo "P2P_VPN_REPRO_VPN_HOST_A_ROUTE=$vpn_host_a_route"
                 echo "P2P_VPN_REPRO_VPN_HOST_B_ROUTE=$vpn_host_b_route"
                 echo "P2P_VPN_REPRO_VPN_NETWORK=$vpn_network"
+                echo "P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=$require_vpn_relay_reservations"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -333,6 +337,7 @@
                 printf "export P2P_VPN_REPRO_VPN_HOST_A_ROUTE=%q\n" "$vpn_host_a_route"
                 printf "export P2P_VPN_REPRO_VPN_HOST_B_ROUTE=%q\n" "$vpn_host_b_route"
                 printf "export P2P_VPN_REPRO_VPN_NETWORK=%q\n" "$vpn_network"
+                printf "export P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=%q\n" "$require_vpn_relay_reservations"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -368,6 +373,20 @@
                 printf "  --two-host-network %q \\\\\n" "$vpn_network"
                 printf "  --host-a-route %q \\\\\n" "$vpn_host_a_route"
                 printf "  --host-b-route %q \\\\\n" "$vpn_host_b_route"
+                echo "  --force"
+                echo
+                echo "p2p-vpn bootstrap-check \\"
+                printf "  --config %q \\\\\n" "$vpn_host_a_config"
+                printf "  --timeout-seconds %q \\\\\n" "$candidate_timeout"
+                echo "  --require-relay-reservations \\"
+                printf "  --write-report %q \\\\\n" "$vpn_host_a_relay_reservation_report"
+                echo "  --force"
+                echo
+                echo "p2p-vpn bootstrap-check \\"
+                printf "  --config %q \\\\\n" "$vpn_host_b_config"
+                printf "  --timeout-seconds %q \\\\\n" "$candidate_timeout"
+                echo "  --require-relay-reservations \\"
+                printf "  --write-report %q \\\\\n" "$vpn_host_b_relay_reservation_report"
                 echo "  --force"
                 echo
                 echo "p2p-vpn relay-check \\"
@@ -484,6 +503,7 @@
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT=%q\n" "$membership_dht"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_NETWORK=%q\n" "$membership_network"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=%q\n" "$membership_dht_timeout"
+                printf "export P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=%q\n" "$require_vpn_relay_reservations"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -580,6 +600,27 @@
                 echo "  serve_seconds=$dcutr_serve_seconds"
                 echo "  dial_timeout_seconds=$dcutr_dial_timeout"
               } >> "$summary"
+            }
+
+            check_two_host_vpn_relay_reservations() {
+              if [[ ! -s "$vpn_host_a_config" || ! -s "$vpn_host_b_config" ]]; then
+                echo "generated Host A/B VPN configs are missing; cannot check relay reservations" >&2
+                return 2
+              fi
+
+              p2p-vpn bootstrap-check \
+                --config "$vpn_host_a_config" \
+                --timeout-seconds "$candidate_timeout" \
+                --require-relay-reservations \
+                --write-report "$vpn_host_a_relay_reservation_report" \
+                --force
+
+              p2p-vpn bootstrap-check \
+                --config "$vpn_host_b_config" \
+                --timeout-seconds "$candidate_timeout" \
+                --require-relay-reservations \
+                --write-report "$vpn_host_b_relay_reservation_report" \
+                --force
             }
 
             append_membership_dht_summary() {
@@ -738,12 +779,16 @@
               scan_summary="$artifact_dir/.repro-scan-summary.json"
               relay_summary="$artifact_dir/.repro-relay-check-summary.json"
               dcutr_summary="$artifact_dir/.repro-dcutr-summary.json"
+              vpn_host_a_relay_reservation_summary="$artifact_dir/.repro-vpn-host-a-relay-reservation-summary.json"
+              vpn_host_b_relay_reservation_summary="$artifact_dir/.repro-vpn-host-b-relay-reservation-summary.json"
               membership_dht_summary="$artifact_dir/.repro-membership-dht-summary.json"
               phase_summary="$artifact_dir/.repro-phase-results.json"
 
               write_report_summary_json "scan" "$scan_report" "$scan_summary"
               write_report_summary_json "relay-check" "$relay_report" "$relay_summary"
               write_report_summary_json "dcutr" "$dcutr_report" "$dcutr_summary"
+              write_bootstrap_summary_json "vpn-host-a-relay-reservation" "$vpn_host_a_relay_reservation_report" "$vpn_host_a_relay_reservation_summary"
+              write_bootstrap_summary_json "vpn-host-b-relay-reservation" "$vpn_host_b_relay_reservation_report" "$vpn_host_b_relay_reservation_summary"
               if [[ -s "$membership_dht_report" ]]; then
                 jq \
                   --arg path "$membership_dht_report" '
@@ -784,6 +829,8 @@
                 --arg relay_assisted_config "$relay_config" \
                 --arg vpn_host_a_config "$vpn_host_a_config" \
                 --arg vpn_host_b_config "$vpn_host_b_config" \
+                --arg vpn_host_a_relay_reservation_report "$vpn_host_a_relay_reservation_report" \
+                --arg vpn_host_b_relay_reservation_report "$vpn_host_b_relay_reservation_report" \
                 --arg membership_config "$membership_config" \
                 --arg membership_installed_config "$membership_installed_config" \
                 --arg membership_root_record "$membership_root_record" \
@@ -801,6 +848,8 @@
                 --slurpfile scan "$scan_summary" \
                 --slurpfile relay "$relay_summary" \
                 --slurpfile dcutr "$dcutr_summary" \
+                --slurpfile vpn_host_a_relay_reservation "$vpn_host_a_relay_reservation_summary" \
+                --slurpfile vpn_host_b_relay_reservation "$vpn_host_b_relay_reservation_summary" \
                 --slurpfile membership_dht "$membership_dht_summary" \
                 '{
                   schema_version: 1,
@@ -817,6 +866,8 @@
                     relay_assisted_config: $relay_assisted_config,
                     vpn_host_a_config: $vpn_host_a_config,
                     vpn_host_b_config: $vpn_host_b_config,
+                    vpn_host_a_relay_reservation_report: $vpn_host_a_relay_reservation_report,
+                    vpn_host_b_relay_reservation_report: $vpn_host_b_relay_reservation_report,
                     membership_config: $membership_config,
                     membership_installed_config: $membership_installed_config,
                     membership_root_record: $membership_root_record,
@@ -831,6 +882,8 @@
                     scan: $scan[0],
                     relay_check: $relay[0],
                     dcutr: $dcutr[0],
+                    vpn_host_a_relay_reservation: $vpn_host_a_relay_reservation[0],
+                    vpn_host_b_relay_reservation: $vpn_host_b_relay_reservation[0],
                     membership_dht: $membership_dht[0]
                   },
                   two_host_dcutr_handoff: {
@@ -844,7 +897,50 @@
                   }
                 }' > "$summary_json"
 
-              rm -f "$scan_summary" "$relay_summary" "$dcutr_summary" "$membership_dht_summary" "$phase_summary"
+              rm -f \
+                "$scan_summary" \
+                "$relay_summary" \
+                "$dcutr_summary" \
+                "$vpn_host_a_relay_reservation_summary" \
+                "$vpn_host_b_relay_reservation_summary" \
+                "$membership_dht_summary" \
+                "$phase_summary"
+            }
+
+            write_bootstrap_summary_json() {
+              label="$1"
+              report="$2"
+              output="$3"
+              if [[ ! -s "$report" ]]; then
+                jq -n \
+                  --arg label "$label" \
+                  --arg path "$report" \
+                  '{label: $label, path: $path, present: false}' > "$output"
+                return
+              fi
+
+              jq \
+                --arg label "$label" \
+                --arg path "$report" '
+                  {
+                    label: $label,
+                    path: $path,
+                    present: true,
+                    succeeded: (.succeeded // false),
+                    configured_relay_reservations: (.bootstrap.configured_relay_reservations // null),
+                    accepted_relay_reservations: (.bootstrap.accepted_relay_reservations // null),
+                    relayed_listen_addresses: (.bootstrap.relayed_listen_addresses // null),
+                    relay_results: (.bootstrap.relay_results // []),
+                    first_error: (
+                      [
+                        (.bootstrap.peer_results[]?.last_error),
+                        (.bootstrap.relayed_peer_results[]?.last_error)
+                      ]
+                      | map(select(. != null and . != ""))
+                      | first // null
+                    )
+                  }
+                ' "$report" > "$output"
             }
 
             write_summary() {
@@ -992,6 +1088,14 @@
                 --host-a-route "$vpn_host_a_route" \
                 --host-b-route "$vpn_host_b_route" \
                 --force
+
+              if [[ "$require_vpn_relay_reservations" == 1 ]]; then
+                run_phase "checking generated two-host VPN relay reservations" \
+                  check_two_host_vpn_relay_reservations
+              else
+                phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                record_phase_result "generated two-host VPN relay reservation check disabled" 0 "$phase_utc" "$phase_utc" 0 "" ""
+              fi
 
               run_phase "probing candidates for DCUtR success evidence" \
                 p2p-vpn relay-check \
@@ -2160,8 +2264,14 @@ EOF
             grep -q 'membership_dht' "$script"
             grep -q 'public-vpn-host-a.json' "$script"
             grep -q 'public-vpn-host-b.json' "$script"
+            grep -q 'public-vpn-host-a-relay-reservation-check.json' "$script"
+            grep -q 'public-vpn-host-b-relay-reservation-check.json' "$script"
+            grep -q 'P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS' "$script"
+            grep -q 'checking generated two-host VPN relay reservations' "$script"
+            grep -q 'write_bootstrap_summary_json' "$script"
             grep -q -- '--write-host-a-config' "$script"
             grep -q -- '--write-host-b-config' "$script"
+            grep -q -- '--require-relay-reservations' "$script"
             grep -q 'vpn_host_a_config' "$script"
             grep -q 'P2P_VPN_REPRO_VPN_HOST_A_ROUTE' "$script"
 
