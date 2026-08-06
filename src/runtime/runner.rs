@@ -288,7 +288,7 @@ where
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         external_addresses: config.external_multiaddrs()?,
-        bootstrap_peers: config.bootstrap_multiaddrs()?,
+        bootstrap_peers: config.effective_bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
         relay_server: config.network.relay.server,

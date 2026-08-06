@@ -103,9 +103,17 @@ Relay peers are not VPN members unless they also appear in `peers[]`.
 
 ## Public Discovery
 
-Public IPFS/libp2p routing is used as a hint source.
+Public IPFS/libp2p routing is default reachability infrastructure.
 
 Provider results are dialed only when they match configured overlay peers.
+
+Bootstrap peers are runtime defaults for the public DHT profile.
+
+They are not VPN members and are not serialized into minimal configs.
+
+Configured peer addresses are optional hints.
+
+They must not be required for normal route convergence or network movement.
 
 ## Observability
 

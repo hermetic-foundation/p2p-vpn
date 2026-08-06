@@ -25,16 +25,44 @@ use crate::{
 
 use libp2p::multiaddr::Protocol;
 
+pub const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
+pub const PUBLIC_IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
+pub const PUBLIC_IPFS_BOOTSTRAP_PEERS: &[(&str, &str)] = &[
+    (
+        "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    ),
+    (
+        "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    ),
+    (
+        "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    ),
+    (
+        "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    ),
+    (
+        "QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+        "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+    ),
+];
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Config {
     pub network: NetworkConfig,
-    #[serde(default = "default_interface")]
+    #[serde(
+        default = "default_interface",
+        skip_serializing_if = "is_default_interface"
+    )]
     pub interface: InterfaceConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<PeerConfig>,
-    #[serde(default = "default_queue")]
+    #[serde(default = "default_queue", skip_serializing_if = "is_default_queue")]
     pub queue: QueueConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_resources")]
     pub resources: ResourceConfig,
 }
 
@@ -345,6 +373,27 @@ impl Config {
             .collect()
     }
 
+    pub fn effective_bootstrap_multiaddrs(
+        &self,
+    ) -> Result<Vec<(libp2p::PeerId, libp2p::Multiaddr)>, ConfigError> {
+        let mut peers = self.bootstrap_multiaddrs()?;
+        if self.uses_public_ipfs_bootstrap_defaults() {
+            for peer in public_ipfs_bootstrap_peer_configs() {
+                let address = peer.peer_address()?;
+                if peers.iter().any(|existing| existing == &address) {
+                    continue;
+                }
+                peers.push(address);
+            }
+        }
+        Ok(peers)
+    }
+
+    pub fn uses_public_ipfs_bootstrap_defaults(&self) -> bool {
+        self.network.discovery.kademlia
+            && self.network.discovery.kademlia_protocol == PUBLIC_IPFS_KADEMLIA_PROTOCOL
+    }
+
     pub fn peer_multiaddrs(&self) -> Result<Vec<(libp2p::PeerId, libp2p::Multiaddr)>, ConfigError> {
         self.peers
             .iter()
@@ -400,27 +449,33 @@ impl Config {
 pub struct NetworkConfig {
     pub name: String,
     pub local_peer: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub previous_membership_tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_records: Vec<SignedMembershipRecord>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<RouteConfig>,
-    #[serde(default = "default_listen_addresses")]
+    #[serde(
+        default = "default_listen_addresses",
+        skip_serializing_if = "is_default_listen_addresses"
+    )]
     pub listen_addresses: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_addresses: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bootstrap_peers: Vec<BootstrapPeerConfig>,
-    #[serde(default = "default_discovery")]
+    #[serde(
+        default = "default_discovery",
+        skip_serializing_if = "is_default_discovery"
+    )]
     pub discovery: DiscoveryConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_relay")]
     pub relay: RelayConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_packet_plane")]
     pub packet_plane: PacketPlaneConfig,
 }
 
@@ -434,6 +489,17 @@ impl BootstrapPeerConfig {
     pub fn peer_address(&self) -> Result<(libp2p::PeerId, libp2p::Multiaddr), ConfigError> {
         parse_peer_address(&self.id, &self.address)
     }
+}
+
+#[must_use]
+pub fn public_ipfs_bootstrap_peer_configs() -> Vec<BootstrapPeerConfig> {
+    PUBLIC_IPFS_BOOTSTRAP_PEERS
+        .iter()
+        .map(|(id, address)| BootstrapPeerConfig {
+            id: (*id).to_owned(),
+            address: (*address).to_owned(),
+        })
+        .collect()
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -461,13 +527,13 @@ impl Default for DiscoveryConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelayConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub server: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reservations: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_auto_relay")]
     pub auto: AutoRelayConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_relay_resources")]
     pub resources: RelayResourceConfig,
 }
 
@@ -500,13 +566,13 @@ impl AutoRelayConfig {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PacketPlaneConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub listen: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_endpoints: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quic_listen: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quic_external_endpoints: Vec<String>,
     #[serde(default = "default_packet_plane_session_ttl_seconds")]
     pub session_ttl_seconds: u64,
@@ -598,13 +664,13 @@ pub struct InterfaceConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PeerConfig {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<RouteConfig>,
 }
 
@@ -1044,15 +1110,15 @@ fn default_discovery() -> DiscoveryConfig {
 }
 
 fn default_kademlia_protocol() -> String {
-    "/p2p-vpn/kad/1".to_owned()
+    PUBLIC_IPFS_KADEMLIA_PROTOCOL.to_owned()
 }
 
-fn default_listen_addresses() -> Vec<String> {
+pub fn default_listen_addresses() -> Vec<String> {
     vec![format!("/ip4/0.0.0.0/tcp/{DEFAULT_DIRECT_TCP_PORT}")]
 }
 
 fn default_interface_name() -> String {
-    "hs0".to_owned()
+    "pv0".to_owned()
 }
 
 const fn default_mtu() -> u16 {
@@ -1143,6 +1209,46 @@ fn default_interface() -> InterfaceConfig {
         name: default_interface_name(),
         mtu: default_mtu(),
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_default_interface(value: &InterfaceConfig) -> bool {
+    *value == default_interface()
+}
+
+fn is_default_queue(value: &QueueConfig) -> bool {
+    *value == default_queue()
+}
+
+fn is_default_resources(value: &ResourceConfig) -> bool {
+    *value == default_resources()
+}
+
+fn is_default_discovery(value: &DiscoveryConfig) -> bool {
+    *value == default_discovery()
+}
+
+fn is_default_relay(value: &RelayConfig) -> bool {
+    *value == RelayConfig::default()
+}
+
+fn is_default_auto_relay(value: &AutoRelayConfig) -> bool {
+    *value == AutoRelayConfig::default()
+}
+
+fn is_default_relay_resources(value: &RelayResourceConfig) -> bool {
+    *value == RelayResourceConfig::default()
+}
+
+fn is_default_packet_plane(value: &PacketPlaneConfig) -> bool {
+    *value == PacketPlaneConfig::default()
+}
+
+fn is_default_listen_addresses(value: &[String]) -> bool {
+    value == default_listen_addresses().as_slice()
 }
 
 fn decode_membership_key(input: &str) -> Result<Vec<u8>, ConfigError> {
@@ -1477,6 +1583,32 @@ mod tests {
         assert_eq!(
             config.network.listen_addresses,
             vec!["/ip4/0.0.0.0/tcp/4001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn minimal_public_config_gets_runtime_bootstrap_defaults() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "peers": [
+                    { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert!(config.network.bootstrap_peers.is_empty());
+        assert!(config.uses_public_ipfs_bootstrap_defaults());
+        assert_eq!(
+            config
+                .effective_bootstrap_multiaddrs()
+                .expect("effective bootstrap")
+                .len(),
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
         );
     }
 
@@ -2102,11 +2234,11 @@ mod tests {
     }
 
     #[test]
-    fn discovery_config_defaults_to_private_kademlia_protocol() {
+    fn discovery_config_defaults_to_public_ipfs_kademlia_protocol() {
         let discovery = serde_json::from_str::<DiscoveryConfig>("{}").expect("discovery");
 
         assert_eq!(discovery, DiscoveryConfig::default());
-        assert_eq!(discovery.kademlia_protocol, "/p2p-vpn/kad/1");
+        assert_eq!(discovery.kademlia_protocol, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
     }
 
     #[test]

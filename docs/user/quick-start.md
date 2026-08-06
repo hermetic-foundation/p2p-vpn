@@ -2,8 +2,8 @@
 
 This guide creates a minimal two-node overlay.
 
-It assumes both machines can reach each other by at least one libp2p
-multiaddr, such as a LAN TCP address.
+The default profile uses mDNS, public IPFS-compatible Kademlia bootstrap,
+provider discovery, DCUtR, and AutoNAT.
 
 ## What You Need
 
@@ -47,7 +47,8 @@ Defaults fill in:
 | TUN interface | `pv0` |
 | MTU | `1280` |
 | libp2p listener | `/ip4/0.0.0.0/tcp/4001` |
-| Discovery | mDNS, Kademlia, DCUtR, AutoNAT enabled |
+| Discovery | mDNS, public Kademlia, provider ads, DCUtR, AutoNAT |
+| Public bootstrap | built-in IPFS/libp2p bootstrap peers |
 | Queue and resource limits | built-in safe defaults |
 | Packet plane listeners | disabled unless configured |
 
@@ -98,9 +99,9 @@ nix run .# -- --help
 
 ## 2. Generate A Config On Each Host
 
-`init-config` writes expanded JSON with defaults.
+`init-config` writes compact JSON.
 
-Those defaults are not all required in manual configs.
+Defaulted discovery and resource sections are omitted.
 
 Run this on Node A:
 
@@ -151,21 +152,13 @@ Use routes only when you want stable overlay IPs:
 --peer-route PEER_ID=CIDR
 ```
 
-Add a multiaddr when you want an explicit LAN dial path:
-
-```text
---peer PEER_ID=/ip4/HOST/tcp/PORT/p2p/PEER_ID
-```
-
 Example for Node A:
 
 ```sh
 nix run .# -- init-config \
   --output host-a.json \
   --network lab \
-  --interface pv0 \
-  --listen-address /ip4/0.0.0.0/tcp/4001 \
-  --peer NODE_B_PEER_ID=/ip4/NODE_B_LAN_IP/tcp/4001/p2p/NODE_B_PEER_ID \
+  --peer NODE_B_PEER_ID \
   --peer-route NODE_B_PEER_ID=10.44.0.2/32 \
   --local-route 10.44.0.1/32 \
   --force
@@ -177,13 +170,19 @@ Example for Node B:
 nix run .# -- init-config \
   --output host-b.json \
   --network lab \
-  --interface pv0 \
-  --listen-address /ip4/0.0.0.0/tcp/4001 \
-  --peer NODE_A_PEER_ID=/ip4/NODE_A_LAN_IP/tcp/4001/p2p/NODE_A_PEER_ID \
+  --peer NODE_A_PEER_ID \
   --peer-route NODE_A_PEER_ID=10.44.0.1/32 \
   --local-route 10.44.0.2/32 \
   --force
 ```
+
+Use explicit addresses only as overrides:
+
+```text
+--peer PEER_ID=/ip4/HOST/tcp/PORT/p2p/PEER_ID
+```
+
+Do not hardcode relayed circuit paths for normal operation.
 
 ## 5. Start The Daemon
 

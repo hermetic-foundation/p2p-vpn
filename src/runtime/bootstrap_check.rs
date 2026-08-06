@@ -1772,7 +1772,7 @@ fn relay_probe_config_with_relayed_peer_discovery(
             packet_plane: PacketPlaneConfig::default(),
         },
         interface: InterfaceConfig {
-            name: "hs0".to_owned(),
+            name: "pv0".to_owned(),
             mtu: 1280,
         },
         peers: vec![PeerConfig {
@@ -1797,7 +1797,7 @@ fn bootstrap_check_host_config(config: &Config) -> Result<HostConfig, BootstrapC
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         external_addresses: config.external_multiaddrs()?,
-        bootstrap_peers: config.bootstrap_multiaddrs()?,
+        bootstrap_peers: config.effective_bootstrap_multiaddrs()?,
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
         relay_server: config.network.relay.server,
@@ -4123,12 +4123,12 @@ mod tests {
                     id: peer.to_string(),
                     address: address.to_string(),
                 }],
-                discovery: DiscoveryConfig::default(),
+                discovery: relay_test_discovery(),
                 relay: RelayConfig::default(),
                 packet_plane: PacketPlaneConfig::default(),
             },
             interface: InterfaceConfig {
-                name: "hs0".to_owned(),
+                name: "pv0".to_owned(),
                 mtu: 1280,
             },
             peers: Vec::new(),
@@ -4140,6 +4140,7 @@ mod tests {
     fn config_with_relay_reservation(reservation: &Multiaddr) -> Config {
         let mut config = config_with_bootstrap_peer(peer_id(), &"/memory/9".parse().expect("addr"));
         config.network.bootstrap_peers = Vec::new();
+        config.network.discovery = dcutr_probe_discovery();
         config.network.relay.reservations = vec![reservation.to_string()];
         config
     }

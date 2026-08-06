@@ -1,6 +1,6 @@
 # Configuration
 
-Use `init-config` to generate full configs.
+Use `init-config` to generate compact configs.
 
 Manual JSON can be much smaller.
 
@@ -29,8 +29,8 @@ Everything else can be omitted for the default profile.
 | `network.routes` | empty |
 | `network.listen_addresses` | `/ip4/0.0.0.0/tcp/4001` |
 | `network.external_addresses` | empty |
-| `network.bootstrap_peers` | empty |
-| `network.discovery` | enabled defaults |
+| `network.bootstrap_peers` | empty in JSON; public defaults at runtime |
+| `network.discovery` | public discovery defaults |
 | `network.relay` | disabled relay server, no reservations |
 | `network.packet_plane` | no owned datagram listeners |
 | `queue` | built-in bounded queue defaults |
@@ -135,25 +135,34 @@ Without them, peers still get built-in host routes.
 | Setting | Default | Use |
 | --- | --- | --- |
 | `mdns` | enabled | LAN peer discovery. |
-| `kademlia` | enabled | Overlay provider discovery. |
+| `kademlia` | enabled | Public DHT-backed provider discovery. |
 | `kademlia_provider_advertisement` | enabled | Advertise this overlay peer. |
+| `kademlia_protocol` | `/ipfs/kad/1.0.0` | Public libp2p/IPFS DHT. |
 | `dcutr` | enabled | Hole punching support. |
 | `autonat` | enabled | Reachability detection. |
 
-## Public IPFS Profile
+## Public Bootstrap
 
-Use this only for reachability assistance:
+Public IPFS/libp2p bootstrap is automatic by default.
+
+It is not serialized into generated configs.
+
+To write bootstrap peers explicitly:
 
 ```sh
 nix run .# -- init-config \
   --output public.json \
-  --public-ipfs-profile \
+  --ipfs-bootstrap-peers \
   --force
 ```
 
 Public IPFS/libp2p peers are not VPN members.
 
 They are bootstrap, relay, AutoNAT, and routing infrastructure only.
+
+For private-only DHTs, set a private Kademlia protocol.
+
+Then provide private bootstrap peers.
 
 ## Relay Settings
 

@@ -12,9 +12,11 @@ use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
         AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate,
-        InitPeer, PacketPlaneConfig, QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig,
-        RouteConfig, RuntimeDefaults, default_auto_relay_max_candidates,
-        default_auto_relay_max_reservations, default_auto_relay_retry_interval_seconds,
+        InitPeer, PRIVATE_KADEMLIA_PROTOCOL, PUBLIC_IPFS_BOOTSTRAP_PEERS,
+        PUBLIC_IPFS_KADEMLIA_PROTOCOL, PacketPlaneConfig, QueueConfig, RelayConfig,
+        RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
+        default_auto_relay_max_candidates, default_auto_relay_max_reservations,
+        default_auto_relay_retry_interval_seconds, default_listen_addresses,
         default_packet_plane_replay_windows_per_session, default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
@@ -48,31 +50,7 @@ use p2p_vpn::{
 };
 use serde::{Deserialize, Serialize};
 
-const PRIVATE_KADEMLIA_PROTOCOL: &str = "/p2p-vpn/kad/1";
-const IPFS_KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
 const RELAY_CHECK_CAPPED_INPUT_LIMIT: usize = 256;
-const IPFS_BOOTSTRAP_PEERS: &[(&str, &str)] = &[
-    (
-        "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-        "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-    ),
-    (
-        "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-        "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-    ),
-    (
-        "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-        "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-    ),
-    (
-        "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-        "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-    ),
-    (
-        "QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-        "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-    ),
-];
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -200,7 +178,7 @@ enum Command {
         disable_kademlia: bool,
         #[arg(long)]
         disable_kademlia_provider_advertisement: bool,
-        #[arg(long, default_value = PRIVATE_KADEMLIA_PROTOCOL)]
+        #[arg(long, default_value = PUBLIC_IPFS_KADEMLIA_PROTOCOL)]
         kademlia_protocol: String,
         #[arg(long)]
         ipfs_kademlia: bool,
@@ -1091,11 +1069,10 @@ impl InitDiscoveryFlags {
         public_ipfs_profile: bool,
     ) -> DiscoveryConfig {
         DiscoveryConfig {
-            mdns: !self.disable_mdns && !public_ipfs_profile,
+            mdns: !self.disable_mdns,
             kademlia: !self.disable_kademlia,
             kademlia_provider_advertisement: !self.disable_kademlia
-                && !self.disable_kademlia_provider_advertisement
-                && !public_ipfs_profile,
+                && !self.disable_kademlia_provider_advertisement,
             kademlia_protocol: selected_kademlia_protocol(
                 kademlia_protocol,
                 ipfs_kademlia || public_ipfs_profile,
@@ -1108,7 +1085,7 @@ impl InitDiscoveryFlags {
 
 fn selected_kademlia_protocol(kademlia_protocol: String, ipfs_kademlia: bool) -> String {
     if ipfs_kademlia {
-        IPFS_KADEMLIA_PROTOCOL.to_owned()
+        PUBLIC_IPFS_KADEMLIA_PROTOCOL.to_owned()
     } else {
         kademlia_protocol
     }
@@ -1823,7 +1800,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         if !args.discovery.kademlia {
             return Err("--ipfs-bootstrap-peers requires Kademlia discovery".to_owned());
         }
-        if args.discovery.kademlia_protocol != IPFS_KADEMLIA_PROTOCOL {
+        if args.discovery.kademlia_protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
             return Err(
                 "--ipfs-bootstrap-peers requires --ipfs-kademlia or --kademlia-protocol /ipfs/kad/1.0.0"
                     .to_owned(),
@@ -1845,6 +1822,11 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
     );
     let mut relay = args.relay;
     relay.reservations.extend(relay_reservations);
+    let listen_addresses = if args.listen_addresses.is_empty() {
+        default_listen_addresses()
+    } else {
+        args.listen_addresses
+    };
     let mut config = InitConfigTemplate {
         identity,
         network_name: args.network,
@@ -1856,7 +1838,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
             .collect(),
         interface_name: args.interface,
         mtu: args.mtu,
-        listen_addresses: args.listen_addresses,
+        listen_addresses,
         external_addresses: args.external_addresses,
         packet_plane: args.packet_plane,
         bootstrap_peers,
@@ -2005,7 +1987,7 @@ fn init_bootstrap_peers(
     }
 
     if include_ipfs_defaults {
-        for (id, address) in IPFS_BOOTSTRAP_PEERS {
+        for (id, address) in PUBLIC_IPFS_BOOTSTRAP_PEERS {
             if peers
                 .iter()
                 .any(|peer| peer.id == *id && peer.address.as_deref() == Some(*address))
@@ -2424,7 +2406,7 @@ fn push_discovery_status(lines: &mut Vec<String>, config: &Config) {
 }
 
 fn kademlia_scope(protocol: &str) -> &'static str {
-    if protocol == IPFS_KADEMLIA_PROTOCOL {
+    if protocol == PUBLIC_IPFS_KADEMLIA_PROTOCOL {
         "ipfs-compatible public dht"
     } else if protocol == PRIVATE_KADEMLIA_PROTOCOL {
         "private overlay"
@@ -4806,7 +4788,7 @@ fn relay_scan_config(
 
     if ipfs_bootstrap_peers {
         config.network.discovery.kademlia = true;
-        IPFS_KADEMLIA_PROTOCOL.clone_into(&mut config.network.discovery.kademlia_protocol);
+        PUBLIC_IPFS_KADEMLIA_PROTOCOL.clone_into(&mut config.network.discovery.kademlia_protocol);
         config.network.discovery.kademlia_provider_advertisement = false;
     }
 
@@ -5942,7 +5924,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "kademlia scope: private overlay")
+                .any(|line| line == "kademlia scope: ipfs-compatible public dht")
         );
         assert!(
             lines.contains(
@@ -8503,7 +8485,7 @@ mod tests {
                 relayed_peer_circuits: true,
                 membership_records: false,
             },
-            kademlia_protocol: IPFS_KADEMLIA_PROTOCOL.to_owned(),
+            kademlia_protocol: PUBLIC_IPFS_KADEMLIA_PROTOCOL.to_owned(),
             ipfs_compatible: true,
             dcutr: p2p_vpn::runtime::bootstrap_check::BootstrapDcutrCheck {
                 enabled: true,
@@ -8586,7 +8568,10 @@ mod tests {
         assert_eq!(bootstrap["requirements"]["dcutr_success"], true);
         assert_eq!(bootstrap["requirements"]["relayed_peer_circuits"], true);
         assert_eq!(bootstrap["requirements"]["membership_records"], false);
-        assert_eq!(bootstrap["kademlia_protocol"], IPFS_KADEMLIA_PROTOCOL);
+        assert_eq!(
+            bootstrap["kademlia_protocol"],
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
+        );
         assert_eq!(bootstrap["ipfs_compatible"], true);
         assert_eq!(bootstrap["dcutr"]["enabled"], true);
         assert_eq!(bootstrap["dcutr"]["ready"], true);
@@ -8790,13 +8775,13 @@ mod tests {
         assert_eq!(config.network.name, "relay-scan");
         assert_eq!(
             config.network.bootstrap_peers.len(),
-            IPFS_BOOTSTRAP_PEERS.len()
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
         );
         assert!(!config.network.discovery.mdns);
         assert!(config.network.discovery.kademlia);
         assert_eq!(
             config.network.discovery.kademlia_protocol,
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
         assert!(!config.network.discovery.kademlia_provider_advertisement);
     }
@@ -9425,7 +9410,10 @@ mod tests {
             packet_plane: PacketPlaneConfig::default(),
             bootstrap_peers: Vec::new(),
             peers: Vec::new(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                ..DiscoveryConfig::default()
+            },
             relay: RelayConfig::default(),
         }
         .into_config();
@@ -9529,7 +9517,10 @@ mod tests {
             packet_plane: PacketPlaneConfig::default(),
             bootstrap_peers: Vec::new(),
             peers: Vec::new(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                ..DiscoveryConfig::default()
+            },
             relay: RelayConfig::default(),
         }
         .into_config();
@@ -9627,7 +9618,10 @@ mod tests {
             packet_plane: PacketPlaneConfig::default(),
             bootstrap_peers: Vec::new(),
             peers: Vec::new(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                ..DiscoveryConfig::default()
+            },
             relay: RelayConfig::default(),
         }
         .into_config();
@@ -10070,10 +10064,10 @@ mod tests {
         assert!(ipfs_bootstrap_peers);
         assert_eq!(
             selected_kademlia_protocol(kademlia_protocol, ipfs_kademlia),
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
         assert_eq!(
-            kademlia_scope(IPFS_KADEMLIA_PROTOCOL),
+            kademlia_scope(PUBLIC_IPFS_KADEMLIA_PROTOCOL),
             "ipfs-compatible public dht"
         );
         assert_eq!(kademlia_scope("/custom/kad/1"), "custom");
@@ -10113,7 +10107,10 @@ mod tests {
             peers: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                ..DiscoveryConfig::default()
+            },
             relay: RelayConfig::default(),
             packet_plane: PacketPlaneConfig::default(),
             queue: QueueConfig::default(),
@@ -10129,15 +10126,15 @@ mod tests {
     fn init_bootstrap_peers_adds_ipfs_defaults_without_duplicates() {
         let peers = init_bootstrap_peers(
             vec![EndpointArg {
-                id: IPFS_BOOTSTRAP_PEERS[0].0.to_owned(),
-                address: Some(IPFS_BOOTSTRAP_PEERS[0].1.to_owned()),
+                id: PUBLIC_IPFS_BOOTSTRAP_PEERS[0].0.to_owned(),
+                address: Some(PUBLIC_IPFS_BOOTSTRAP_PEERS[0].1.to_owned()),
             }],
             Vec::new(),
             true,
         );
 
-        assert_eq!(peers.len(), IPFS_BOOTSTRAP_PEERS.len());
-        for (id, address) in IPFS_BOOTSTRAP_PEERS {
+        assert_eq!(peers.len(), PUBLIC_IPFS_BOOTSTRAP_PEERS.len());
+        for (id, address) in PUBLIC_IPFS_BOOTSTRAP_PEERS {
             assert!(peers.iter().any(|peer| {
                 peer.id == *id
                     && peer.address.as_deref() == Some(*address)
@@ -10189,18 +10186,18 @@ mod tests {
         config.validate_runtime().expect("runtime-valid config");
         assert_eq!(
             config.network.discovery.kademlia_protocol,
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
         assert_eq!(
             config.network.bootstrap_peers.len(),
-            IPFS_BOOTSTRAP_PEERS.len()
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
         );
         assert_eq!(
             config
                 .bootstrap_multiaddrs()
                 .expect("bootstrap multiaddrs")
                 .len(),
-            IPFS_BOOTSTRAP_PEERS.len()
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
         );
     }
 
@@ -10233,10 +10230,10 @@ mod tests {
             disable_autonat: false,
         }
         .into_config(kademlia_protocol, ipfs_kademlia, public_ipfs_profile);
-        assert!(!discovery.mdns);
+        assert!(discovery.mdns);
         assert!(discovery.kademlia);
-        assert!(!discovery.kademlia_provider_advertisement);
-        assert_eq!(discovery.kademlia_protocol, IPFS_KADEMLIA_PROTOCOL);
+        assert!(discovery.kademlia_provider_advertisement);
+        assert_eq!(discovery.kademlia_protocol, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
         assert!(discovery.dcutr);
         assert!(discovery.autonat);
     }
@@ -10257,7 +10254,7 @@ mod tests {
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
             relay_peers: Vec::new(),
-            ipfs_bootstrap_peers: true,
+            ipfs_bootstrap_peers: false,
             public_ipfs_profile: true,
             peers: Vec::new(),
             local_routes: Vec::new(),
@@ -10282,16 +10279,20 @@ mod tests {
         let _ = std::fs::remove_file(&output);
 
         config.validate_runtime().expect("runtime-valid config");
-        assert!(!config.network.discovery.mdns);
+        assert!(config.network.discovery.mdns);
         assert!(config.network.discovery.kademlia);
-        assert!(!config.network.discovery.kademlia_provider_advertisement);
+        assert!(config.network.discovery.kademlia_provider_advertisement);
         assert_eq!(
             config.network.discovery.kademlia_protocol,
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
+        assert!(config.network.bootstrap_peers.is_empty());
         assert_eq!(
-            config.network.bootstrap_peers.len(),
-            IPFS_BOOTSTRAP_PEERS.len()
+            config
+                .effective_bootstrap_multiaddrs()
+                .expect("effective bootstrap")
+                .len(),
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
         );
         assert!(config.network.discovery.autonat);
         assert!(config.network.discovery.dcutr);
@@ -10419,18 +10420,18 @@ mod tests {
         );
         assert_eq!(
             config.network.bootstrap_peers.len(),
-            IPFS_BOOTSTRAP_PEERS.len() + 1
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
         );
         assert!(config.network.bootstrap_peers.iter().any(|peer| {
             peer.id == relay_id && Some(peer.address.as_str()) == relay_direct_address.as_deref()
         }));
         assert_eq!(config.peers.len(), 0);
-        assert!(!config.network.discovery.mdns);
+        assert!(config.network.discovery.mdns);
         assert!(config.network.discovery.kademlia);
-        assert!(!config.network.discovery.kademlia_provider_advertisement);
+        assert!(config.network.discovery.kademlia_provider_advertisement);
         assert_eq!(
             config.network.discovery.kademlia_protocol,
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
         assert!(config.network.discovery.dcutr);
         assert!(config.network.discovery.autonat);
@@ -10474,7 +10475,7 @@ mod tests {
         assert!(host_b.network.discovery.mdns);
         assert_eq!(
             host_a.network.discovery.kademlia_protocol,
-            IPFS_KADEMLIA_PROTOCOL
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
         );
         assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
         assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
@@ -10679,7 +10680,7 @@ mod tests {
 
         assert_eq!(
             config.network.bootstrap_peers.len(),
-            IPFS_BOOTSTRAP_PEERS.len() + 1
+            PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
         );
         assert_eq!(
             config
