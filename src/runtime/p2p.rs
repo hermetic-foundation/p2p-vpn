@@ -49,6 +49,7 @@ pub struct P2pNode {
     pub kademlia_membership_records_key: Option<kad::RecordKey>,
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub relay_peer_addresses: Vec<(PeerId, Multiaddr)>,
+    pub relay_reservation_addresses: Vec<Multiaddr>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub packet_endpoint_candidates: Vec<String>,
     pub startup: StartupStatus,
@@ -97,6 +98,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let local_peer_id = keypair.public().to_peer_id();
     let bootstrap_peer_addresses = config.bootstrap_peers.clone();
     let relay_peer_addresses = relay_peer_addresses_from_reservations(&config.relay_reservations);
+    let relay_reservation_addresses = config.relay_reservations.clone();
     let configured_peer_addresses = config.known_peers.clone();
 
     let discovery = config.discovery.clone();
@@ -189,6 +191,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         kademlia_membership_records_key,
         bootstrap_peer_addresses,
         relay_peer_addresses,
+        relay_reservation_addresses,
         configured_peer_addresses,
         packet_endpoint_candidates: Vec::new(),
         startup: startup_status(
