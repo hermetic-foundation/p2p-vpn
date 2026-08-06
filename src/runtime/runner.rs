@@ -532,6 +532,11 @@ where
         }
         None => (None, None),
     };
+    if let Some(socket) = control_socket_guard {
+        // The socket accept task must live for the daemon lifetime.  The runtime
+        // command removes stale socket paths before binding in managed runs.
+        std::mem::forget(socket);
+    }
 
     log_startup_status(node.startup);
     log_packet_plane_status(packet_plane.snapshot());
@@ -544,7 +549,6 @@ where
     tokio::pin!(shutdown);
 
     loop {
-        let _control_socket_path = control_socket_guard.as_ref().map(ControlSocket::path);
         tokio::select! {
             reason = &mut shutdown => {
                 log_runtime_event(
