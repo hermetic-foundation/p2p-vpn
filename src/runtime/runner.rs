@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io,
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -2538,11 +2538,50 @@ fn local_advertisable_addresses(swarm: &Swarm<Behaviour>) -> Vec<Multiaddr> {
         if addresses.len() >= MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES {
             break;
         }
-        if !addresses.contains(address) {
+        if kademlia_peer_address_is_advertisable(address) && !addresses.contains(address) {
             addresses.push(address.clone());
         }
     }
     addresses
+}
+
+fn kademlia_peer_address_is_advertisable(address: &Multiaddr) -> bool {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+    {
+        return true;
+    }
+
+    address.iter().any(|protocol| match protocol {
+        Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => true,
+        Protocol::Ip4(address) => ipv4_address_is_globally_routable(address),
+        Protocol::Ip6(address) => ipv6_address_is_globally_routable(address),
+        _ => false,
+    })
+}
+
+fn ipv4_address_is_globally_routable(address: Ipv4Addr) -> bool {
+    let [first, second, _, _] = address.octets();
+    !(address.is_unspecified()
+        || address.is_loopback()
+        || address.is_private()
+        || address.is_link_local()
+        || address.is_broadcast()
+        || address.is_documentation()
+        || address.is_multicast()
+        || (first == 100 && (64..=127).contains(&second)))
+}
+
+fn ipv6_address_is_globally_routable(address: Ipv6Addr) -> bool {
+    let segments = address.segments();
+    let first = segments[0];
+    !(address.is_unspecified()
+        || address.is_loopback()
+        || address.is_multicast()
+        || (first & 0xfe00) == 0xfc00
+        || (first & 0xffc0) == 0xfe80
+        || (first == 0x2001 && segments[1] == 0x0db8))
 }
 
 fn encode_kademlia_peer_address_record(
@@ -9951,6 +9990,35 @@ mod tests {
             result,
             Err(KademliaPeerAddressRecordError::WrongPeer)
         ));
+    }
+
+    #[test]
+    fn kademlia_peer_address_publication_filters_local_only_direct_addresses() {
+        let relay = peer_id();
+        let rejected = [
+            "/ip4/127.0.0.1/tcp/4001",
+            "/ip4/10.42.0.1/tcp/4001",
+            "/ip4/100.64.9.171/tcp/4001",
+            "/ip4/172.17.0.1/tcp/4001",
+            "/ip4/192.168.0.10/tcp/4001",
+            "/ip6/fd00:6879:7072:7370:6163:6500:4b5b:8ec1/tcp/4001",
+            "/ip6/fe80::1/tcp/4001",
+        ];
+        for address in rejected {
+            let address: Multiaddr = address.parse().expect("address");
+            assert!(!kademlia_peer_address_is_advertisable(&address));
+        }
+
+        let accepted = [
+            "/ip4/8.8.8.8/tcp/4001",
+            "/ip6/2606:4700:4700::1111/tcp/4001",
+            "/dns4/relay.example.net/tcp/4001",
+            &format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit"),
+        ];
+        for address in accepted {
+            let address: Multiaddr = address.parse().expect("address");
+            assert!(kademlia_peer_address_is_advertisable(&address));
+        }
     }
 
     #[test]
