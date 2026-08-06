@@ -3360,6 +3360,7 @@ async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         configured_peer_addresses: &node.configured_peer_addresses,
         discovered_peer_addresses: &discovered_addresses,
         packet_in_flight: &mut queue_runtime.packet_in_flight,
+        last_blocked_queue_redial: &mut queue_runtime.last_blocked_queue_redial,
         writer: Some(writer),
         packet_plane: Some(packet_plane),
         packet_plane_quic,
@@ -3454,7 +3455,9 @@ async fn drain_outbound_queue(
             context
                 .metrics
                 .record_outbound_queue_blocked_no_supported_path();
-            dial_blocked_queue_peers(swarm, forwarder, queues, context);
+            if should_redial_blocked_queue(context.last_blocked_queue_redial, Instant::now()) {
+                dial_blocked_queue_peers(swarm, forwarder, queues, context);
+            }
         }
     }
 }
@@ -3682,6 +3685,7 @@ struct QueueDrainContext<'a> {
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     packet_in_flight: &'a mut PacketInFlight,
+    last_blocked_queue_redial: &'a mut Option<Instant>,
     writer: Option<&'a mut TunWriter>,
     packet_plane: Option<&'a PacketPlaneRuntime>,
     packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
@@ -3753,6 +3757,7 @@ fn maybe_write_packet_too_big(
 struct QueueRuntimeState {
     discovered_peer_addresses: DiscoveredPeerAddresses,
     packet_in_flight: PacketInFlight,
+    last_blocked_queue_redial: Option<Instant>,
 }
 
 impl QueueRuntimeState {
@@ -3760,6 +3765,7 @@ impl QueueRuntimeState {
         Self {
             discovered_peer_addresses: DiscoveredPeerAddresses::default(),
             packet_in_flight: PacketInFlight::new(packet_in_flight_limit_per_peer),
+            last_blocked_queue_redial: None,
         }
     }
 }
@@ -3894,6 +3900,15 @@ fn dial_blocked_queue_peers(
         context.paths,
         context.metrics,
     );
+}
+
+fn should_redial_blocked_queue(last_redial: &mut Option<Instant>, now: Instant) -> bool {
+    if last_redial.is_some_and(|last| now.duration_since(last) < REDIAL_INTERVAL) {
+        return false;
+    }
+
+    *last_redial = Some(now);
+    true
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8098,6 +8113,7 @@ mod tests {
         packet_in_flight: &'a mut PacketInFlight,
         metrics: &'a RuntimeMetrics,
     ) -> QueueDrainContext<'a> {
+        let last_blocked_queue_redial = Box::leak(Box::new(None));
         QueueDrainContext {
             paths,
             peer_capabilities,
@@ -8106,6 +8122,7 @@ mod tests {
             configured_peer_addresses: &[],
             discovered_peer_addresses: &[],
             packet_in_flight,
+            last_blocked_queue_redial,
             writer: None,
             packet_plane: None,
             packet_plane_quic: None,
@@ -9535,6 +9552,22 @@ mod tests {
             redial_connection_state(&paths, peer, true),
             RedialConnectionState::Direct
         );
+    }
+
+    #[test]
+    fn blocked_queue_redial_is_rate_limited() {
+        let now = Instant::now();
+        let mut last_redial = None;
+
+        assert!(should_redial_blocked_queue(&mut last_redial, now));
+        assert!(!should_redial_blocked_queue(
+            &mut last_redial,
+            now + REDIAL_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(should_redial_blocked_queue(
+            &mut last_redial,
+            now + REDIAL_INTERVAL
+        ));
     }
 
     #[test]
