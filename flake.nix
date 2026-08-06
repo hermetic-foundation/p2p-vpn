@@ -1971,13 +1971,26 @@ EOF
           nativeBuildInputs = [ pkgs.gnutar ];
         } ''
           release_dir="$TMPDIR/p2p-vpn-0.1.0-${system}"
-          mkdir -p "$release_dir/bin" "$release_dir/docs" "$release_dir/examples" "$release_dir/nix" "$release_dir/scripts"
+          mkdir -p \
+            "$release_dir/bin" \
+            "$release_dir/docs/user" \
+            "$release_dir/docs/developer" \
+            "$release_dir/examples" \
+            "$release_dir/nix" \
+            "$release_dir/scripts"
           cp ${package}/bin/p2p-vpn "$release_dir/bin/"
           cp ${./README.md} "$release_dir/README.md"
-          cp ${./docs/feature-matrix.md} "$release_dir/docs/feature-matrix.md"
-          cp ${./docs/network-debugging.md} "$release_dir/docs/network-debugging.md"
-          cp ${./docs/namespace-e2e-smoke.md} "$release_dir/docs/namespace-e2e-smoke.md"
-          cp ${./docs/public-bootstrap-smoke.md} "$release_dir/docs/public-bootstrap-smoke.md"
+          cp ${./docs/user/README.md} "$release_dir/docs/user/README.md"
+          cp ${./docs/user/quick-start.md} "$release_dir/docs/user/quick-start.md"
+          cp ${./docs/user/configuration.md} "$release_dir/docs/user/configuration.md"
+          cp ${./docs/user/operations.md} "$release_dir/docs/user/operations.md"
+          cp ${./docs/user/public-libp2p.md} "$release_dir/docs/user/public-libp2p.md"
+          cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
+          cp ${./docs/developer/architecture.md} "$release_dir/docs/developer/architecture.md"
+          cp ${./docs/developer/feature-matrix.md} "$release_dir/docs/developer/feature-matrix.md"
+          cp ${./docs/developer/testing.md} "$release_dir/docs/developer/testing.md"
+          cp ${./docs/developer/network-debugging.md} "$release_dir/docs/developer/network-debugging.md"
+          cp ${./docs/developer/public-bootstrap-smoke.md} "$release_dir/docs/developer/public-bootstrap-smoke.md"
           cp ${./flake.nix} "$release_dir/flake.nix"
           cp ${./flake.lock} "$release_dir/flake.lock"
           cp ${./Cargo.toml} "$release_dir/Cargo.toml"
@@ -2098,10 +2111,17 @@ EOF
               "$root/flake.nix" \
               "$root/flake.lock" \
               "$root/Cargo.toml" \
-              "$root/docs/feature-matrix.md" \
-              "$root/docs/network-debugging.md" \
-              "$root/docs/namespace-e2e-smoke.md" \
-              "$root/docs/public-bootstrap-smoke.md" \
+              "$root/docs/user/README.md" \
+              "$root/docs/user/quick-start.md" \
+              "$root/docs/user/configuration.md" \
+              "$root/docs/user/operations.md" \
+              "$root/docs/user/public-libp2p.md" \
+              "$root/docs/developer/README.md" \
+              "$root/docs/developer/architecture.md" \
+              "$root/docs/developer/feature-matrix.md" \
+              "$root/docs/developer/testing.md" \
+              "$root/docs/developer/network-debugging.md" \
+              "$root/docs/developer/public-bootstrap-smoke.md" \
               "$root/examples/nixos-mesh/flake.nix" \
               "$root/nix/nixos-module.nix" \
               "$root/scripts/debug-bundle.sh" \
