@@ -32,7 +32,7 @@ Everything else can be omitted for the default profile.
 | `network.bootstrap_peers` | empty in JSON; public defaults at runtime |
 | `network.discovery` | public discovery defaults |
 | `network.relay` | disabled relay server, no reservations |
-| `network.packet_plane` | no owned datagram listeners |
+| `network.packet_plane` | UDP packet plane listens on `0.0.0.0:0` |
 | `queue` | built-in bounded queue defaults |
 | `resources` | built-in connection and stream limits |
 
@@ -191,7 +191,9 @@ This also creates a matching reservation address.
 | `packet_plane.quic_external_endpoints` | Advertised QUIC endpoints. |
 | `packet_plane.session_ttl_seconds` | Session lifetime. Default `600`. |
 
-Stream fallback works without packet-plane listeners.
+Omit `network.packet_plane` for automatic UDP packet-plane setup.
+
+Use `"listen": []` only to force stream fallback.
 
 Datagram forwarding needs compatible direct paths and negotiated sessions.
 

@@ -50,7 +50,7 @@ Defaults fill in:
 | Discovery | mDNS, public Kademlia, provider ads, DCUtR, AutoNAT |
 | Public bootstrap | built-in IPFS/libp2p bootstrap peers |
 | Queue and resource limits | built-in safe defaults |
-| Packet plane listeners | disabled unless configured |
+| Packet plane listeners | auto UDP bind on `0.0.0.0:0` |
 
 For predictable VPN addresses, add only route ownership.
 

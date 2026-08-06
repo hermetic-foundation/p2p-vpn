@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -4625,6 +4625,12 @@ async fn handle_swarm_event(
                 peer_id,
                 num_established.get(),
             );
+            advertise_direct_packet_plane_endpoint_from_path(
+                context.local_capabilities,
+                context.packet_plane.primary_listener(),
+                &endpoint,
+                context.metrics,
+            );
             record_path_established_and_maybe_send_packet_plane_hello(
                 swarm,
                 context.paths,
@@ -6692,6 +6698,77 @@ fn update_observed_packet_plane_endpoints(
     update
 }
 
+fn advertise_direct_packet_plane_endpoint_from_path(
+    capabilities: &mut ControlCapabilities,
+    udp_listener: Option<SocketAddr>,
+    endpoint: &ConnectedPoint,
+    metrics: &RuntimeMetrics,
+) -> bool {
+    let Some(candidate) = direct_packet_plane_endpoint_from_path(udp_listener, endpoint) else {
+        return false;
+    };
+    if capabilities.packet_endpoint_candidates.contains(&candidate) {
+        return false;
+    }
+
+    capabilities
+        .packet_endpoint_candidates
+        .push(candidate.clone());
+    capabilities.supports_owned_udp_packet_plane = true;
+    capabilities.supports_quic_datagrams = true;
+    metrics.record_observed_packet_plane_udp_endpoint_candidate();
+    log_runtime_event(
+        LogLevel::Info,
+        "direct_packet_plane_endpoint_advertised",
+        &[("endpoint", &candidate)],
+    );
+    true
+}
+
+fn direct_packet_plane_endpoint_from_path(
+    udp_listener: Option<SocketAddr>,
+    endpoint: &ConnectedPoint,
+) -> Option<String> {
+    let listener = udp_listener?;
+    if listener.port() == 0 || endpoint.is_relayed() {
+        return None;
+    }
+    if !listener.ip().is_unspecified() {
+        return is_usable_direct_packet_endpoint_ip(listener.ip()).then(|| listener.to_string());
+    }
+
+    let remote_ip = direct_endpoint_remote_ip(endpoint)?;
+    let local_ip = local_ip_for_remote(remote_ip)?;
+    is_usable_direct_packet_endpoint_ip(local_ip)
+        .then(|| SocketAddr::new(local_ip, listener.port()).to_string())
+}
+
+fn is_usable_direct_packet_endpoint_ip(address: IpAddr) -> bool {
+    is_routable_packet_endpoint_ip(address) || address.is_loopback()
+}
+
+fn direct_endpoint_remote_ip(endpoint: &ConnectedPoint) -> Option<IpAddr> {
+    let address = match endpoint {
+        ConnectedPoint::Dialer { address, .. } => address,
+        ConnectedPoint::Listener { send_back_addr, .. } => send_back_addr,
+    };
+    address.iter().find_map(|protocol| match protocol {
+        Protocol::Ip4(address) => Some(IpAddr::V4(address)),
+        Protocol::Ip6(address) => Some(IpAddr::V6(address)),
+        _ => None,
+    })
+}
+
+fn local_ip_for_remote(remote_ip: IpAddr) -> Option<IpAddr> {
+    let bind_addr = match remote_ip {
+        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    };
+    let socket = StdUdpSocket::bind(bind_addr).ok()?;
+    socket.connect(SocketAddr::new(remote_ip, 9)).ok()?;
+    Some(socket.local_addr().ok()?.ip())
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ObservedPacketPlaneEndpointUpdate {
     public_address_accepted: bool,
@@ -6717,7 +6794,7 @@ fn observed_packet_plane_endpoints(
     udp_listener: Option<SocketAddr>,
     quic_listener: Option<SocketAddr>,
 ) -> ObservedPacketPlaneEndpoints {
-    let Some(ip) = public_ip_from_external_address(external_address) else {
+    let Some(ip) = routable_packet_endpoint_ip_from_external_address(external_address) else {
         return ObservedPacketPlaneEndpoints::default();
     };
 
@@ -6732,7 +6809,7 @@ fn observed_packet_plane_endpoints(
     }
 }
 
-fn public_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
+fn routable_packet_endpoint_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
     if address
         .iter()
         .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
@@ -6746,7 +6823,7 @@ fn public_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
             Protocol::Ip6(address) => IpAddr::V6(address),
             _ => continue,
         };
-        if is_public_packet_endpoint_ip(ip) {
+        if is_routable_packet_endpoint_ip(ip) {
             return Some(ip);
         }
     }
@@ -6754,8 +6831,8 @@ fn public_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
     None
 }
 
-fn is_public_packet_endpoint_ip(address: IpAddr) -> bool {
-    packet_endpoint_reachability_rank(address) == 0 && !address.is_multicast()
+fn is_routable_packet_endpoint_ip(address: IpAddr) -> bool {
+    matches!(packet_endpoint_reachability_rank(address), 0 | 1) && !address.is_multicast()
 }
 
 fn resolve_packet_plane_endpoint_candidate(candidate: &str) -> Vec<SocketAddr> {
@@ -15214,22 +15291,92 @@ mod tests {
     }
 
     #[test]
-    fn observed_packet_plane_endpoints_reject_private_or_relayed_external_addresses() {
+    fn observed_packet_plane_endpoints_accept_private_lan_addresses() {
         let private_address: Multiaddr = "/ip4/192.168.1.10/tcp/4001"
             .parse()
             .expect("private multiaddr");
-        let relayed_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001/p2p-circuit"
-            .parse()
-            .expect("relayed multiaddr");
         let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
 
         assert_eq!(
             observed_packet_plane_endpoints(&private_address, udp_listener, None),
+            ObservedPacketPlaneEndpoints {
+                public_address_accepted: true,
+                udp: Some("192.168.1.10:51820".to_owned()),
+                quic: None,
+            }
+        );
+    }
+
+    #[test]
+    fn observed_packet_plane_endpoints_reject_unusable_or_relayed_external_addresses() {
+        let relayed_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001/p2p-circuit"
+            .parse()
+            .expect("relayed multiaddr");
+        let loopback_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001"
+            .parse()
+            .expect("loopback multiaddr");
+        let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
+
+        assert_eq!(
+            observed_packet_plane_endpoints(&loopback_address, udp_listener, None),
             ObservedPacketPlaneEndpoints::default()
         );
         assert_eq!(
             observed_packet_plane_endpoints(&relayed_address, udp_listener, None),
             ObservedPacketPlaneEndpoints::default()
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_uses_concrete_listener_address() {
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/192.168.1.20/tcp/4001".parse().expect("address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+
+        assert_eq!(
+            direct_packet_plane_endpoint_from_path(
+                Some("192.168.1.10:51820".parse().expect("listener")),
+                &endpoint,
+            ),
+            Some("192.168.1.10:51820".to_owned())
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_derives_loopback_source_for_wildcard_listener() {
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/4001".parse().expect("address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+
+        assert_eq!(
+            direct_packet_plane_endpoint_from_path(
+                Some("0.0.0.0:51820".parse().expect("listener")),
+                &endpoint,
+            ),
+            Some("127.0.0.1:51820".to_owned())
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_rejects_relay_path() {
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/8.8.8.8/tcp/4001/p2p-circuit"
+                .parse()
+                .expect("address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+
+        assert_eq!(
+            direct_packet_plane_endpoint_from_path(
+                Some("0.0.0.0:51820".parse().expect("listener")),
+                &endpoint,
+            ),
+            None
         );
     }
 

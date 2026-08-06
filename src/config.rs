@@ -566,7 +566,10 @@ impl AutoRelayConfig {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PacketPlaneConfig {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default = "default_packet_plane_listen",
+        skip_serializing_if = "is_default_packet_plane_listen"
+    )]
     pub listen: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_endpoints: Vec<String>,
@@ -583,7 +586,7 @@ pub struct PacketPlaneConfig {
 impl Default for PacketPlaneConfig {
     fn default() -> Self {
         Self {
-            listen: Vec::new(),
+            listen: default_packet_plane_listen(),
             external_endpoints: Vec::new(),
             quic_listen: Vec::new(),
             quic_external_endpoints: Vec::new(),
@@ -1060,6 +1063,10 @@ const fn default_max_inbound_packets_per_peer_per_second() -> u32 {
     4096
 }
 
+fn default_packet_plane_listen() -> Vec<String> {
+    vec!["0.0.0.0:0".to_owned()]
+}
+
 const fn default_max_pending_incoming_connections() -> u32 {
     64
 }
@@ -1245,6 +1252,10 @@ fn is_default_relay_resources(value: &RelayResourceConfig) -> bool {
 
 fn is_default_packet_plane(value: &PacketPlaneConfig) -> bool {
     *value == PacketPlaneConfig::default()
+}
+
+fn is_default_packet_plane_listen(value: &[String]) -> bool {
+    value == default_packet_plane_listen().as_slice()
 }
 
 fn is_default_listen_addresses(value: &[String]) -> bool {
@@ -1609,6 +1620,58 @@ mod tests {
                 .expect("effective bootstrap")
                 .len(),
             PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
+        );
+    }
+
+    #[test]
+    fn omitted_packet_plane_defaults_to_auto_udp_listener() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "peers": [
+                    { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert_eq!(
+            config.network.packet_plane.listen,
+            vec!["0.0.0.0:0".to_owned()]
+        );
+        assert_eq!(
+            config.packet_plane_listen_addrs().expect("packet plane"),
+            vec!["0.0.0.0:0".parse().expect("socket")]
+        );
+    }
+
+    #[test]
+    fn explicit_empty_packet_plane_listen_disables_udp_packet_plane() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {
+                    "name": "lab",
+                    "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "packet_plane": {
+                        "listen": []
+                    }
+                },
+                "peers": [
+                    { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+                ]
+            }"#,
+        )
+        .expect("minimal config");
+
+        assert!(config.network.packet_plane.listen.is_empty());
+        assert!(
+            config
+                .packet_plane_listen_addrs()
+                .expect("packet plane")
+                .is_empty()
         );
     }
 
