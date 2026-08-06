@@ -2555,25 +2555,25 @@ fn kademlia_peer_address_is_advertisable(address: &Multiaddr) -> bool {
 
     address.iter().any(|protocol| match protocol {
         Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => true,
-        Protocol::Ip4(address) => ipv4_address_is_globally_routable(address),
-        Protocol::Ip6(address) => ipv6_address_is_globally_routable(address),
+        Protocol::Ip4(address) => ipv4_address_is_advertisable(address),
+        Protocol::Ip6(address) => ipv6_address_is_advertisable(address),
         _ => false,
     })
 }
 
-fn ipv4_address_is_globally_routable(address: Ipv4Addr) -> bool {
+fn ipv4_address_is_advertisable(address: Ipv4Addr) -> bool {
     let [first, second, _, _] = address.octets();
     !(address.is_unspecified()
         || address.is_loopback()
-        || address.is_private()
         || address.is_link_local()
         || address.is_broadcast()
         || address.is_documentation()
         || address.is_multicast()
+        || (first == 10 && second == 42)
         || (first == 100 && (64..=127).contains(&second)))
 }
 
-fn ipv6_address_is_globally_routable(address: Ipv6Addr) -> bool {
+fn ipv6_address_is_advertisable(address: Ipv6Addr) -> bool {
     let segments = address.segments();
     let first = segments[0];
     !(address.is_unspecified()
@@ -9999,8 +9999,6 @@ mod tests {
             "/ip4/127.0.0.1/tcp/4001",
             "/ip4/10.42.0.1/tcp/4001",
             "/ip4/100.64.9.171/tcp/4001",
-            "/ip4/172.17.0.1/tcp/4001",
-            "/ip4/192.168.0.10/tcp/4001",
             "/ip6/fd00:6879:7072:7370:6163:6500:4b5b:8ec1/tcp/4001",
             "/ip6/fe80::1/tcp/4001",
         ];
@@ -10011,6 +10009,8 @@ mod tests {
 
         let accepted = [
             "/ip4/8.8.8.8/tcp/4001",
+            "/ip4/192.168.0.10/tcp/4001",
+            "/ip4/172.17.0.1/tcp/4001",
             "/ip6/2606:4700:4700::1111/tcp/4001",
             "/dns4/relay.example.net/tcp/4001",
             &format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit"),
