@@ -520,7 +520,7 @@ where
     }
     timers.prime().await;
     let discovery = node.discovery.clone();
-    let (_control_socket, mut control_rx) = match control_socket {
+    let (control_socket_guard, mut control_rx) = match control_socket {
         Some(path) => {
             let (socket, rx) = ControlSocket::bind(path)?;
             log_runtime_event(
@@ -544,6 +544,7 @@ where
     tokio::pin!(shutdown);
 
     loop {
+        let _control_socket_path = control_socket_guard.as_ref().map(ControlSocket::path);
         tokio::select! {
             reason = &mut shutdown => {
                 log_runtime_event(
