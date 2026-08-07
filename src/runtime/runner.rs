@@ -5131,6 +5131,7 @@ async fn handle_swarm_event(
                 peer_id,
                 &endpoint,
             );
+            redial_configured_peer_after_supported_path_loss(swarm, &mut context, peer_id);
             invalidate_peer_capabilities_when_disconnected(
                 context.forwarder,
                 context.peer_capabilities,
@@ -5343,6 +5344,45 @@ async fn handle_swarm_event(
     }
 
     Ok(())
+}
+
+fn redial_configured_peer_after_supported_path_loss(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+) {
+    if !context.forwarder.is_configured_transport_peer(peer)
+        || !peer_lacks_supported_packet_path(context.paths, context.peer_capabilities, peer)
+    {
+        return;
+    }
+
+    let mut selected_peers = HashSet::new();
+    selected_peers.insert(peer);
+    let discovered_addresses = context
+        .discovered_peer_addresses
+        .redial_candidates_at(Instant::now());
+    redial_selected_addresses(
+        swarm,
+        &selected_peers,
+        &[],
+        &[],
+        context.configured_peer_addresses,
+        &discovered_addresses,
+        context.discovered_peer_addresses,
+        context.paths,
+        context.metrics,
+    );
+}
+
+fn peer_lacks_supported_packet_path(
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    peer: Libp2pPeerId,
+) -> bool {
+    let overlay_peer = PeerId::from_libp2p(peer);
+    let support = packet_transport_support(peer_capabilities, overlay_peer);
+    !paths.has_supported_path(overlay_peer, support)
 }
 
 fn handle_outgoing_connection_error(
@@ -11555,6 +11595,42 @@ mod tests {
             redial_connection_state(&paths, peer, true),
             RedialConnectionState::DirectAndRelay
         );
+    }
+
+    #[test]
+    fn configured_peer_lacks_supported_path_after_relay_connection_closes() {
+        let peer = peer_id();
+        let overlay = PeerId::from_libp2p(peer);
+        let mut paths = PathSet::new();
+        let peer_capabilities = PeerCapabilities::default();
+
+        paths.record_established(overlay, PathKind::CircuitRelay);
+        assert!(!peer_lacks_supported_packet_path(
+            &paths,
+            &peer_capabilities,
+            peer
+        ));
+
+        paths.record_closed(overlay, PathKind::CircuitRelay);
+        assert!(peer_lacks_supported_packet_path(
+            &paths,
+            &peer_capabilities,
+            peer
+        ));
+
+        paths.record_established(overlay, PathKind::DirectTcpStream);
+        assert!(!peer_lacks_supported_packet_path(
+            &paths,
+            &peer_capabilities,
+            peer
+        ));
+
+        paths.mark_unhealthy(overlay, PathKind::DirectTcpStream);
+        assert!(peer_lacks_supported_packet_path(
+            &paths,
+            &peer_capabilities,
+            peer
+        ));
     }
 
     #[test]
