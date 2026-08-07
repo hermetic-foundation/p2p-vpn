@@ -5710,22 +5710,60 @@ async fn handle_packet_plane_received(
         let drop_reason = inbound_drop_reason(&error);
         context.metrics.record_inbound_drop(drop_reason);
         audit_packet_request_rejection(transport_peer, &received.frame, &error);
-    } else if received.frame.header.payload_type == PayloadType::PathProbe {
-        handle_packet_plane_path_probe(
-            context.forwarder,
+    } else {
+        refresh_packet_plane_path(
             context.paths,
-            context.peer_capabilities,
-            context.packet_plane,
-            context.packet_plane_quic,
-            context.backend,
-            context.path_probe_tracker,
             context.metrics,
             overlay_peer,
-            received,
-        )
-        .await;
+            context.backend,
+            received.frame.header.payload_type,
+        );
+        if received.frame.header.payload_type == PayloadType::PathProbe {
+            handle_packet_plane_path_probe(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                context.packet_plane,
+                context.packet_plane_quic,
+                context.backend,
+                context.path_probe_tracker,
+                context.metrics,
+                overlay_peer,
+                received,
+            )
+            .await;
+        }
     }
     Ok(())
+}
+
+fn refresh_packet_plane_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    backend: PacketDatagramBackend,
+    payload_type: PayloadType,
+) {
+    let path = packet_datagram_backend_path_kind(backend);
+    let previous = paths
+        .candidates_for(peer)
+        .find(|candidate| candidate.kind == path);
+    if previous.is_some_and(|candidate| candidate.healthy && candidate.established_connections > 0)
+    {
+        return;
+    }
+
+    let change = paths.record_established(peer, path);
+    record_path_selection_change(metrics, change);
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_path_refreshed",
+        &[
+            ("peer", &peer.to_string()),
+            ("path", path.wire_name()),
+            ("payload", payload_type_name(payload_type)),
+        ],
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -16789,6 +16827,37 @@ mod tests {
             PATH_PROBE_TIMEOUT,
         );
         assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn accepted_packet_plane_frame_refreshes_demoted_datagram_path() {
+        let peer = PeerId::from_bytes([13; 32]);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        paths.record_established(peer, PathKind::CircuitRelay);
+        paths.record_established(peer, PathKind::DirectUdpDatagram);
+        paths.mark_unhealthy(peer, PathKind::DirectUdpDatagram);
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+
+        refresh_packet_plane_path(
+            &mut paths,
+            &metrics,
+            peer,
+            PacketDatagramBackend::OwnedUdp,
+            PayloadType::IpPacket,
+        );
+
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::DirectUdpDatagram)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.path_promotions_to_direct, 1);
     }
 
     #[tokio::test]
