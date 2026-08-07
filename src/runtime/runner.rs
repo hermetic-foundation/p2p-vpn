@@ -3694,6 +3694,31 @@ fn redial_connection_state(
     }
 }
 
+fn has_healthy_relay_path(paths: &PathSet, peer: Libp2pPeerId) -> bool {
+    let overlay_peer = PeerId::from_libp2p(peer);
+    paths
+        .candidates_for(overlay_peer)
+        .any(|candidate| candidate.healthy && candidate.is_relay())
+}
+
+fn should_dial_discovered_address(
+    paths: &PathSet,
+    peer: Libp2pPeerId,
+    connected: bool,
+    address: &Multiaddr,
+) -> bool {
+    match redial_connection_state(paths, peer, connected) {
+        RedialConnectionState::DirectOnly | RedialConnectionState::DirectAndRelay => false,
+        RedialConnectionState::RelayOnly
+            if relayed_address_relay_peer(address).is_some()
+                && has_healthy_relay_path(paths, peer) =>
+        {
+            false
+        }
+        RedialConnectionState::Disconnected | RedialConnectionState::RelayOnly => true,
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct RedialTargets {
     addresses: Vec<(Libp2pPeerId, Multiaddr)>,
@@ -8323,11 +8348,7 @@ fn learn_peer_address(
         autonat.add_server(peer, Some(address.clone()));
     }
 
-    if matches!(
-        redial_connection_state(paths, peer, swarm.is_connected(&peer)),
-        RedialConnectionState::DirectOnly | RedialConnectionState::DirectAndRelay
-    ) || (swarm.is_connected(&peer) && relayed_address_relay_peer(&address).is_some())
-    {
+    if !should_dial_discovered_address(paths, peer, swarm.is_connected(&peer), &address) {
         return;
     }
 
@@ -11140,6 +11161,59 @@ mod tests {
             redial_connection_state(&paths, peer, true),
             RedialConnectionState::DirectAndRelay
         );
+    }
+
+    #[test]
+    fn discovered_relay_addresses_are_dialed_when_connected_path_is_stale() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let overlay = PeerId::from_libp2p(peer);
+        let relay_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relay address");
+        let direct_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("direct address");
+        let mut paths = PathSet::new();
+
+        assert!(should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address
+        ));
+
+        paths.record_established(overlay, PathKind::DirectTcpStream);
+        paths.mark_unhealthy(overlay, PathKind::DirectTcpStream);
+        assert!(should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address
+        ));
+        assert!(should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &direct_address
+        ));
+
+        paths.record_established(overlay, PathKind::CircuitRelay);
+        assert!(!should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address
+        ));
+
+        paths.record_established(overlay, PathKind::DirectTcpStream);
+        assert!(!should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &direct_address
+        ));
     }
 
     #[test]
