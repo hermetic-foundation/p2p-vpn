@@ -199,6 +199,7 @@ impl PathSet {
             .find(|candidate| candidate.peer == peer && candidate.kind == kind)
         {
             candidate.healthy = false;
+            candidate.established_connections = 0;
             candidate.failure_penalty = candidate
                 .failure_penalty
                 .saturating_add(PATH_FAILURE_PENALTY_STEP);
@@ -498,6 +499,23 @@ mod tests {
 
         paths.record_closed(peer(1), PathKind::DirectTcpStream);
         assert!(!paths.has_healthy_path(peer(1)));
+    }
+
+    #[test]
+    fn demotion_clears_stale_connection_count() {
+        let mut paths = PathSet::new();
+
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        paths.mark_unhealthy(peer(1), PathKind::DirectTcpStream);
+
+        let candidate = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.kind == PathKind::DirectTcpStream)
+            .expect("direct tcp candidate");
+        assert!(!candidate.healthy);
+        assert_eq!(candidate.established_connections, 0);
+        assert_eq!(paths.best_for(peer(1)), None);
     }
 
     #[test]
