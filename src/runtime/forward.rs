@@ -31,7 +31,7 @@ pub struct Forwarder {
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
-    replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
+    replay_windows: HashMap<(PeerId, SessionId, PayloadType), ReplayWindow>,
     replay_session_ttl: Duration,
     max_replay_windows: usize,
     session_id: SessionId,
@@ -410,7 +410,12 @@ impl Forwarder {
         self.routes.authorize_source(overlay_peer, source)?;
         let destination = packet_destination(&frame.payload)?;
         self.authorize_local_destination(destination)?;
-        self.accept_sequence(overlay_peer, frame.header.session_id, frame.header.sequence)?;
+        self.accept_sequence(
+            overlay_peer,
+            frame.header.session_id,
+            frame.header.sequence,
+            frame.header.payload_type,
+        )?;
 
         Ok(&frame.payload)
     }
@@ -426,6 +431,7 @@ impl Forwarder {
             PeerId::from_libp2p(peer),
             frame.header.session_id,
             frame.header.sequence,
+            frame.header.payload_type,
         )
     }
 
@@ -462,8 +468,9 @@ impl Forwarder {
         peer: PeerId,
         session_id: SessionId,
         sequence: Sequence,
+        payload_type: PayloadType,
     ) -> Result<(), ForwardError> {
-        self.accept_sequence_at(peer, session_id, sequence, Instant::now())
+        self.accept_sequence_at(peer, session_id, sequence, payload_type, Instant::now())
     }
 
     fn accept_sequence_at(
@@ -471,10 +478,11 @@ impl Forwarder {
         peer: PeerId,
         session_id: SessionId,
         sequence: Sequence,
+        payload_type: PayloadType,
         now: Instant,
     ) -> Result<(), ForwardError> {
         self.expire_replay_windows_at(now);
-        let key = (peer, session_id);
+        let key = (peer, session_id, payload_type);
         if self.replay_windows.len() >= self.max_replay_windows.max(1)
             && !self.replay_windows.contains_key(&key)
         {
@@ -1206,11 +1214,17 @@ mod tests {
         let start = Instant::now();
 
         forwarder
-            .accept_sequence_at(remote_overlay, 7, 42, start)
+            .accept_sequence_at(remote_overlay, 7, 42, PayloadType::IpPacket, start)
             .expect("sequence accepted");
         assert_eq!(forwarder.replay_window_count(), 1);
         assert!(matches!(
-            forwarder.accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_millis(500)),
+            forwarder.accept_sequence_at(
+                remote_overlay,
+                7,
+                42,
+                PayloadType::IpPacket,
+                start + Duration::from_millis(500)
+            ),
             Err(ForwardError::ReplayedPacket {
                 peer,
                 session_id: 7,
@@ -1224,7 +1238,13 @@ mod tests {
         );
         assert_eq!(forwarder.replay_window_count(), 0);
         forwarder
-            .accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_secs(2))
+            .accept_sequence_at(
+                remote_overlay,
+                7,
+                42,
+                PayloadType::IpPacket,
+                start + Duration::from_secs(2),
+            )
             .expect("expired session starts a fresh replay window");
     }
 
@@ -1238,17 +1258,51 @@ mod tests {
         let start = Instant::now();
 
         forwarder
-            .accept_sequence_at(remote_overlay, 7, 42, start)
+            .accept_sequence_at(remote_overlay, 7, 42, PayloadType::IpPacket, start)
             .expect("first session accepted");
         forwarder
-            .accept_sequence_at(remote_overlay, 8, 42, start + Duration::from_millis(1))
+            .accept_sequence_at(
+                remote_overlay,
+                8,
+                42,
+                PayloadType::IpPacket,
+                start + Duration::from_millis(1),
+            )
             .expect("second session accepted");
 
         assert_eq!(forwarder.replay_window_count(), 1);
         forwarder
-            .accept_sequence_at(remote_overlay, 7, 42, start + Duration::from_millis(2))
+            .accept_sequence_at(
+                remote_overlay,
+                7,
+                42,
+                PayloadType::IpPacket,
+                start + Duration::from_millis(2),
+            )
             .expect("oldest evicted session starts fresh");
         assert_eq!(forwarder.replay_window_count(), 1);
+    }
+
+    #[test]
+    fn replay_windows_are_isolated_by_payload_type() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let start = Instant::now();
+
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 128, PayloadType::PathProbe, start)
+            .expect("probe accepted");
+        forwarder
+            .accept_sequence_at(
+                remote_overlay,
+                7,
+                16,
+                PayloadType::IpPacket,
+                start + Duration::from_millis(1),
+            )
+            .expect("older IP packet sequence is accepted in its own replay window");
     }
 
     #[test]

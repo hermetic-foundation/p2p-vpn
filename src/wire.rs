@@ -4,7 +4,7 @@ pub const WIRE_VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 17;
 pub const MAX_PAYLOAD_LEN: usize = u16::MAX as usize;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PayloadType {
     IpPacket = 0,
     Keepalive = 1,

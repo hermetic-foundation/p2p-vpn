@@ -145,10 +145,10 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     connection_limits: connection_limits::Behaviour::new(
                         resources.to_connection_limits(),
                     ),
-                    identify: identify::Behaviour::new(identify::Config::new(
-                        PROTOCOL_VERSION.to_owned(),
-                        keypair.public(),
-                    )),
+                    identify: identify::Behaviour::new(
+                        identify::Config::new(PROTOCOL_VERSION.to_owned(), keypair.public())
+                            .with_hide_listen_addrs(true),
+                    ),
                     ping: ping::Behaviour::default(),
                     kad,
                     relay,
