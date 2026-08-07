@@ -2373,7 +2373,7 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
         }
     }
 
-    if context.auto_relay.private_reachability() {
+    if context.auto_relay.should_discover_candidates() {
         query_auto_relay_infrastructure(swarm, context.metrics, "kademlia_refresh");
     }
 
@@ -2571,7 +2571,7 @@ fn kademlia_peer_address_is_confirmed_for_publication(
     address: &Multiaddr,
     confirmed_external_addresses: &HashSet<Multiaddr>,
 ) -> bool {
-    relayed_address_relay_peer(address).is_none() || confirmed_external_addresses.contains(address)
+    relayed_address_relay_peer(address).is_some() || confirmed_external_addresses.contains(address)
 }
 
 fn kademlia_peer_address_is_advertisable(address: &Multiaddr) -> bool {
@@ -2905,6 +2905,13 @@ impl AutoRelayState {
         !matches!(self.reachability, AutoNatReachability::Public)
     }
 
+    fn should_discover_candidates(&self) -> bool {
+        self.should_attempt_reservations()
+            && self.policy.max_candidates > self.candidates.len()
+            && self.policy.max_reservations > 0
+            && self.accepted_reservation_peers.len() < self.policy.max_reservations
+    }
+
     fn snapshot(&self, now: Instant) -> AutoRelaySnapshot {
         AutoRelaySnapshot {
             max_candidates: self.policy.max_candidates,
@@ -3019,6 +3026,8 @@ impl AutoRelayState {
         let mut expired = Vec::with_capacity(expired_peers.len());
         for peer in expired_peers {
             if let Some(pending) = self.pending_reservations.remove(&peer) {
+                self.attempted_reservations
+                    .remove(&(peer, pending.address.clone()));
                 self.retry_after
                     .insert(peer, now + self.policy.retry_interval());
                 expired.push((peer, pending.address));
@@ -3081,12 +3090,17 @@ impl InfrastructurePeers {
 
 fn admit_kademlia_relay_infrastructure_peer<'a>(
     swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     mut addresses: impl Iterator<Item = &'a Multiaddr>,
 ) {
-    if peer == *swarm.local_peer_id() || infrastructure_peers.contains(peer) {
+    if peer == *swarm.local_peer_id()
+        || forwarder.is_configured_transport_peer(peer)
+        || infrastructure_peers.contains(peer)
+    {
         return;
     }
 
@@ -3098,6 +3112,7 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
     if !infrastructure_peers.insert(peer, address.clone()) {
         return;
     }
+    record_auto_relay_candidates(auto_relay, metrics, peer, std::iter::once(address.clone()));
 
     metrics.record_auto_relay_infrastructure_candidate();
     log_runtime_event(
@@ -4698,12 +4713,24 @@ async fn handle_swarm_event(
                 context.infrastructure_peers,
                 context.metrics,
                 peer_id,
+                context.auto_relay.should_discover_candidates(),
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {}
                 EstablishedConnectionAuthorization::InfrastructurePeer => {
                     log_runtime_event(
                         LogLevel::Info,
                         "relay_infrastructure_connection_established",
+                        &[
+                            ("peer", &peer_id.to_string()),
+                            ("relayed", &endpoint.is_relayed().to_string()),
+                        ],
+                    );
+                    return Ok(());
+                }
+                EstablishedConnectionAuthorization::InfrastructureProbe => {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "auto_relay_infrastructure_probe_connection_established",
                         &[
                             ("peer", &peer_id.to_string()),
                             ("relayed", &endpoint.is_relayed().to_string()),
@@ -7383,6 +7410,7 @@ fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChan
 enum EstablishedConnectionAuthorization {
     OverlayPeer,
     InfrastructurePeer,
+    InfrastructureProbe,
     Rejected,
 }
 
@@ -7391,6 +7419,7 @@ fn authorize_established_connection(
     infrastructure_peers: &InfrastructurePeers,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
+    allow_infrastructure_probe: bool,
 ) -> EstablishedConnectionAuthorization {
     if membership.allows(peer) {
         return EstablishedConnectionAuthorization::OverlayPeer;
@@ -7398,6 +7427,10 @@ fn authorize_established_connection(
 
     if membership.allows_configured_infrastructure(peer) || infrastructure_peers.contains(peer) {
         return EstablishedConnectionAuthorization::InfrastructurePeer;
+    }
+
+    if allow_infrastructure_probe {
+        return EstablishedConnectionAuthorization::InfrastructureProbe;
     }
 
     metrics.record_unauthorized_connection_dropped();
@@ -7491,6 +7524,7 @@ fn handle_behaviour_event(
                     forwarder: context.forwarder,
                     membership: context.membership,
                     infrastructure_peers: context.infrastructure_peers,
+                    auto_relay: context.auto_relay,
                     discovered_peer_addresses: context.discovered_peer_addresses,
                     paths: context.paths,
                     local_capabilities: context.local_capabilities,
@@ -7573,6 +7607,42 @@ fn handle_identify_received(
             "missing_relay_hop",
         );
         return;
+    }
+    if !context.membership.allows(peer_id) && !relay_hop {
+        log_runtime_event(
+            LogLevel::Warn,
+            "auto_relay_infrastructure_rejected",
+            &[
+                ("peer", &peer_id.to_string()),
+                ("reason", "identified_non_relay_peer"),
+            ],
+        );
+        if swarm.disconnect_peer_id(peer_id).is_err() {
+            log_runtime_event(
+                LogLevel::Warn,
+                "auto_relay_infrastructure_already_disconnected",
+                &[("peer", &peer_id.to_string())],
+            );
+        }
+        return;
+    }
+    if !context.membership.allows(peer_id)
+        && relay_hop
+        && let Some(address) = auto_relay_candidates.first().cloned()
+        && !context.infrastructure_peers.contains(peer_id)
+        && context
+            .infrastructure_peers
+            .insert(peer_id, address.clone())
+    {
+        context.metrics.record_auto_relay_infrastructure_candidate();
+        log_runtime_event(
+            LogLevel::Info,
+            "auto_relay_infrastructure_candidate",
+            &[
+                ("peer", &peer_id.to_string()),
+                ("address", &address.to_string()),
+            ],
+        );
     }
     record_auto_relay_candidates(
         context.auto_relay,
@@ -7667,6 +7737,7 @@ struct KademliaEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
     infrastructure_peers: &'a mut InfrastructurePeers,
+    auto_relay: &'a mut AutoRelayState,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     paths: &'a PathSet,
     local_capabilities: &'a mut ControlCapabilities,
@@ -7695,6 +7766,7 @@ fn handle_kademlia_event(
                 swarm,
                 context.forwarder,
                 context.infrastructure_peers,
+                context.auto_relay,
                 context.discovered_peer_addresses,
                 context.paths,
                 context.metrics,
@@ -7708,7 +7780,9 @@ fn handle_kademlia_event(
         } => {
             admit_kademlia_relay_infrastructure_peer(
                 swarm,
+                context.forwarder,
                 context.infrastructure_peers,
+                context.auto_relay,
                 context.metrics,
                 peer,
                 addresses.iter(),
@@ -7862,6 +7936,7 @@ fn handle_kademlia_closest_peer_result(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
     metrics: &RuntimeMetrics,
@@ -7889,7 +7964,9 @@ fn handle_kademlia_closest_peer_result(
             }
             admit_kademlia_relay_infrastructure_peer(
                 swarm,
+                forwarder,
                 infrastructure_peers,
+                auto_relay,
                 metrics,
                 peer.peer_id,
                 peer.addrs.iter(),
@@ -10185,6 +10262,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
         let mut discovered = DiscoveredPeerAddresses::default();
         let paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
@@ -10208,6 +10286,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
+            &mut auto_relay,
             &mut discovered,
             &paths,
             &metrics,
@@ -10249,6 +10328,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
         let mut discovered = DiscoveredPeerAddresses::default();
         let paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
@@ -10268,6 +10348,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
+            &mut auto_relay,
             &mut discovered,
             &paths,
             &metrics,
@@ -10421,7 +10502,7 @@ mod tests {
     }
 
     #[test]
-    fn kademlia_peer_address_publication_requires_confirmed_relay_address() {
+    fn kademlia_peer_address_publication_requires_confirmed_direct_or_relay_address() {
         let relay = peer_id();
         let relayed: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
             .parse()
@@ -10430,16 +10511,16 @@ mod tests {
             .parse()
             .expect("direct address");
         let empty = HashSet::new();
-        let confirmed = HashSet::from([relayed.clone()]);
+        let confirmed = HashSet::from([direct.clone()]);
 
-        assert!(kademlia_peer_address_is_confirmed_for_publication(
+        assert!(!kademlia_peer_address_is_confirmed_for_publication(
             &direct, &empty
         ));
-        assert!(!kademlia_peer_address_is_confirmed_for_publication(
+        assert!(kademlia_peer_address_is_confirmed_for_publication(
             &relayed, &empty
         ));
         assert!(kademlia_peer_address_is_confirmed_for_publication(
-            &relayed, &confirmed
+            &direct, &confirmed
         ));
     }
 
@@ -11023,6 +11104,16 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_state_discovers_candidates_while_reachability_is_unknown() {
+        let mut state = AutoRelayState::default();
+
+        assert!(state.should_discover_candidates());
+
+        state.record_reachability(AutoNatReachability::Public);
+        assert!(!state.should_discover_candidates());
+    }
+
+    #[test]
     fn auto_relay_state_caps_reservation_targets() {
         let max_reservations = 3;
         let mut state = AutoRelayState::new(AutoRelayConfig {
@@ -11190,6 +11281,44 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_state_retries_timed_out_single_candidate_after_configured_delay() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 7,
+        });
+        state.record_reachability(AutoNatReachability::Private);
+        assert!(state.record_candidate(relay, address.clone()));
+        let now = Instant::now();
+        assert_eq!(
+            state.next_reservation_targets(now),
+            vec![(relay, address.clone())]
+        );
+
+        assert_eq!(
+            state.expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
+            vec![(relay, address.clone())]
+        );
+        assert!(
+            state
+                .next_reservation_targets(
+                    now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT + Duration::from_secs(6)
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            state.next_reservation_targets(
+                now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT + Duration::from_secs(7)
+            ),
+            vec![(relay, address)]
+        );
+    }
+
+    #[test]
     fn auto_relay_state_times_out_pending_reservation_and_rotates_candidate() {
         let relay_a = peer_id();
         let relay_b = peer_id();
@@ -11267,30 +11396,35 @@ mod tests {
             .parse()
             .expect("relay address");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
         let metrics = RuntimeMetrics::default();
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let config = config_with_peer(&local_identity, peer_id());
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
 
         admit_kademlia_relay_infrastructure_peer(
             &mut node.swarm,
+            &forwarder,
             &mut infrastructure_peers,
+            &mut auto_relay,
             &metrics,
             relay,
             std::slice::from_ref(&relay_address).iter(),
         );
 
         assert!(infrastructure_peers.contains(relay));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 1);
         assert_eq!(
             authorize_established_connection(
                 &OverlayMembership::default(),
                 &infrastructure_peers,
                 &metrics,
                 relay,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
 
-        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
-        let config = config_with_peer(&local_identity, peer_id());
-        let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let local_capabilities = ControlCapabilities::local("lab", None, 1280);
 
         assert_eq!(
@@ -11322,6 +11456,54 @@ mod tests {
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[tokio::test]
+    async fn kademlia_relay_infrastructure_skips_configured_vpn_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured_peer = peer_id();
+        let config = config_with_peer(&local_identity, configured_peer);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{configured_peer}")
+            .parse()
+            .expect("relay address");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
+        let metrics = RuntimeMetrics::default();
+
+        admit_kademlia_relay_infrastructure_peer(
+            &mut node.swarm,
+            &forwarder,
+            &mut infrastructure_peers,
+            &mut auto_relay,
+            &metrics,
+            configured_peer,
+            std::slice::from_ref(&relay_address).iter(),
+        );
+
+        assert!(!infrastructure_peers.contains(configured_peer));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 0);
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.auto_relay_infrastructure_candidates, 0);
+        assert_eq!(snapshot.auto_relay_candidates, 0);
     }
 
     #[tokio::test]
@@ -11622,7 +11804,13 @@ mod tests {
         let metrics = RuntimeMetrics::default();
 
         assert_eq!(
-            authorize_established_connection(&membership, &infrastructure_peers, &metrics, allowed),
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                allowed,
+                false,
+            ),
             EstablishedConnectionAuthorization::OverlayPeer,
         );
         assert_eq!(
@@ -11631,6 +11819,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 infrastructure,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -11639,7 +11828,8 @@ mod tests {
                 &membership,
                 &infrastructure_peers,
                 &metrics,
-                rejected
+                rejected,
+                false,
             ),
             EstablishedConnectionAuthorization::Rejected,
         );
@@ -11665,6 +11855,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 infrastructure,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -11673,13 +11864,39 @@ mod tests {
                 &membership,
                 &infrastructure_peers,
                 &metrics,
-                rejected
+                rejected,
+                false,
             ),
             EstablishedConnectionAuthorization::Rejected,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.unauthorized_connections_dropped, 1);
+    }
+
+    #[test]
+    fn infrastructure_probe_connections_are_temporarily_admitted_without_counting_rejections() {
+        let probe = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::new(),
+            configured_infrastructure_peers: HashSet::new(),
+        };
+        let infrastructure_peers = InfrastructurePeers::default();
+        let metrics = RuntimeMetrics::default();
+
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                probe,
+                true,
+            ),
+            EstablishedConnectionAuthorization::InfrastructureProbe,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.unauthorized_connections_dropped, 0);
     }
 
     #[test]
