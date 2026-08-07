@@ -784,6 +784,7 @@ where
                     &peer_capabilities,
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
+                    &mut queue_runtime.packet_in_flight,
                     &mut path_probe_tracker,
                     &metrics,
                 )
@@ -889,6 +890,7 @@ async fn send_path_probes(
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    packet_in_flight: &mut PacketInFlight,
     path_probe_tracker: &mut PathProbeTracker,
     metrics: &RuntimeMetrics,
 ) {
@@ -964,10 +966,13 @@ async fn send_path_probes(
                     }
                 }
             }
-            PacketTransportDecision::StreamFallback { .. } => {
+            PacketTransportDecision::StreamFallback { path } => {
                 match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD)
                 {
-                    Ok(_) => metrics.record_outbound_path_probe_sent(),
+                    Ok(request_id) => {
+                        packet_in_flight.record_path_probe(peer, request_id, path);
+                        metrics.record_outbound_path_probe_sent();
+                    }
                     Err(error) => {
                         metrics.record_outbound_path_probe_failure();
                         eprintln!("path probe to {peer} failed: {error:?}");
@@ -4639,6 +4644,24 @@ impl PacketInFlight {
             .entry(packet.peer())
             .or_default()
             .record(packet.flow_shard());
+    }
+
+    fn record_path_probe(
+        &mut self,
+        peer: PeerId,
+        request_id: request_response::OutboundRequestId,
+        path: PathKind,
+    ) {
+        self.requests.insert(
+            request_id,
+            PacketInFlightRequest {
+                peer,
+                shard: 0,
+                path,
+                sent_at: Instant::now(),
+            },
+        );
+        self.peers.entry(peer).or_default().record(0);
     }
 
     fn complete(
@@ -16492,6 +16515,7 @@ mod tests {
         capabilities = capabilities.with_owned_udp_packet_plane(true);
         peer_capabilities.record(remote_overlay, capabilities);
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
         let mut path_probe_tracker = PathProbeTracker::default();
 
         send_path_probes(
@@ -16501,6 +16525,7 @@ mod tests {
             &peer_capabilities,
             Some(&sender_packet_plane),
             None,
+            &mut packet_in_flight,
             &mut path_probe_tracker,
             &metrics,
         )
@@ -16615,6 +16640,7 @@ mod tests {
         local_capabilities = local_capabilities.with_owned_udp_packet_plane(true);
         receiver_capabilities.record(local_overlay, local_capabilities);
         let metrics = RuntimeMetrics::default();
+        let mut sender_packet_in_flight = PacketInFlight::new(256);
         let mut sender_path_probe_tracker = PathProbeTracker::default();
         let mut receiver_path_probe_tracker = PathProbeTracker::default();
 
@@ -16625,6 +16651,7 @@ mod tests {
             &sender_capabilities,
             Some(&sender_packet_plane),
             None,
+            &mut sender_packet_in_flight,
             &mut sender_path_probe_tracker,
             &metrics,
         )
@@ -17888,6 +17915,7 @@ mod tests {
         let mut paths = PathSet::new();
         let mut peer_capabilities = PeerCapabilities::default();
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
         let mut path_probe_tracker = PathProbeTracker::default();
 
         send_path_probes(
@@ -17897,6 +17925,7 @@ mod tests {
             &peer_capabilities,
             None,
             None,
+            &mut packet_in_flight,
             &mut path_probe_tracker,
             &metrics,
         )
@@ -17921,6 +17950,7 @@ mod tests {
             &peer_capabilities,
             None,
             None,
+            &mut packet_in_flight,
             &mut path_probe_tracker,
             &metrics,
         )
@@ -17929,6 +17959,7 @@ mod tests {
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outbound_path_probes_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_failures, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
     }
 
     #[tokio::test]
@@ -17961,6 +17992,7 @@ mod tests {
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(remote_overlay, ControlCapabilities::local("lab", None, 4));
         let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
         let mut path_probe_tracker = PathProbeTracker::default();
 
         send_path_probes(
@@ -17970,6 +18002,7 @@ mod tests {
             &peer_capabilities,
             None,
             None,
+            &mut packet_in_flight,
             &mut path_probe_tracker,
             &metrics,
         )
