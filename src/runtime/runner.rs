@@ -2637,7 +2637,7 @@ fn kademlia_peer_address_is_advertisable(address: &Multiaddr) -> bool {
         .iter()
         .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
     {
-        return true;
+        return supports_relayed_peer_dial_transport(address);
     }
 
     address.iter().any(|protocol| match protocol {
@@ -3348,6 +3348,18 @@ fn supports_auto_relay_candidate_transport(address: &Multiaddr) -> bool {
     }
 
     supported
+}
+
+fn supports_relayed_peer_dial_transport(address: &Multiaddr) -> bool {
+    let mut relay_transport = Multiaddr::empty();
+    for protocol in address {
+        if matches!(protocol, Protocol::P2pCircuit) {
+            return supports_auto_relay_candidate_transport(&relay_transport);
+        }
+        relay_transport.push(protocol);
+    }
+
+    false
 }
 
 impl RelayReadiness {
@@ -8260,6 +8272,20 @@ fn learn_peer_address(
         return;
     }
     if relayed_address_relay_peer(&address).is_some() {
+        if !supports_relayed_peer_dial_transport(&address) {
+            metrics.record_discovered_address_rejected();
+            log_runtime_event(
+                LogLevel::Info,
+                "discovered_relayed_address_rejected",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("address", &address.to_string()),
+                    ("reason", "unsupported_transport"),
+                    ("source", source.as_str()),
+                ],
+            );
+            return;
+        }
         log_runtime_event(
             LogLevel::Info,
             "discovered_relayed_address_accepted",
@@ -10614,6 +10640,59 @@ mod tests {
         assert_eq!(discovered.as_vec(), vec![(configured, relayed_address)]);
     }
 
+    #[tokio::test]
+    async fn authenticated_peer_records_reject_unsupported_relayed_peer_addresses() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let relay = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        let relayed_address: Multiaddr = format!(
+            "/ip4/127.0.0.1/udp/4001/quic-v1/webtransport/p2p/{relay}/p2p-circuit/p2p/{configured}"
+        )
+        .parse()
+        .expect("relayed address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &paths,
+            &metrics,
+            configured,
+            relayed_address,
+            &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::AuthenticatedPeerRecord,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert!(discovered.as_vec().is_empty());
+    }
+
     #[test]
     fn kademlia_peer_address_records_reject_unconfigured_peers() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
@@ -10649,6 +10728,9 @@ mod tests {
             "/ip4/100.64.9.171/tcp/4001",
             "/ip6/fd00:6879:7072:7370:6163:6500:4b5b:8ec1/tcp/4001",
             "/ip6/fe80::1/tcp/4001",
+            &format!("/ip4/127.0.0.1/udp/4001/quic-v1/webtransport/p2p/{relay}/p2p-circuit"),
+            &format!("/ip4/127.0.0.1/udp/4001/webrtc-direct/p2p/{relay}/p2p-circuit"),
+            &format!("/dns4/relay.example.net/tcp/4001/tls/ws/p2p/{relay}/p2p-circuit"),
         ];
         for address in rejected {
             let address: Multiaddr = address.parse().expect("address");
@@ -10666,6 +10748,30 @@ mod tests {
         for address in accepted {
             let address: Multiaddr = address.parse().expect("address");
             assert!(kademlia_peer_address_is_advertisable(&address));
+        }
+    }
+
+    #[test]
+    fn relayed_peer_dial_transport_matches_runtime_supported_transports() {
+        let relay = peer_id();
+        let accepted = [
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{relay}/p2p-circuit"),
+        ];
+        for address in accepted {
+            let address: Multiaddr = address.parse().expect("address");
+            assert!(supports_relayed_peer_dial_transport(&address));
+        }
+
+        let rejected = [
+            format!("/ip4/127.0.0.1/udp/4001/quic-v1/webtransport/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/127.0.0.1/udp/4001/webrtc-direct/p2p/{relay}/p2p-circuit"),
+            format!("/dns4/relay.example.net/tcp/4001/tls/ws/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}"),
+        ];
+        for address in rejected {
+            let address: Multiaddr = address.parse().expect("address");
+            assert!(!supports_relayed_peer_dial_transport(&address));
         }
     }
 
