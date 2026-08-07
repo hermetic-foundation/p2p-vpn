@@ -2928,15 +2928,7 @@ impl AutoRelayState {
         if self
             .candidates
             .iter()
-            .any(|candidate| candidate == &(peer, address.clone()))
-        {
-            return false;
-        }
-        if self.candidates.len() >= self.policy.max_candidates
-            && !self
-                .candidates
-                .iter()
-                .any(|(candidate_peer, _)| *candidate_peer == peer)
+            .any(|(candidate_peer, _)| *candidate_peer == peer)
         {
             return false;
         }
@@ -3622,6 +3614,15 @@ struct DiscoveredPeerAddress {
 enum DiscoveredPeerAddressSource {
     AuthenticatedPeerRecord,
     UnauthenticatedDiscovery,
+}
+
+impl DiscoveredPeerAddressSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticatedPeerRecord => "authenticated_peer_record",
+            Self::UnauthenticatedDiscovery => "unauthenticated_discovery",
+        }
+    }
 }
 
 impl DiscoveredPeerAddresses {
@@ -8076,20 +8077,16 @@ fn learn_peer_address(
         eprintln!("rejecting discovered address for {peer} with mismatched target: {address}");
         return;
     }
-    if relayed_address_relay_peer(&address).is_some()
-        && source != DiscoveredPeerAddressSource::AuthenticatedPeerRecord
-    {
-        metrics.record_discovered_address_rejected();
+    if relayed_address_relay_peer(&address).is_some() {
         log_runtime_event(
             LogLevel::Info,
-            "discovered_relayed_address_rejected",
+            "discovered_relayed_address_accepted",
             &[
                 ("peer", &peer.to_string()),
                 ("address", &address.to_string()),
-                ("reason", "unauthenticated_relayed_address"),
+                ("source", source.as_str()),
             ],
         );
-        return;
     }
 
     if discovery.kademlia {
@@ -10227,7 +10224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kademlia_closest_peer_results_reject_unauthenticated_relayed_peer_addresses() {
+    async fn kademlia_closest_peer_results_accept_unauthenticated_relayed_dial_hints() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let configured = peer_id();
         let relay = peer_id();
@@ -10263,7 +10260,7 @@ mod tests {
             key: configured.to_bytes(),
             peers: vec![kad::PeerInfo {
                 peer_id: configured,
-                addrs: vec![relayed_address],
+                addrs: vec![relayed_address.clone()],
             }],
         }));
 
@@ -10279,10 +10276,10 @@ mod tests {
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.discovered_addresses_accepted, 0);
-        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
-        assert_eq!(snapshot.discovered_addresses_rejected, 1);
-        assert!(discovered.as_vec().is_empty());
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 1);
+        assert_eq!(snapshot.discovered_addresses_rejected, 0);
+        assert_eq!(discovered.as_vec(), vec![(configured, relayed_address)]);
     }
 
     #[test]
@@ -11070,6 +11067,35 @@ mod tests {
 
         assert!(state.record_candidate(relay_a, address_a));
         assert!(!state.record_candidate(relay_b, address_b));
+    }
+
+    #[test]
+    fn auto_relay_state_keeps_one_candidate_address_per_relay_peer() {
+        let relay_a = peer_id();
+        let relay_b = peer_id();
+        let address_a_tcp: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_a}")
+            .parse()
+            .expect("relay address");
+        let address_a_quic: Multiaddr = format!("/ip4/127.0.0.1/udp/4001/quic-v1/p2p/{relay_a}")
+            .parse()
+            .expect("relay address");
+        let address_b: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay_b}")
+            .parse()
+            .expect("relay address");
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 2,
+            max_reservations: 2,
+            retry_interval_seconds: 5,
+        });
+
+        assert!(state.record_candidate(relay_a, address_a_tcp.clone()));
+        assert!(!state.record_candidate(relay_a, address_a_quic));
+        assert!(state.record_candidate(relay_b, address_b.clone()));
+
+        assert_eq!(
+            state.next_reservation_targets(Instant::now()),
+            vec![(relay_a, address_a_tcp), (relay_b, address_b)]
+        );
     }
 
     #[test]
