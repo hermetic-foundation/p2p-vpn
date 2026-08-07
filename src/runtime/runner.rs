@@ -7695,18 +7695,6 @@ fn maybe_demote_stream_fallback_path(
     path: PathKind,
     error: &request_response::OutboundFailure,
 ) -> bool {
-    if path == PathKind::CircuitRelay {
-        log_runtime_event(
-            LogLevel::Warn,
-            "relay_stream_fallback_failure",
-            &[
-                ("peer", &peer.to_string()),
-                ("reason", stream_fallback_failure_name(error)),
-            ],
-        );
-        return false;
-    }
-
     let change = paths.mark_unhealthy(peer, path);
     metrics.record_stream_fallback_path_demotion();
     record_path_selection_change(metrics, change);
@@ -13455,14 +13443,14 @@ mod tests {
     }
 
     #[test]
-    fn stream_fallback_failure_does_not_demote_relay_path() {
+    fn stream_fallback_failure_demotes_relay_path_for_rotation() {
         let peer = PeerId::from_bytes([12; 32]);
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
         paths.record_established(peer, PathKind::CircuitRelay);
 
-        assert!(!maybe_demote_stream_fallback_path(
+        assert!(maybe_demote_stream_fallback_path(
             &mut paths,
             &metrics,
             peer,
@@ -13470,12 +13458,9 @@ mod tests {
             &request_response::OutboundFailure::DialFailure,
         ));
 
-        assert_eq!(
-            paths.best_for(peer).map(|candidate| candidate.kind),
-            Some(PathKind::CircuitRelay)
-        );
+        assert_eq!(paths.best_for(peer).map(|candidate| candidate.kind), None);
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.stream_fallback_path_demotions, 0);
+        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 0);
     }
 
