@@ -66,7 +66,7 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(10);
+const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const SERVICE_STATUS_NONCE: u64 = 1;
 const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
@@ -82,7 +82,8 @@ const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30)
 const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES: usize = 32;
-const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 120;
+const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 30 * 60;
+const KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE: u64 = 60 * 60;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
 
@@ -2731,7 +2732,12 @@ fn learn_peer_addresses_from_kademlia_value(
     ) {
         return Err(KademliaPeerAddressRecordError::WrongMembershipScope);
     }
-    if record.payload.expires_at_unix_seconds < current_unix_seconds_lossy() {
+    if record
+        .payload
+        .expires_at_unix_seconds
+        .saturating_add(KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE)
+        < current_unix_seconds_lossy()
+    {
         return Err(KademliaPeerAddressRecordError::Expired);
     }
     if record.payload.addresses.len() > MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES {
@@ -2858,12 +2864,16 @@ fn redial_known_addresses(
     for (peer, address) in targets.addresses {
         metrics.record_redial_attempt();
         let dial_address = peer_dial_address(peer, address);
-        if let Err(error) = swarm.dial(dial_address) {
+        if let Err(error) = swarm.dial(dial_address.clone()) {
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "redial_failed",
-                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+                &[
+                    ("peer", &peer.to_string()),
+                    ("address", &dial_address.to_string()),
+                    ("error", &error.to_string()),
+                ],
             );
         }
     }
@@ -3414,7 +3424,7 @@ fn dial_relay_ready_configured_peers(
                 ("address", &dial_address.to_string()),
             ],
         );
-        if let Err(error) = swarm.dial(dial_address) {
+        if let Err(error) = swarm.dial(dial_address.clone()) {
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -3489,12 +3499,16 @@ fn redial_selected_addresses(
         }
         metrics.record_redial_attempt();
         let dial_address = peer_dial_address(peer, address);
-        if let Err(error) = swarm.dial(dial_address) {
+        if let Err(error) = swarm.dial(dial_address.clone()) {
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "redial_failed",
-                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+                &[
+                    ("peer", &peer.to_string()),
+                    ("address", &dial_address.to_string()),
+                    ("error", &error.to_string()),
+                ],
             );
         }
     }
@@ -3516,12 +3530,16 @@ fn redial_packet_plane_recovery_addresses(
     ) {
         metrics.record_packet_plane_path_recovery_dial_attempt();
         let dial_address = peer_dial_address(peer, address);
-        if let Err(error) = swarm.dial(dial_address) {
+        if let Err(error) = swarm.dial(dial_address.clone()) {
             metrics.record_packet_plane_path_recovery_dial_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "packet_plane_path_recovery_dial_failed",
-                &[("peer", &peer.to_string()), ("error", &error.to_string())],
+                &[
+                    ("peer", &peer.to_string()),
+                    ("address", &dial_address.to_string()),
+                    ("error", &error.to_string()),
+                ],
             );
         }
     }
@@ -10479,6 +10497,69 @@ mod tests {
 
         assert_eq!(peer, remote_peer);
         assert_eq!(addresses, vec![relayed_address]);
+    }
+
+    #[test]
+    fn kademlia_peer_address_records_accept_recently_stale_signed_addresses() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_peer = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote peer id");
+        let relay = peer_id();
+        let config = config_with_peer(&local_identity, remote_peer);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let relayed_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("relayed address");
+        let current = current_unix_seconds_lossy();
+        let recently_stale = current
+            .saturating_sub(KADEMLIA_PEER_ADDRESS_RECORD_TTL)
+            .saturating_sub(KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE / 2);
+        let too_stale = current
+            .saturating_sub(KADEMLIA_PEER_ADDRESS_RECORD_TTL)
+            .saturating_sub(KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE)
+            .saturating_sub(1);
+
+        let recently_stale_value = encode_kademlia_peer_address_record(
+            "lab",
+            None,
+            &remote_identity,
+            vec![relayed_address.clone()],
+            recently_stale,
+        )
+        .expect("recently stale address record");
+        let (peer, addresses) = learn_peer_addresses_from_kademlia_value(
+            &forwarder,
+            "lab",
+            None,
+            &[],
+            &recently_stale_value,
+        )
+        .expect("recently stale signed address record");
+        assert_eq!(peer, remote_peer);
+        assert_eq!(addresses, vec![relayed_address.clone()]);
+
+        let too_stale_value = encode_kademlia_peer_address_record(
+            "lab",
+            None,
+            &remote_identity,
+            vec![relayed_address],
+            too_stale,
+        )
+        .expect("too stale address record");
+        let result = learn_peer_addresses_from_kademlia_value(
+            &forwarder,
+            "lab",
+            None,
+            &[],
+            &too_stale_value,
+        );
+        assert!(matches!(
+            result,
+            Err(KademliaPeerAddressRecordError::Expired)
+        ));
     }
 
     #[tokio::test]
