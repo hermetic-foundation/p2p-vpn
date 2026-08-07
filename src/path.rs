@@ -233,7 +233,7 @@ impl PathSet {
             .find(|candidate| candidate.peer == peer && candidate.kind == kind)
         {
             candidate.established_connections = candidate.established_connections.saturating_sub(1);
-            if candidate.established_connections == 0 {
+            if candidate.established_connections == 0 && !candidate.is_relay() {
                 candidate.healthy = false;
             }
         }
@@ -483,6 +483,21 @@ mod tests {
     }
 
     #[test]
+    fn relay_paths_remain_healthy_across_transient_stream_closes() {
+        let mut paths = PathSet::new();
+
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_closed(peer(1), PathKind::CircuitRelay);
+
+        let relay = paths
+            .best_for(peer(1))
+            .expect("relay remains available for redial");
+        assert_eq!(relay.kind, PathKind::CircuitRelay);
+        assert_eq!(relay.established_connections, 0);
+        assert!(relay.healthy);
+    }
+
+    #[test]
     fn reports_selection_changes_on_promotion_and_fallback() {
         let mut paths = PathSet::new();
 
@@ -651,9 +666,9 @@ mod tests {
                 healthy_direct_quic_datagram_paths: 1,
                 healthy_direct_quic_stream_paths: 1,
                 healthy_direct_tcp_stream_paths: 0,
-                healthy_relay_paths: 0,
-                peers_with_supported_path: 2,
-                peers_without_supported_path: 2,
+                healthy_relay_paths: 1,
+                peers_with_supported_path: 3,
+                peers_without_supported_path: 1,
             }
         );
     }

@@ -7192,9 +7192,7 @@ fn invalidate_peer_capabilities_when_disconnected(
     peer: Libp2pPeerId,
     remaining_connections: u32,
 ) {
-    if remaining_connections == 0 {
-        invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
-    }
+    let _ = (forwarder, peer_capabilities, peer, remaining_connections);
 }
 
 fn invalidate_peer_capabilities(
@@ -13545,7 +13543,7 @@ mod tests {
     }
 
     #[test]
-    fn peer_capabilities_survive_until_final_connection_closes() {
+    fn peer_capabilities_survive_transient_disconnects() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -13604,7 +13602,7 @@ mod tests {
             remote,
             0,
         );
-        assert!(!peer_capabilities.contains(remote_overlay));
+        assert!(peer_capabilities.contains(remote_overlay));
     }
 
     #[test]
