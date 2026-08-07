@@ -420,6 +420,21 @@ impl Forwarder {
         Ok(&frame.payload)
     }
 
+    pub fn accept_inbound_stream_packet<'a>(
+        &self,
+        peer: Libp2pPeerId,
+        frame: &'a Frame,
+    ) -> Result<&'a [u8], ForwardError> {
+        self.validate_inbound_frame_metadata(peer, frame, PayloadType::IpPacket)?;
+        let overlay_peer = PeerId::from_libp2p(peer);
+        let source = packet_source(&frame.payload)?;
+        self.routes.authorize_source(overlay_peer, source)?;
+        let destination = packet_destination(&frame.payload)?;
+        self.authorize_local_destination(destination)?;
+
+        Ok(&frame.payload)
+    }
+
     pub fn accept_inbound_control_frame(
         &mut self,
         peer: Libp2pPeerId,
@@ -436,7 +451,7 @@ impl Forwarder {
     }
 
     fn validate_inbound_frame_metadata(
-        &mut self,
+        &self,
         peer: Libp2pPeerId,
         frame: &Frame,
         expected_payload_type: PayloadType,
@@ -1184,6 +1199,28 @@ mod tests {
                 sequence: 36
             }) if peer == remote_overlay
         ));
+    }
+
+    #[test]
+    fn inbound_stream_packet_does_not_use_datagram_replay_window() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let packet = ipv4_packet(builtin_ipv4(remote_overlay), local_ipv4(&config));
+        let datagram = Frame::packet(7, 100, packet.clone()).expect("datagram frame");
+        let stream = Frame::packet(7, 0, packet).expect("stream frame");
+
+        forwarder
+            .accept_inbound_packet(remote, &datagram)
+            .expect("datagram packet accepted");
+
+        assert_eq!(
+            forwarder
+                .accept_inbound_stream_packet(remote, &stream)
+                .expect("stream fallback bypasses datagram replay window"),
+            stream.payload.as_slice()
+        );
     }
 
     #[test]

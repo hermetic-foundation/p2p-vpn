@@ -83,6 +83,7 @@ const MAX_KADEMLIA_PEER_ADDRESS_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES: usize = 32;
 const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 120;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
+const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
 
 const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
     LocalPacketDataPlane::identity_keyed_streams();
@@ -3617,6 +3618,12 @@ struct DiscoveredPeerAddress {
     last_seen: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveredPeerAddressSource {
+    AuthenticatedPeerRecord,
+    UnauthenticatedDiscovery,
+}
+
 impl DiscoveredPeerAddresses {
     fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) {
         self.insert_at(peer, address, Instant::now());
@@ -4490,7 +4497,7 @@ fn packet_transport_decision(
         local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
     let local_datagrams = datagram_backend.is_some();
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
-    if let Some(path) = paths.best_supported_for(peer, support) {
+    if let Some(path) = best_packet_transport_path(paths, peer, support) {
         return if path.kind.requires_quic_datagrams() {
             PacketTransportDecision::PacketPlaneDatagram {
                 path: path.kind,
@@ -4511,6 +4518,22 @@ fn packet_transport_decision(
         PacketTransportBlockReason::NoHealthyPath
     };
     PacketTransportDecision::Blocked { reason, best_path }
+}
+
+fn best_packet_transport_path(
+    paths: &PathSet,
+    peer: PeerId,
+    support: PathTransportSupport,
+) -> Option<crate::path::PathCandidate> {
+    let selected = paths.best_supported_for(peer, support)?;
+    if selected.kind.requires_quic_datagrams()
+        && selected.observed_rtt_ms.is_none()
+        && let Some(stream_path) =
+            paths.best_supported_for(peer, PathTransportSupport::stream_fallback())
+    {
+        return Some(stream_path);
+    }
+    Some(selected)
 }
 
 fn local_packet_datagram_backend(
@@ -5159,7 +5182,10 @@ fn handle_packet_request(
     }
 
     let result = match request.header.payload_type {
-        PayloadType::IpPacket => match context.forwarder.accept_inbound_packet(peer, request) {
+        PayloadType::IpPacket => match context
+            .forwarder
+            .accept_inbound_stream_packet(peer, request)
+        {
             Ok(packet) => {
                 context.writer.write_packet(packet)?;
                 context.metrics.record_tun_write(packet.len());
@@ -7430,6 +7456,7 @@ fn handle_behaviour_event(
                     peer,
                     address,
                     context.discovery,
+                    DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
                 );
             }
         }
@@ -7531,6 +7558,7 @@ fn handle_identify_received(
             peer_id,
             address,
             context.discovery,
+            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
         );
     }
     if context.infrastructure_peers.contains(peer_id)
@@ -7769,6 +7797,7 @@ fn handle_kademlia_peer_address_record_result(
                     peer,
                     address,
                     context.discovery,
+                    DiscoveredPeerAddressSource::AuthenticatedPeerRecord,
                 );
             }
         }
@@ -7788,13 +7817,23 @@ fn query_auto_relay_infrastructure(
     reason: &'static str,
 ) {
     let local_peer = *swarm.local_peer_id();
-    swarm.behaviour_mut().kad.get_closest_peers(local_peer);
-    metrics.record_auto_relay_discovery_query();
-    log_runtime_event(
-        LogLevel::Info,
-        "auto_relay_discovery_query",
-        &[("reason", reason), ("target", &local_peer.to_string())],
-    );
+    let mut targets = vec![local_peer];
+    for _ in 1..AUTO_RELAY_DISCOVERY_QUERY_FANOUT {
+        targets.push(
+            libp2p::identity::Keypair::generate_ed25519()
+                .public()
+                .to_peer_id(),
+        );
+    }
+    for target in targets {
+        swarm.behaviour_mut().kad.get_closest_peers(target);
+        metrics.record_auto_relay_discovery_query();
+        log_runtime_event(
+            LogLevel::Info,
+            "auto_relay_discovery_query",
+            &[("reason", reason), ("target", &target.to_string())],
+        );
+    }
 }
 
 fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::QueryResult) {
@@ -7844,6 +7883,7 @@ fn handle_kademlia_closest_peer_result(
                     peer.peer_id,
                     address.clone(),
                     discovery,
+                    DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
                 );
             }
             admit_kademlia_relay_infrastructure_peer(
@@ -8017,23 +8057,46 @@ fn learn_peer_address(
     peer: Libp2pPeerId,
     address: Multiaddr,
     discovery: &DiscoveryConfig,
+    source: DiscoveredPeerAddressSource,
 ) {
     if peer == *swarm.local_peer_id() {
         return;
     }
-    if discovery.kademlia && address_targets_peer(peer, &address) {
-        swarm
-            .behaviour_mut()
-            .kad
-            .add_address(&peer, address.clone());
-    }
     if !forwarder.is_configured_transport_peer(peer) {
+        if discovery.kademlia && address_targets_peer(peer, &address) {
+            swarm
+                .behaviour_mut()
+                .kad
+                .add_address(&peer, address.clone());
+        }
         return;
     }
     if !address_targets_peer(peer, &address) {
         metrics.record_discovered_address_rejected();
         eprintln!("rejecting discovered address for {peer} with mismatched target: {address}");
         return;
+    }
+    if relayed_address_relay_peer(&address).is_some()
+        && source != DiscoveredPeerAddressSource::AuthenticatedPeerRecord
+    {
+        metrics.record_discovered_address_rejected();
+        log_runtime_event(
+            LogLevel::Info,
+            "discovered_relayed_address_rejected",
+            &[
+                ("peer", &peer.to_string()),
+                ("address", &address.to_string()),
+                ("reason", "unauthenticated_relayed_address"),
+            ],
+        );
+        return;
+    }
+
+    if discovery.kademlia {
+        swarm
+            .behaviour_mut()
+            .kad
+            .add_address(&peer, address.clone());
     }
 
     metrics.record_discovered_address_accepted();
@@ -8157,8 +8220,7 @@ fn selected_path_mtu(
     let datagram_backend =
         local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
-    let path_mtu = paths
-        .best_supported_for(peer, support)
+    let path_mtu = best_packet_transport_path(paths, peer, support)
         .map_or(peer_mtu, |path| path.effective_mtu(peer_mtu));
     selected_datagram_session_mtu(packet_plane, packet_plane_quic, datagram_backend, peer)
         .map_or(path_mtu, |session_mtu| path_mtu.min(session_mtu))
@@ -9768,7 +9830,10 @@ mod tests {
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
         assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_provider_advertisement_failures, 0);
-        assert_eq!(snapshot.auto_relay_discovery_queries, 1);
+        assert_eq!(
+            snapshot.auto_relay_discovery_queries,
+            AUTO_RELAY_DISCOVERY_QUERY_FANOUT as u64
+        );
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
     }
@@ -10161,6 +10226,65 @@ mod tests {
         assert_eq!(discovered.as_vec(), vec![(configured, configured_address)]);
     }
 
+    #[tokio::test]
+    async fn kademlia_closest_peer_results_reject_unauthenticated_relayed_peer_addresses() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let relay = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        let relayed_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{configured}")
+                .parse()
+                .expect("relayed address");
+        let result = kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk {
+            key: configured.to_bytes(),
+            peers: vec![kad::PeerInfo {
+                peer_id: configured,
+                addrs: vec![relayed_address],
+            }],
+        }));
+
+        handle_kademlia_closest_peer_result(
+            &mut node.swarm,
+            &forwarder,
+            &mut infrastructure_peers,
+            &mut discovered,
+            &paths,
+            &metrics,
+            &DiscoveryConfig::default(),
+            &result,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert!(discovered.as_vec().is_empty());
+    }
+
     #[test]
     fn kademlia_peer_address_records_accept_signed_configured_relay_addresses() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
@@ -10190,6 +10314,58 @@ mod tests {
 
         assert_eq!(peer, remote_peer);
         assert_eq!(addresses, vec![relayed_address]);
+    }
+
+    #[tokio::test]
+    async fn authenticated_peer_records_can_learn_relayed_peer_addresses() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let relay = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        let relayed_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{configured}")
+                .parse()
+                .expect("relayed address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &paths,
+            &metrics,
+            configured,
+            relayed_address.clone(),
+            &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::AuthenticatedPeerRecord,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 1);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 1);
+        assert_eq!(snapshot.discovered_addresses_rejected, 0);
+        assert_eq!(discovered.as_vec(), vec![(configured, relayed_address)]);
     }
 
     #[test]
@@ -11669,6 +11845,7 @@ mod tests {
             configured,
             address.clone(),
             &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -11718,6 +11895,7 @@ mod tests {
             unconfigured,
             address,
             &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -11769,6 +11947,7 @@ mod tests {
             configured,
             address,
             &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -15827,6 +16006,73 @@ mod tests {
             PacketTransportDecision::Blocked {
                 reason: PacketTransportBlockReason::LocalQuicDatagramsUnavailable,
                 best_path: Some(PathKind::DirectQuicDatagram)
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_transport_decision_prefers_stream_until_datagram_path_is_confirmed() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1280,
+        );
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
+        let mut peer_capabilities = PeerCapabilities::default();
+        let capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true);
+        peer_capabilities.record(remote_overlay, capabilities);
+
+        assert_eq!(
+            packet_transport_decision(
+                &paths,
+                &peer_capabilities,
+                Some(&sender_packet_plane),
+                None,
+                remote_overlay
+            ),
+            PacketTransportDecision::StreamFallback {
+                path: PathKind::DirectTcpStream
+            }
+        );
+
+        paths.record_rtt(remote_overlay, PathKind::DirectUdpDatagram, 10);
+
+        assert_eq!(
+            packet_transport_decision(
+                &paths,
+                &peer_capabilities,
+                Some(&sender_packet_plane),
+                None,
+                remote_overlay
+            ),
+            PacketTransportDecision::PacketPlaneDatagram {
+                path: PathKind::DirectUdpDatagram,
+                backend: PacketDatagramBackend::OwnedUdp
             }
         );
     }
