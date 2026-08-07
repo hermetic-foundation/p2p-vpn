@@ -4709,9 +4709,14 @@ fn best_packet_transport_path(
 ) -> Option<crate::path::PathCandidate> {
     let selected = paths.best_supported_for(peer, support)?;
     if selected.kind.requires_quic_datagrams()
-        && selected.observed_rtt_ms.is_none()
-        && let Some(stream_path) =
-            paths.best_supported_for(peer, PathTransportSupport::stream_fallback())
+        && let Some(stream_path) = paths.best_supported_for(
+            peer,
+            PathTransportSupport {
+                udp_datagrams: false,
+                quic_datagrams: false,
+            },
+        )
+        && (selected.observed_rtt_ms.is_none() || stream_path.is_relay())
     {
         return Some(stream_path);
     }
@@ -16964,6 +16969,29 @@ mod tests {
                 path: PathKind::DirectUdpDatagram,
                 backend: PacketDatagramBackend::OwnedUdp
             }
+        );
+    }
+
+    #[test]
+    fn packet_transport_selection_prefers_established_relay_over_direct_datagram() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
+        paths.record_rtt(remote_overlay, PathKind::DirectUdpDatagram, 10);
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+
+        assert_eq!(
+            best_packet_transport_path(
+                &paths,
+                remote_overlay,
+                PathTransportSupport {
+                    udp_datagrams: true,
+                    quic_datagrams: false
+                }
+            )
+            .map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
         );
     }
 
