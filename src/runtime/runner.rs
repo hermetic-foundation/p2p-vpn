@@ -5628,6 +5628,7 @@ fn handle_control_response_event(
                 peer,
                 &handshake,
             ) {
+                packet_plane_negotiator.remove_peer(PeerId::from_libp2p(peer));
                 metrics.record_control_failure();
                 eprintln!(
                     "packet-plane accept from {peer} failed: {}",
@@ -5636,6 +5637,7 @@ fn handle_control_response_event(
             }
         }
         ControlResponse::PacketPlaneRejected(reason) => {
+            packet_plane_negotiator.remove_peer(PeerId::from_libp2p(peer));
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
@@ -6707,13 +6709,18 @@ fn advertise_direct_packet_plane_endpoint_from_path(
     let Some(candidate) = direct_packet_plane_endpoint_from_path(udp_listener, endpoint) else {
         return false;
     };
-    if capabilities.packet_endpoint_candidates.contains(&candidate) {
+    if capabilities
+        .packet_endpoint_candidates
+        .first()
+        .is_some_and(|existing| existing == &candidate)
+    {
         return false;
     }
 
-    capabilities
-        .packet_endpoint_candidates
-        .push(candidate.clone());
+    replace_packet_plane_endpoint_for_listener(
+        &mut capabilities.packet_endpoint_candidates,
+        &candidate,
+    );
     capabilities.supports_owned_udp_packet_plane = true;
     capabilities.supports_quic_datagrams = true;
     metrics.record_observed_packet_plane_udp_endpoint_candidate();
@@ -6723,6 +6730,20 @@ fn advertise_direct_packet_plane_endpoint_from_path(
         &[("endpoint", &candidate)],
     );
     true
+}
+
+fn replace_packet_plane_endpoint_for_listener(candidates: &mut Vec<String>, candidate: &str) {
+    let Ok(endpoint) = candidate.parse::<SocketAddr>() else {
+        candidates.insert(0, candidate.to_owned());
+        return;
+    };
+    candidates.retain(|existing| {
+        existing.parse::<SocketAddr>().map_or(true, |existing| {
+            existing == endpoint || existing.port() != endpoint.port()
+        })
+    });
+    candidates.retain(|existing| existing != candidate);
+    candidates.insert(0, candidate.to_owned());
 }
 
 fn direct_packet_plane_endpoint_from_path(
@@ -15377,6 +15398,43 @@ mod tests {
                 &endpoint,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_replaces_stale_candidate_for_listener_port() {
+        let mut candidates = vec![
+            "172.20.10.2:51820".to_owned(),
+            "192.168.1.50:51821".to_owned(),
+        ];
+
+        replace_packet_plane_endpoint_for_listener(&mut candidates, "192.168.1.10:51820");
+
+        assert_eq!(
+            candidates,
+            vec![
+                "192.168.1.10:51820".to_owned(),
+                "192.168.1.50:51821".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_moves_existing_candidate_to_front() {
+        let mut candidates = vec![
+            "172.20.10.2:51820".to_owned(),
+            "192.168.1.10:51820".to_owned(),
+            "192.168.1.50:51821".to_owned(),
+        ];
+
+        replace_packet_plane_endpoint_for_listener(&mut candidates, "192.168.1.10:51820");
+
+        assert_eq!(
+            candidates,
+            vec![
+                "192.168.1.10:51820".to_owned(),
+                "192.168.1.50:51821".to_owned(),
+            ]
         );
     }
 
