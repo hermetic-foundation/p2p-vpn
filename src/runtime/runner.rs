@@ -3731,7 +3731,7 @@ fn redial_connection_state(
         }
         if candidate.is_relay() {
             has_relay = true;
-        } else {
+        } else if !candidate.kind.requires_quic_datagrams() {
             has_direct = true;
         }
     }
@@ -11281,6 +11281,31 @@ mod tests {
     }
 
     #[test]
+    fn redial_connection_state_ignores_datagram_only_direct_paths() {
+        let peer = peer_id();
+        let overlay = PeerId::from_libp2p(peer);
+        let mut paths = PathSet::new();
+
+        paths.record_established(overlay, PathKind::DirectUdpDatagram);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::ConnectedNoUsablePath
+        );
+
+        paths.record_established(overlay, PathKind::CircuitRelay);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::RelayOnly
+        );
+
+        paths.record_established(overlay, PathKind::DirectTcpStream);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::DirectAndRelay
+        );
+    }
+
+    #[test]
     fn discovered_relay_addresses_are_dialed_when_connected_path_is_stale() {
         let peer = peer_id();
         let relay = peer_id();
@@ -11314,6 +11339,14 @@ mod tests {
             peer,
             true,
             &direct_address
+        ));
+
+        paths.record_established(overlay, PathKind::DirectUdpDatagram);
+        assert!(should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address
         ));
 
         paths.record_established(overlay, PathKind::CircuitRelay);
