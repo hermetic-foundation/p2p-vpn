@@ -16,7 +16,7 @@ use libp2p::{
     multiaddr::Protocol,
     relay,
     request_response::{self, Message},
-    swarm::SwarmEvent,
+    swarm::{DialError, SwarmEvent},
 };
 use rand_core::{OsRng, RngCore as _};
 use rustls::pki_types::CertificateDer;
@@ -3862,6 +3862,47 @@ fn should_dial_discovered_address(
     }
 }
 
+fn record_discovered_outgoing_connection_failure(
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+    peer: Option<Libp2pPeerId>,
+    error: &DialError,
+) {
+    let Some(peer) = peer else {
+        return;
+    };
+    let now = Instant::now();
+    let failed_addresses = dial_error_failed_addresses(error);
+    for address in failed_addresses {
+        if !discovered_peer_addresses.record_dial_failure_at(peer, &address, now) {
+            continue;
+        }
+        metrics.record_discovered_address_dial_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "discovered_address_async_dial_failed",
+            &[
+                ("peer", &peer.to_string()),
+                ("address", &address.to_string()),
+                ("error", &error.to_string()),
+            ],
+        );
+    }
+}
+
+fn dial_error_failed_addresses(error: &DialError) -> Vec<Multiaddr> {
+    match error {
+        DialError::LocalPeerId { address } | DialError::WrongPeerId { address, .. } => {
+            vec![address.clone()]
+        }
+        DialError::Transport(errors) => errors.iter().map(|(address, _)| address.clone()).collect(),
+        DialError::NoAddresses
+        | DialError::DialPeerConditionFalse(_)
+        | DialError::Aborted
+        | DialError::Denied { .. } => Vec::new(),
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct RedialTargets {
     addresses: Vec<(Libp2pPeerId, Multiaddr)>,
@@ -3946,6 +3987,33 @@ impl DiscoveredPeerAddresses {
         else {
             return false;
         };
+        entry.failure_count = entry.failure_count.saturating_add(1);
+        entry.quarantined_until =
+            Some(now + discovered_address_failure_backoff(entry.failure_count));
+        true
+    }
+
+    fn is_ready_at(&self, peer: Libp2pPeerId, address: &Multiaddr, now: Instant) -> bool {
+        self.addresses
+            .iter()
+            .find(|entry| entry.peer == peer && &entry.address == address)
+            .is_none_or(|entry| entry.quarantined_until.is_none_or(|until| until <= now))
+    }
+
+    fn record_dial_failure_at(
+        &mut self,
+        peer: Libp2pPeerId,
+        dialed_address: &Multiaddr,
+        now: Instant,
+    ) -> bool {
+        let Some(entry) = self.addresses.iter_mut().find(|entry| {
+            entry.peer == peer
+                && (&entry.address == dialed_address
+                    || peer_dial_address(peer, entry.address.clone()) == *dialed_address)
+        }) else {
+            return false;
+        };
+
         entry.failure_count = entry.failure_count.saturating_add(1);
         entry.quarantined_until =
             Some(now + discovered_address_failure_backoff(entry.failure_count));
@@ -5187,6 +5255,12 @@ async fn handle_swarm_event(
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             let peer_connected = peer_id.is_some_and(|peer_id| swarm.is_connected(&peer_id));
+            record_discovered_outgoing_connection_failure(
+                context.discovered_peer_addresses,
+                context.metrics,
+                peer_id,
+                &error,
+            );
             handle_relay_infrastructure_outgoing_connection_error(
                 context.infrastructure_peers,
                 context.auto_relay,
@@ -8755,6 +8829,7 @@ fn learn_peer_address(
     }
 
     metrics.record_discovered_address_accepted();
+    let now = Instant::now();
     discovered_peer_addresses.insert(peer, address.clone());
 
     if discovery.autonat
@@ -8766,11 +8841,14 @@ fn learn_peer_address(
     if !should_dial_discovered_address(paths, peer, swarm.is_connected(&peer), &address) {
         return;
     }
+    if !discovered_peer_addresses.is_ready_at(peer, &address, now) {
+        return;
+    }
 
     let dial_address = peer_dial_address(peer, address.clone());
     metrics.record_discovered_address_dial_attempt();
     if let Err(error) = swarm.dial(dial_address) {
-        discovered_peer_addresses.record_failure_at(peer, &address, Instant::now());
+        discovered_peer_addresses.record_failure_at(peer, &address, now);
         metrics.record_discovered_address_dial_failure();
         eprintln!("dial discovered peer {peer} failed: {error}");
     }
@@ -12667,6 +12745,43 @@ mod tests {
         assert_eq!(
             discovered.redial_candidates_at(now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE),
             vec![(peer, other_address), (peer, address)]
+        );
+    }
+
+    #[test]
+    fn discovered_peer_address_quarantine_blocks_immediate_rediscovery_dial() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let now = Instant::now();
+        let mut discovered = DiscoveredPeerAddresses::default();
+
+        discovered.insert_at(peer, address.clone(), now);
+        assert!(discovered.record_failure_at(peer, &address, now));
+        discovered.insert_at(peer, address.clone(), now + Duration::from_secs(1));
+
+        assert!(!discovered.is_ready_at(peer, &address, now + Duration::from_secs(1)));
+        assert!(discovered.is_ready_at(
+            peer,
+            &address,
+            now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE
+        ));
+    }
+
+    #[test]
+    fn discovered_peer_address_async_dial_failures_are_quarantined() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let dialed_address = peer_dial_address(peer, address.clone());
+        let now = Instant::now();
+        let mut discovered = DiscoveredPeerAddresses::default();
+
+        discovered.insert_at(peer, address.clone(), now);
+
+        assert!(discovered.record_dial_failure_at(peer, &dialed_address, now));
+        assert_eq!(discovered.redial_candidates_at(now), Vec::new());
+        assert_eq!(
+            discovered.redial_candidates_at(now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE),
+            vec![(peer, address)]
         );
     }
 
