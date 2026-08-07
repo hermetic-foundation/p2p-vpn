@@ -42,6 +42,24 @@ nix develop -c cargo clippy --all-targets -- -D warnings
 nix flake check
 ```
 
+## NixOS VM Mesh
+
+Run the two-node VM mesh check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-mesh
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Minimal config | Peer IDs plus route ownership are enough. |
+| Discovery | No explicit peer dial addresses are configured. |
+| TUN setup | Both nodes create default `pv0`. |
+| Data plane | Bidirectional ping crosses the overlay. |
+| Packet plane | A direct LAN packet-plane session is negotiated. |
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

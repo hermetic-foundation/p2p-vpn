@@ -1922,6 +1922,9 @@ EOF
             machine.succeed("test \"$(systemctl show p2p-vpn-smoke.service -p Result --value)\" = success")
           '';
         };
+        nixosVmMesh = import ./tests/nixos/mesh.nix {
+          inherit self pkgs package;
+        };
         namespaceSmokePreflighted = pkgs.rustPlatform.buildRustPackage {
           pname = "p2p-vpn-namespace-smoke-preflighted";
           version = "0.1.0";
@@ -2282,6 +2285,7 @@ EOF
             touch $out
           '';
           nixos-vm-smoke = nixosVmSmoke;
+          nixos-vm-mesh = nixosVmMesh;
           public-relay-repro-structure = pkgs.runCommand "p2p-vpn-public-relay-repro-structure" {
             nativeBuildInputs = [
               publicRelayRepro
