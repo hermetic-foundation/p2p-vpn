@@ -80,6 +80,7 @@ const MAX_PENDING_PATH_PROBES: usize = 4096;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD: u8 = 2;
 const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES: usize = 32;
@@ -2923,6 +2924,7 @@ struct AutoRelayState {
     pending_reservations: HashMap<Libp2pPeerId, PendingAutoRelayReservation>,
     accepted_reservation_peers: HashSet<Libp2pPeerId>,
     retry_after: HashMap<Libp2pPeerId, Instant>,
+    reservation_failures: HashMap<Libp2pPeerId, u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -2958,6 +2960,7 @@ impl AutoRelayState {
             pending_reservations: HashMap::new(),
             accepted_reservation_peers: HashSet::new(),
             retry_after: HashMap::new(),
+            reservation_failures: HashMap::new(),
         }
     }
 
@@ -3015,6 +3018,28 @@ impl AutoRelayState {
         true
     }
 
+    fn remove_candidate(&mut self, peer: Libp2pPeerId) -> bool {
+        let original_len = self.candidates.len();
+        self.candidates
+            .retain(|(candidate_peer, _)| *candidate_peer != peer);
+        self.attempted_reservations
+            .retain(|(attempted_peer, _)| *attempted_peer != peer);
+        self.pending_reservations.remove(&peer);
+        self.accepted_reservation_peers.remove(&peer);
+        self.retry_after.remove(&peer);
+        self.reservation_failures.remove(&peer);
+        self.candidates.len() != original_len
+    }
+
+    fn record_reservation_failure(&mut self, peer: Libp2pPeerId) -> bool {
+        let failures = self.reservation_failures.entry(peer).or_default();
+        *failures = failures.saturating_add(1);
+        if *failures < AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD {
+            return false;
+        }
+        self.remove_candidate(peer)
+    }
+
     fn next_reservation_targets(&mut self, now: Instant) -> Vec<(Libp2pPeerId, Multiaddr)> {
         if !self.should_attempt_reservations()
             || self.policy.max_reservations == 0
@@ -3064,6 +3089,7 @@ impl AutoRelayState {
         self.pending_reservations.remove(&peer);
         self.accepted_reservation_peers.insert(peer);
         self.retry_after.remove(&peer);
+        self.reservation_failures.remove(&peer);
     }
 
     fn release_reservation_peer(&mut self, peer: Libp2pPeerId) -> bool {
@@ -3200,6 +3226,7 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
     if let Err(error) = swarm.dial(address.clone()) {
         metrics.record_auto_relay_infrastructure_dial_failure();
         infrastructure_peers.remove(peer);
+        auto_relay.remove_candidate(peer);
         log_runtime_event(
             LogLevel::Warn,
             "auto_relay_infrastructure_dial_failed",
@@ -3215,12 +3242,14 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
 fn reject_unconfirmed_infrastructure_peer(
     swarm: &mut Swarm<Behaviour>,
     infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
     peer: Libp2pPeerId,
     reason: &str,
 ) {
     if !infrastructure_peers.remove(peer) {
         return;
     }
+    auto_relay.remove_candidate(peer);
 
     log_runtime_event(
         LogLevel::Warn,
@@ -4997,6 +5026,7 @@ async fn handle_swarm_event(
             let peer_connected = peer_id.is_some_and(|peer_id| swarm.is_connected(&peer_id));
             handle_relay_infrastructure_outgoing_connection_error(
                 context.infrastructure_peers,
+                context.auto_relay,
                 context.membership,
                 context.metrics,
                 peer_id,
@@ -5166,6 +5196,7 @@ fn handle_outgoing_connection_error(
 
 fn handle_relay_infrastructure_outgoing_connection_error(
     infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
     membership: &OverlayMembership,
     metrics: &RuntimeMetrics,
     peer_id: Option<Libp2pPeerId>,
@@ -5179,6 +5210,7 @@ fn handle_relay_infrastructure_outgoing_connection_error(
     if peer_connected || membership.allows(peer_id) || !infrastructure_peers.remove(peer_id) {
         return;
     }
+    auto_relay.remove_candidate(peer_id);
 
     metrics.record_auto_relay_infrastructure_dial_failure();
     log_runtime_event(
@@ -7698,6 +7730,7 @@ fn handle_behaviour_event(
                 reject_unconfirmed_infrastructure_peer(
                     swarm,
                     context.infrastructure_peers,
+                    context.auto_relay,
                     peer_id,
                     "identify_failed",
                 );
@@ -7790,6 +7823,7 @@ fn handle_identify_received(
         reject_unconfirmed_infrastructure_peer(
             swarm,
             context.infrastructure_peers,
+            context.auto_relay,
             peer_id,
             "missing_relay_hop",
         );
@@ -8274,12 +8308,14 @@ fn expire_pending_auto_relay_reservations(
 ) {
     for (relay_peer, relay_address) in auto_relay.expire_pending_reservations(now) {
         metrics.record_auto_relay_reservation_failure();
+        let evicted = auto_relay.record_reservation_failure(relay_peer);
         log_runtime_event(
             LogLevel::Warn,
             "auto_relay_reservation_timeout",
             &[
                 ("relay", &relay_peer.to_string()),
                 ("address", &relay_address.to_string()),
+                ("evicted", &evicted.to_string()),
             ],
         );
     }
@@ -11725,6 +11761,57 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_state_evicts_repeatedly_timed_out_candidate() {
+        let relay = peer_id();
+        let replacement = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let replacement_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{replacement}")
+            .parse()
+            .expect("replacement relay address");
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 7,
+        });
+        state.record_reachability(AutoNatReachability::Private);
+        assert!(state.record_candidate(relay, address.clone()));
+        let now = Instant::now();
+
+        assert_eq!(state.next_reservation_targets(now), vec![(relay, address)]);
+        assert_eq!(
+            state
+                .expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT)
+                .len(),
+            1
+        );
+        assert!(!state.record_reservation_failure(relay));
+        assert_eq!(state.snapshot(now).candidates, 1);
+        assert!(!state.record_candidate(replacement, replacement_address.clone()));
+
+        assert!(state.record_reservation_failure(relay));
+
+        assert_eq!(state.snapshot(now).candidates, 0);
+        assert!(state.record_candidate(replacement, replacement_address));
+    }
+
+    #[test]
+    fn auto_relay_state_removes_identify_rejected_candidate() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let mut state = AutoRelayState::default();
+
+        assert!(state.record_candidate(relay, address));
+        assert!(state.remove_candidate(relay));
+
+        assert_eq!(state.snapshot(Instant::now()).candidates, 0);
+        assert!(!state.remove_candidate(relay));
+    }
+
+    #[test]
     fn auto_relay_state_times_out_pending_reservation_and_rotates_candidate() {
         let relay_a = peer_id();
         let relay_b = peer_id();
@@ -11937,16 +12024,27 @@ mod tests {
             .parse()
             .expect("address");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
         assert!(infrastructure_peers.insert(peer, address));
+        assert!(
+            auto_relay.record_candidate(
+                peer,
+                format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer}")
+                    .parse()
+                    .expect("relay address")
+            )
+        );
 
         reject_unconfirmed_infrastructure_peer(
             &mut node.swarm,
             &mut infrastructure_peers,
+            &mut auto_relay,
             peer,
             "missing_relay_hop",
         );
 
         assert!(!infrastructure_peers.contains(peer));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 0);
     }
 
     #[test]
@@ -12323,11 +12421,14 @@ mod tests {
             .parse()
             .expect("infrastructure address");
         let mut infrastructure_peers = InfrastructurePeers::default();
-        assert!(infrastructure_peers.insert(peer, address));
+        let mut auto_relay = AutoRelayState::default();
+        assert!(infrastructure_peers.insert(peer, address.clone()));
+        assert!(auto_relay.record_candidate(peer, address));
         let metrics = RuntimeMetrics::default();
 
         handle_relay_infrastructure_outgoing_connection_error(
             &mut infrastructure_peers,
+            &mut auto_relay,
             &OverlayMembership::default(),
             &metrics,
             Some(peer),
@@ -12336,6 +12437,7 @@ mod tests {
         );
 
         assert!(!infrastructure_peers.contains(peer));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 0);
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outgoing_connection_errors, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 1);
@@ -12348,7 +12450,9 @@ mod tests {
             .parse()
             .expect("infrastructure address");
         let mut infrastructure_peers = InfrastructurePeers::default();
-        assert!(infrastructure_peers.insert(peer, address));
+        let mut auto_relay = AutoRelayState::default();
+        assert!(infrastructure_peers.insert(peer, address.clone()));
+        assert!(auto_relay.record_candidate(peer, address));
         let membership = OverlayMembership {
             peers: HashSet::from([peer]),
             configured_infrastructure_peers: HashSet::new(),
@@ -12357,6 +12461,7 @@ mod tests {
 
         handle_relay_infrastructure_outgoing_connection_error(
             &mut infrastructure_peers,
+            &mut auto_relay,
             &membership,
             &metrics,
             Some(peer),
@@ -12365,6 +12470,7 @@ mod tests {
         );
 
         assert!(infrastructure_peers.contains(peer));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 1);
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outgoing_connection_errors, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 0);
@@ -12377,11 +12483,14 @@ mod tests {
             .parse()
             .expect("infrastructure address");
         let mut infrastructure_peers = InfrastructurePeers::default();
-        assert!(infrastructure_peers.insert(peer, address));
+        let mut auto_relay = AutoRelayState::default();
+        assert!(infrastructure_peers.insert(peer, address.clone()));
+        assert!(auto_relay.record_candidate(peer, address));
         let metrics = RuntimeMetrics::default();
 
         handle_relay_infrastructure_outgoing_connection_error(
             &mut infrastructure_peers,
+            &mut auto_relay,
             &OverlayMembership::default(),
             &metrics,
             Some(peer),
@@ -12390,6 +12499,7 @@ mod tests {
         );
 
         assert!(infrastructure_peers.contains(peer));
+        assert_eq!(auto_relay.snapshot(Instant::now()).candidates, 1);
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outgoing_connection_errors, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_failures, 0);
