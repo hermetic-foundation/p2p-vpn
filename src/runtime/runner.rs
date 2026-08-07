@@ -68,6 +68,8 @@ const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
+const DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE: Duration = Duration::from_secs(10);
+const DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX: Duration = Duration::from_mins(5);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const SERVICE_STATUS_NONCE: u64 = 1;
 const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
@@ -2136,13 +2138,14 @@ fn handle_redial_tick(
         relay_readiness,
         configured_relay_reservation_retries,
     );
-    let discovered_addresses = discovered_peer_addresses.as_vec();
+    let discovered_addresses = discovered_peer_addresses.redial_candidates_at(Instant::now());
     redial_known_addresses(
         &mut node.swarm,
         &node.bootstrap_peer_addresses,
         &node.relay_peer_addresses,
         &node.configured_peer_addresses,
         &discovered_addresses,
+        discovered_peer_addresses,
         paths,
         metrics,
         |relay| relay_readiness.relay_ready(relay),
@@ -2862,6 +2865,7 @@ fn redial_known_addresses(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_address_state: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
     metrics: &RuntimeMetrics,
     relay_ready: impl FnMut(Libp2pPeerId) -> bool,
@@ -2883,8 +2887,10 @@ fn redial_known_addresses(
 
     for (peer, address) in targets.addresses {
         metrics.record_redial_attempt();
-        let dial_address = peer_dial_address(peer, address);
+        let dial_address = peer_dial_address(peer, address.clone());
         if let Err(error) = swarm.dial(dial_address.clone()) {
+            let discovered =
+                discovered_address_state.record_failure_at(peer, &address, Instant::now());
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -2893,6 +2899,7 @@ fn redial_known_addresses(
                     ("peer", &peer.to_string()),
                     ("address", &dial_address.to_string()),
                     ("error", &error.to_string()),
+                    ("discovered", &discovered.to_string()),
                 ],
             );
         }
@@ -3539,6 +3546,7 @@ fn redial_selected_addresses(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_address_state: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
     metrics: &RuntimeMetrics,
 ) {
@@ -3558,8 +3566,10 @@ fn redial_selected_addresses(
             continue;
         }
         metrics.record_redial_attempt();
-        let dial_address = peer_dial_address(peer, address);
+        let dial_address = peer_dial_address(peer, address.clone());
         if let Err(error) = swarm.dial(dial_address.clone()) {
+            let discovered =
+                discovered_address_state.record_failure_at(peer, &address, Instant::now());
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -3568,6 +3578,7 @@ fn redial_selected_addresses(
                     ("peer", &peer.to_string()),
                     ("address", &dial_address.to_string()),
                     ("error", &error.to_string()),
+                    ("discovered", &discovered.to_string()),
                 ],
             );
         }
@@ -3792,6 +3803,8 @@ struct DiscoveredPeerAddress {
     peer: Libp2pPeerId,
     address: Multiaddr,
     last_seen: Instant,
+    failure_count: u8,
+    quarantined_until: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3828,6 +3841,8 @@ impl DiscoveredPeerAddresses {
             peer,
             address,
             last_seen: now,
+            failure_count: 0,
+            quarantined_until: None,
         });
     }
 
@@ -3848,12 +3863,46 @@ impl DiscoveredPeerAddresses {
         expired
     }
 
+    fn record_failure_at(&mut self, peer: Libp2pPeerId, address: &Multiaddr, now: Instant) -> bool {
+        let Some(entry) = self
+            .addresses
+            .iter_mut()
+            .find(|entry| entry.peer == peer && &entry.address == address)
+        else {
+            return false;
+        };
+        entry.failure_count = entry.failure_count.saturating_add(1);
+        entry.quarantined_until =
+            Some(now + discovered_address_failure_backoff(entry.failure_count));
+        true
+    }
+
     fn as_vec(&self) -> Vec<(Libp2pPeerId, Multiaddr)> {
         self.addresses
             .iter()
             .map(|entry| (entry.peer, entry.address.clone()))
             .collect()
     }
+
+    fn redial_candidates_at(&self, now: Instant) -> Vec<(Libp2pPeerId, Multiaddr)> {
+        let mut entries = self
+            .addresses
+            .iter()
+            .filter(|entry| entry.quarantined_until.is_none_or(|until| until <= now))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| (entry.failure_count, std::cmp::Reverse(entry.last_seen)));
+        entries
+            .into_iter()
+            .map(|entry| (entry.peer, entry.address.clone()))
+            .collect()
+    }
+}
+
+fn discovered_address_failure_backoff(failure_count: u8) -> Duration {
+    let exponent = u32::from(failure_count.saturating_sub(1)).min(8);
+    DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE
+        .saturating_mul(1_u32 << exponent)
+        .min(DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -4028,14 +4077,13 @@ async fn drain_runtime_outbound_queue(drain: RuntimeOutboundDrain<'_>) {
         packet_plane_quic,
         metrics,
     } = drain;
-    let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
     let mut context = QueueDrainContext {
         paths,
         peer_capabilities,
         bootstrap_addresses: &node.bootstrap_peer_addresses,
         relay_addresses: &node.relay_peer_addresses,
         configured_peer_addresses: &node.configured_peer_addresses,
-        discovered_peer_addresses: &discovered_addresses,
+        discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
         packet_in_flight: &mut queue_runtime.packet_in_flight,
         last_blocked_queue_redial: &mut queue_runtime.last_blocked_queue_redial,
         writer: Some(writer),
@@ -4200,11 +4248,14 @@ async fn send_dequeued_packet_plane_datagram(
                     &error,
                 ) && let Some(peer) = forwarder.transport_peer_for_overlay(packet.peer())
                 {
+                    let discovered_addresses = context
+                        .discovered_peer_addresses
+                        .redial_candidates_at(Instant::now());
                     redial_packet_plane_recovery_addresses(
                         swarm,
                         peer,
                         context.configured_peer_addresses,
-                        context.discovered_peer_addresses,
+                        &discovered_addresses,
                         context.metrics,
                     );
                 }
@@ -4277,11 +4328,14 @@ async fn send_dequeued_packet_plane_fallback(
                     &error,
                 ) && let Some(peer) = forwarder.transport_peer_for_overlay(attempt.packet.peer())
                 {
+                    let discovered_addresses = context
+                        .discovered_peer_addresses
+                        .redial_candidates_at(Instant::now());
                     redial_packet_plane_recovery_addresses(
                         swarm,
                         peer,
                         context.configured_peer_addresses,
-                        context.discovered_peer_addresses,
+                        &discovered_addresses,
                         context.metrics,
                     );
                 }
@@ -4373,7 +4427,7 @@ struct QueueDrainContext<'a> {
     bootstrap_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
-    discovered_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
     last_blocked_queue_redial: &'a mut Option<Instant>,
     writer: Option<&'a mut TunWriter>,
@@ -4589,7 +4643,7 @@ fn dial_blocked_queue_peers(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     queues: &PeerQueues,
-    context: &QueueDrainContext<'_>,
+    context: &mut QueueDrainContext<'_>,
 ) {
     let blocked_transport_peers = queues
         .queued_peers()
@@ -4599,12 +4653,16 @@ fn dial_blocked_queue_peers(
         return;
     }
 
+    let discovered_addresses = context
+        .discovered_peer_addresses
+        .redial_candidates_at(Instant::now());
     redial_selected_addresses(
         swarm,
         &blocked_transport_peers,
         context.bootstrap_addresses,
         context.relay_addresses,
         context.configured_peer_addresses,
+        &discovered_addresses,
         context.discovered_peer_addresses,
         context.paths,
         context.metrics,
@@ -8464,9 +8522,10 @@ fn learn_peer_address(
         return;
     }
 
-    let dial_address = peer_dial_address(peer, address);
+    let dial_address = peer_dial_address(peer, address.clone());
     metrics.record_discovered_address_dial_attempt();
     if let Err(error) = swarm.dial(dial_address) {
+        discovered_peer_addresses.record_failure_at(peer, &address, Instant::now());
         metrics.record_discovered_address_dial_failure();
         eprintln!("dial discovered peer {peer} failed: {error}");
     }
@@ -9296,13 +9355,14 @@ mod tests {
         metrics: &'a RuntimeMetrics,
     ) -> QueueDrainContext<'a> {
         let last_blocked_queue_redial = Box::leak(Box::new(None));
+        let discovered_peer_addresses = Box::leak(Box::new(DiscoveredPeerAddresses::default()));
         QueueDrainContext {
             paths,
             peer_capabilities,
             bootstrap_addresses: &[],
             relay_addresses: &[],
             configured_peer_addresses: &[],
-            discovered_peer_addresses: &[],
+            discovered_peer_addresses,
             packet_in_flight,
             last_blocked_queue_redial,
             writer: None,
@@ -12179,6 +12239,28 @@ mod tests {
         discovered.remove(peer, &address);
 
         assert_eq!(discovered.as_vec(), Vec::new());
+    }
+
+    #[test]
+    fn discovered_peer_address_failures_are_quarantined_for_redial() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let other_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let now = Instant::now();
+        let mut discovered = DiscoveredPeerAddresses::default();
+
+        discovered.insert_at(peer, address.clone(), now);
+        discovered.insert_at(peer, other_address.clone(), now);
+
+        assert!(discovered.record_failure_at(peer, &address, now));
+        assert_eq!(
+            discovered.redial_candidates_at(now),
+            vec![(peer, other_address.clone())]
+        );
+        assert_eq!(
+            discovered.redial_candidates_at(now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE),
+            vec![(peer, other_address), (peer, address)]
+        );
     }
 
     #[test]
