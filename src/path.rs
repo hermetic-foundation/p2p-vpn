@@ -1,11 +1,15 @@
 use crate::{PathKind, PeerId};
 
+const PATH_FAILURE_PENALTY_STEP: u16 = 50;
+const PATH_FAILURE_PENALTY_RECOVERY_STEP: u16 = 10;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PathCandidate {
     pub peer: PeerId,
     pub kind: PathKind,
     pub observed_rtt_ms: Option<u16>,
     pub estimated_mtu: Option<u16>,
+    pub failure_penalty: u16,
     pub relay: bool,
     pub healthy: bool,
     pub established_connections: u32,
@@ -19,6 +23,7 @@ impl PathCandidate {
             kind,
             observed_rtt_ms: None,
             estimated_mtu: None,
+            failure_penalty: 0,
             relay: matches!(kind, PathKind::CircuitRelay),
             healthy: true,
             established_connections: 0,
@@ -46,7 +51,7 @@ impl PathCandidate {
         let latency_penalty = self
             .observed_rtt_ms
             .map_or(0, |rtt| i32::from(rtt.saturating_div(10)));
-        i32::from(self.kind.default_score()) - latency_penalty
+        i32::from(self.kind.default_score()) - latency_penalty - i32::from(self.failure_penalty)
     }
 
     #[must_use]
@@ -194,6 +199,9 @@ impl PathSet {
             .find(|candidate| candidate.peer == peer && candidate.kind == kind)
         {
             candidate.healthy = false;
+            candidate.failure_penalty = candidate
+                .failure_penalty
+                .saturating_add(PATH_FAILURE_PENALTY_STEP);
         }
         self.selection_change(peer, previous)
     }
@@ -289,6 +297,9 @@ impl PathSet {
             candidate.peer == peer && candidate.kind == kind && candidate.healthy
         })?;
         candidate.observed_rtt_ms = Some(rtt_ms);
+        candidate.failure_penalty = candidate
+            .failure_penalty
+            .saturating_sub(PATH_FAILURE_PENALTY_RECOVERY_STEP);
         self.selection_change(peer, previous)
     }
 
@@ -649,6 +660,42 @@ mod tests {
         assert_eq!(
             change.current.map(|path| path.kind),
             Some(PathKind::DirectQuicStream)
+        );
+    }
+
+    #[test]
+    fn failure_penalty_survives_reconnect_and_decays_on_success() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_rtt(peer(1), PathKind::CircuitRelay, 50);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        paths.record_rtt(peer(1), PathKind::DirectTcpStream, 70);
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectTcpStream)
+        );
+
+        paths.mark_unhealthy(peer(1), PathKind::DirectTcpStream);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+
+        let direct = paths
+            .candidates_for(peer(1))
+            .find(|path| path.kind == PathKind::DirectTcpStream)
+            .expect("direct path");
+        assert_eq!(direct.failure_penalty, PATH_FAILURE_PENALTY_STEP);
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+
+        for _ in 0..5 {
+            paths.record_rtt(peer(1), PathKind::DirectTcpStream, 70);
+        }
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectTcpStream)
         );
     }
 

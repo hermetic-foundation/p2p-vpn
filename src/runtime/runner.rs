@@ -3621,7 +3621,7 @@ fn pending_redial_targets(
             continue;
         }
         match connection_state(peer) {
-            RedialConnectionState::Disconnected => {}
+            RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath => {}
             RedialConnectionState::RelayOnly if relayed_address_relay_peer(address).is_none() => {}
             RedialConnectionState::DirectOnly if relayed_address_relay_peer(address).is_some() => {}
             RedialConnectionState::RelayOnly
@@ -3651,6 +3651,7 @@ fn pending_redial_targets(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RedialConnectionState {
     Disconnected,
+    ConnectedNoUsablePath,
     RelayOnly,
     DirectOnly,
     DirectAndRelay,
@@ -3658,7 +3659,7 @@ enum RedialConnectionState {
 
 impl RedialConnectionState {
     const fn is_connected(self) -> bool {
-        !matches!(self, Self::Disconnected)
+        !matches!(self, Self::Disconnected | Self::ConnectedNoUsablePath)
     }
 }
 
@@ -3674,7 +3675,9 @@ fn redial_connection_state(
     let overlay_peer = PeerId::from_libp2p(peer);
     let mut has_direct = false;
     let mut has_relay = false;
+    let mut has_candidate = false;
     for candidate in paths.candidates_for(overlay_peer) {
+        has_candidate = true;
         if !candidate.healthy || candidate.established_connections == 0 {
             continue;
         }
@@ -3689,6 +3692,10 @@ fn redial_connection_state(
         RedialConnectionState::DirectAndRelay
     } else if has_direct {
         RedialConnectionState::DirectOnly
+    } else if has_relay {
+        RedialConnectionState::RelayOnly
+    } else if has_candidate {
+        RedialConnectionState::ConnectedNoUsablePath
     } else {
         RedialConnectionState::RelayOnly
     }
@@ -3715,7 +3722,9 @@ fn should_dial_discovered_address(
         {
             false
         }
-        RedialConnectionState::Disconnected | RedialConnectionState::RelayOnly => true,
+        RedialConnectionState::Disconnected
+        | RedialConnectionState::ConnectedNoUsablePath
+        | RedialConnectionState::RelayOnly => true,
     }
 }
 
@@ -4086,12 +4095,8 @@ fn packet_in_flight_allows(
     packet: &crate::queue::Packet,
     decision: PacketTransportDecision,
 ) -> bool {
-    if matches!(
-        decision,
-        PacketTransportDecision::StreamFallback {
-            path: PathKind::CircuitRelay
-        }
-    ) && !packet.requires_ordered_delivery()
+    if matches!(decision, PacketTransportDecision::StreamFallback { .. })
+        && !packet.requires_ordered_delivery()
     {
         return packet_in_flight.can_send(packet.peer());
     }
@@ -4419,6 +4424,7 @@ struct PacketInFlightRequest {
     peer: PeerId,
     shard: FlowShard,
     path: PathKind,
+    sent_at: Instant,
 }
 
 impl PacketInFlight {
@@ -4454,6 +4460,7 @@ impl PacketInFlight {
                 peer: packet.peer(),
                 shard: packet.flow_shard(),
                 path,
+                sent_at: Instant::now(),
             },
         );
         self.peers
@@ -5260,9 +5267,19 @@ fn handle_packet_event(
                 },
             ..
         } => {
-            context.packet_in_flight.complete(request_id);
+            let in_flight = context.packet_in_flight.complete(request_id);
             match response {
-                PacketResponse::Accepted => {}
+                PacketResponse::Accepted => {
+                    if let Some(request) = in_flight {
+                        let rtt_ms = request
+                            .sent_at
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u16::MAX)) as u16;
+                        let change = context.paths.record_rtt(request.peer, request.path, rtt_ms);
+                        record_path_selection_change(context.metrics, change);
+                    }
+                }
                 PacketResponse::Rejected(reason) => {
                     context.metrics.record_outbound_failure();
                     context
@@ -11167,6 +11184,11 @@ mod tests {
         );
 
         paths.record_closed(overlay, PathKind::CircuitRelay);
+        assert_eq!(
+            redial_connection_state(&paths, peer, true),
+            RedialConnectionState::ConnectedNoUsablePath
+        );
+
         paths.record_established(overlay, PathKind::DirectTcpStream);
         assert_eq!(
             redial_connection_state(&paths, peer, true),
@@ -11218,6 +11240,14 @@ mod tests {
 
         paths.record_established(overlay, PathKind::CircuitRelay);
         assert!(!should_dial_discovered_address(
+            &paths,
+            peer,
+            true,
+            &relay_address
+        ));
+
+        paths.record_closed(overlay, PathKind::CircuitRelay);
+        assert!(should_dial_discovered_address(
             &paths,
             peer,
             true,
@@ -14936,7 +14966,12 @@ mod tests {
             forwarder
                 .enqueue_tun_packet(
                     &mut queues,
-                    ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+                    ipv4_tcp_packet(
+                        builtin_ipv4(local_overlay),
+                        builtin_ipv4(remote_overlay),
+                        10_000,
+                        443,
+                    ),
                 )
                 .expect("queued");
         }
@@ -15090,7 +15125,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relay_stream_fallback_allows_unordered_packets_while_in_flight() {
+    async fn stream_fallback_allows_unordered_packets_while_in_flight() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -15128,7 +15163,7 @@ mod tests {
                 .expect("queued");
         }
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
