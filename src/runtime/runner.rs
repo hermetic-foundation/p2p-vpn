@@ -64,6 +64,7 @@ use crate::{
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
@@ -4564,7 +4565,7 @@ fn dial_blocked_queue_peers(
 }
 
 fn should_redial_blocked_queue(last_redial: &mut Option<Instant>, now: Instant) -> bool {
-    if last_redial.is_some_and(|last| now.duration_since(last) < REDIAL_INTERVAL) {
+    if last_redial.is_some_and(|last| now.duration_since(last) < BLOCKED_QUEUE_REDIAL_INTERVAL) {
         return false;
     }
 
@@ -11271,11 +11272,11 @@ mod tests {
         assert!(should_redial_blocked_queue(&mut last_redial, now));
         assert!(!should_redial_blocked_queue(
             &mut last_redial,
-            now + REDIAL_INTERVAL - Duration::from_millis(1)
+            now + BLOCKED_QUEUE_REDIAL_INTERVAL - Duration::from_millis(1)
         ));
         assert!(should_redial_blocked_queue(
             &mut last_redial,
-            now + REDIAL_INTERVAL
+            now + BLOCKED_QUEUE_REDIAL_INTERVAL
         ));
     }
 

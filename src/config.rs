@@ -1034,7 +1034,7 @@ fn default_queue() -> QueueConfig {
 }
 
 const fn default_max_packet_age_millis() -> u64 {
-    1_000
+    3_000
 }
 
 const fn default_resources() -> ResourceConfig {
@@ -3695,7 +3695,7 @@ mod tests {
         assert_eq!(config.resources.max_established_connections_per_peer, 8);
         assert_eq!(config.resources.max_established_connections, 512);
         assert_eq!(config.resources.inbound_packet_rate_limit(), 4096);
-        assert_eq!(config.queue.max_packet_age_millis, 1_000);
+        assert_eq!(config.queue.max_packet_age_millis, 3_000);
 
         let config = serde_json::from_str::<Config>(
             r#"{

@@ -33,7 +33,7 @@ Everything else can be omitted for the default profile.
 | `network.discovery` | public discovery defaults |
 | `network.relay` | disabled relay server, no reservations |
 | `network.packet_plane` | UDP packet plane listens on `0.0.0.0:0` |
-| `queue` | built-in bounded queue defaults |
+| `queue` | `256` packets, `512 KiB`, `3000 ms` packet age |
 | `resources` | built-in connection and stream limits |
 
 ## Minimal Shapes
