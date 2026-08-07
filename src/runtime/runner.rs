@@ -66,7 +66,7 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
 const DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE: Duration = Duration::from_secs(10);
 const DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX: Duration = Duration::from_mins(5);
@@ -76,7 +76,7 @@ const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
 const PATH_PROBE_ACK_PAYLOAD: &[u8] = b"path-probe-ack-v1";
 const PATH_PROBE_MTU_STEP: u16 = 64;
 const PATH_PROBE_TOKEN_LEN: usize = 8;
-const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -614,6 +614,7 @@ where
                         packet_plane: &mut packet_plane,
                         packet_plane_quic: packet_plane_quic.as_mut(),
                         packet_plane_negotiator: &mut packet_plane_negotiator,
+                        path_probe_tracker: &mut path_probe_tracker,
                         packet_plane_session_ttl,
                         packet_plane_replay_windows_per_session,
                     },
@@ -1147,6 +1148,11 @@ impl PathProbeTracker {
             }
         }
         expired
+    }
+
+    fn clear_path(&mut self, peer: PeerId, path: PathKind) {
+        self.pending
+            .retain(|_, probe| probe.peer != peer || probe.path != path);
     }
 
     fn drop_rtt_expired(&mut self, now: Instant) {
@@ -4942,6 +4948,7 @@ struct SwarmEventContext<'a> {
     packet_plane: &'a mut PacketPlaneRuntime,
     packet_plane_quic: Option<&'a mut PacketPlaneQuicRuntime>,
     packet_plane_negotiator: &'a mut PacketPlaneNegotiator,
+    path_probe_tracker: &'a mut PathProbeTracker,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
 }
@@ -5450,6 +5457,7 @@ async fn handle_control_event(
                 context.packet_plane,
                 context.packet_plane_quic.as_deref_mut(),
                 context.packet_plane_negotiator,
+                context.path_probe_tracker,
                 context.identity,
                 context.paths,
             );
@@ -5985,6 +5993,7 @@ async fn handle_control_request(
                     packet_plane_quic: context.packet_plane_quic.as_deref_mut(),
                     identity: context.identity,
                     local_capabilities: context.local_capabilities,
+                    path_probe_tracker: context.path_probe_tracker,
                 },
                 peer,
                 &handshake,
@@ -6092,6 +6101,7 @@ fn handle_control_response_event(
     packet_plane: &mut PacketPlaneRuntime,
     packet_plane_quic: Option<&mut PacketPlaneQuicRuntime>,
     packet_plane_negotiator: &mut PacketPlaneNegotiator,
+    path_probe_tracker: &mut PathProbeTracker,
     identity: &NodeIdentity,
     paths: &mut PathSet,
 ) {
@@ -6145,6 +6155,7 @@ fn handle_control_response_event(
                     paths,
                     metrics,
                     network_name: validation.network,
+                    path_probe_tracker,
                 },
                 peer,
                 &handshake,
@@ -6809,6 +6820,7 @@ struct PacketPlaneAcceptContext<'a> {
     packet_plane_quic: Option<&'a mut PacketPlaneQuicRuntime>,
     identity: &'a NodeIdentity,
     local_capabilities: &'a ControlCapabilities,
+    path_probe_tracker: &'a mut PathProbeTracker,
 }
 
 async fn packet_plane_accept_response_for_peer(
@@ -6913,6 +6925,9 @@ async fn accept_packet_plane_hello(
         backend,
         session.mtu,
     );
+    context
+        .path_probe_tracker
+        .clear_path(remote_overlay, packet_datagram_backend_path_kind(backend));
     log_runtime_event(
         LogLevel::Info,
         "packet_plane_session_established",
@@ -6935,6 +6950,7 @@ struct PacketPlaneCompleteContext<'a> {
     paths: &'a mut PathSet,
     metrics: &'a RuntimeMetrics,
     network_name: &'a str,
+    path_probe_tracker: &'a mut PathProbeTracker,
 }
 
 fn complete_packet_plane_hello(
@@ -7000,6 +7016,10 @@ fn complete_packet_plane_hello(
         remote_overlay,
         pending.backend,
         session.mtu,
+    );
+    context.path_probe_tracker.clear_path(
+        remote_overlay,
+        packet_datagram_backend_path_kind(pending.backend),
     );
     log_runtime_event(
         LogLevel::Info,
@@ -16754,6 +16774,23 @@ mod tests {
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
     }
 
+    #[test]
+    fn packet_plane_session_replacement_clears_stale_path_probes() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let start = Instant::now();
+        let mut path_probe_tracker = PathProbeTracker::default();
+
+        path_probe_tracker.record(remote_overlay, PathKind::DirectUdpDatagram, 7, start);
+        path_probe_tracker.clear_path(remote_overlay, PathKind::DirectUdpDatagram);
+
+        let expired = path_probe_tracker.expire_unconfirmed(
+            start + PATH_PROBE_TIMEOUT + Duration::from_millis(1),
+            PATH_PROBE_TIMEOUT,
+        );
+        assert!(expired.is_empty());
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn packet_plane_control_negotiation_establishes_sessions() {
@@ -16809,6 +16846,8 @@ mod tests {
         let mut initiator_paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let mut negotiator = PacketPlaneNegotiator::default();
+        let mut responder_path_probe_tracker = PathProbeTracker::default();
+        let mut initiator_path_probe_tracker = PathProbeTracker::default();
         let (secret, hello, verified_hello) = signed_packet_plane_handshake(
             PacketPlaneHandshakeKind::Hello,
             &initiator_identity,
@@ -16834,6 +16873,7 @@ mod tests {
                 packet_plane_quic: None,
                 identity: &responder_identity,
                 local_capabilities: &responder_capabilities,
+                path_probe_tracker: &mut responder_path_probe_tracker,
             },
             initiator_peer,
             &encoded_hello,
@@ -16856,6 +16896,7 @@ mod tests {
                 packet_plane_quic: None,
                 identity: &responder_identity,
                 local_capabilities: &responder_capabilities,
+                path_probe_tracker: &mut responder_path_probe_tracker,
             },
             initiator_peer,
             &encoded_hello,
@@ -16874,6 +16915,7 @@ mod tests {
                 paths: &mut initiator_paths,
                 metrics: &metrics,
                 network_name: "lab",
+                path_probe_tracker: &mut initiator_path_probe_tracker,
             },
             responder_peer,
             &encoded_accept,
@@ -17065,6 +17107,8 @@ mod tests {
         initiator_paths.record_established(responder_overlay, PathKind::DirectTcpStream);
         let metrics = RuntimeMetrics::default();
         let mut negotiator = PacketPlaneNegotiator::default();
+        let mut responder_path_probe_tracker = PathProbeTracker::default();
+        let mut initiator_path_probe_tracker = PathProbeTracker::default();
         let (secret, hello, verified_hello) = signed_packet_plane_handshake(
             PacketPlaneHandshakeKind::Hello,
             &initiator_identity,
@@ -17097,6 +17141,7 @@ mod tests {
                     packet_plane_quic: Some(&mut responder_quic),
                     identity: &responder_identity,
                     local_capabilities: &responder_capabilities,
+                    path_probe_tracker: &mut responder_path_probe_tracker,
                 },
                 initiator_peer,
                 &encoded_hello,
@@ -17116,6 +17161,7 @@ mod tests {
                 paths: &mut initiator_paths,
                 metrics: &metrics,
                 network_name: "lab",
+                path_probe_tracker: &mut initiator_path_probe_tracker,
             },
             responder_peer,
             &encoded_accept,
