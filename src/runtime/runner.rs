@@ -12822,10 +12822,7 @@ mod tests {
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
-        paths.upsert(crate::path::PathCandidate::new(
-            peer,
-            PathKind::CircuitRelay,
-        ));
+        paths.record_established(peer, PathKind::CircuitRelay);
         paths.upsert(crate::path::PathCandidate::new(
             peer,
             PathKind::DirectUdpDatagram,
@@ -12856,10 +12853,7 @@ mod tests {
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
-        paths.upsert(crate::path::PathCandidate::new(
-            peer,
-            PathKind::CircuitRelay,
-        ));
+        paths.record_established(peer, PathKind::CircuitRelay);
         paths.upsert(crate::path::PathCandidate::new(
             peer,
             PathKind::DirectUdpDatagram,
@@ -12892,10 +12886,7 @@ mod tests {
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
-        paths.upsert(crate::path::PathCandidate::new(
-            peer,
-            PathKind::CircuitRelay,
-        ));
+        paths.record_established(peer, PathKind::CircuitRelay);
         paths.upsert(crate::path::PathCandidate::new(
             peer,
             PathKind::DirectQuicDatagram,
@@ -12922,10 +12913,7 @@ mod tests {
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
-        paths.upsert(crate::path::PathCandidate::new(
-            peer,
-            PathKind::CircuitRelay,
-        ));
+        paths.record_established(peer, PathKind::CircuitRelay);
         paths.upsert(crate::path::PathCandidate::new(
             peer,
             PathKind::DirectTcpStream,
@@ -12954,10 +12942,7 @@ mod tests {
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
-        paths.upsert(crate::path::PathCandidate::new(
-            peer,
-            PathKind::CircuitRelay,
-        ));
+        paths.record_established(peer, PathKind::CircuitRelay);
 
         assert!(!maybe_demote_stream_fallback_path(
             &mut paths,

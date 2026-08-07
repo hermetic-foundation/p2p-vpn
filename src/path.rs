@@ -58,6 +58,11 @@ impl PathCandidate {
     pub const fn is_direct(self) -> bool {
         !self.relay
     }
+
+    #[must_use]
+    pub const fn is_selectable(self) -> bool {
+        self.healthy && (!self.relay || self.established_connections > 0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -167,7 +172,9 @@ impl PathSet {
             .iter()
             .copied()
             .filter(|candidate| {
-                candidate.peer == peer && candidate.healthy && support.supports(candidate.kind)
+                candidate.peer == peer
+                    && candidate.is_selectable()
+                    && support.supports(candidate.kind)
             })
             .max_by_key(|candidate| candidate.score())
     }
@@ -380,7 +387,7 @@ mod tests {
     #[test]
     fn falls_back_when_best_path_is_unhealthy() {
         let mut paths = PathSet::new();
-        paths.upsert(PathCandidate::new(peer(1), PathKind::CircuitRelay));
+        paths.record_established(peer(1), PathKind::CircuitRelay);
         paths.upsert(PathCandidate::new(peer(1), PathKind::DirectQuicDatagram));
 
         let change = paths.mark_unhealthy(peer(1), PathKind::DirectQuicDatagram);
@@ -490,11 +497,13 @@ mod tests {
         paths.record_closed(peer(1), PathKind::CircuitRelay);
 
         let relay = paths
-            .best_for(peer(1))
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.kind == PathKind::CircuitRelay)
             .expect("relay remains available for redial");
         assert_eq!(relay.kind, PathKind::CircuitRelay);
         assert_eq!(relay.established_connections, 0);
         assert!(relay.healthy);
+        assert_eq!(paths.best_for(peer(1)), None);
     }
 
     #[test]
@@ -667,8 +676,8 @@ mod tests {
                 healthy_direct_quic_stream_paths: 1,
                 healthy_direct_tcp_stream_paths: 0,
                 healthy_relay_paths: 1,
-                peers_with_supported_path: 3,
-                peers_without_supported_path: 1,
+                peers_with_supported_path: 2,
+                peers_without_supported_path: 2,
             }
         );
     }
