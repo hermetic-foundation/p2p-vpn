@@ -4847,20 +4847,7 @@ fn best_packet_transport_path(
     peer: PeerId,
     support: PathTransportSupport,
 ) -> Option<crate::path::PathCandidate> {
-    let selected = paths.best_supported_for(peer, support)?;
-    if selected.kind.requires_quic_datagrams()
-        && let Some(stream_path) = paths.best_supported_for(
-            peer,
-            PathTransportSupport {
-                udp_datagrams: false,
-                quic_datagrams: false,
-            },
-        )
-        && (selected.observed_rtt_ms.is_none() || stream_path.is_relay())
-    {
-        return Some(stream_path);
-    }
-    Some(selected)
+    paths.best_supported_for(peer, support)
 }
 
 fn local_packet_datagram_backend(
@@ -17366,7 +17353,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn packet_transport_decision_prefers_stream_until_datagram_path_is_confirmed() {
+    async fn packet_transport_decision_prefers_owned_udp_once_session_exists() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote_identity =
             crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
@@ -17410,8 +17397,9 @@ mod tests {
                 None,
                 remote_overlay
             ),
-            PacketTransportDecision::StreamFallback {
-                path: PathKind::DirectTcpStream
+            PacketTransportDecision::PacketPlaneDatagram {
+                path: PathKind::DirectUdpDatagram,
+                backend: PacketDatagramBackend::OwnedUdp
             }
         );
 
@@ -17451,7 +17439,7 @@ mod tests {
                 }
             )
             .map(|path| path.kind),
-            Some(PathKind::CircuitRelay)
+            Some(PathKind::DirectUdpDatagram)
         );
     }
 
