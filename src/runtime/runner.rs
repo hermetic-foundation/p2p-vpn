@@ -3824,11 +3824,11 @@ fn redial_connection_state(
     }
 }
 
-fn has_healthy_relay_path(paths: &PathSet, peer: Libp2pPeerId) -> bool {
+fn has_established_relay_path(paths: &PathSet, peer: Libp2pPeerId) -> bool {
     let overlay_peer = PeerId::from_libp2p(peer);
-    paths
-        .candidates_for(overlay_peer)
-        .any(|candidate| candidate.healthy && candidate.is_relay())
+    paths.candidates_for(overlay_peer).any(|candidate| {
+        candidate.healthy && candidate.is_relay() && candidate.established_connections > 0
+    })
 }
 
 fn should_dial_discovered_address(
@@ -3841,7 +3841,7 @@ fn should_dial_discovered_address(
         RedialConnectionState::DirectOnly | RedialConnectionState::DirectAndRelay => false,
         RedialConnectionState::RelayOnly
             if relayed_address_relay_peer(address).is_some()
-                && has_healthy_relay_path(paths, peer) =>
+                && has_established_relay_path(paths, peer) =>
         {
             false
         }
