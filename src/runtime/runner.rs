@@ -2604,6 +2604,24 @@ fn publish_kademlia_peer_address_record(
     }
 }
 
+fn publish_kademlia_peer_address_record_for_capabilities(
+    swarm: &mut Swarm<Behaviour>,
+    discovery: &DiscoveryConfig,
+    local_capabilities: &ControlCapabilities,
+    identity: &NodeIdentity,
+) {
+    if !discovery.kademlia {
+        return;
+    }
+
+    publish_kademlia_peer_address_record(
+        swarm,
+        &local_capabilities.network_name,
+        local_capabilities.membership_tag.as_deref(),
+        identity,
+    );
+}
+
 fn local_advertisable_addresses(swarm: &Swarm<Behaviour>) -> Vec<Multiaddr> {
     let mut addresses = Vec::new();
     let confirmed_external_addresses = swarm
@@ -5145,6 +5163,12 @@ async fn handle_swarm_event(
                         ("address", &address.to_string()),
                     ],
                 );
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
+                );
             }
         }
         SwarmEvent::ExpiredListenAddr { address, .. } => {
@@ -5160,6 +5184,12 @@ async fn handle_swarm_event(
                         ("relay", &relay.to_string()),
                         ("address", &address.to_string()),
                     ],
+                );
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
                 );
             }
         }
@@ -5177,6 +5207,12 @@ async fn handle_swarm_event(
                             ("relay", &relay.to_string()),
                             ("address", &address.to_string()),
                         ],
+                    );
+                    publish_kademlia_peer_address_record_for_capabilities(
+                        swarm,
+                        context.discovery,
+                        context.local_capabilities,
+                        context.identity,
                     );
                 }
             }
