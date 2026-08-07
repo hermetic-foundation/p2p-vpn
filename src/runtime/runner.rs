@@ -3704,6 +3704,27 @@ fn pending_redial_targets(
         .iter()
         .map(|(peer, _)| *peer)
         .collect::<HashSet<_>>();
+    for (peer, address) in configured_peer_addresses
+        .iter()
+        .chain(discovered_peer_addresses.iter())
+        .filter(|(_, address)| relayed_address_relay_peer(address).is_none())
+    {
+        if *peer == local_peer {
+            continue;
+        }
+        match connection_state(peer) {
+            RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath => {}
+            RedialConnectionState::RelayOnly => {}
+            RedialConnectionState::DirectOnly | RedialConnectionState::DirectAndRelay => {
+                skipped_connected += 1;
+                continue;
+            }
+        }
+        if !seen.insert((*peer, address.clone())) {
+            continue;
+        }
+        addresses.push((*peer, address.clone()));
+    }
     for (peer, address) in bootstrap_addresses.iter().chain(relay_addresses.iter()) {
         if *peer == local_peer {
             continue;
@@ -3720,17 +3741,15 @@ fn pending_redial_targets(
     for (peer, address) in configured_peer_addresses
         .iter()
         .chain(discovered_peer_addresses.iter())
+        .filter(|(_, address)| relayed_address_relay_peer(address).is_some())
     {
         if *peer == local_peer {
             continue;
         }
         match connection_state(peer) {
             RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath => {}
-            RedialConnectionState::RelayOnly if relayed_address_relay_peer(address).is_none() => {}
-            RedialConnectionState::DirectOnly if relayed_address_relay_peer(address).is_some() => {}
-            RedialConnectionState::RelayOnly
-            | RedialConnectionState::DirectOnly
-            | RedialConnectionState::DirectAndRelay => {
+            RedialConnectionState::DirectOnly => {}
+            RedialConnectionState::RelayOnly | RedialConnectionState::DirectAndRelay => {
                 skipped_connected += 1;
                 continue;
             }
@@ -11199,9 +11218,9 @@ mod tests {
             targets,
             RedialTargets {
                 addresses: vec![
+                    (configured, peer_address),
                     (bootstrap, bootstrap_address),
                     (relay, relay_address),
-                    (configured, peer_address),
                 ],
                 skipped_connected: 0,
             }
@@ -11232,6 +11251,51 @@ mod tests {
                 addresses: vec![
                     (configured, configured_address),
                     (discovered, discovered_address),
+                ],
+                skipped_connected: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn redial_targets_prefer_discovered_direct_peer_addresses_before_relay_infrastructure() {
+        let local = peer_id();
+        let bootstrap = peer_id();
+        let relay = peer_id();
+        let peer = peer_id();
+        let bootstrap_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("bootstrap");
+        let relay_address: Multiaddr = format!("/ip4/8.8.4.4/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay");
+        let direct_address: Multiaddr = format!("/ip4/192.168.0.203/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("direct");
+        let relayed_address: Multiaddr =
+            format!("/ip4/8.8.4.4/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed");
+
+        let targets = pending_redial_targets(
+            local,
+            &[(bootstrap, bootstrap_address.clone())],
+            &[(relay, relay_address.clone())],
+            &[],
+            &[
+                (peer, relayed_address.clone()),
+                (peer, direct_address.clone()),
+            ],
+            |_| RedialConnectionState::Disconnected,
+            |_| true,
+        );
+
+        assert_eq!(
+            targets,
+            RedialTargets {
+                addresses: vec![
+                    (peer, direct_address),
+                    (bootstrap, bootstrap_address),
+                    (relay, relay_address),
+                    (peer, relayed_address),
                 ],
                 skipped_connected: 0,
             }
