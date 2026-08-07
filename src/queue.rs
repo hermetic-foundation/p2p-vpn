@@ -72,6 +72,11 @@ impl Packet {
     }
 
     #[must_use]
+    pub fn requires_ordered_delivery(&self) -> bool {
+        requires_ordered_delivery(&self.bytes)
+    }
+
+    #[must_use]
     pub const fn enqueued_at(&self) -> Instant {
         self.enqueued_at
     }
@@ -412,6 +417,14 @@ fn flow_shard(packet: &[u8]) -> FlowShard {
     u8::try_from(hash % u64::from(FLOW_SHARDS)).expect("flow shard is bounded")
 }
 
+fn requires_ordered_delivery(packet: &[u8]) -> bool {
+    match packet.first().map(|byte| byte >> 4) {
+        Some(4) if packet.len() >= 10 => packet[9] == 6,
+        Some(6) if packet.len() >= 7 => packet[6] == 6,
+        _ => true,
+    }
+}
+
 fn ipv4_flow_hash(packet: &[u8]) -> u64 {
     if packet.len() < 20 {
         return fallback_hash(packet);
@@ -531,6 +544,29 @@ mod tests {
         assert_eq!(packet.sequence(), 7);
         assert_eq!(packet.payload(), &[1, 2, 3]);
         assert_eq!(queue.stats(), QueueStats::default());
+    }
+
+    #[test]
+    fn packet_ordering_is_required_only_for_tcp() {
+        let mut ipv4_tcp = vec![0; 20];
+        ipv4_tcp[0] = 0x45;
+        ipv4_tcp[9] = 6;
+        let mut ipv4_udp = ipv4_tcp.clone();
+        ipv4_udp[9] = 17;
+        let mut ipv4_icmp = ipv4_tcp.clone();
+        ipv4_icmp[9] = 1;
+        let mut ipv6_tcp = vec![0; 40];
+        ipv6_tcp[0] = 0x60;
+        ipv6_tcp[6] = 6;
+        let mut ipv6_udp = ipv6_tcp.clone();
+        ipv6_udp[6] = 17;
+
+        assert!(Packet::new(peer(1), 1, ipv4_tcp).requires_ordered_delivery());
+        assert!(Packet::new(peer(1), 1, ipv6_tcp).requires_ordered_delivery());
+        assert!(!Packet::new(peer(1), 1, ipv4_udp).requires_ordered_delivery());
+        assert!(!Packet::new(peer(1), 1, ipv4_icmp).requires_ordered_delivery());
+        assert!(!Packet::new(peer(1), 1, ipv6_udp).requires_ordered_delivery());
+        assert!(Packet::new(peer(1), 1, vec![1, 2, 3]).requires_ordered_delivery());
     }
 
     #[test]

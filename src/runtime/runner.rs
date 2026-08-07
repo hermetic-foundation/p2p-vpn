@@ -3997,15 +3997,14 @@ async fn drain_outbound_queue(
 ) {
     expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready_packet(|peer, packet| {
-        context.packet_in_flight.can_send_packet(packet)
-            && packet_transport_decision(
-                context.paths,
-                context.peer_capabilities,
-                context.packet_plane,
-                context.packet_plane_quic,
-                peer,
-            )
-            .can_send()
+        let decision = packet_transport_decision(
+            context.paths,
+            context.peer_capabilities,
+            context.packet_plane,
+            context.packet_plane_quic,
+            peer,
+        );
+        packet_in_flight_allows(context.packet_in_flight, packet, decision) && decision.can_send()
     }) {
         let peer_mtu = selected_path_mtu(
             context.paths,
@@ -4051,7 +4050,7 @@ async fn drain_outbound_queue(
             );
             if decision.can_send()
                 && !queues.peer_has_ready_packet(peer, |packet| {
-                    context.packet_in_flight.can_send_packet(packet)
+                    packet_in_flight_allows(context.packet_in_flight, packet, decision)
                 })
             {
                 blocked_by_window = true;
@@ -4080,6 +4079,24 @@ async fn drain_outbound_queue(
             }
         }
     }
+}
+
+fn packet_in_flight_allows(
+    packet_in_flight: &PacketInFlight,
+    packet: &crate::queue::Packet,
+    decision: PacketTransportDecision,
+) -> bool {
+    if matches!(
+        decision,
+        PacketTransportDecision::StreamFallback {
+            path: PathKind::CircuitRelay
+        }
+    ) && !packet.requires_ordered_delivery()
+    {
+        return packet_in_flight.can_send(packet.peer());
+    }
+
+    packet_in_flight.can_send_packet(packet)
 }
 
 async fn send_dequeued_packet_plane_datagram(
@@ -15070,6 +15087,70 @@ mod tests {
                 limit_per_peer: 256
             }
         );
+    }
+
+    #[tokio::test]
+    async fn relay_stream_fallback_allows_unordered_packets_while_in_flight() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        for _ in 0..2 {
+            forwarder
+                .enqueue_tun_packet(
+                    &mut queues,
+                    ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+                )
+                .expect("queued");
+        }
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 2);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 2);
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 2);
     }
 
     #[tokio::test]
