@@ -73,6 +73,7 @@ const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
 const PATH_PROBE_ACK_PAYLOAD: &[u8] = b"path-probe-ack-v1";
 const PATH_PROBE_MTU_STEP: u16 = 64;
 const PATH_PROBE_TOKEN_LEN: usize = 8;
+const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(45);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -759,6 +760,17 @@ where
                 expire_packet_plane_sessions(&mut expiry_context);
             }
             _ = timers.path_probe.tick() => {
+                let discovered_addresses = queue_runtime.discovered_peer_addresses.as_vec();
+                expire_unconfirmed_path_probes(
+                    &mut node.swarm,
+                    &forwarder,
+                    &mut paths,
+                    &node.configured_peer_addresses,
+                    &discovered_addresses,
+                    &mut path_probe_tracker,
+                    &metrics,
+                    Instant::now(),
+                );
                 send_path_probes(
                     &mut node.swarm,
                     &mut forwarder,
@@ -961,6 +973,34 @@ async fn send_path_probes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn expire_unconfirmed_path_probes(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    paths: &mut PathSet,
+    configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    path_probe_tracker: &mut PathProbeTracker,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
+    for probe in path_probe_tracker.expire_unconfirmed(now, PATH_PROBE_TIMEOUT) {
+        metrics.record_outbound_path_probe_failure();
+        if !demote_packet_plane_path_probe_timeout(paths, metrics, probe.peer, probe.path) {
+            continue;
+        }
+        if let Some(peer) = forwarder.transport_peer_for_overlay(probe.peer) {
+            redial_packet_plane_recovery_addresses(
+                swarm,
+                peer,
+                configured_peer_addresses,
+                discovered_peer_addresses,
+                metrics,
+            );
+        }
+    }
+}
+
 fn mtu_sized_path_probe_payload(peer_mtu: u16, token: Option<u64>) -> Vec<u8> {
     let len = usize::from(peer_mtu).max(PATH_PROBE_PAYLOAD.len());
     let mut payload = vec![0; len];
@@ -1056,7 +1096,7 @@ struct PathProbeTracker {
 
 impl PathProbeTracker {
     fn record(&mut self, peer: PeerId, path: PathKind, token: u64, now: Instant) {
-        self.expire(now);
+        self.drop_rtt_expired(now);
         if self.pending.len() >= MAX_PENDING_PATH_PROBES
             && let Some(oldest) = self
                 .pending
@@ -1077,7 +1117,7 @@ impl PathProbeTracker {
     }
 
     fn confirm(&mut self, peer: PeerId, token: u64, now: Instant) -> Option<(PathKind, u16)> {
-        self.expire(now);
+        self.drop_rtt_expired(now);
         let probe = self.pending.remove(&token)?;
         if probe.peer != peer {
             return None;
@@ -1087,7 +1127,24 @@ impl PathProbeTracker {
         Some((probe.path, rtt_ms))
     }
 
-    fn expire(&mut self, now: Instant) {
+    fn expire_unconfirmed(&mut self, now: Instant, timeout: Duration) -> Vec<PendingPathProbe> {
+        let expired_tokens = self
+            .pending
+            .iter()
+            .filter_map(|(token, probe)| {
+                (now.saturating_duration_since(probe.sent_at) > timeout).then_some(*token)
+            })
+            .collect::<Vec<_>>();
+        let mut expired = Vec::with_capacity(expired_tokens.len());
+        for token in expired_tokens {
+            if let Some(probe) = self.pending.remove(&token) {
+                expired.push(probe);
+            }
+        }
+        expired
+    }
+
+    fn drop_rtt_expired(&mut self, now: Instant) {
         self.pending
             .retain(|_, probe| now.saturating_duration_since(probe.sent_at) <= PATH_PROBE_RTT_TTL);
     }
@@ -7313,6 +7370,36 @@ fn maybe_demote_packet_plane_send_path(
             ("peer", &peer),
             ("path", path.wire_name()),
             ("reason", packet_plane_send_error_name(error)),
+        ],
+    );
+    true
+}
+
+fn demote_packet_plane_path_probe_timeout(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    path: PathKind,
+) -> bool {
+    if !paths
+        .candidates_for(peer)
+        .any(|candidate| candidate.kind == path && candidate.healthy)
+    {
+        return false;
+    }
+
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_packet_plane_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "packet_plane_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", "path_probe_timeout"),
         ],
     );
     true
@@ -15602,6 +15689,55 @@ mod tests {
             paths.path_mtu(remote_overlay, PathKind::DirectUdpDatagram),
             Some(1_200)
         );
+    }
+
+    #[test]
+    fn unconfirmed_packet_plane_path_probe_demotes_direct_datagram_to_relay() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
+        let metrics = RuntimeMetrics::default();
+        let mut path_probe_tracker = PathProbeTracker::default();
+        let start = Instant::now();
+
+        path_probe_tracker.record(remote_overlay, PathKind::DirectUdpDatagram, 7, start);
+        assert!(
+            path_probe_tracker
+                .expire_unconfirmed(start + PATH_PROBE_TIMEOUT, PATH_PROBE_TIMEOUT)
+                .is_empty()
+        );
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::DirectUdpDatagram)
+        );
+
+        let expired = path_probe_tracker.expire_unconfirmed(
+            start + PATH_PROBE_TIMEOUT + Duration::from_millis(1),
+            PATH_PROBE_TIMEOUT,
+        );
+        assert_eq!(expired.len(), 1);
+        metrics.record_outbound_path_probe_failure();
+        assert!(demote_packet_plane_path_probe_timeout(
+            &mut paths,
+            &metrics,
+            expired[0].peer,
+            expired[0].path,
+        ));
+
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.outbound_path_probe_failures, 1);
+        assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
     }
 
     #[tokio::test]
