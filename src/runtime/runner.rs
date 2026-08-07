@@ -5945,6 +5945,19 @@ async fn handle_control_request(
                         capabilities.clone(),
                     );
                     context.metrics.record_control_capability_accept();
+                    maybe_send_packet_plane_hello(
+                        swarm,
+                        context.forwarder,
+                        context.paths,
+                        context.packet_plane,
+                        context.packet_plane_quic.as_deref(),
+                        context.packet_plane_negotiator,
+                        context.identity,
+                        context.local_capabilities,
+                        peer,
+                        &capabilities,
+                        context.metrics,
+                    );
                 }
                 ControlResponse::CapabilitiesRejected(reason) => {
                     context.metrics.record_control_capability_rejection(*reason);
@@ -6667,11 +6680,18 @@ fn packet_plane_negotiation_backend(
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: PeerId,
 ) -> Option<PacketDatagramBackend> {
+    let local_quic_endpoint = first_packet_plane_quic_endpoint(local_capabilities);
+    let remote_quic_endpoint = first_packet_plane_quic_endpoint(remote_capabilities);
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
-        && packet_plane_quic.is_some_and(|packet_plane| !packet_plane.has_session(peer))
-        && first_packet_plane_quic_endpoint(local_capabilities).is_some()
-        && first_packet_plane_quic_endpoint(remote_capabilities).is_some()
+        && packet_plane_quic.is_some_and(|packet_plane| {
+            packet_plane_session_needs_negotiation(
+                packet_plane.session_endpoint_for(peer),
+                remote_quic_endpoint,
+            )
+        })
+        && local_quic_endpoint.is_some()
+        && remote_quic_endpoint.is_some()
         && remote_capabilities
             .owned_quic_packet_plane_certificate_der
             .as_ref()
@@ -6679,15 +6699,27 @@ fn packet_plane_negotiation_backend(
     {
         return Some(PacketDatagramBackend::OwnedQuic);
     }
+    let local_udp_endpoint = first_packet_plane_endpoint(local_capabilities);
+    let remote_udp_endpoint = first_packet_plane_endpoint(remote_capabilities);
     if local_capabilities.supports_owned_udp_packet_plane
         && remote_capabilities.supports_owned_udp_packet_plane
-        && !packet_plane.has_session(peer)
-        && first_packet_plane_endpoint(local_capabilities).is_some()
-        && first_packet_plane_endpoint(remote_capabilities).is_some()
+        && packet_plane_session_needs_negotiation(
+            packet_plane.session_endpoint_for(peer),
+            remote_udp_endpoint,
+        )
+        && local_udp_endpoint.is_some()
+        && remote_udp_endpoint.is_some()
     {
         return Some(PacketDatagramBackend::OwnedUdp);
     }
     None
+}
+
+fn packet_plane_session_needs_negotiation(
+    current_endpoint: Option<SocketAddr>,
+    advertised_endpoint: Option<SocketAddr>,
+) -> bool {
+    advertised_endpoint.is_some() && current_endpoint != advertised_endpoint
 }
 
 async fn connect_packet_plane_quic_peer(
@@ -6695,11 +6727,11 @@ async fn connect_packet_plane_quic_peer(
     peer: PeerId,
     remote_capabilities: &ControlCapabilities,
 ) -> Result<(), PacketPlaneNegotiationError> {
-    if packet_plane_quic.has_session(peer) {
-        return Ok(());
-    }
     let endpoint = first_packet_plane_quic_endpoint(remote_capabilities)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
+    if packet_plane_quic.session_endpoint_for(peer) == Some(endpoint) {
+        return Ok(());
+    }
     let certificate = remote_capabilities
         .owned_quic_packet_plane_certificate_der
         .clone()
@@ -16870,6 +16902,88 @@ mod tests {
             initiator_packet_plane
                 .primary_listener()
                 .expect("initiator")
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_plane_negotiation_replaces_session_when_remote_endpoint_changes() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("local socket")])
+                .await
+                .expect("local packet plane");
+        let old_remote_endpoint: SocketAddr = "192.168.0.203:42696".parse().expect("old endpoint");
+        let new_remote_endpoint: SocketAddr = "10.101.142.39:42696".parse().expect("new endpoint");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &local_identity,
+            &local_secret,
+            1280,
+            packet_plane.primary_listener().expect("local listener"),
+        );
+        let accept = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Accept,
+            &remote_identity,
+            &remote_secret,
+            1280,
+            old_remote_endpoint,
+        );
+        packet_plane
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &local_secret,
+                &hello,
+                &accept,
+            )
+            .expect("stale session");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec![
+                packet_plane
+                    .primary_listener()
+                    .expect("local listener")
+                    .to_string(),
+            ]);
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec![new_remote_endpoint.to_string()]);
+
+        assert_eq!(
+            packet_plane.session_endpoint_for(remote_overlay),
+            Some(old_remote_endpoint)
+        );
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &local_capabilities,
+                &remote_capabilities,
+                &packet_plane,
+                None,
+                remote_overlay,
+            ),
+            Some(PacketDatagramBackend::OwnedUdp)
+        );
+
+        let matching_remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_owned_udp_packet_plane(true)
+            .with_packet_endpoint_candidates(vec![old_remote_endpoint.to_string()]);
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &local_capabilities,
+                &matching_remote_capabilities,
+                &packet_plane,
+                None,
+                remote_overlay,
+            ),
+            None
         );
     }
 

@@ -1102,6 +1102,11 @@ impl PacketPlaneRuntime {
     }
 
     #[must_use]
+    pub fn session_endpoint_for(&self, peer: PeerId) -> Option<SocketAddr> {
+        self.sessions.get(&peer).map(|session| session.endpoint)
+    }
+
+    #[must_use]
     pub fn session_mtu_for(&self, peer: PeerId) -> Option<u16> {
         self.sessions.get(&peer).map(|session| session.mtu)
     }
@@ -1463,6 +1468,11 @@ impl PacketPlaneQuicRuntime {
     #[must_use]
     pub fn has_session(&self, peer: PeerId) -> bool {
         self.sessions.contains_key(&peer)
+    }
+
+    #[must_use]
+    pub fn session_endpoint_for(&self, peer: PeerId) -> Option<SocketAddr> {
+        self.sessions.get(&peer).map(|session| session.endpoint)
     }
 
     pub fn forget_connection(&mut self, peer: PeerId) -> bool {
