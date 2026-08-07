@@ -6715,6 +6715,31 @@ fn packet_plane_negotiation_backend(
     None
 }
 
+fn packet_plane_accept_backend(
+    local_capabilities: &ControlCapabilities,
+    remote_capabilities: &ControlCapabilities,
+) -> Option<PacketDatagramBackend> {
+    if local_capabilities.supports_owned_quic_packet_plane
+        && remote_capabilities.supports_owned_quic_packet_plane
+        && first_packet_plane_quic_endpoint(local_capabilities).is_some()
+        && first_packet_plane_quic_endpoint(remote_capabilities).is_some()
+        && remote_capabilities
+            .owned_quic_packet_plane_certificate_der
+            .as_ref()
+            .is_some_and(|certificate| !certificate.is_empty())
+    {
+        return Some(PacketDatagramBackend::OwnedQuic);
+    }
+    if local_capabilities.supports_owned_udp_packet_plane
+        && remote_capabilities.supports_owned_udp_packet_plane
+        && first_packet_plane_endpoint(local_capabilities).is_some()
+        && first_packet_plane_endpoint(remote_capabilities).is_some()
+    {
+        return Some(PacketDatagramBackend::OwnedUdp);
+    }
+    None
+}
+
 fn packet_plane_session_needs_negotiation(
     current_endpoint: Option<SocketAddr>,
     advertised_endpoint: Option<SocketAddr>,
@@ -6819,14 +6844,8 @@ async fn accept_packet_plane_hello(
         .peer_capabilities
         .get(remote_overlay)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
-    let backend = packet_plane_negotiation_backend(
-        context.local_capabilities,
-        remote_capabilities,
-        context.packet_plane,
-        context.packet_plane_quic.as_deref(),
-        remote_overlay,
-    )
-    .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
+    let backend = packet_plane_accept_backend(context.local_capabilities, remote_capabilities)
+        .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
     if backend == PacketDatagramBackend::OwnedQuic {
         let packet_plane_quic = context
             .packet_plane_quic
@@ -16984,6 +17003,10 @@ mod tests {
                 remote_overlay,
             ),
             None
+        );
+        assert_eq!(
+            packet_plane_accept_backend(&local_capabilities, &matching_remote_capabilities),
+            Some(PacketDatagramBackend::OwnedUdp)
         );
     }
 
