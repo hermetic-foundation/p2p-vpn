@@ -17,6 +17,7 @@ use crate::{
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
 const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;
 pub const MAX_CONTROL_MEMBERSHIP_RECORDS: usize = 8;
+pub const MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES: usize = 32;
 pub const MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN: usize = 2048;
 
 #[derive(Clone, Debug, Default)]
@@ -65,6 +66,8 @@ pub struct ControlCapabilities {
     #[serde(default)]
     pub packet_endpoint_candidates: Vec<String>,
     #[serde(default)]
+    pub direct_address_candidates: Vec<String>,
+    #[serde(default)]
     pub member_records: Vec<SignedMembershipRecord>,
 }
 
@@ -88,6 +91,7 @@ impl ControlCapabilities {
             owned_quic_packet_plane_certificate_der: None,
             owned_quic_packet_endpoint_candidates: Vec::new(),
             packet_endpoint_candidates: Vec::new(),
+            direct_address_candidates: Vec::new(),
             member_records: Vec::new(),
         }
     }
@@ -101,6 +105,12 @@ impl ControlCapabilities {
     #[must_use]
     pub fn with_packet_endpoint_candidates(mut self, endpoints: Vec<String>) -> Self {
         self.packet_endpoint_candidates = endpoints;
+        self
+    }
+
+    #[must_use]
+    pub fn with_direct_address_candidates(mut self, addresses: Vec<String>) -> Self {
+        self.direct_address_candidates = addresses;
         self
     }
 
@@ -332,6 +342,14 @@ pub fn validate_capabilities(
     }
     if capabilities.member_records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
         return Some(ControlRejectionReason::InvalidMembershipRecord);
+    }
+    if capabilities.direct_address_candidates.len() > MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES
+        || capabilities
+            .direct_address_candidates
+            .iter()
+            .any(|address| address.parse::<libp2p::Multiaddr>().is_err())
+    {
+        return Some(ControlRejectionReason::UnsupportedPreferredPath);
     }
     if capabilities.supports_owned_quic_packet_plane {
         let Some(certificate) = capabilities

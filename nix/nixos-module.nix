@@ -117,16 +117,19 @@ let
 
         tcpPorts = mkOption {
           type = types.listOf types.port;
-          default = [ ];
+          default = [ 4001 ];
           example = [ 4001 ];
           description = "Libp2p TCP transport ports to open when openFirewall is true.";
         };
 
         udpPorts = mkOption {
           type = types.listOf types.port;
-          default = [ ];
+          default = [ 5353 ];
           example = [ 4001 ];
-          description = "Libp2p UDP/QUIC transport ports to open when openFirewall is true.";
+          description = ''
+            Libp2p UDP/QUIC transport ports to open when openFirewall is true.
+            The default opens mDNS discovery.
+          '';
         };
 
         packetPlaneUdpPorts = mkOption {
@@ -247,7 +250,7 @@ in
           metricsIntervalSeconds = 10;
           openFirewall = true;
           tcpPorts = [ 4001 ];
-          udpPorts = [ 4001 ];
+          udpPorts = [ 5353 ];
           packetPlaneUdpPorts = [ 51820 ];
           packetPlaneQuicPorts = [ 51821 ];
         };

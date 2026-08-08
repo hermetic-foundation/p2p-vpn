@@ -63,14 +63,31 @@ Use `configFile` for real deployments:
 
 ## Firewall
 
-Open ports per instance:
+Open default service ports:
 
 ```nix
 {
   services.p2p-vpn.instances.lab = {
     openFirewall = true;
-    tcpPorts = [ 4001 ];
-    udpPorts = [ 4001 ];
+  };
+}
+```
+
+This opens:
+
+| Port | Purpose |
+| --- | --- |
+| TCP `4001` | Default libp2p listener |
+| UDP `5353` | mDNS LAN discovery |
+
+Add custom ports only when your config overrides listeners:
+
+```nix
+{
+  services.p2p-vpn.instances.lab = {
+    openFirewall = true;
+    tcpPorts = [ 4001 4401 ];
+    udpPorts = [ 5353 4001 ];
     packetPlaneUdpPorts = [ 51820 ];
     packetPlaneQuicPorts = [ 51821 ];
   };

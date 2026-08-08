@@ -2250,6 +2250,7 @@ dependencies = [
  "clap",
  "futures",
  "hkdf",
+ "if-addrs",
  "libp2p",
  "quinn",
  "rand_core 0.6.4",

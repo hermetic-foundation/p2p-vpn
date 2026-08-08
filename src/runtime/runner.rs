@@ -38,8 +38,9 @@ use crate::{
     runtime::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
-            MAX_CONTROL_MEMBERSHIP_RECORDS, PeerCapabilities, accepted_capabilities_response,
-            rejected_capabilities_response, validate_capabilities,
+            MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES, MAX_CONTROL_MEMBERSHIP_RECORDS,
+            PeerCapabilities, accepted_capabilities_response, rejected_capabilities_response,
+            validate_capabilities,
         },
         control_socket::{ControlSocket, RuntimeControlRequest},
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
@@ -4117,6 +4118,7 @@ struct DiscoveredPeerAddress {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiscoveredPeerAddressSource {
     AuthenticatedPeerRecord,
+    AuthenticatedControlHint,
     UnauthenticatedDiscovery,
 }
 
@@ -4124,6 +4126,7 @@ impl DiscoveredPeerAddressSource {
     const fn as_str(self) -> &'static str {
         match self {
             Self::AuthenticatedPeerRecord => "authenticated_peer_record",
+            Self::AuthenticatedControlHint => "authenticated_control_hint",
             Self::UnauthenticatedDiscovery => "unauthenticated_discovery",
         }
     }
@@ -5820,6 +5823,7 @@ async fn handle_control_event(
                 context.forwarder,
                 context.membership,
                 context.peer_capabilities,
+                context.discovered_peer_addresses,
                 context.metrics,
                 peer,
                 response,
@@ -5831,6 +5835,7 @@ async fn handle_control_event(
                 context.path_probe_tracker,
                 context.identity,
                 context.paths,
+                context.discovery,
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
@@ -6413,6 +6418,16 @@ async fn handle_control_request(
                         peer,
                         capabilities.clone(),
                     );
+                    learn_peer_direct_address_candidates_from_capabilities(
+                        swarm,
+                        context.forwarder,
+                        context.discovered_peer_addresses,
+                        context.paths,
+                        context.metrics,
+                        peer,
+                        &capabilities,
+                        context.discovery,
+                    );
                     context.metrics.record_control_capability_accept();
                     maybe_send_packet_plane_hello(
                         swarm,
@@ -6554,6 +6569,7 @@ fn handle_control_response_event(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
     peer_capabilities: &mut PeerCapabilities,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     response: ControlResponse,
@@ -6565,6 +6581,7 @@ fn handle_control_response_event(
     path_probe_tracker: &mut PathProbeTracker,
     identity: &NodeIdentity,
     paths: &mut PathSet,
+    discovery: &DiscoveryConfig,
 ) {
     metrics.record_control_response_received();
     match response {
@@ -6583,6 +6600,16 @@ fn handle_control_response_event(
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
             } else {
                 record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
+                learn_peer_direct_address_candidates_from_capabilities(
+                    swarm,
+                    forwarder,
+                    discovered_peer_addresses,
+                    paths,
+                    metrics,
+                    peer,
+                    &capabilities,
+                    discovery,
+                );
                 metrics.record_control_capability_accept();
                 eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
                 maybe_send_packet_plane_hello(
@@ -6940,6 +6967,142 @@ fn refreshed_local_capabilities(
     capabilities.advertised_routes = forwarder.local_advertised_routes();
     capabilities.member_records = advertised_member_records(forwarder);
     capabilities
+}
+
+fn refreshed_local_capabilities_for_swarm(
+    swarm: &Swarm<Behaviour>,
+    local_capabilities: &ControlCapabilities,
+    forwarder: &Forwarder,
+) -> ControlCapabilities {
+    refreshed_local_capabilities(local_capabilities, forwarder)
+        .with_direct_address_candidates(local_direct_address_candidates(swarm, forwarder))
+}
+
+fn local_direct_address_candidates(swarm: &Swarm<Behaviour>, forwarder: &Forwarder) -> Vec<String> {
+    let interface_ips = local_interface_ips(&forwarder.config().interface.name);
+    let mut addresses = Vec::new();
+    for listener in swarm.listeners() {
+        for address in concrete_direct_listener_addresses(listener, &interface_ips) {
+            if addresses.len() >= MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES {
+                return addresses;
+            }
+            let address = address.to_string();
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+        }
+    }
+    addresses
+}
+
+fn concrete_direct_listener_addresses(
+    listener: &Multiaddr,
+    interface_ips: &[IpAddr],
+) -> Vec<Multiaddr> {
+    if listener
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+    {
+        return Vec::new();
+    }
+
+    let mut addresses = Vec::new();
+    let mut wildcard = None;
+    for protocol in listener {
+        match protocol {
+            Protocol::Ip4(address) if address.is_unspecified() => {
+                wildcard = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+                break;
+            }
+            Protocol::Ip6(address) if address.is_unspecified() => {
+                wildcard = Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+                break;
+            }
+            Protocol::Ip4(address) => {
+                if direct_libp2p_address_ip_is_advertisable(IpAddr::V4(address)) {
+                    addresses.push(listener.clone());
+                }
+                return addresses;
+            }
+            Protocol::Ip6(address) => {
+                if direct_libp2p_address_ip_is_advertisable(IpAddr::V6(address)) {
+                    addresses.push(listener.clone());
+                }
+                return addresses;
+            }
+            _ => {}
+        }
+    }
+
+    let Some(wildcard) = wildcard else {
+        return addresses;
+    };
+    for ip in interface_ips {
+        if wildcard.is_ipv4() != ip.is_ipv4() || !direct_libp2p_address_ip_is_advertisable(*ip) {
+            continue;
+        }
+        addresses.push(replace_first_ip_protocol(listener, *ip));
+    }
+    addresses
+}
+
+fn replace_first_ip_protocol(address: &Multiaddr, ip: IpAddr) -> Multiaddr {
+    let mut replaced = false;
+    let mut result = Multiaddr::empty();
+    for protocol in address {
+        let protocol = match (protocol, ip, replaced) {
+            (Protocol::Ip4(_), IpAddr::V4(address), false) => {
+                replaced = true;
+                Protocol::Ip4(address)
+            }
+            (Protocol::Ip6(_), IpAddr::V6(address), false) => {
+                replaced = true;
+                Protocol::Ip6(address)
+            }
+            (protocol, _, _) => protocol,
+        };
+        result.push(protocol);
+    }
+    result
+}
+
+fn local_interface_ips(excluded_interface_name: &str) -> Vec<IpAddr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut addresses = Vec::new();
+    for interface in interfaces {
+        if interface.name == excluded_interface_name {
+            continue;
+        }
+        let ip = interface.ip();
+        if direct_libp2p_address_ip_is_advertisable(ip) && !addresses.contains(&ip) {
+            addresses.push(ip);
+        }
+    }
+    addresses
+}
+
+fn direct_libp2p_address_ip_is_advertisable(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [first, second, _, _] = address.octets();
+            !(address.is_unspecified()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_broadcast()
+                || address.is_documentation()
+                || address.is_multicast()
+                || (first == 10 && second == 42)
+                || (first == 100 && (64..=127).contains(&second)))
+        }
+        IpAddr::V6(address) => {
+            !(address.is_unspecified()
+                || address.is_loopback()
+                || address.is_multicast()
+                || address.is_unicast_link_local())
+        }
+    }
 }
 
 fn current_unix_seconds_lossy() -> u64 {
@@ -8030,10 +8193,11 @@ fn send_control_capabilities(
         return;
     }
 
-    swarm.behaviour_mut().control.send_request(
-        &peer,
-        ControlRequest::Capabilities(refreshed_local_capabilities(local_capabilities, forwarder)),
-    );
+    let capabilities = refreshed_local_capabilities_for_swarm(swarm, local_capabilities, forwarder);
+    swarm
+        .behaviour_mut()
+        .control
+        .send_request(&peer, ControlRequest::Capabilities(capabilities));
     metrics.record_control_request_sent();
 }
 
@@ -9203,6 +9367,43 @@ fn learn_peer_address(
         discovered_peer_addresses.record_failure_at(peer, &address, now);
         metrics.record_discovered_address_dial_failure();
         eprintln!("dial discovered peer {peer} failed: {error}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn learn_peer_direct_address_candidates_from_capabilities(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
+    paths: &PathSet,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+    discovery: &DiscoveryConfig,
+) {
+    for address in &capabilities.direct_address_candidates {
+        let Ok(address) = address.parse::<Multiaddr>() else {
+            metrics.record_discovered_address_rejected();
+            continue;
+        };
+        if address
+            .iter()
+            .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+        {
+            metrics.record_discovered_address_rejected();
+            continue;
+        }
+        learn_peer_address(
+            swarm,
+            forwarder,
+            discovered_peer_addresses,
+            paths,
+            metrics,
+            peer,
+            address,
+            discovery,
+            DiscoveredPeerAddressSource::AuthenticatedControlHint,
+        );
     }
 }
 
@@ -18149,6 +18350,50 @@ mod tests {
             &capabilities,
             "127.0.0.1:51821".parse().expect("other endpoint")
         ));
+    }
+
+    #[test]
+    fn wildcard_direct_listener_addresses_expand_to_interface_ips() {
+        let listener: Multiaddr = "/ip4/0.0.0.0/tcp/4001".parse().expect("listener");
+        let addresses = concrete_direct_listener_addresses(
+            &listener,
+            &[
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10)),
+                IpAddr::V6(Ipv6Addr::LOCALHOST),
+            ],
+        );
+
+        assert_eq!(
+            addresses,
+            vec![
+                "/ip4/192.168.0.10/tcp/4001"
+                    .parse::<Multiaddr>()
+                    .expect("expanded listener")
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_listener_address_candidates_skip_relayed_paths() {
+        let listener: Multiaddr = "/ip4/192.168.0.10/tcp/4001/p2p-circuit"
+            .parse()
+            .expect("listener");
+
+        assert!(concrete_direct_listener_addresses(&listener, &[]).is_empty());
+    }
+
+    #[test]
+    fn direct_listener_address_candidates_skip_overlay_addresses() {
+        assert!(!direct_libp2p_address_ip_is_advertisable(IpAddr::V4(
+            Ipv4Addr::new(10, 42, 0, 1)
+        )));
+        assert!(!direct_libp2p_address_ip_is_advertisable(IpAddr::V4(
+            Ipv4Addr::new(100, 64, 9, 171)
+        )));
+        assert!(direct_libp2p_address_ip_is_advertisable(IpAddr::V4(
+            Ipv4Addr::new(192, 168, 0, 10)
+        )));
     }
 
     #[test]
