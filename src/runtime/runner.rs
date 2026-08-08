@@ -1785,6 +1785,8 @@ fn runtime_state_lines(view: &RuntimeStateView<'_>) -> Vec<String> {
             view.forwarder,
             view.paths,
             view.peer_capabilities,
+            view.packet_plane,
+            view.packet_plane_quic,
             peer,
             local_mtu,
         );
@@ -2091,13 +2093,17 @@ fn extend_runtime_peer_state_lines(
     forwarder: &Forwarder,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
     peer: PeerId,
     local_mtu: u16,
 ) {
     let transport = forwarder
         .transport_peer_for_overlay(peer)
         .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
-    let support = packet_transport_support(peer_capabilities, peer);
+    let datagram_backend =
+        local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+    let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     let selected_path = paths.best_supported_for(peer, support);
     let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
     let healthy_paths = candidates
@@ -2156,6 +2162,28 @@ fn extend_runtime_peer_state_lines(
             path_rtt_value(candidate)
         ));
     }
+}
+
+fn local_packet_datagram_backend_from_snapshot(
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
+    peer: PeerId,
+) -> Option<PacketDatagramBackend> {
+    if packet_plane_quic
+        .sessions
+        .iter()
+        .any(|session| session.peer == peer)
+    {
+        return Some(PacketDatagramBackend::OwnedQuic);
+    }
+    if packet_plane
+        .sessions
+        .iter()
+        .any(|session| session.peer == peer)
+    {
+        return Some(PacketDatagramBackend::OwnedUdp);
+    }
+    None
 }
 
 fn handle_redial_tick(
