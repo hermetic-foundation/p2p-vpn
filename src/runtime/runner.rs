@@ -4041,6 +4041,23 @@ fn record_discovered_outgoing_connection_failure(
     let now = Instant::now();
     let failed_addresses = dial_error_failed_addresses(error);
     for address in failed_addresses {
+        if dial_error_reports_relay_no_reservation(error)
+            && relayed_address_relay_peer(&address).is_some()
+        {
+            if discovered_peer_addresses.remove(peer, &address) {
+                metrics.record_discovered_address_dial_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "discovered_relayed_address_removed",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("address", &address.to_string()),
+                        ("reason", "relay_no_destination_reservation"),
+                    ],
+                );
+            }
+            continue;
+        }
         if !discovered_peer_addresses.record_dial_failure_at(peer, &address, now) {
             continue;
         }
@@ -4055,6 +4072,13 @@ fn record_discovered_outgoing_connection_failure(
             ],
         );
     }
+}
+
+fn dial_error_reports_relay_no_reservation(error: &DialError) -> bool {
+    let error = error.to_string();
+    error.contains("Relay has no reservation for destination")
+        || error.contains("NoReservation")
+        || error.contains("NO_RESERVATION")
 }
 
 fn dial_error_failed_addresses(error: &DialError) -> Vec<Multiaddr> {
@@ -4129,9 +4153,11 @@ impl DiscoveredPeerAddresses {
         });
     }
 
-    fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) {
+    fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
+        let original_len = self.addresses.len();
         self.addresses
             .retain(|entry| entry.peer != peer || &entry.address != address);
+        self.addresses.len() != original_len
     }
 
     fn drop_expired(&mut self, now: Instant, max_age: Duration) -> u64 {
@@ -13327,6 +13353,19 @@ mod tests {
             discovered.redial_candidates_at(now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE),
             vec![(peer, other_address), (peer, address)]
         );
+    }
+
+    #[test]
+    fn discovered_peer_addresses_report_removed_entries() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let mut discovered = DiscoveredPeerAddresses::default();
+
+        discovered.insert(peer, address.clone());
+
+        assert!(discovered.remove(peer, &address));
+        assert!(!discovered.remove(peer, &address));
+        assert!(discovered.as_vec().is_empty());
     }
 
     #[test]
