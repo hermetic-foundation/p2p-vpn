@@ -6523,7 +6523,7 @@ mod tests {
             )));
         assert!(lines.iter().any(|line| line
             == &format!(
-                "peer path candidate: {} direct TCP stream score 60 estimated_mtu 1280 address /ip4/127.0.0.1/tcp/4001",
+                "peer path candidate: {} direct TCP stream score 40 estimated_mtu 1280 address /ip4/127.0.0.1/tcp/4001",
                 remote.peer_id
             )));
         assert!(lines.iter().any(|line| line

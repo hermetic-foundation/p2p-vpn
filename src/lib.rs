@@ -106,7 +106,7 @@ impl PathKind {
             Self::DirectUdpDatagram => 95,
             Self::DirectQuicDatagram => 100,
             Self::DirectQuicStream => 75,
-            Self::DirectTcpStream => 60,
+            Self::DirectTcpStream => 40,
             Self::CircuitRelay => 30,
         }
     }

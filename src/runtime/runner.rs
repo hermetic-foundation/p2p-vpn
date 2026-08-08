@@ -10840,7 +10840,7 @@ mod tests {
 
         let path_lines = runtime_path_lines(&forwarder, &paths, &peer_capabilities);
         assert!(path_lines.contains(&format!(
-            "peer selected path: {remote_overlay} direct_tcp_stream score 60 mtu 1180"
+            "peer selected path: {remote_overlay} direct_tcp_stream score 40 mtu 1180"
         )));
         assert!(path_lines.contains(&format!(
             "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown"
@@ -11041,7 +11041,7 @@ mod tests {
         )));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer state: {} transport {} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1200 selected_path_rtt_ms unknown healthy_paths 1 direct_paths 1 relay_paths 0",
+                "peer state: {} transport {} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1200 selected_path_rtt_ms unknown healthy_paths 1 direct_paths 1 relay_paths 0",
                 fixture.remote_overlay, fixture.remote
             )
         }));
@@ -11053,7 +11053,7 @@ mod tests {
         }));
         assert!(lines.iter().any(|line| {
             line == &format!(
-                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 60 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown",
+                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 40 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown",
                 fixture.remote_overlay
             )
         }));

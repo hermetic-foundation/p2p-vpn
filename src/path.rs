@@ -828,6 +828,28 @@ mod tests {
     }
 
     #[test]
+    fn penalized_direct_tcp_reconnect_does_not_displace_working_relay() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_rtt(peer(1), PathKind::CircuitRelay, 263);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+        paths.record_rtt(peer(1), PathKind::DirectTcpStream, 72);
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectTcpStream)
+        );
+
+        paths.mark_unhealthy(peer(1), PathKind::DirectTcpStream);
+        paths.record_established(peer(1), PathKind::DirectTcpStream);
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+    }
+
+    #[test]
     fn repeated_direct_failures_do_not_pin_recovered_datagram_below_relay() {
         let mut paths = PathSet::new();
         paths.record_established(peer(1), PathKind::CircuitRelay);
