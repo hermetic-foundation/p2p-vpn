@@ -1,6 +1,7 @@
 use crate::{PathKind, PeerId};
 
 const PATH_FAILURE_PENALTY_STEP: u16 = 50;
+const PATH_FAILURE_PENALTY_MAX: u16 = PATH_FAILURE_PENALTY_STEP;
 const PATH_FAILURE_PENALTY_RECOVERY_STEP: u16 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +67,7 @@ impl PathCandidate {
 
     #[must_use]
     pub const fn is_selectable(self) -> bool {
-        self.healthy && (!self.relay || self.established_connections > 0)
+        self.healthy
     }
 }
 
@@ -203,6 +204,7 @@ impl PathSet {
             candidate.failure_penalty = candidate
                 .failure_penalty
                 .saturating_add(PATH_FAILURE_PENALTY_STEP);
+            candidate.failure_penalty = candidate.failure_penalty.min(PATH_FAILURE_PENALTY_MAX);
         }
         self.selection_change(peer, previous)
     }
@@ -532,7 +534,34 @@ mod tests {
         assert_eq!(relay.kind, PathKind::CircuitRelay);
         assert_eq!(relay.established_connections, 0);
         assert!(relay.healthy);
-        assert_eq!(paths.best_for(peer(1)), None);
+        assert_eq!(
+            paths.best_for(peer(1)).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+    }
+
+    #[test]
+    fn confirmed_relay_paths_remain_selectable_across_transient_stream_closes() {
+        let mut paths = PathSet::new();
+
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_rtt(peer(1), PathKind::CircuitRelay, 250);
+        paths.record_closed(peer(1), PathKind::CircuitRelay);
+
+        let relay = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.kind == PathKind::CircuitRelay)
+            .expect("relay remains available for redial");
+        assert_eq!(relay.kind, PathKind::CircuitRelay);
+        assert_eq!(relay.established_connections, 0);
+        assert!(relay.healthy);
+        assert!(relay.is_selectable());
+        assert_eq!(
+            paths
+                .best_supported_for(peer(1), PathTransportSupport::stream_fallback())
+                .map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
     }
 
     #[test]
@@ -718,6 +747,34 @@ mod tests {
     }
 
     #[test]
+    fn repeated_direct_failures_do_not_pin_recovered_datagram_below_relay() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_rtt(peer(1), PathKind::CircuitRelay, 190);
+        paths.record_established(peer(1), PathKind::DirectUdpDatagram);
+        paths.record_rtt(peer(1), PathKind::DirectUdpDatagram, 40);
+
+        for _ in 0..5 {
+            paths.mark_unhealthy(peer(1), PathKind::DirectUdpDatagram);
+        }
+        paths.record_established(peer(1), PathKind::DirectUdpDatagram);
+        paths.record_rtt(peer(1), PathKind::DirectUdpDatagram, 40);
+
+        let direct = paths
+            .candidates_for(peer(1))
+            .find(|path| path.kind == PathKind::DirectUdpDatagram)
+            .expect("direct path");
+        assert_eq!(
+            direct.failure_penalty,
+            PATH_FAILURE_PENALTY_MAX - PATH_FAILURE_PENALTY_RECOVERY_STEP
+        );
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectUdpDatagram)
+        );
+    }
+
+    #[test]
     fn runtime_stats_report_healthy_paths_and_supported_peers() {
         let mut paths = PathSet::new();
         paths.record_established(peer(1), PathKind::DirectQuicStream);
@@ -741,8 +798,8 @@ mod tests {
                 healthy_direct_quic_stream_paths: 1,
                 healthy_direct_tcp_stream_paths: 0,
                 healthy_relay_paths: 1,
-                peers_with_supported_path: 2,
-                peers_without_supported_path: 2,
+                peers_with_supported_path: 3,
+                peers_without_supported_path: 1,
             }
         );
     }
