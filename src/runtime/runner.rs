@@ -3263,6 +3263,10 @@ impl AutoRelayState {
         self.reservation_failures.remove(&peer);
     }
 
+    fn has_active_reservation(&self, peer: Libp2pPeerId) -> bool {
+        self.accepted_reservation_peers.contains(&peer)
+    }
+
     fn release_reservation_peer(&mut self, peer: Libp2pPeerId) -> bool {
         self.pending_reservations.remove(&peer).is_some()
             | self.accepted_reservation_peers.remove(&peer)
@@ -3364,6 +3368,9 @@ fn quiesce_public_relay_infrastructure(
         .copied()
         .collect::<Vec<_>>();
     for peer in peers {
+        if auto_relay.has_active_reservation(peer) {
+            continue;
+        }
         let _ = swarm.disconnect_peer_id(peer);
         infrastructure_peers.remove(peer);
         auto_relay.remove_candidate(peer);
@@ -13007,6 +13014,29 @@ mod tests {
         assert_eq!(state.snapshot(now).reservations, 1);
 
         assert!(state.next_reservation_targets(now).is_empty());
+    }
+
+    #[test]
+    fn auto_relay_state_reports_active_reservations_for_quiet_mode() {
+        let relay = peer_id();
+        let other = peer_id();
+        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let other_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{other}")
+            .parse()
+            .expect("other relay address");
+        let mut state = AutoRelayState::default();
+        let now = Instant::now();
+        state.record_reachability(AutoNatReachability::Private);
+
+        assert!(state.record_candidate(relay, relay_address));
+        assert!(state.record_candidate(other, other_address));
+        assert_eq!(state.next_reservation_targets(now).len(), 2);
+        state.record_reservation_accepted(relay);
+
+        assert!(state.has_active_reservation(relay));
+        assert!(!state.has_active_reservation(other));
     }
 
     #[tokio::test]
