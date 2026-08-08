@@ -698,6 +698,7 @@ where
                 attempt_auto_relay_reservations(&mut node.swarm, &mut auto_relay, &metrics);
                 handle_redial_tick(
                     &mut node,
+                    &forwarder,
                     &mut queue_runtime.discovered_peer_addresses,
                     &paths,
                     &relay_readiness,
@@ -2136,6 +2137,7 @@ fn extend_runtime_peer_state_lines(
 
 fn handle_redial_tick(
     node: &mut P2pNode,
+    forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
     relay_readiness: &RelayReadiness,
@@ -2149,6 +2151,14 @@ fn handle_redial_tick(
         relay_readiness,
         configured_relay_reservation_retries,
     );
+    query_configured_peer_recovery_discovery(
+        &mut node.swarm,
+        &node.network_name,
+        node.membership_tag.as_deref(),
+        forwarder.configured_transport_peers(),
+        paths,
+        metrics,
+    );
     let discovered_addresses = discovered_peer_addresses.redial_candidates_at(Instant::now());
     redial_known_addresses(
         &mut node.swarm,
@@ -2161,6 +2171,54 @@ fn handle_redial_tick(
         metrics,
         |relay| relay_readiness.relay_ready(relay),
     );
+}
+
+fn query_configured_peer_recovery_discovery(
+    swarm: &mut Swarm<Behaviour>,
+    network_name: &str,
+    membership_tag: Option<&str>,
+    configured_peers: impl IntoIterator<Item = Libp2pPeerId>,
+    paths: &PathSet,
+    metrics: &RuntimeMetrics,
+) {
+    for peer in configured_peer_recovery_discovery_targets(
+        *swarm.local_peer_id(),
+        configured_peers,
+        |candidate| redial_connection_state(paths, *candidate, swarm.is_connected(candidate)),
+    ) {
+        swarm
+            .behaviour_mut()
+            .kad
+            .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
+                network_name,
+                membership_tag,
+                peer,
+            ));
+        swarm.behaviour_mut().kad.get_closest_peers(peer);
+        metrics.record_kademlia_provider_lookup();
+        log_runtime_event(
+            LogLevel::Info,
+            "peer_recovery_discovery_query",
+            &[("peer", &peer.to_string())],
+        );
+    }
+}
+
+fn configured_peer_recovery_discovery_targets(
+    local_peer: Libp2pPeerId,
+    configured_peers: impl IntoIterator<Item = Libp2pPeerId>,
+    mut connection_state: impl FnMut(&Libp2pPeerId) -> RedialConnectionState,
+) -> Vec<Libp2pPeerId> {
+    configured_peers
+        .into_iter()
+        .filter(|peer| *peer != local_peer)
+        .filter(|peer| {
+            matches!(
+                connection_state(peer),
+                RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath
+            )
+        })
+        .collect()
 }
 
 fn retry_configured_relay_reservations(
@@ -11812,6 +11870,39 @@ mod tests {
             redial_connection_state(&paths, peer, true),
             RedialConnectionState::DirectAndRelay
         );
+    }
+
+    #[test]
+    fn recovery_discovery_targets_configured_peers_without_usable_paths() {
+        let local = peer_id();
+        let disconnected = peer_id();
+        let stale_connected = peer_id();
+        let relay_only = peer_id();
+        let fully_connected = peer_id();
+
+        let targets = configured_peer_recovery_discovery_targets(
+            local,
+            [
+                local,
+                disconnected,
+                stale_connected,
+                relay_only,
+                fully_connected,
+            ],
+            |peer| {
+                if *peer == disconnected {
+                    RedialConnectionState::Disconnected
+                } else if *peer == stale_connected {
+                    RedialConnectionState::ConnectedNoUsablePath
+                } else if *peer == relay_only {
+                    RedialConnectionState::RelayOnly
+                } else {
+                    RedialConnectionState::DirectAndRelay
+                }
+            },
+        );
+
+        assert_eq!(targets, vec![disconnected, stale_connected]);
     }
 
     #[test]
