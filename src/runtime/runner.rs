@@ -80,6 +80,7 @@ const PATH_PROBE_TOKEN_LEN: usize = 8;
 const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
+const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -150,6 +151,7 @@ struct PendingPacketPlaneHello {
     secret: PacketPlaneEphemeralSecret,
     hello: VerifiedPacketPlaneHandshake,
     backend: PacketDatagramBackend,
+    created_at: Instant,
     quic_connect_attempted: bool,
     quic_connect_defer_events: u8,
 }
@@ -168,6 +170,7 @@ impl PacketPlaneNegotiator {
                 secret,
                 hello,
                 backend,
+                created_at: Instant::now(),
                 quic_connect_attempted: false,
                 quic_connect_defer_events: u8::from(backend == PacketDatagramBackend::OwnedQuic),
             },
@@ -206,6 +209,25 @@ impl PacketPlaneNegotiator {
         if let Some(pending) = self.pending.get_mut(&peer) {
             pending.quic_connect_attempted = true;
         }
+    }
+
+    fn expire_stale(
+        &mut self,
+        now: Instant,
+        max_age: Duration,
+    ) -> Vec<(PeerId, PacketDatagramBackend)> {
+        let expired = self
+            .pending
+            .iter()
+            .filter_map(|(peer, pending)| {
+                (now.saturating_duration_since(pending.created_at) >= max_age)
+                    .then_some((*peer, pending.backend))
+            })
+            .collect::<Vec<_>>();
+        for (peer, _) in &expired {
+            self.pending.remove(peer);
+        }
+        expired
     }
 }
 
@@ -757,6 +779,11 @@ where
                 );
             }
             _ = timers.queue_expiry.tick() => {
+                expire_pending_packet_plane_hellos(
+                    &mut packet_plane_negotiator,
+                    &metrics,
+                    Instant::now(),
+                );
                 drive_pending_packet_plane_quic_connects(
                     packet_plane_quic.as_mut(),
                     &mut packet_plane_negotiator,
@@ -7724,6 +7751,24 @@ fn handle_expired_packet_plane_session(
             peer,
             capabilities,
             context.metrics,
+        );
+    }
+}
+
+fn expire_pending_packet_plane_hellos(
+    negotiator: &mut PacketPlaneNegotiator,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
+    for (peer, backend) in negotiator.expire_stale(now, PACKET_PLANE_PENDING_HELLO_TIMEOUT) {
+        metrics.record_control_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_pending_hello_expired",
+            &[
+                ("peer", &peer.to_string()),
+                ("backend", packet_datagram_backend_name(backend)),
+            ],
         );
     }
 }
@@ -18800,6 +18845,41 @@ mod tests {
             &paths,
             remote_overlay
         ));
+    }
+
+    #[test]
+    fn stale_packet_plane_hello_expires_to_allow_renegotiation() {
+        let peer = PeerId::from_bytes([13; 32]);
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let secret = test_packet_plane_secret(7);
+        let hello = verified_test_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &local_identity,
+            &secret,
+            1280,
+            "192.168.0.180:51820".parse().expect("endpoint"),
+        );
+        let start = Instant::now();
+        let mut negotiator = PacketPlaneNegotiator::default();
+        negotiator.insert(peer, secret, hello, PacketDatagramBackend::OwnedUdp);
+
+        assert!(negotiator.has_pending(peer));
+        assert!(
+            negotiator
+                .expire_stale(
+                    start + PACKET_PLANE_PENDING_HELLO_TIMEOUT / 2,
+                    PACKET_PLANE_PENDING_HELLO_TIMEOUT
+                )
+                .is_empty()
+        );
+
+        let expired = negotiator.expire_stale(
+            start + PACKET_PLANE_PENDING_HELLO_TIMEOUT + Duration::from_millis(1),
+            PACKET_PLANE_PENDING_HELLO_TIMEOUT,
+        );
+
+        assert_eq!(expired, vec![(peer, PacketDatagramBackend::OwnedUdp)]);
+        assert!(!negotiator.has_pending(peer));
     }
 
     #[tokio::test]
