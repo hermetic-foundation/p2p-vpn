@@ -696,7 +696,22 @@ where
                     &metrics,
                     Instant::now(),
                 );
-                attempt_auto_relay_reservations(&mut node.swarm, &mut auto_relay, &metrics);
+                let public_discovery_quiet = public_discovery_quiet_mode(
+                    &forwarder,
+                    &paths,
+                    &peer_capabilities,
+                    Some(&packet_plane),
+                    packet_plane_quic.as_ref(),
+                );
+                if public_discovery_quiet {
+                    quiesce_public_relay_infrastructure(
+                        &mut node.swarm,
+                        &mut infrastructure_peers,
+                        &mut auto_relay,
+                    );
+                } else {
+                    attempt_auto_relay_reservations(&mut node.swarm, &mut auto_relay, &metrics);
+                }
                 handle_redial_tick(
                     &mut node,
                     &forwarder,
@@ -729,6 +744,13 @@ where
                         identity: &node.identity,
                         advertise_provider: discovery.kademlia_provider_advertisement,
                         auto_relay: &auto_relay,
+                        public_discovery_quiet: public_discovery_quiet_mode(
+                            &forwarder,
+                            &paths,
+                            &peer_capabilities,
+                            Some(&packet_plane),
+                            packet_plane_quic.as_ref(),
+                        ),
                         metrics: &metrics,
                     },
                 );
@@ -2438,10 +2460,15 @@ struct KademliaRefreshContext<'a> {
     identity: &'a NodeIdentity,
     advertise_provider: bool,
     auto_relay: &'a AutoRelayState,
+    public_discovery_quiet: bool,
     metrics: &'a RuntimeMetrics,
 }
 
 fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaRefreshContext<'_>) {
+    if context.public_discovery_quiet {
+        return;
+    }
+
     if context.advertise_provider {
         match swarm
             .behaviour_mut()
@@ -3275,6 +3302,28 @@ impl InfrastructurePeers {
             .collect::<Vec<_>>();
         peers.sort_by_key(|peer| peer.peer.to_string());
         RelayInfrastructureSnapshot { peers }
+    }
+}
+
+fn quiesce_public_relay_infrastructure(
+    swarm: &mut Swarm<Behaviour>,
+    infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
+) {
+    let peers = infrastructure_peers
+        .peers
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+    for peer in peers {
+        let _ = swarm.disconnect_peer_id(peer);
+        infrastructure_peers.remove(peer);
+        auto_relay.remove_candidate(peer);
+        log_runtime_event(
+            LogLevel::Info,
+            "public_relay_infrastructure_quiesced",
+            &[("peer", &peer.to_string())],
+        );
     }
 }
 
@@ -5091,6 +5140,41 @@ fn packet_transport_support_for_backend(
     }
 }
 
+fn public_discovery_quiet_mode(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+) -> bool {
+    let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
+    !peers.is_empty()
+        && peers.into_iter().all(|peer| {
+            peer_has_healthy_direct_supported_path(
+                paths,
+                peer_capabilities,
+                packet_plane,
+                packet_plane_quic,
+                peer,
+            )
+        })
+}
+
+fn peer_has_healthy_direct_supported_path(
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    peer: PeerId,
+) -> bool {
+    let datagram_backend =
+        local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+    let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
+    paths
+        .candidates_for(peer)
+        .any(|path| path.healthy && path.is_direct() && support.supports(path.kind))
+}
+
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
@@ -5154,6 +5238,13 @@ async fn handle_swarm_event(
             handle_service_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(event) => {
+            let public_discovery_quiet = public_discovery_quiet_mode(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                Some(context.packet_plane),
+                context.packet_plane_quic.as_deref(),
+            );
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
                 membership: context.membership,
@@ -5168,6 +5259,7 @@ async fn handle_swarm_event(
                 local_capabilities: context.local_capabilities,
                 previous_membership_tags: context.previous_membership_tags,
                 identity: context.identity,
+                public_discovery_quiet,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
         }
@@ -5182,7 +5274,14 @@ async fn handle_swarm_event(
                 context.infrastructure_peers,
                 context.metrics,
                 peer_id,
-                context.auto_relay.should_discover_candidates(),
+                context.auto_relay.should_discover_candidates()
+                    && !public_discovery_quiet_mode(
+                        context.forwarder,
+                        context.paths,
+                        context.peer_capabilities,
+                        Some(context.packet_plane),
+                        context.packet_plane_quic.as_deref(),
+                    ),
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {}
                 EstablishedConnectionAuthorization::InfrastructurePeer => {
@@ -8167,6 +8266,7 @@ struct BehaviourEventContext<'a> {
     local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
     identity: &'a NodeIdentity,
+    public_discovery_quiet: bool,
 }
 
 fn handle_behaviour_event(
@@ -8228,6 +8328,7 @@ fn handle_behaviour_event(
                     previous_membership_tags: context.previous_membership_tags,
                     metrics: context.metrics,
                     discovery: context.discovery,
+                    public_discovery_quiet: context.public_discovery_quiet,
                 },
                 event,
             );
@@ -8242,6 +8343,7 @@ fn handle_behaviour_event(
             context.discovery,
             context.local_capabilities,
             context.identity,
+            context.public_discovery_quiet,
             &event,
         ),
         BehaviourEvent::RelayServer(event) => handle_relay_server_event(context.metrics, &event),
@@ -8265,7 +8367,13 @@ fn handle_behaviour_event(
             );
         }
         BehaviourEvent::Autonat(event) if context.discovery.autonat => {
-            handle_autonat_event(swarm, context.auto_relay, context.metrics, event);
+            handle_autonat_event(
+                swarm,
+                context.auto_relay,
+                context.metrics,
+                context.public_discovery_quiet,
+                event,
+            );
         }
         _ => {}
     }
@@ -8372,6 +8480,7 @@ fn handle_autonat_event(
     swarm: &mut Swarm<Behaviour>,
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
+    public_discovery_quiet: bool,
     event: autonat::Event,
 ) {
     match event {
@@ -8382,10 +8491,12 @@ fn handle_autonat_event(
             let reachability = autonat_reachability(&new);
             auto_relay.record_reachability(reachability);
             metrics.record_autonat_status(reachability);
-            if auto_relay.private_reachability() {
+            if auto_relay.private_reachability() && !public_discovery_quiet {
                 query_auto_relay_infrastructure(swarm, metrics, "autonat_private");
             }
-            attempt_auto_relay_reservations(swarm, auto_relay, metrics);
+            if !public_discovery_quiet {
+                attempt_auto_relay_reservations(swarm, auto_relay, metrics);
+            }
             log_runtime_event(
                 LogLevel::Info,
                 "autonat_status_changed",
@@ -8442,6 +8553,7 @@ struct KademliaEventContext<'a> {
     previous_membership_tags: &'a [String],
     metrics: &'a RuntimeMetrics,
     discovery: &'a DiscoveryConfig,
+    public_discovery_quiet: bool,
 }
 
 fn handle_kademlia_event(
@@ -8469,6 +8581,7 @@ fn handle_kademlia_event(
                 context.paths,
                 context.metrics,
                 context.discovery,
+                context.public_discovery_quiet,
                 &result,
             );
             eprintln!("kademlia query progressed: {result:?}");
@@ -8476,15 +8589,17 @@ fn handle_kademlia_event(
         kad::Event::RoutingUpdated {
             peer, addresses, ..
         } => {
-            admit_kademlia_relay_infrastructure_peer(
-                swarm,
-                context.forwarder,
-                context.infrastructure_peers,
-                context.auto_relay,
-                context.metrics,
-                peer,
-                addresses.iter(),
-            );
+            if !context.public_discovery_quiet {
+                admit_kademlia_relay_infrastructure_peer(
+                    swarm,
+                    context.forwarder,
+                    context.infrastructure_peers,
+                    context.auto_relay,
+                    context.metrics,
+                    peer,
+                    addresses.iter(),
+                );
+            }
             eprintln!("kademlia routing updated: {peer}");
         }
         other => {
@@ -8639,6 +8754,7 @@ fn handle_kademlia_closest_peer_result(
     paths: &PathSet,
     metrics: &RuntimeMetrics,
     discovery: &DiscoveryConfig,
+    public_discovery_quiet: bool,
     result: &kad::QueryResult,
 ) {
     if let kad::QueryResult::GetClosestPeers(
@@ -8660,15 +8776,17 @@ fn handle_kademlia_closest_peer_result(
                     DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
                 );
             }
-            admit_kademlia_relay_infrastructure_peer(
-                swarm,
-                forwarder,
-                infrastructure_peers,
-                auto_relay,
-                metrics,
-                peer.peer_id,
-                peer.addrs.iter(),
-            );
+            if !public_discovery_quiet {
+                admit_kademlia_relay_infrastructure_peer(
+                    swarm,
+                    forwarder,
+                    infrastructure_peers,
+                    auto_relay,
+                    metrics,
+                    peer.peer_id,
+                    peer.addrs.iter(),
+                );
+            }
         }
     }
 }
@@ -8753,12 +8871,16 @@ fn handle_relay_event(
     discovery: &DiscoveryConfig,
     local_capabilities: &ControlCapabilities,
     identity: &NodeIdentity,
+    public_discovery_quiet: bool,
     event: &relay::client::Event,
 ) {
     let accepted_relay = record_relay_client_event(metrics, event);
     if let Some(relay_peer_id) = accepted_relay {
         auto_relay.record_reservation_accepted(relay_peer_id);
         relay_readiness.record_reservation_accepted(relay_peer_id);
+        if public_discovery_quiet {
+            return;
+        }
         dial_relay_ready_configured_peers(
             swarm,
             relay_readiness,
@@ -10626,6 +10748,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: true,
                 auto_relay: &auto_relay,
+                public_discovery_quiet: false,
                 metrics: &metrics,
             },
         );
@@ -10640,6 +10763,68 @@ mod tests {
         );
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn kademlia_refresh_quiets_public_discovery_when_direct_paths_are_healthy() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            kademlia_provider_advertisement: true,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+        let keys = vec![key.clone()];
+        let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
+            .expect("forwarder");
+        let mut auto_relay = AutoRelayState::default();
+        auto_relay.record_reachability(AutoNatReachability::Private);
+
+        refresh_kademlia_rendezvous(
+            &mut node.swarm,
+            &KademliaRefreshContext {
+                advertise_key: &key,
+                lookup_keys: &keys,
+                membership_record_advertise_key: node.kademlia_membership_records_key.as_ref(),
+                membership_record_lookup_keys: &[],
+                network_name: &node.network_name,
+                membership_tag: node.membership_tag.as_deref(),
+                forwarder: &forwarder,
+                identity: &node.identity,
+                advertise_provider: true,
+                auto_relay: &auto_relay,
+                public_discovery_quiet: true,
+                metrics: &metrics,
+            },
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 0);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 0);
+        assert_eq!(snapshot.auto_relay_discovery_queries, 0);
+        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
+        assert_eq!(snapshot.kademlia_bootstrap_failures, 0);
     }
 
     #[tokio::test]
@@ -10694,6 +10879,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: false,
                 auto_relay: &auto_relay,
+                public_discovery_quiet: false,
                 metrics: &metrics,
             },
         );
@@ -10770,6 +10956,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: true,
                 auto_relay: &auto_relay,
+                public_discovery_quiet: false,
                 metrics: &metrics,
             },
         );
@@ -11021,6 +11208,7 @@ mod tests {
             &paths,
             &metrics,
             &DiscoveryConfig::default(),
+            false,
             &result,
         );
 
@@ -11083,6 +11271,7 @@ mod tests {
             &paths,
             &metrics,
             &DiscoveryConfig::default(),
+            false,
             &result,
         );
 
@@ -11918,6 +12107,91 @@ mod tests {
         );
 
         assert_eq!(targets, vec![disconnected, stale_connected]);
+    }
+
+    #[test]
+    fn public_discovery_quiet_mode_requires_all_configured_peers_to_have_direct_paths() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let direct_peer = peer_id();
+        let relay_peer = peer_id();
+        let direct_overlay = PeerId::from_libp2p(direct_peer);
+        let relay_overlay = PeerId::from_libp2p(relay_peer);
+        let mut config = config_with_peer(&local_identity, direct_peer);
+        config.peers.push(PeerConfig {
+            id: relay_peer.to_string(),
+            name: None,
+            ip: None,
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let peer_capabilities = PeerCapabilities::default();
+        let mut paths = PathSet::new();
+        paths.record_established(direct_overlay, PathKind::DirectTcpStream);
+        paths.record_established(relay_overlay, PathKind::CircuitRelay);
+
+        assert!(!public_discovery_quiet_mode(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            None,
+            None
+        ));
+
+        paths.record_established(relay_overlay, PathKind::DirectTcpStream);
+
+        assert!(public_discovery_quiet_mode(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn public_discovery_quiet_mode_stays_active_when_direct_stream_is_healthy() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let peer_capabilities = PeerCapabilities::default();
+        let mut paths = PathSet::new();
+
+        assert!(!public_discovery_quiet_mode(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            None,
+            None
+        ));
+
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+
+        assert!(public_discovery_quiet_mode(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn public_discovery_quiet_mode_rejects_empty_peer_sets() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = config_with_peer(&local_identity, peer_id());
+        config.peers.clear();
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(!public_discovery_quiet_mode(
+            &forwarder,
+            &PathSet::new(),
+            &PeerCapabilities::default(),
+            None,
+            None
+        ));
     }
 
     #[test]
@@ -13533,6 +13807,7 @@ mod tests {
             &mut node.swarm,
             &mut auto_relay,
             &metrics,
+            false,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Unknown,
                 new: autonat::NatStatus::Public(public_address.clone()),
@@ -13548,6 +13823,7 @@ mod tests {
             &mut node.swarm,
             &mut auto_relay,
             &metrics,
+            false,
             autonat::Event::StatusChanged {
                 old: autonat::NatStatus::Public(
                     "/ip4/203.0.113.10/tcp/4001".parse().expect("address"),
