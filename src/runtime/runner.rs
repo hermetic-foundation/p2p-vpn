@@ -5923,12 +5923,14 @@ fn handle_packet_request(
             request,
             context.inbound_packet_rate_limiters.limit_per_second(),
         );
-        return Forwarder::send_packet_response(
+        send_packet_response_nonfatal(
             swarm,
+            context.metrics,
+            peer,
             channel,
             PacketResponse::Rejected(PacketRejectionReason::RateLimited),
-        )
-        .map_err(|_| RunnerError::PacketResponseDropped);
+        );
+        return Ok(());
     }
 
     let result = match request.header.payload_type {
@@ -5955,19 +5957,69 @@ fn handle_packet_request(
     };
 
     match result {
-        Ok(()) => Forwarder::send_packet_response(swarm, channel, PacketResponse::Accepted)
-            .map_err(|_| RunnerError::PacketResponseDropped),
+        Ok(()) => {
+            send_packet_response_nonfatal(
+                swarm,
+                context.metrics,
+                peer,
+                channel,
+                PacketResponse::Accepted,
+            );
+            Ok(())
+        }
         Err(error) => {
             let drop_reason = inbound_drop_reason(&error);
             context.metrics.record_inbound_drop(drop_reason);
             audit_packet_request_rejection(peer, request, &error);
-            Forwarder::send_packet_response(
+            send_packet_response_nonfatal(
                 swarm,
+                context.metrics,
+                peer,
                 channel,
                 PacketResponse::Rejected(packet_rejection_reason(drop_reason)),
-            )
-            .map_err(|_| RunnerError::PacketResponseDropped)
+            );
+            Ok(())
         }
+    }
+}
+
+fn send_packet_response_nonfatal(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    channel: request_response::ResponseChannel<PacketResponse>,
+    response: PacketResponse,
+) {
+    if let Err(response) = Forwarder::send_packet_response(swarm, channel, response) {
+        metrics.record_inbound_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_response_dropped",
+            &[
+                ("peer", &peer.to_string()),
+                ("response", packet_response_name(&response)),
+            ],
+        );
+    }
+}
+
+fn packet_response_name(response: &PacketResponse) -> &'static str {
+    match response {
+        PacketResponse::Accepted => "accepted",
+        PacketResponse::Rejected(reason) => packet_rejection_reason_name(*reason),
+    }
+}
+
+fn packet_rejection_reason_name(reason: PacketRejectionReason) -> &'static str {
+    match reason {
+        PacketRejectionReason::MalformedPacket => "malformed_packet",
+        PacketRejectionReason::PacketTooLarge => "packet_too_large",
+        PacketRejectionReason::Replay => "replay",
+        PacketRejectionReason::UnauthorizedPeer => "unauthorized_peer",
+        PacketRejectionReason::UnauthorizedSource => "unauthorized_source",
+        PacketRejectionReason::UnauthorizedDestination => "unauthorized_destination",
+        PacketRejectionReason::UnexpectedPayload => "unexpected_payload",
+        PacketRejectionReason::RateLimited => "rate_limited",
     }
 }
 
