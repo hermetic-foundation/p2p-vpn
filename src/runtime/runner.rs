@@ -6212,13 +6212,15 @@ async fn handle_packet_plane_received(
         context.metrics.record_inbound_drop(drop_reason);
         audit_packet_request_rejection(transport_peer, &received.frame, &error);
     } else {
-        refresh_packet_plane_path(
-            context.paths,
-            context.metrics,
-            overlay_peer,
-            context.backend,
-            received.frame.header.payload_type,
-        );
+        if packet_plane_payload_refreshes_path(received.frame.header.payload_type) {
+            refresh_packet_plane_path(
+                context.paths,
+                context.metrics,
+                overlay_peer,
+                context.backend,
+                received.frame.header.payload_type,
+            );
+        }
         if received.frame.header.payload_type == PayloadType::PathProbe {
             handle_packet_plane_path_probe(
                 context.forwarder,
@@ -6236,6 +6238,10 @@ async fn handle_packet_plane_received(
         }
     }
     Ok(())
+}
+
+const fn packet_plane_payload_refreshes_path(payload_type: PayloadType) -> bool {
+    !matches!(payload_type, PayloadType::PathProbe)
 }
 
 fn refresh_packet_plane_path(
@@ -7844,7 +7850,7 @@ fn record_packet_plane_path_established(
     backend: PacketDatagramBackend,
     mtu: u16,
 ) {
-    let change = paths.record_established_with_mtu(
+    let change = paths.record_unconfirmed_with_mtu(
         peer,
         packet_datagram_backend_path_kind(backend),
         Some(mtu),
@@ -17640,10 +17646,7 @@ mod tests {
         assert_eq!(snapshot.outbound_dropped_packets, 0);
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
-        assert_eq!(
-            paths.best_for(remote_overlay).expect("selected path").kind,
-            PathKind::DirectUdpDatagram
-        );
+        assert_eq!(paths.best_for(remote_overlay), None);
         assert_eq!(inbound.peer, Some(local_overlay));
         assert_eq!(inbound.frame.payload, packet);
     }
@@ -18247,6 +18250,13 @@ mod tests {
         assert_eq!(snapshot.path_promotions_to_direct, 1);
     }
 
+    #[test]
+    fn packet_plane_path_probe_request_does_not_refresh_demoted_datagram_path() {
+        assert!(!packet_plane_payload_refreshes_path(PayloadType::PathProbe));
+        assert!(packet_plane_payload_refreshes_path(PayloadType::IpPacket));
+        assert!(packet_plane_payload_refreshes_path(PayloadType::Keepalive));
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn packet_plane_control_negotiation_establishes_sessions() {
@@ -18397,12 +18407,28 @@ mod tests {
                 .best_for(responder_overlay)
                 .expect("initiator path")
                 .kind,
-            PathKind::DirectUdpDatagram
+            PathKind::DirectTcpStream
         );
         assert_eq!(
             responder_paths
                 .best_for(initiator_overlay)
                 .expect("responder path")
+                .kind,
+            PathKind::DirectTcpStream
+        );
+        initiator_paths.record_rtt(responder_overlay, PathKind::DirectUdpDatagram, 40);
+        responder_paths.record_rtt(initiator_overlay, PathKind::DirectUdpDatagram, 40);
+        assert_eq!(
+            initiator_paths
+                .best_for(responder_overlay)
+                .expect("initiator confirmed path")
+                .kind,
+            PathKind::DirectUdpDatagram
+        );
+        assert_eq!(
+            responder_paths
+                .best_for(initiator_overlay)
+                .expect("responder confirmed path")
                 .kind,
             PathKind::DirectUdpDatagram
         );
@@ -18642,6 +18668,13 @@ mod tests {
 
         assert!(initiator_quic.has_session(responder_overlay));
         assert!(responder_quic.has_session(initiator_overlay));
+        assert_eq!(
+            initiator_paths
+                .best_for(responder_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::DirectTcpStream)
+        );
+        initiator_paths.record_rtt(responder_overlay, PathKind::DirectQuicDatagram, 40);
         assert_eq!(
             initiator_paths
                 .best_for(responder_overlay)

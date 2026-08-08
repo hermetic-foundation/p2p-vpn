@@ -243,6 +243,33 @@ impl PathSet {
         self.selection_change(peer, previous)
     }
 
+    pub fn record_unconfirmed_with_mtu(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        estimated_mtu: Option<u16>,
+    ) -> Option<PathSelectionChange> {
+        let previous = self.best_for(peer);
+        if let Some(candidate) = self
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+        {
+            candidate.healthy = false;
+            if let Some(estimated_mtu) = estimated_mtu {
+                candidate.estimated_mtu = Some(estimated_mtu);
+            }
+            candidate.established_connections = 1;
+        } else {
+            let mut candidate = PathCandidate::new(peer, kind);
+            candidate.healthy = false;
+            candidate.estimated_mtu = estimated_mtu;
+            candidate.established_connections = 1;
+            self.candidates.push(candidate);
+        }
+        self.selection_change(peer, previous)
+    }
+
     pub fn record_closed(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         if let Some(candidate) = self
@@ -296,9 +323,11 @@ impl PathSet {
         rtt_ms: u16,
     ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
-        let candidate = self.candidates.iter_mut().find(|candidate| {
-            candidate.peer == peer && candidate.kind == kind && candidate.healthy
-        })?;
+        let candidate = self
+            .candidates
+            .iter_mut()
+            .find(|candidate| candidate.peer == peer && candidate.kind == kind)?;
+        candidate.healthy = true;
         candidate.observed_rtt_ms = Some(rtt_ms);
         candidate.failure_penalty = candidate
             .failure_penalty
@@ -707,6 +736,58 @@ mod tests {
         assert_eq!(
             change.current.map(|path| path.kind),
             Some(PathKind::DirectQuicStream)
+        );
+    }
+
+    #[test]
+    fn rtt_confirmation_restores_unhealthy_path() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.record_established(peer(1), PathKind::DirectUdpDatagram);
+        paths.mark_unhealthy(peer(1), PathKind::DirectUdpDatagram);
+
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+
+        let change = paths
+            .record_rtt(peer(1), PathKind::DirectUdpDatagram, 40)
+            .expect("confirmed rtt should restore direct path");
+
+        assert!(change.promoted_to_direct());
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectUdpDatagram)
+        );
+    }
+
+    #[test]
+    fn unconfirmed_datagram_path_waits_for_rtt_before_selection() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+
+        assert_eq!(
+            paths.record_unconfirmed_with_mtu(peer(1), PathKind::DirectUdpDatagram, Some(1200)),
+            None
+        );
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::CircuitRelay)
+        );
+
+        let change = paths
+            .record_rtt(peer(1), PathKind::DirectUdpDatagram, 40)
+            .expect("confirmed rtt should promote direct datagram");
+
+        assert!(change.promoted_to_direct());
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.kind),
+            Some(PathKind::DirectUdpDatagram)
+        );
+        assert_eq!(
+            paths.path_mtu(peer(1), PathKind::DirectUdpDatagram),
+            Some(1200)
         );
     }
 
