@@ -2356,9 +2356,7 @@ fn configured_peer_recovery_discovery_targets(
         .filter(|peer| {
             matches!(
                 connection_state(peer),
-                RedialConnectionState::Disconnected
-                    | RedialConnectionState::ConnectedNoUsablePath
-                    | RedialConnectionState::RelayOnly
+                RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath
             )
         })
         .collect()
@@ -5355,7 +5353,7 @@ fn public_discovery_quiet_mode(
     let peers = forwarder.configured_overlay_peers().collect::<Vec<_>>();
     !peers.is_empty()
         && peers.into_iter().all(|peer| {
-            peer_has_healthy_direct_supported_path(
+            peer_has_healthy_supported_path(
                 paths,
                 peer_capabilities,
                 packet_plane,
@@ -5365,7 +5363,7 @@ fn public_discovery_quiet_mode(
         })
 }
 
-fn peer_has_healthy_direct_supported_path(
+fn peer_has_healthy_supported_path(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
@@ -5377,7 +5375,7 @@ fn peer_has_healthy_direct_supported_path(
     let support = packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
     paths
         .candidates_for(peer)
-        .any(|path| path.healthy && path.is_direct() && support.supports(path.kind))
+        .any(|path| path.healthy && support.supports(path.kind))
 }
 
 struct SwarmEventContext<'a> {
@@ -12716,7 +12714,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_discovery_targets_configured_peers_without_usable_paths() {
+    fn recovery_discovery_targets_configured_peers_without_paths() {
         let local = peer_id();
         let disconnected = peer_id();
         let stale_connected = peer_id();
@@ -12745,11 +12743,11 @@ mod tests {
             },
         );
 
-        assert_eq!(targets, vec![disconnected, stale_connected, relay_only]);
+        assert_eq!(targets, vec![disconnected, stale_connected]);
     }
 
     #[test]
-    fn public_discovery_quiet_mode_requires_all_configured_peers_to_have_direct_paths() {
+    fn public_discovery_quiet_mode_requires_all_configured_peers_to_have_supported_paths() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let direct_peer = peer_id();
         let relay_peer = peer_id();
@@ -12767,7 +12765,6 @@ mod tests {
         let peer_capabilities = PeerCapabilities::default();
         let mut paths = PathSet::new();
         paths.record_established(direct_overlay, PathKind::DirectTcpStream);
-        paths.record_established(relay_overlay, PathKind::CircuitRelay);
 
         assert!(!public_discovery_quiet_mode(
             &forwarder,
@@ -12777,7 +12774,7 @@ mod tests {
             None
         ));
 
-        paths.record_established(relay_overlay, PathKind::DirectTcpStream);
+        paths.record_established(relay_overlay, PathKind::CircuitRelay);
 
         assert!(public_discovery_quiet_mode(
             &forwarder,
