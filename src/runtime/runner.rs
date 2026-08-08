@@ -832,7 +832,7 @@ where
                 send_path_probes(
                     &mut node.swarm,
                     &mut forwarder,
-                    &paths,
+                    &mut paths,
                     &peer_capabilities,
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
@@ -938,7 +938,7 @@ impl RuntimeTimers {
 async fn send_path_probes(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &mut Forwarder,
-    paths: &PathSet,
+    paths: &mut PathSet,
     peer_capabilities: &PeerCapabilities,
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
@@ -1009,6 +1009,13 @@ async fn send_path_probes(
                         }
                         Err(error) => {
                             metrics.record_outbound_path_probe_failure();
+                            maybe_demote_packet_plane_send_path(
+                                paths,
+                                metrics,
+                                peer,
+                                packet_datagram_backend_path_kind(backend),
+                                &error,
+                            );
                             eprintln!("packet-plane path probe to {peer} failed: {error:?}");
                         }
                     },
@@ -4597,6 +4604,25 @@ async fn send_dequeued_packet_plane_datagram(
                 context.metrics.record_outbound_quic_datagram();
             }
             Err(error) => {
+                let demoted = maybe_demote_packet_plane_send_path(
+                    context.paths,
+                    context.metrics,
+                    packet.peer(),
+                    path,
+                    &error,
+                );
+                if demoted && let Some(peer) = forwarder.transport_peer_for_overlay(packet.peer()) {
+                    let discovered_addresses = context
+                        .discovered_peer_addresses
+                        .redial_candidates_at(Instant::now());
+                    redial_packet_plane_recovery_addresses(
+                        swarm,
+                        peer,
+                        context.configured_peer_addresses,
+                        &discovered_addresses,
+                        context.metrics,
+                    );
+                }
                 if send_dequeued_packet_plane_fallback(
                     swarm,
                     forwarder,
@@ -4612,25 +4638,6 @@ async fn send_dequeued_packet_plane_datagram(
                 .await
                 {
                     return;
-                }
-                if maybe_demote_packet_plane_send_path(
-                    context.paths,
-                    context.metrics,
-                    packet.peer(),
-                    path,
-                    &error,
-                ) && let Some(peer) = forwarder.transport_peer_for_overlay(packet.peer())
-                {
-                    let discovered_addresses = context
-                        .discovered_peer_addresses
-                        .redial_candidates_at(Instant::now());
-                    redial_packet_plane_recovery_addresses(
-                        swarm,
-                        peer,
-                        context.configured_peer_addresses,
-                        &discovered_addresses,
-                        context.metrics,
-                    );
                 }
                 context
                     .metrics
@@ -11584,7 +11591,7 @@ mod tests {
         let mut infrastructure_peers = InfrastructurePeers::default();
         let mut auto_relay = AutoRelayState::default();
         let mut discovered = DiscoveredPeerAddresses::default();
-        let paths = PathSet::new();
+        let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
         let unconfigured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
@@ -11608,7 +11615,7 @@ mod tests {
             &mut infrastructure_peers,
             &mut auto_relay,
             &mut discovered,
-            &paths,
+            &mut paths,
             &metrics,
             &DiscoveryConfig::default(),
             false,
@@ -11651,7 +11658,7 @@ mod tests {
         let mut infrastructure_peers = InfrastructurePeers::default();
         let mut auto_relay = AutoRelayState::default();
         let mut discovered = DiscoveredPeerAddresses::default();
-        let paths = PathSet::new();
+        let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let relayed_address: Multiaddr =
             format!("/ip4/8.8.8.8/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{configured}")
@@ -11671,7 +11678,7 @@ mod tests {
             &mut infrastructure_peers,
             &mut auto_relay,
             &mut discovered,
-            &paths,
+            &mut paths,
             &metrics,
             &DiscoveryConfig::default(),
             false,
@@ -11805,7 +11812,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
-        let paths = PathSet::new();
+        let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let relayed_address: Multiaddr =
             format!("/ip4/8.8.8.8/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{configured}")
@@ -11816,7 +11823,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
-            &paths,
+            &mut paths,
             &metrics,
             configured,
             relayed_address.clone(),
@@ -11857,7 +11864,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
-        let paths = PathSet::new();
+        let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let relayed_address: Multiaddr = format!(
             "/ip4/127.0.0.1/udp/4001/quic-v1/webtransport/p2p/{relay}/p2p-circuit/p2p/{configured}"
@@ -11869,7 +11876,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
-            &paths,
+            &mut paths,
             &metrics,
             configured,
             relayed_address,
@@ -11910,7 +11917,7 @@ mod tests {
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut discovered = DiscoveredPeerAddresses::default();
-        let paths = PathSet::new();
+        let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let relayed_address: Multiaddr =
             format!("/ip4/192.168.0.203/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{configured}")
@@ -11921,7 +11928,7 @@ mod tests {
             &mut node.swarm,
             &forwarder,
             &mut discovered,
-            &paths,
+            &mut paths,
             &metrics,
             configured,
             relayed_address,
@@ -12535,7 +12542,7 @@ mod tests {
 
         assert!(!public_discovery_quiet_mode(
             &forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None
@@ -12545,7 +12552,7 @@ mod tests {
 
         assert!(public_discovery_quiet_mode(
             &forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None
@@ -12564,7 +12571,7 @@ mod tests {
 
         assert!(!public_discovery_quiet_mode(
             &forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None
@@ -12574,7 +12581,7 @@ mod tests {
 
         assert!(public_discovery_quiet_mode(
             &forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None
@@ -12606,28 +12613,28 @@ mod tests {
 
         paths.record_established(overlay, PathKind::CircuitRelay);
         assert!(!peer_lacks_supported_packet_path(
-            &paths,
+            &mut paths,
             &peer_capabilities,
             peer
         ));
 
         paths.record_closed(overlay, PathKind::CircuitRelay);
         assert!(peer_lacks_supported_packet_path(
-            &paths,
+            &mut paths,
             &peer_capabilities,
             peer
         ));
 
         paths.record_established(overlay, PathKind::DirectTcpStream);
         assert!(!peer_lacks_supported_packet_path(
-            &paths,
+            &mut paths,
             &peer_capabilities,
             peer
         ));
 
         paths.mark_unhealthy(overlay, PathKind::DirectTcpStream);
         assert!(peer_lacks_supported_packet_path(
-            &paths,
+            &mut paths,
             &peer_capabilities,
             peer
         ));
@@ -17578,7 +17585,7 @@ mod tests {
         send_path_probes(
             &mut node.swarm,
             &mut forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             Some(&sender_packet_plane),
             None,
@@ -17704,7 +17711,7 @@ mod tests {
         send_path_probes(
             &mut node.swarm,
             &mut sender_forwarder,
-            &sender_paths,
+            &mut sender_paths,
             &sender_capabilities,
             Some(&sender_packet_plane),
             None,
@@ -17892,6 +17899,36 @@ mod tests {
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.outbound_path_probe_failures, 1);
+        assert_eq!(snapshot.packet_plane_path_demotions, 1);
+        assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
+    fn packet_plane_send_io_error_demotes_direct_datagram_to_relay() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
+        let metrics = RuntimeMetrics::default();
+        let error =
+            PacketPlaneSendError::Udp(PacketPlaneIoError::Io(std::io::Error::from_raw_os_error(1)));
+
+        assert!(maybe_demote_packet_plane_send_path(
+            &mut paths,
+            &metrics,
+            remote_overlay,
+            PathKind::DirectUdpDatagram,
+            &error,
+        ));
+
+        assert_eq!(
+            paths
+                .best_for(remote_overlay)
+                .map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
     }
@@ -18830,19 +18867,19 @@ mod tests {
         let mut paths = PathSet::new();
         paths.record_established(remote_overlay, PathKind::CircuitRelay);
         assert!(!has_direct_packet_plane_negotiation_path(
-            &paths,
+            &mut paths,
             remote_overlay
         ));
 
         paths.record_established(remote_overlay, PathKind::DirectQuicDatagram);
         assert!(!has_direct_packet_plane_negotiation_path(
-            &paths,
+            &mut paths,
             remote_overlay
         ));
 
         paths.record_established(remote_overlay, PathKind::DirectTcpStream);
         assert!(has_direct_packet_plane_negotiation_path(
-            &paths,
+            &mut paths,
             remote_overlay
         ));
     }
@@ -19057,7 +19094,7 @@ mod tests {
         send_path_probes(
             &mut node.swarm,
             &mut forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None,
@@ -19082,7 +19119,7 @@ mod tests {
         send_path_probes(
             &mut node.swarm,
             &mut forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None,
@@ -19134,7 +19171,7 @@ mod tests {
         send_path_probes(
             &mut node.swarm,
             &mut forwarder,
-            &paths,
+            &mut paths,
             &peer_capabilities,
             None,
             None,
