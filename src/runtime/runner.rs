@@ -717,7 +717,8 @@ where
                     &forwarder,
                     &mut queue_runtime.discovered_peer_addresses,
                     &paths,
-                    &relay_readiness,
+                    &mut relay_readiness,
+                    &auto_relay,
                     &mut configured_relay_reservation_retries,
                     &metrics,
                 );
@@ -2191,7 +2192,8 @@ fn handle_redial_tick(
     forwarder: &Forwarder,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
-    relay_readiness: &RelayReadiness,
+    relay_readiness: &mut RelayReadiness,
+    auto_relay: &AutoRelayState,
     configured_relay_reservation_retries: &mut ConfiguredRelayReservationRetries,
     metrics: &RuntimeMetrics,
 ) {
@@ -2222,6 +2224,18 @@ fn handle_redial_tick(
         metrics,
         |relay| relay_readiness.relay_ready(relay),
     );
+    for relay in relay_readiness.ready_relays() {
+        dial_relay_ready_configured_peers(
+            &mut node.swarm,
+            forwarder,
+            relay_readiness,
+            auto_relay,
+            &node.configured_peer_addresses,
+            discovered_peer_addresses,
+            metrics,
+            relay,
+        );
+    }
 }
 
 fn query_configured_peer_recovery_discovery(
@@ -3640,9 +3654,21 @@ impl RelayReadiness {
         }
     }
 
+    fn record_peer_connection_lost(&mut self, peer: Libp2pPeerId) {
+        self.attempted_ready_dials
+            .retain(|(_, attempted_peer, _)| *attempted_peer != peer);
+    }
+
     fn relay_ready(&self, relay: Libp2pPeerId) -> bool {
         self.accepted_reservations.contains(&relay)
             && self.relayed_listen_addresses.contains(&relay)
+    }
+
+    fn ready_relays(&self) -> Vec<Libp2pPeerId> {
+        self.accepted_reservations
+            .intersection(&self.relayed_listen_addresses)
+            .copied()
+            .collect()
     }
 
     fn should_attempt_ready_dial(
@@ -5432,6 +5458,9 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            if context.forwarder.is_configured_transport_peer(peer_id) {
+                context.relay_readiness.record_peer_connection_lost(peer_id);
+            }
             record_path_closed(
                 context.paths,
                 context.forwarder,
@@ -5478,6 +5507,11 @@ async fn handle_swarm_event(
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             let peer_connected = peer_id.is_some_and(|peer_id| swarm.is_connected(&peer_id));
+            if let Some(peer_id) = peer_id
+                && context.forwarder.is_configured_transport_peer(peer_id)
+            {
+                context.relay_readiness.record_peer_connection_lost(peer_id);
+            }
             record_discovered_outgoing_connection_failure(
                 context.discovered_peer_addresses,
                 context.metrics,
@@ -12525,6 +12559,29 @@ mod tests {
         assert!(readiness.relay_ready(relay));
         assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
         assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+    }
+
+    #[test]
+    fn relay_readiness_retries_ready_dials_after_peer_connection_loss() {
+        let relay = peer_id();
+        let peer = peer_id();
+        let address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+        let mut readiness = RelayReadiness::default();
+
+        readiness.record_reservation_accepted(relay);
+        readiness.record_relay_listen_address(relay);
+
+        assert_eq!(readiness.ready_relays().len(), 1);
+        assert!(readiness.ready_relays().contains(&relay));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+
+        readiness.record_peer_connection_lost(peer);
+
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
     }
 
     #[test]
