@@ -90,6 +90,7 @@ const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 30 * 60;
 const KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE: u64 = 60 * 60;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
+const STREAM_FALLBACK_ORDERED_FLOW_WINDOW: usize = 16;
 
 const LOCAL_PACKET_DATA_PLANE: LocalPacketDataPlane =
     LocalPacketDataPlane::identity_keyed_streams();
@@ -4392,13 +4393,20 @@ fn packet_in_flight_allows(
     packet: &crate::queue::Packet,
     decision: PacketTransportDecision,
 ) -> bool {
-    if matches!(decision, PacketTransportDecision::StreamFallback { .. })
-        && !packet.requires_ordered_delivery()
-    {
-        return packet_in_flight.can_send(packet.peer());
+    if matches!(decision, PacketTransportDecision::StreamFallback { .. }) {
+        return packet_in_flight
+            .can_send_packet_with_shard_window(packet, stream_fallback_shard_window(packet));
     }
 
     packet_in_flight.can_send_packet(packet)
+}
+
+fn stream_fallback_shard_window(packet: &crate::queue::Packet) -> usize {
+    if packet.requires_ordered_delivery() {
+        STREAM_FALLBACK_ORDERED_FLOW_WINDOW
+    } else {
+        usize::MAX
+    }
 }
 
 async fn send_dequeued_packet_plane_datagram(
@@ -4744,11 +4752,18 @@ impl PacketInFlight {
     }
 
     fn can_send_packet(&self, packet: &crate::queue::Packet) -> bool {
+        self.can_send_packet_with_shard_window(packet, 1)
+    }
+
+    fn can_send_packet_with_shard_window(
+        &self,
+        packet: &crate::queue::Packet,
+        shard_window: usize,
+    ) -> bool {
         self.can_send(packet.peer())
-            && self
-                .peers
-                .get(&packet.peer())
-                .is_none_or(|state| state.in_flight_for_shard(packet.flow_shard()) == 0)
+            && self.peers.get(&packet.peer()).is_none_or(|state| {
+                state.in_flight_for_shard(packet.flow_shard()) < shard_window.max(1)
+            })
     }
 
     fn record(
@@ -15905,7 +15920,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn drain_outbound_queue_gates_stream_fallback_by_flow_shard() {
+    async fn drain_outbound_queue_allows_stream_fallback_ordered_flow_window() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -16009,19 +16024,93 @@ mod tests {
         drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
 
         let snapshot = metrics.snapshot(queues.total_stats());
-        assert_eq!(snapshot.outbound_sent_packets, 2);
-        assert_eq!(snapshot.outbound_stream_fallback_packets, 2);
-        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
-        assert_eq!(snapshot.queue.queued_packets, 1);
-        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 2);
+        assert_eq!(snapshot.outbound_sent_packets, 3);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 3);
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 3);
         assert_eq!(
             packet_in_flight.stats(),
             PacketInFlightStats {
-                packets: 2,
+                packets: 3,
                 peers: 1,
                 shards: 2,
                 limit_per_peer: 256
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_caps_stream_fallback_ordered_flow_window() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(32, 8192);
+        for sequence in 0..=STREAM_FALLBACK_ORDERED_FLOW_WINDOW {
+            forwarder
+                .enqueue_tun_packet(
+                    &mut queues,
+                    ipv4_tcp_packet(
+                        builtin_ipv4(local_overlay),
+                        builtin_ipv4(remote_overlay),
+                        10_000,
+                        443,
+                    ),
+                )
+                .unwrap_or_else(|error| panic!("queued packet {sequence}: {error:?}"));
+        }
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(
+            snapshot.outbound_sent_packets as usize,
+            STREAM_FALLBACK_ORDERED_FLOW_WINDOW
+        );
+        assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
+        assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(
+            packet_in_flight.in_flight_for(remote_overlay),
+            STREAM_FALLBACK_ORDERED_FLOW_WINDOW
         );
     }
 
