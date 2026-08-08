@@ -1839,18 +1839,21 @@ EOF
                 };
                 services.p2p-vpn.instances.node-c = {
                   enable = true;
-                  settings = {
-                    network = {
-                      name = "nixos-module";
-                      local_peer = "0000000000000000000000000000000000000000000000000000000000000000";
-                    };
-                    peers = [
-                      {
-                        id = "1111111111111111111111111111111111111111111111111111111111111111";
-                        ip = "192.168.0.203";
-                      }
-                    ];
+                  networkName = "nixos-module";
+                  localPeer = "0000000000000000000000000000000000000000000000000000000000000000";
+                  privateKey = "BASE64_PRIVATE_KEY";
+                  routes = [ "10.44.0.1/32" ];
+                  peers."1111111111111111111111111111111111111111111111111111111111111111" = {
+                    ip = "192.168.0.203";
+                    routes = [ "10.44.0.2/32" ];
                   };
+                };
+                services.p2p-vpn.instances.node-d = {
+                  enable = true;
+                  networkName = "nixos-module";
+                  localPeer = "2222222222222222222222222222222222222222222222222222222222222222";
+                  privateKeyFile = "/run/secrets/p2p-vpn/node-d.key";
+                  peers."3333333333333333333333333333333333333333333333333333333333333333" = { };
                 };
               }
             )
@@ -2203,6 +2206,11 @@ EOF
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
             execStartSettings = moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStart;
+            execStartSecret = moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStart;
+            execStartPreSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre;
+            execStartPreSecretScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre
+            );
             execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
             execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
             generatedSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-c.json".source;
@@ -2245,8 +2253,20 @@ EOF
               *"p2p-vpn up --config /etc/p2p-vpn/node-c.json --control-socket /run/p2p-vpn-node-c/control.sock"*) ;;
               *) echo "unexpected settings ExecStart: $execStartSettings" >&2; exit 1 ;;
             esac
+            case "$execStartSecret" in
+              *"p2p-vpn up --config /run/p2p-vpn-node-d/config.json --control-socket /run/p2p-vpn-node-d/control.sock"*) ;;
+              *) echo "unexpected secret ExecStart: $execStartSecret" >&2; exit 1 ;;
+            esac
+            case "$execStartPreSecret" in
+              *"p2p-vpn-node-d-write-config"*) ;;
+              *) echo "unexpected secret ExecStartPre: $execStartPreSecret" >&2; exit 1 ;;
+            esac
+            case "$execStartPreSecretScript" in
+              *"--rawfile private_key /run/secrets/p2p-vpn/node-d.key"*"/run/p2p-vpn-node-d/config.json"*) ;;
+              *) echo "unexpected secret ExecStartPre script: $execStartPreSecretScript" >&2; exit 1 ;;
+            esac
             case "$generatedSettings" in
-              *'"name":"nixos-module"'*'"ip":"192.168.0.203"'*) ;;
+              *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"routes":[{"prefix":"10.44.0.1/32"}]'*'"ip":"192.168.0.203"'*'"routes":[{"prefix":"10.44.0.2/32"}]'*) ;;
               *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
             esac
             case "$execStop" in

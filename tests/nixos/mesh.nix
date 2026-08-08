@@ -15,23 +15,6 @@ let
     vpnIp = "10.44.0.2";
   };
 
-  settingsFor =
-    local: remote:
-    {
-      network = {
-        name = "nixos-vm-mesh";
-        local_peer = local.peerId;
-        private_key = local.privateKey;
-        routes = [ { prefix = "${local.vpnIp}/32"; } ];
-      };
-      peers = [
-        {
-          id = remote.peerId;
-          routes = [ { prefix = "${remote.vpnIp}/32"; } ];
-        }
-      ];
-    };
-
   nodeModule =
     name: local: remote:
     { ... }:
@@ -49,7 +32,11 @@ let
 
       services.p2p-vpn.instances.${name} = {
         enable = true;
-        settings = settingsFor local remote;
+        networkName = "nixos-vm-mesh";
+        localPeer = local.peerId;
+        privateKey = local.privateKey;
+        routes = [ "${local.vpnIp}/32" ];
+        peers.${remote.peerId}.routes = [ "${remote.vpnIp}/32" ];
         metricsIntervalSeconds = 1;
         controlSocket = "/run/p2p-vpn-${name}/control.sock";
       };

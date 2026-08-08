@@ -19,7 +19,84 @@ Use the flake module to run one or more `p2p-vpn` daemons as systemd services.
 
 ## Minimal Service
 
-Use `settings` for throwaway test configs:
+Use typed module options for ordinary NixOS hosts:
+
+```nix
+{
+  services.p2p-vpn.instances.lab = {
+    enable = true;
+
+    networkName = "lab";
+    localPeer = "LOCAL_PEER_ID";
+    privateKeyFile = "/run/secrets/p2p-vpn/lab.key";
+
+    routes = [ "10.44.0.1/32" ];
+    peers."REMOTE_PEER_ID".routes = [ "10.44.0.2/32" ];
+  };
+}
+```
+
+That is enough for the default profile:
+
+| Item | Default |
+| --- | --- |
+| Interface | `pv0` |
+| MTU | `1280` |
+| LAN discovery | mDNS |
+| Public discovery | IPFS-compatible Kademlia |
+| Hole punching | DCUtR and AutoNAT |
+| Relay fallback | automatic public relay candidates |
+| Packet plane | UDP listener on `0.0.0.0:0` |
+
+Add a direct LAN IP only as an override:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.peers."REMOTE_PEER_ID" = {
+    ip = "192.168.0.203";
+    routes = [ "10.44.0.2/32" ];
+  };
+}
+```
+
+Use explicit `addresses` only for custom ports, DNS, or relayed paths.
+
+## Private Keys
+
+Prefer `privateKeyFile`:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.privateKeyFile =
+    "/run/secrets/p2p-vpn/lab.key";
+}
+```
+
+The file must contain the base64 identity key.
+
+The generated runtime JSON is written to:
+
+```text
+/run/p2p-vpn-<instance>/config.json
+```
+
+Use `privateKey` only for throwaway test hosts:
+
+```nix
+{
+  services.p2p-vpn.instances.lab = {
+    localPeer = "LOCAL_PEER_ID";
+    privateKey = "BASE64_PRIVATE_KEY";
+    peers."REMOTE_PEER_ID" = { };
+  };
+}
+```
+
+`privateKey` is copied into the Nix store.
+
+## Raw Settings
+
+Use `settings` only when you need full JSON control:
 
 ```nix
 {
@@ -30,27 +107,22 @@ Use `settings` for throwaway test configs:
         name = "lab";
         local_peer = "LOCAL_PEER_ID";
         private_key = "BASE64_PRIVATE_KEY";
-        routes = [ { prefix = "10.44.0.1/32"; } ];
       };
       peers = [
-        {
-          id = "REMOTE_PEER_ID";
-          ip = "192.168.0.203";
-          routes = [ { prefix = "10.44.0.2/32"; } ];
-        }
+        { id = "REMOTE_PEER_ID"; }
       ];
     };
   };
 }
 ```
 
-The example above stores `private_key` in the Nix store.
+`settings` values are copied into the Nix store.
 
-Do not put private keys or membership keys in `settings` on real machines.
+Do not put private keys or membership keys in `settings` on real hosts.
 
 ## Secret Config
 
-Use `configFile` for real deployments:
+Use `configFile` when another tool writes the complete JSON:
 
 ```nix
 {
@@ -60,6 +132,8 @@ Use `configFile` for real deployments:
   };
 }
 ```
+
+Do not combine `configFile` with generated config options.
 
 ## Firewall
 

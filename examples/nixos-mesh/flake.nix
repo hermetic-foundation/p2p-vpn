@@ -32,13 +32,13 @@
               networking.hostName = "node-a";
               services.p2p-vpn.instances.node-a = {
                 enable = true;
-                configFile = "/etc/p2p-vpn/node-a.json";
+                networkName = "lab";
+                localPeer = "NODE_A_PEER_ID";
+                privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
+                routes = [ "10.44.0.1/32" ];
+                peers."NODE_B_PEER_ID".routes = [ "10.44.0.2/32" ];
                 metricsIntervalSeconds = 10;
                 openFirewall = true;
-                tcpPorts = [ 4001 ];
-                udpPorts = [ 4001 ];
-                packetPlaneUdpPorts = [ 51820 ];
-                packetPlaneQuicPorts = [ 51821 ];
               };
             }
           )
@@ -55,13 +55,13 @@
               networking.hostName = "node-b";
               services.p2p-vpn.instances.node-b = {
                 enable = true;
-                configFile = "/etc/p2p-vpn/node-b.json";
+                networkName = "lab";
+                localPeer = "NODE_B_PEER_ID";
+                privateKeyFile = "/run/secrets/p2p-vpn/node-b.key";
+                routes = [ "10.44.0.2/32" ];
+                peers."NODE_A_PEER_ID".routes = [ "10.44.0.1/32" ];
                 metricsIntervalSeconds = 10;
                 openFirewall = true;
-                tcpPorts = [ 4001 ];
-                udpPorts = [ 4001 ];
-                packetPlaneUdpPorts = [ 51820 ];
-                packetPlaneQuicPorts = [ 51821 ];
               };
             }
           )
