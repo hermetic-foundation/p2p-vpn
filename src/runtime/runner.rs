@@ -941,9 +941,29 @@ async fn send_path_probes(
         }
         let datagram_backend =
             local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+        let datagram_probe_sent = datagram_backend
+            .is_some_and(|backend| has_established_packet_plane_candidate(paths, peer, backend));
+        let datagram_probe_sent = if datagram_probe_sent {
+            send_packet_plane_path_probe(
+                forwarder,
+                paths,
+                peer_capabilities,
+                packet_plane,
+                packet_plane_quic,
+                path_probe_tracker,
+                metrics,
+                datagram_backend.expect("checked datagram backend"),
+                peer,
+                local_mtu,
+            )
+            .await;
+            true
+        } else {
+            false
+        };
         let support =
             packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
-        if !paths.has_supported_path(peer, support) {
+        if !paths.has_supported_path(peer, support) && !datagram_probe_sent {
             continue;
         }
 
@@ -963,52 +983,20 @@ async fn send_path_probes(
             peer,
         ) {
             PacketTransportDecision::PacketPlaneDatagram { backend, .. } => {
-                let probe_mtu = selected_path_probe_mtu(
-                    paths,
-                    peer_capabilities,
-                    packet_plane,
-                    packet_plane_quic,
-                    backend,
-                    peer,
-                    local_mtu,
-                );
-                let token = fresh_path_probe_token();
-                let payload = mtu_sized_path_probe_payload(probe_mtu, Some(token));
-                match forwarder.path_probe_frame_with_mtu(probe_mtu, &payload) {
-                    Ok(frame) => match send_packet_plane_frame(
+                if !datagram_probe_sent {
+                    send_packet_plane_path_probe(
+                        forwarder,
+                        paths,
+                        peer_capabilities,
                         packet_plane,
                         packet_plane_quic,
+                        path_probe_tracker,
+                        metrics,
                         backend,
                         peer,
-                        &frame,
+                        local_mtu,
                     )
-                    .await
-                    {
-                        Ok(_) => {
-                            path_probe_tracker.record(
-                                peer,
-                                packet_datagram_backend_path_kind(backend),
-                                token,
-                                Instant::now(),
-                            );
-                            metrics.record_outbound_path_probe_sent();
-                        }
-                        Err(error) => {
-                            metrics.record_outbound_path_probe_failure();
-                            maybe_demote_packet_plane_send_path(
-                                paths,
-                                metrics,
-                                peer,
-                                packet_datagram_backend_path_kind(backend),
-                                &error,
-                            );
-                            eprintln!("packet-plane path probe to {peer} failed: {error:?}");
-                        }
-                    },
-                    Err(error) => {
-                        metrics.record_outbound_path_probe_failure();
-                        eprintln!("packet-plane path probe to {peer} failed: {error:?}");
-                    }
+                    .await;
                 }
             }
             PacketTransportDecision::StreamFallback { path } => {
@@ -1025,6 +1013,75 @@ async fn send_path_probes(
                 }
             }
             PacketTransportDecision::Blocked { .. } => {}
+        }
+    }
+}
+
+fn has_established_packet_plane_candidate(
+    paths: &PathSet,
+    peer: PeerId,
+    backend: PacketDatagramBackend,
+) -> bool {
+    let path = packet_datagram_backend_path_kind(backend);
+    paths
+        .candidates_for(peer)
+        .any(|candidate| candidate.kind == path && candidate.established_connections > 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_packet_plane_path_probe(
+    forwarder: &mut Forwarder,
+    paths: &mut PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    path_probe_tracker: &mut PathProbeTracker,
+    metrics: &RuntimeMetrics,
+    backend: PacketDatagramBackend,
+    peer: PeerId,
+    local_mtu: u16,
+) {
+    let probe_mtu = selected_path_probe_mtu(
+        paths,
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        backend,
+        peer,
+        local_mtu,
+    );
+    let token = fresh_path_probe_token();
+    let payload = mtu_sized_path_probe_payload(probe_mtu, Some(token));
+    match forwarder.path_probe_frame_with_mtu(probe_mtu, &payload) {
+        Ok(frame) => {
+            match send_packet_plane_frame(packet_plane, packet_plane_quic, backend, peer, &frame)
+                .await
+            {
+                Ok(_) => {
+                    path_probe_tracker.record(
+                        peer,
+                        packet_datagram_backend_path_kind(backend),
+                        token,
+                        Instant::now(),
+                    );
+                    metrics.record_outbound_path_probe_sent();
+                }
+                Err(error) => {
+                    metrics.record_outbound_path_probe_failure();
+                    maybe_demote_packet_plane_send_path(
+                        paths,
+                        metrics,
+                        peer,
+                        packet_datagram_backend_path_kind(backend),
+                        &error,
+                    );
+                    eprintln!("packet-plane path probe to {peer} failed: {error:?}");
+                }
+            }
+        }
+        Err(error) => {
+            metrics.record_outbound_path_probe_failure();
+            eprintln!("packet-plane path probe to {peer} failed: {error:?}");
         }
     }
 }
@@ -17893,6 +17950,169 @@ mod tests {
         assert_eq!(inbound.frame.payload.len(), 1_000);
         assert!(inbound.frame.payload.starts_with(PATH_PROBE_PAYLOAD));
         assert!(path_probe_request_token(&inbound.frame.payload).is_some());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn path_probes_confirm_unhealthy_datagram_candidate_while_relay_is_selected() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let local = local_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("local libp2p peer");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let local_overlay = PeerId::from_libp2p(local);
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let sender_config = config_with_peer(&local_identity, remote);
+        let receiver_config = config_with_peer(&remote_identity, local);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        let local_secret = test_packet_plane_secret(7);
+        let remote_secret = test_packet_plane_secret(9);
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &local_secret,
+            &remote_secret,
+            1_280,
+        );
+        let mut sender_forwarder = Forwarder::from_config(&sender_config).expect("sender");
+        let mut receiver_forwarder = Forwarder::from_config(&receiver_config).expect("receiver");
+        let mut sender_paths = PathSet::new();
+        sender_paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        sender_paths.record_unconfirmed_with_mtu(
+            remote_overlay,
+            PathKind::DirectUdpDatagram,
+            Some(1_200),
+        );
+        let mut receiver_paths = PathSet::new();
+        receiver_paths.record_established_with_mtu(
+            local_overlay,
+            PathKind::DirectUdpDatagram,
+            Some(1_200),
+        );
+        let mut sender_capabilities = PeerCapabilities::default();
+        let mut remote_capabilities = ControlCapabilities::local("lab", None, 1_280);
+        remote_capabilities = remote_capabilities.with_owned_udp_packet_plane(true);
+        sender_capabilities.record(remote_overlay, remote_capabilities);
+        let mut receiver_capabilities = PeerCapabilities::default();
+        let mut local_capabilities = ControlCapabilities::local("lab", None, 1_280);
+        local_capabilities = local_capabilities.with_owned_udp_packet_plane(true);
+        receiver_capabilities.record(local_overlay, local_capabilities);
+        let metrics = RuntimeMetrics::default();
+        let mut sender_packet_in_flight = PacketInFlight::new(256);
+        let mut sender_path_probe_tracker = PathProbeTracker::default();
+        let mut receiver_path_probe_tracker = PathProbeTracker::default();
+
+        assert_eq!(
+            sender_paths
+                .best_for(remote_overlay)
+                .expect("selected relay")
+                .kind,
+            PathKind::CircuitRelay
+        );
+
+        send_path_probes(
+            &mut node.swarm,
+            &mut sender_forwarder,
+            &mut sender_paths,
+            &sender_capabilities,
+            Some(&sender_packet_plane),
+            None,
+            &mut sender_packet_in_flight,
+            &mut sender_path_probe_tracker,
+            &metrics,
+        )
+        .await;
+
+        let probe = timeout(
+            TokioDuration::from_secs(1),
+            receiver_packet_plane.recv_frame_from_peer(local_overlay),
+        )
+        .await
+        .expect("packet-plane candidate probe should not time out")
+        .expect("packet-plane candidate probe");
+        assert_eq!(probe.frame.header.payload_type, PayloadType::PathProbe);
+        assert!(path_probe_request_token(&probe.frame.payload).is_some());
+
+        handle_packet_plane_path_probe(
+            &mut receiver_forwarder,
+            &mut receiver_paths,
+            &receiver_capabilities,
+            Some(&receiver_packet_plane),
+            None,
+            PacketDatagramBackend::OwnedUdp,
+            &mut receiver_path_probe_tracker,
+            &metrics,
+            local_overlay,
+            &probe,
+        )
+        .await;
+        let ack = timeout(
+            TokioDuration::from_secs(1),
+            sender_packet_plane.recv_frame_from_peer(remote_overlay),
+        )
+        .await
+        .expect("packet-plane candidate probe ack should not time out")
+        .expect("packet-plane candidate probe ack");
+
+        handle_packet_plane_path_probe(
+            &mut sender_forwarder,
+            &mut sender_paths,
+            &sender_capabilities,
+            Some(&sender_packet_plane),
+            None,
+            PacketDatagramBackend::OwnedUdp,
+            &mut sender_path_probe_tracker,
+            &metrics,
+            remote_overlay,
+            &ack,
+        )
+        .await;
+
+        assert_eq!(
+            sender_paths
+                .best_for(remote_overlay)
+                .expect("promoted direct UDP")
+                .kind,
+            PathKind::DirectUdpDatagram
+        );
+        assert!(
+            sender_paths
+                .path_rtt(remote_overlay, PathKind::DirectUdpDatagram)
+                .is_some()
+        );
     }
 
     #[tokio::test]
