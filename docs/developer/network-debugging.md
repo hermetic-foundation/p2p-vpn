@@ -88,6 +88,28 @@ rg 'packet_plane_session|owned_quic' node-*.log
 rg 'path_selected|path_promoted|path_demoted' node-*.log
 ```
 
+## Public Discovery Backoff
+
+Look for this event when a host is offline from the public internet:
+
+```sh
+rg 'public_discovery_bootstrap_backoff' node-*.log
+```
+
+The event means default public IPFS bootstrap retries are paused.
+
+Expected behavior during the pause:
+
+| Path | Expected |
+| --- | --- |
+| mDNS LAN discovery | Continues |
+| Configured peer redial | Continues |
+| Discovered relay redial | Continues |
+| Kademlia peer record lookup | Continues |
+| Public Kademlia bootstrap | Paused |
+
+Do not treat this event as a LAN failure by itself.
+
 ## Namespace Repro
 
 ```sh

@@ -10,7 +10,7 @@ use std::{
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId, Swarm, autonat,
+    Multiaddr, PeerId as Libp2pPeerId, Swarm, TransportError, autonat,
     core::ConnectedPoint,
     dcutr, identify, kad, mdns,
     multiaddr::Protocol,
@@ -25,7 +25,10 @@ use tokio::sync::mpsc;
 
 use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
-    config::{AutoRelayConfig, Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig},
+    config::{
+        AutoRelayConfig, Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig,
+        public_ipfs_bootstrap_peer_configs,
+    },
     identity::NodeIdentity,
     membership::{SignedMembershipRecord, effective_membership_at},
     metrics::{
@@ -67,6 +70,8 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
+const PUBLIC_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(10);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
 const DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE: Duration = Duration::from_secs(10);
@@ -314,6 +319,7 @@ where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
     let identity = config.identity()?;
+    let public_bootstrap_defaults = config.uses_public_ipfs_bootstrap_defaults();
     let mut node = build_node(&HostConfig {
         identity,
         network_name: config.network.name.clone(),
@@ -377,6 +383,7 @@ where
         config.network.packet_plane.session_ttl(),
         config.network.packet_plane.replay_window_limit(),
         config.network.relay.auto,
+        public_bootstrap_defaults,
         shutdown,
     ))
     .await
@@ -424,6 +431,7 @@ pub async fn run_node(
         options.packet_plane_session_ttl,
         options.packet_plane_replay_windows_per_session,
         options.auto_relay,
+        false,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -459,6 +467,7 @@ pub async fn run_node_until<Shutdown>(
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
     auto_relay_config: AutoRelayConfig,
+    public_bootstrap_defaults: bool,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -483,6 +492,8 @@ where
             Instant::now(),
         );
     let mut auto_relay = AutoRelayState::new(auto_relay_config);
+    let mut public_discovery_backoff =
+        PublicDiscoveryBackoff::from_bootstrap_defaults(public_bootstrap_defaults);
     let mut infrastructure_peers = InfrastructurePeers::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
@@ -626,6 +637,7 @@ where
                         peer_capabilities: &mut peer_capabilities,
                         relay_readiness: &mut relay_readiness,
                         auto_relay: &mut auto_relay,
+                        public_discovery_backoff: &mut public_discovery_backoff,
                         relay_addresses: &node.relay_peer_addresses,
                         configured_peer_addresses: &node.configured_peer_addresses,
                         relay_server_enabled: node.startup.relay_server_enabled,
@@ -729,6 +741,7 @@ where
                     &paths,
                     &mut relay_readiness,
                     &mut configured_relay_reservation_retries,
+                    &public_discovery_backoff,
                     &metrics,
                 );
             }
@@ -754,6 +767,7 @@ where
                         identity: &node.identity,
                         advertise_provider: discovery.kademlia_provider_advertisement,
                         auto_relay: &auto_relay,
+                        public_discovery_backoff: &public_discovery_backoff,
                         public_discovery_quiet: public_discovery_quiet_mode(
                             &forwarder,
                             &paths,
@@ -2280,6 +2294,7 @@ fn handle_redial_tick(
     paths: &PathSet,
     relay_readiness: &mut RelayReadiness,
     configured_relay_reservation_retries: &mut ConfiguredRelayReservationRetries,
+    public_discovery_backoff: &PublicDiscoveryBackoff,
     metrics: &RuntimeMetrics,
 ) {
     expire_discovered_peer_addresses(discovered_peer_addresses, metrics);
@@ -2300,9 +2315,16 @@ fn handle_redial_tick(
         );
     }
     let discovered_addresses = discovered_peer_addresses.redial_candidates_at(Instant::now());
+    let now = Instant::now();
+    let bootstrap_addresses = node
+        .bootstrap_peer_addresses
+        .iter()
+        .filter(|(peer, _)| public_discovery_backoff.should_dial_bootstrap_peer(*peer, now))
+        .cloned()
+        .collect::<Vec<_>>();
     redial_known_addresses(
         &mut node.swarm,
-        &node.bootstrap_peer_addresses,
+        &bootstrap_addresses,
         &node.relay_peer_addresses,
         &node.configured_peer_addresses,
         &discovered_addresses,
@@ -2618,6 +2640,7 @@ struct KademliaRefreshContext<'a> {
     identity: &'a NodeIdentity,
     advertise_provider: bool,
     auto_relay: &'a AutoRelayState,
+    public_discovery_backoff: &'a PublicDiscoveryBackoff,
     public_discovery_quiet: bool,
     metrics: &'a RuntimeMetrics,
 }
@@ -2695,15 +2718,17 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
         }
     }
 
-    match swarm.behaviour_mut().kad.bootstrap() {
-        Ok(_) => context.metrics.record_kademlia_bootstrap_refresh(),
-        Err(error) => {
-            context.metrics.record_kademlia_bootstrap_failure();
-            log_runtime_event(
-                LogLevel::Warn,
-                "kademlia_bootstrap_failed",
-                &[("error", &format!("{error:?}"))],
-            );
+    if !context.public_discovery_backoff.suppresses(Instant::now()) {
+        match swarm.behaviour_mut().kad.bootstrap() {
+            Ok(_) => context.metrics.record_kademlia_bootstrap_refresh(),
+            Err(error) => {
+                context.metrics.record_kademlia_bootstrap_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "kademlia_bootstrap_failed",
+                    &[("error", &format!("{error:?}"))],
+                );
+            }
         }
     }
 }
@@ -3193,6 +3218,69 @@ impl ConfiguredRelayReservationRetries {
         }
         self.last_attempts.insert(address.clone(), now);
         true
+    }
+}
+
+#[derive(Debug, Default)]
+struct PublicDiscoveryBackoff {
+    bootstrap_peers: HashSet<Libp2pPeerId>,
+    consecutive_no_route_failures: u32,
+    suppressed_until: Option<Instant>,
+}
+
+impl PublicDiscoveryBackoff {
+    fn from_bootstrap_defaults(enabled: bool) -> Self {
+        if !enabled {
+            return Self::default();
+        }
+
+        let bootstrap_peers = public_ipfs_bootstrap_peer_configs()
+            .into_iter()
+            .filter_map(|peer| peer.peer_address().ok().map(|(peer, _)| peer))
+            .collect();
+        Self {
+            bootstrap_peers,
+            consecutive_no_route_failures: 0,
+            suppressed_until: None,
+        }
+    }
+
+    fn suppresses(&self, now: Instant) -> bool {
+        self.suppressed_until.is_some_and(|until| now < until)
+    }
+
+    fn should_dial_bootstrap_peer(&self, peer: Libp2pPeerId, now: Instant) -> bool {
+        !self.bootstrap_peers.contains(&peer) || !self.suppresses(now)
+    }
+
+    fn record_connection_established(&mut self, peer: Libp2pPeerId) {
+        if self.bootstrap_peers.contains(&peer) {
+            self.consecutive_no_route_failures = 0;
+            self.suppressed_until = None;
+        }
+    }
+
+    fn record_outgoing_error(
+        &mut self,
+        peer: Option<Libp2pPeerId>,
+        error: &DialError,
+        now: Instant,
+    ) -> Option<Duration> {
+        let Some(peer) = peer else {
+            return None;
+        };
+        if !self.bootstrap_peers.contains(&peer) || !dial_error_reports_public_no_route(error) {
+            return None;
+        }
+
+        self.consecutive_no_route_failures = self.consecutive_no_route_failures.saturating_add(1);
+        let shift = self.consecutive_no_route_failures.saturating_sub(1).min(8);
+        let multiplier = 1_u32 << shift;
+        let delay = PUBLIC_DISCOVERY_BACKOFF_BASE
+            .saturating_mul(multiplier)
+            .min(PUBLIC_DISCOVERY_BACKOFF_MAX);
+        self.suppressed_until = Some(now + delay);
+        Some(delay)
     }
 }
 
@@ -4262,6 +4350,24 @@ fn dial_error_reports_relay_no_reservation(error: &DialError) -> bool {
     error.contains("Relay has no reservation for destination")
         || error.contains("NoReservation")
         || error.contains("NO_RESERVATION")
+}
+
+fn dial_error_reports_public_no_route(error: &DialError) -> bool {
+    match error {
+        DialError::Transport(errors) => {
+            !errors.is_empty()
+                && errors.iter().all(|(_, error)| match error {
+                    TransportError::Other(error) => matches!(error.raw_os_error(), Some(101 | 113)),
+                    TransportError::MultiaddrNotSupported(_) => false,
+                })
+        }
+        DialError::LocalPeerId { .. }
+        | DialError::NoAddresses
+        | DialError::DialPeerConditionFalse(_)
+        | DialError::Aborted
+        | DialError::WrongPeerId { .. }
+        | DialError::Denied { .. } => false,
+    }
 }
 
 fn dial_error_failed_addresses(error: &DialError) -> Vec<Multiaddr> {
@@ -5461,6 +5567,7 @@ struct SwarmEventContext<'a> {
     peer_capabilities: &'a mut PeerCapabilities,
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
+    public_discovery_backoff: &'a mut PublicDiscoveryBackoff,
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     relay_server_enabled: bool,
@@ -5550,6 +5657,9 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            context
+                .public_discovery_backoff
+                .record_connection_established(peer_id);
             match authorize_established_connection(
                 context.membership,
                 context.infrastructure_peers,
@@ -5732,6 +5842,18 @@ async fn handle_swarm_event(
             );
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+            if let Some(delay) = context.public_discovery_backoff.record_outgoing_error(
+                peer_id,
+                &error,
+                Instant::now(),
+            ) {
+                let delay_millis = delay.as_millis().to_string();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "public_discovery_bootstrap_backoff",
+                    &[("delay_millis", &delay_millis)],
+                );
+            }
             let peer_connected = peer_id.is_some_and(|peer_id| swarm.is_connected(&peer_id));
             if let Some(peer_id) = peer_id
                 && context.forwarder.is_configured_transport_peer(peer_id)
@@ -11554,6 +11676,7 @@ mod tests {
 
         let mut auto_relay = AutoRelayState::default();
         auto_relay.record_reachability(AutoNatReachability::Private);
+        let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
@@ -11568,6 +11691,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: true,
                 auto_relay: &auto_relay,
+                public_discovery_backoff: &public_discovery_backoff,
                 public_discovery_quiet: false,
                 metrics: &metrics,
             },
@@ -11620,6 +11744,7 @@ mod tests {
             .expect("forwarder");
         let mut auto_relay = AutoRelayState::default();
         auto_relay.record_reachability(AutoNatReachability::Private);
+        let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
@@ -11634,6 +11759,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: true,
                 auto_relay: &auto_relay,
+                public_discovery_backoff: &public_discovery_backoff,
                 public_discovery_quiet: true,
                 metrics: &metrics,
             },
@@ -11646,6 +11772,72 @@ mod tests {
             snapshot.auto_relay_discovery_queries,
             AUTO_RELAY_DISCOVERY_QUERY_FANOUT as u64
         );
+        assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
+        assert_eq!(snapshot.kademlia_bootstrap_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn kademlia_refresh_backoff_suppresses_bootstrap_only() {
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            kademlia_provider_advertisement: true,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let key = node.kademlia_rendezvous_key.clone().expect("kademlia key");
+        let keys = vec![key.clone()];
+        let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
+            .expect("forwarder");
+        let auto_relay = AutoRelayState::default();
+        let public_discovery_backoff = PublicDiscoveryBackoff {
+            bootstrap_peers: HashSet::new(),
+            consecutive_no_route_failures: 1,
+            suppressed_until: Some(Instant::now() + Duration::from_secs(30)),
+        };
+
+        refresh_kademlia_rendezvous(
+            &mut node.swarm,
+            &KademliaRefreshContext {
+                advertise_key: &key,
+                lookup_keys: &keys,
+                membership_record_advertise_key: node.kademlia_membership_records_key.as_ref(),
+                membership_record_lookup_keys: &[],
+                network_name: &node.network_name,
+                membership_tag: node.membership_tag.as_deref(),
+                forwarder: &forwarder,
+                identity: &node.identity,
+                advertise_provider: true,
+                auto_relay: &auto_relay,
+                public_discovery_backoff: &public_discovery_backoff,
+                public_discovery_quiet: false,
+                metrics: &metrics,
+            },
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+        assert_eq!(snapshot.kademlia_provider_advertisements, 1);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 0);
     }
@@ -11688,6 +11880,7 @@ mod tests {
         assert!(node.startup.kademlia.rendezvous_lookup_started);
 
         let auto_relay = AutoRelayState::default();
+        let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
@@ -11702,6 +11895,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: false,
                 auto_relay: &auto_relay,
+                public_discovery_backoff: &public_discovery_backoff,
                 public_discovery_quiet: false,
                 metrics: &metrics,
             },
@@ -11765,6 +11959,7 @@ mod tests {
         let auto_relay = AutoRelayState::default();
         let forwarder = Forwarder::from_config(&config_with_peer(&node.identity, peer_id()))
             .expect("forwarder");
+        let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
         refresh_kademlia_rendezvous(
             &mut node.swarm,
@@ -11779,6 +11974,7 @@ mod tests {
                 identity: &node.identity,
                 advertise_provider: true,
                 auto_relay: &auto_relay,
+                public_discovery_backoff: &public_discovery_backoff,
                 public_discovery_quiet: false,
                 metrics: &metrics,
             },
@@ -13200,6 +13396,65 @@ mod tests {
             None,
             None
         ));
+    }
+
+    #[test]
+    fn public_discovery_backoff_suppresses_default_bootstrap_after_no_route() {
+        let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
+        let public_peer = *backoff
+            .bootstrap_peers
+            .iter()
+            .next()
+            .expect("public bootstrap peer");
+        let address: Multiaddr = format!("/ip4/203.0.113.1/tcp/4001/p2p/{public_peer}")
+            .parse()
+            .expect("public address");
+        let error = DialError::Transport(vec![(
+            address,
+            TransportError::Other(io::Error::from_raw_os_error(101)),
+        )]);
+        let now = Instant::now();
+
+        assert!(backoff.should_dial_bootstrap_peer(public_peer, now));
+        assert_eq!(
+            backoff.record_outgoing_error(Some(public_peer), &error, now),
+            Some(PUBLIC_DISCOVERY_BACKOFF_BASE)
+        );
+        assert!(!backoff.should_dial_bootstrap_peer(public_peer, now));
+        assert!(
+            backoff.should_dial_bootstrap_peer(public_peer, now + PUBLIC_DISCOVERY_BACKOFF_BASE)
+        );
+    }
+
+    #[test]
+    fn public_discovery_backoff_resets_after_bootstrap_connection() {
+        let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
+        let public_peer = *backoff
+            .bootstrap_peers
+            .iter()
+            .next()
+            .expect("public bootstrap peer");
+        let address: Multiaddr = format!("/ip4/203.0.113.1/tcp/4001/p2p/{public_peer}")
+            .parse()
+            .expect("public address");
+        let error = DialError::Transport(vec![(
+            address,
+            TransportError::Other(io::Error::from_raw_os_error(113)),
+        )]);
+        let now = Instant::now();
+
+        assert!(
+            backoff
+                .record_outgoing_error(Some(public_peer), &error, now)
+                .is_some()
+        );
+        assert!(!backoff.should_dial_bootstrap_peer(public_peer, now));
+
+        backoff.record_connection_established(public_peer);
+
+        assert!(backoff.should_dial_bootstrap_peer(public_peer, now));
+        assert_eq!(backoff.consecutive_no_route_failures, 0);
+        assert_eq!(backoff.suppressed_until, None);
     }
 
     #[test]

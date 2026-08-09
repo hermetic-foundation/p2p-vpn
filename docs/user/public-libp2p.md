@@ -162,6 +162,22 @@ This is the normal mobile profile.
 
 To force relay-only testing, disable direct listeners and mDNS in a copy.
 
+## No-Route Backoff
+
+Default public IPFS bootstrap peers are retried with backoff when the OS reports
+`network unreachable` or `host unreachable`.
+
+| Item | Behavior |
+| --- | --- |
+| First delay | 30 seconds |
+| Maximum delay | 10 minutes |
+| Reset | Successful connection to a default public bootstrap peer |
+
+This only restrains public bootstrap retries.
+
+LAN discovery, configured peers, discovered relay paths, and Kademlia record
+lookups continue during the backoff window.
+
 ## Interpret Results
 
 | Field | Meaning |
