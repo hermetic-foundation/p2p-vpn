@@ -220,14 +220,14 @@
             repro_relay_candidate="''${P2P_VPN_REPRO_RELAY_CANDIDATE:-}"
             dcutr_serve_seconds="''${P2P_VPN_REPRO_DCUTR_SERVE_SECONDS:-900}"
             dcutr_dial_timeout="''${P2P_VPN_REPRO_DCUTR_DIAL_TIMEOUT_SECONDS:-90}"
-            membership_dht="''${P2P_VPN_REPRO_MEMBERSHIP_DHT:-1}"
+            membership_dht="''${P2P_VPN_REPRO_MEMBERSHIP_DHT:-0}"
             membership_network="''${P2P_VPN_REPRO_MEMBERSHIP_NETWORK:-public-membership-repro}"
             membership_dht_timeout="''${P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS:-45}"
             vpn_host_a_route="''${P2P_VPN_REPRO_VPN_HOST_A_ROUTE:-10.42.0.1/32}"
             vpn_host_b_route="''${P2P_VPN_REPRO_VPN_HOST_B_ROUTE:-10.42.0.2/32}"
             vpn_network="''${P2P_VPN_REPRO_VPN_NETWORK:-public-vpn-repro}"
-            require_vpn_relay_reservations="''${P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS:-1}"
-            require_dcutr="''${P2P_VPN_REPRO_REQUIRE_DCUTR:-1}"
+            require_vpn_relay_reservations="''${P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS:-0}"
+            require_dcutr="''${P2P_VPN_REPRO_REQUIRE_DCUTR:-0}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")

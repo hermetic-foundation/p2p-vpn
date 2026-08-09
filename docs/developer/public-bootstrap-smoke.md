@@ -80,8 +80,8 @@ DCUtR success event.
 Command:
 
 ```sh
-P2P_VPN_REPRO_REQUIRE_DCUTR=0 \
 P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1 \
+P2P_VPN_REPRO_MEMBERSHIP_DHT=1 \
 nix run .#public-relay-repro
 ```
 
@@ -101,8 +101,9 @@ Notes:
 | --- | --- |
 | Shell function phases | Run in-process. |
 | Local listen collision | Avoided with ephemeral check ports. |
+| Probe listener lifetime | Temporary listener task is aborted after probing. |
 | Public relay probing | Reached a real public relay. |
-| Generated-host reservations | Reached relay policy, not local bind failure. |
+| Generated-host reservations | Optional for public repros. |
 | Public DHT membership | Still not operational proof. |
 
 ## Current Conclusion

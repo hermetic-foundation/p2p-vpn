@@ -78,15 +78,47 @@ nix run .# -- relay-check \
 
 ## Faster Relay Repro
 
-Skip strict DCUtR proof when validating relay discovery and generated configs:
+Validate relay discovery and generated configs:
 
 ```sh
-P2P_VPN_REPRO_REQUIRE_DCUTR=0 \
 nix run .#public-relay-repro
 ```
 
-This still records scan, relay, generated config, and relay-reservation
-artifacts.
+This still records scan, relay, and generated config artifacts.
+
+Relay-reservation artifacts are recorded when the local reservation check is
+enabled.
+
+## Local Reservation Check
+
+Generated Host A and Host B configs are written by default.
+
+Single-machine reservation checks are opt-in:
+
+```sh
+P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1 \
+nix run .#public-relay-repro
+```
+
+Use this with controlled relays or known relay policy.
+
+Public relays may cap reservations per source address.
+
+## Strict Public Checks
+
+Require public DHT membership propagation:
+
+```sh
+P2P_VPN_REPRO_MEMBERSHIP_DHT=1 \
+nix run .#public-relay-repro
+```
+
+Require DCUtR hole-punch evidence:
+
+```sh
+P2P_VPN_REPRO_REQUIRE_DCUTR=1 \
+nix run .#public-relay-repro
+```
 
 ## Use A Validated Relay
 
