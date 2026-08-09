@@ -117,6 +117,16 @@ Coverage:
 | No config change | The daemon keeps running during the move. |
 | Return to LAN | The selected path promotes back to direct. |
 
+The committed-source run on 2026-08-09 passed from `main`.
+
+Observed path events:
+
+| Event | Evidence |
+| --- | --- |
+| Direct start | Initial `pv0` traffic used a direct LAN path. |
+| Relay fallback | `path_fell_back_to_relay` was emitted after movement. |
+| Direct recovery | `path_promoted_to_direct` was emitted after LAN return. |
+
 ## Underlay Candidate Hygiene
 
 Run the focused regression tests:

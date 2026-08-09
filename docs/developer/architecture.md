@@ -109,6 +109,11 @@ This prevents recursive routing after a peer moves networks.
 
 The daemon must rediscover LAN, relay, or public paths instead.
 
+Recovery tries direct underlay candidates before relayed paths.
+
+This keeps LAN return and LAN-first rediscovery from being masked by an older
+relay address.
+
 ## Relay Behavior
 
 Circuit relay is a fallback path.
