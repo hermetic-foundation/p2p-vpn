@@ -1392,7 +1392,7 @@ async fn live_public_relayed_peer_circuit(
         )
     })?;
 
-    let _listener_task = tokio::spawn(async move {
+    let listener_task = tokio::spawn(async move {
         loop {
             let _ = listener_node.swarm.select_next_some().await;
         }
@@ -1423,7 +1423,9 @@ async fn live_public_relayed_peer_circuit(
             PublicRelayCandidateFailureStage::RelayedPeerCircuit,
             format!("{error:?}"),
         )
-    })?;
+    });
+    listener_task.abort();
+    let report = report?;
 
     if report.succeeded() {
         Ok(report)
@@ -1486,7 +1488,7 @@ async fn live_public_dcutr_success(
         )
     })?;
 
-    let _listener_task = tokio::spawn(async move {
+    let listener_task = tokio::spawn(async move {
         loop {
             let _ = listener_node.swarm.select_next_some().await;
         }
@@ -1522,7 +1524,9 @@ async fn live_public_dcutr_success(
             PublicRelayCandidateFailureStage::DcutrSuccess,
             format!("{error:?}"),
         )
-    })?;
+    });
+    listener_task.abort();
+    let report = report?;
 
     if report.succeeded() {
         Ok(report)
