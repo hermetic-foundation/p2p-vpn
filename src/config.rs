@@ -1054,7 +1054,7 @@ fn default_queue() -> QueueConfig {
     }
 }
 
-const fn default_max_packet_age_millis() -> u64 {
+pub const fn default_max_packet_age_millis() -> u64 {
     3_000
 }
 

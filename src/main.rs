@@ -17,7 +17,8 @@ use p2p_vpn::{
         RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
         default_auto_relay_max_candidates, default_auto_relay_max_reservations,
         default_auto_relay_retry_interval_seconds, default_listen_addresses,
-        default_packet_plane_replay_windows_per_session, default_packet_plane_session_ttl_seconds,
+        default_max_packet_age_millis, default_packet_plane_replay_windows_per_session,
+        default_packet_plane_session_ttl_seconds,
     },
     identity::NodeIdentity,
     invite::{
@@ -156,7 +157,7 @@ enum Command {
         queue_max_packets_per_peer: usize,
         #[arg(long, default_value_t = 524_288)]
         queue_max_bytes_per_peer: usize,
-        #[arg(long, default_value_t = 1_000)]
+        #[arg(long, default_value_t = default_max_packet_age_millis())]
         queue_max_packet_age_millis: u64,
         #[arg(long, default_value_t = 64)]
         max_concurrent_control_streams: usize,
@@ -10997,6 +10998,64 @@ mod tests {
         assert!(config.network.routes.is_empty());
         assert_eq!(config.peers[0].vpn_ip.as_deref(), Some("10.44.0.2"));
         assert!(config.peers[0].routes.is_empty());
+    }
+
+    #[test]
+    fn init_config_writes_compact_default_peer_config() {
+        let output = temp_config_path("p2p-vpn-init-config-minimal-peer");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            interface: "pv0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
+            public_ipfs_profile: false,
+            peers: vec![EndpointArg {
+                id: remote.peer_id.clone(),
+                address: None,
+            }],
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init config");
+
+        let rendered = std::fs::read_to_string(&output).expect("generated config");
+        let _ = std::fs::remove_file(&output);
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("json");
+
+        assert!(value.get("interface").is_none(), "{rendered}");
+        assert!(value.get("queue").is_none(), "{rendered}");
+        assert!(value.get("resources").is_none(), "{rendered}");
+        assert_eq!(
+            value["peers"],
+            serde_json::json!([{ "id": remote.peer_id }])
+        );
+
+        let network = value["network"].as_object().expect("network object");
+        assert_eq!(
+            network.get("name").and_then(|name| name.as_str()),
+            Some("lab")
+        );
+        assert!(network.contains_key("local_peer"));
+        assert!(network.contains_key("private_key"));
+        assert_eq!(network.len(), 3, "{rendered}");
     }
 
     #[test]
