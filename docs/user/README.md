@@ -20,7 +20,8 @@ Use these docs when you want to run `p2p-vpn`.
 | `/dev/net/tun` | Required for packet forwarding. |
 | `CAP_NET_ADMIN` or root | Required to create and configure TUN. |
 | Nix flakes | Recommended build and run path for this repo. |
-| Peer multiaddrs | Needed when peers cannot discover each other. |
+| Local identity key | Determines this node's libp2p peer ID. |
+| Remote peer IDs | Authorize who may join the overlay. |
 
 ## First Command
 
@@ -28,6 +29,18 @@ Use these docs when you want to run `p2p-vpn`.
 nix run .# -- init-config --output p2p-vpn.json --force
 ```
 
-Then edit the peer list, routes, and listen addresses.
+For ordinary setups, do not add peer multiaddrs first.
+
+Start with:
+
+| Value | Configure It When |
+| --- | --- |
+| `network.private_key` | Always. |
+| `network.builtin_ip` | You want a stable overlay IP. |
+| `peers.<id>` | Always for each trusted peer. |
+| `peers.<id>.vpn_ip` | You want the peer to have a stable overlay IP. |
+
+Leave listen addresses, public relays, and peer multiaddrs unset unless you need
+an override for a controlled network or test.
 
 Use [Quick Start](quick-start.md) for the full two-node flow.

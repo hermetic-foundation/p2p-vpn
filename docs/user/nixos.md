@@ -28,9 +28,8 @@ Use typed module options for ordinary NixOS hosts:
 
     networkName = "lab";
     privateKeyFile = "/run/secrets/p2p-vpn/lab.key";
-    vpnIp = "10.44.0.1";
 
-    peers."REMOTE_PEER_ID".vpnIp = "10.44.0.2";
+    peers."REMOTE_PEER_ID" = {};
   };
 }
 ```
@@ -41,14 +40,34 @@ Required values:
 | --- | --- |
 | `networkName` | Shared overlay name. |
 | `privateKeyFile` | This host's identity key. |
-| `vpnIp` | This host's overlay IP. |
-| `peers.<id>.vpnIp` | Remote peer authorization. |
+| `peers.<id>` | Remote peer authorization. |
 
 `localPeer` is optional.
 
 Set it only to assert the private key matches an expected peer ID.
 
-That is enough for the default profile:
+## Stable Overlay IPs
+
+Add `vpnIp` values when humans or services need stable addresses:
+
+```nix
+{
+  services.p2p-vpn.instances.lab = {
+    vpnIp = "10.44.0.1";
+
+    peers."REMOTE_PEER_ID".vpnIp = "10.44.0.2";
+  };
+}
+```
+
+Stable IP values:
+
+| Field | Purpose |
+| --- | --- |
+| `vpnIp` | This host's preferred overlay IP. |
+| `peers.<id>.vpnIp` | The peer's authorized overlay IP. |
+
+Both service shapes use the default profile:
 
 | Item | Default |
 | --- | --- |
@@ -152,7 +171,7 @@ Use a custom Kademlia protocol to isolate a deployment:
 
 ## Overlay IPs
 
-Use `vpnIp` for ordinary stable host addresses:
+Use `vpnIp` for stable host addresses:
 
 ```nix
 {

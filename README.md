@@ -1,6 +1,6 @@
 # p2p-vpn
 
-`p2p-vpn` is a Rust, libp2p-native mesh VPN prototype.
+`p2p-vpn` is a Rust, libp2p-native mesh VPN for Linux and NixOS.
 
 It uses libp2p for identity, encrypted transports, discovery, relay, AutoNAT,
 and DCUtR. It forwards overlay IP packets through authenticated packet
@@ -28,8 +28,11 @@ protocols and bounded queues.
 
 | Area | State |
 | --- | --- |
-| Static LAN peers | Operational in recorded two-host tests. |
-| Circuit relay fallback | Operational in recorded forced-relay tests. |
+| Minimal config | Operational in NixOS VM mesh tests without peer addresses. |
+| NixOS module | Operational with typed service instances and sane defaults. |
+| Static LAN peers | Operational in VM and recorded two-host tests. |
+| Network move recovery | Operational in VM tests with LAN-first rediscovery. |
+| Circuit relay fallback | Operational in VM and recorded forced-relay tests. |
 | Public IPFS/libp2p bootstrap | Partial; useful for reachability hints. |
 | Public DCUtR proof | Still needs non-LAN host evidence. |
 | Native libp2p QUIC datagrams | Blocked by the current libp2p surface. |
