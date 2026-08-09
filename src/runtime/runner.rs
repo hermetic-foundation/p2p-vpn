@@ -628,6 +628,7 @@ where
                         auto_relay: &mut auto_relay,
                         relay_addresses: &node.relay_peer_addresses,
                         configured_peer_addresses: &node.configured_peer_addresses,
+                        relay_server_enabled: node.startup.relay_server_enabled,
                         discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
@@ -2047,6 +2048,14 @@ fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &Ru
             "outbound_queue_blocked_packet_window_events {}",
             snapshot.outbound_queue_blocked_packet_window_events
         ),
+        format!(
+            "relay_outbound_circuits_established {}",
+            snapshot.relay_outbound_circuits_established
+        ),
+        format!(
+            "relay_inbound_circuits_established {}",
+            snapshot.relay_inbound_circuits_established
+        ),
     ]);
 }
 
@@ -2280,14 +2289,16 @@ fn handle_redial_tick(
         relay_readiness,
         configured_relay_reservation_retries,
     );
-    query_configured_peer_recovery_discovery(
-        &mut node.swarm,
-        &node.network_name,
-        node.membership_tag.as_deref(),
-        forwarder.configured_transport_peers(),
-        paths,
-        metrics,
-    );
+    if should_query_configured_peer_recovery_discovery(&node.discovery) {
+        query_configured_peer_recovery_discovery(
+            &mut node.swarm,
+            &node.network_name,
+            node.membership_tag.as_deref(),
+            forwarder.configured_transport_peers(),
+            paths,
+            metrics,
+        );
+    }
     let discovered_addresses = discovered_peer_addresses.redial_candidates_at(Instant::now());
     redial_known_addresses(
         &mut node.swarm,
@@ -2345,6 +2356,10 @@ fn query_configured_peer_recovery_discovery(
     }
 }
 
+fn should_query_configured_peer_recovery_discovery(discovery: &DiscoveryConfig) -> bool {
+    discovery.kademlia
+}
+
 fn configured_peer_recovery_discovery_targets(
     local_peer: Libp2pPeerId,
     configured_peers: impl IntoIterator<Item = Libp2pPeerId>,
@@ -2368,7 +2383,6 @@ fn retry_configured_relay_reservations(
     relay_readiness: &RelayReadiness,
     retries: &mut ConfiguredRelayReservationRetries,
 ) {
-    let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
     for address in relay_reservation_addresses {
         let Some(relay) = relayed_address_relay_peer(address) else {
@@ -2378,7 +2392,7 @@ fn retry_configured_relay_reservations(
             continue;
         }
 
-        let listen_address = peer_dial_address(local_peer, address.clone());
+        let listen_address = address.clone();
         log_runtime_event(
             LogLevel::Info,
             "configured_relay_reservation_retry",
@@ -3531,11 +3545,9 @@ fn attempt_auto_relay_reservations(
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
 ) {
-    let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
     for (relay_peer, relay_address) in auto_relay.next_reservation_targets(now) {
-        let reservation_address =
-            peer_dial_address(local_peer, relay_address.clone().with(Protocol::P2pCircuit));
+        let reservation_address = relay_address.clone().with(Protocol::P2pCircuit);
         metrics.record_auto_relay_reservation_attempt();
         log_runtime_event(
             LogLevel::Info,
@@ -5389,6 +5401,7 @@ struct SwarmEventContext<'a> {
     auto_relay: &'a mut AutoRelayState,
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    relay_server_enabled: bool,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
@@ -5458,6 +5471,7 @@ async fn handle_swarm_event(
                 paths: context.paths,
                 relay_addresses: context.relay_addresses,
                 configured_peer_addresses: context.configured_peer_addresses,
+                relay_server_enabled: context.relay_server_enabled,
                 discovered_peer_addresses: context.discovered_peer_addresses,
                 metrics: context.metrics,
                 discovery: context.discovery,
@@ -5487,9 +5501,15 @@ async fn handle_swarm_event(
                         Some(context.packet_plane),
                         context.packet_plane_quic.as_deref(),
                     ),
+                context.relay_server_enabled,
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {}
                 EstablishedConnectionAuthorization::InfrastructurePeer => {
+                    advertise_relay_server_listener_address(
+                        swarm,
+                        context.relay_server_enabled,
+                        &endpoint,
+                    );
                     log_runtime_event(
                         LogLevel::Info,
                         "relay_infrastructure_connection_established",
@@ -5836,10 +5856,50 @@ async fn handle_swarm_event(
                 }
             }
         }
+        SwarmEvent::ListenerError { listener_id, error } => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "listener_error",
+                &[
+                    ("listener", &listener_id.to_string()),
+                    ("error", &error.to_string()),
+                ],
+            );
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn advertise_relay_server_listener_address(
+    swarm: &mut Swarm<Behaviour>,
+    relay_server_enabled: bool,
+    endpoint: &ConnectedPoint,
+) {
+    if !relay_server_enabled {
+        return;
+    }
+    let ConnectedPoint::Listener { local_addr, .. } = endpoint else {
+        return;
+    };
+    if !direct_address_is_specific(local_addr) {
+        return;
+    }
+    swarm.add_external_address(local_addr.clone());
+    log_runtime_event(
+        LogLevel::Info,
+        "relay_server_external_address_advertised",
+        &[("address", &local_addr.to_string())],
+    );
+}
+
+fn direct_address_is_specific(address: &Multiaddr) -> bool {
+    address.iter().all(|protocol| match protocol {
+        Protocol::Ip4(address) => !address.is_unspecified(),
+        Protocol::Ip6(address) => !address.is_unspecified(),
+        _ => true,
+    })
 }
 
 fn redial_configured_peer_after_supported_path_loss(
@@ -8702,9 +8762,14 @@ fn authorize_established_connection(
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     allow_infrastructure_probe: bool,
+    relay_server_enabled: bool,
 ) -> EstablishedConnectionAuthorization {
     if membership.allows(peer) {
         return EstablishedConnectionAuthorization::OverlayPeer;
+    }
+
+    if relay_server_enabled {
+        return EstablishedConnectionAuthorization::InfrastructurePeer;
     }
 
     if membership.allows_configured_infrastructure(peer) || infrastructure_peers.contains(peer) {
@@ -8748,6 +8813,7 @@ struct BehaviourEventContext<'a> {
     paths: &'a PathSet,
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    relay_server_enabled: bool,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     metrics: &'a RuntimeMetrics,
     discovery: &'a DiscoveryConfig,
@@ -8917,7 +8983,7 @@ fn handle_identify_received(
         );
         return;
     }
-    if !context.membership.allows(peer_id) && !relay_hop {
+    if !context.membership.allows(peer_id) && !relay_hop && !context.relay_server_enabled {
         log_runtime_event(
             LogLevel::Warn,
             "auto_relay_infrastructure_rejected",
@@ -11117,6 +11183,35 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_lines_include_relay_circuit_counters() {
+        let metrics = RuntimeMetrics::default();
+        metrics.record_relay_outbound_circuit_established();
+        metrics.record_relay_inbound_circuit_established();
+
+        let lines = runtime_state_summary_lines(RuntimeStateSummaryView {
+            snapshot: &metrics.snapshot(crate::queue::QueueStats::default()),
+            configured_peers: 0,
+            validated_peers: 0,
+            replay_windows: 0,
+            packet_in_flight: PacketInFlightStats::default(),
+            auto_relay: AutoRelaySnapshot::default(),
+            relay_infrastructure: &RelayInfrastructureSnapshot::default(),
+            packet_plane: &PacketPlaneSnapshot::default(),
+            packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
+            packet_plane_session_ttl: Duration::from_secs(600),
+            packet_plane_replay_windows_per_session: 1024,
+        });
+
+        assert_lines_contain(
+            &lines,
+            &[
+                "relay_outbound_circuits_established 1",
+                "relay_inbound_circuits_established 1",
+            ],
+        );
+    }
+
+    #[test]
     fn runtime_log_line_is_key_value_structured_and_quoted() {
         assert_eq!(
             runtime_log_line(
@@ -12751,6 +12846,20 @@ mod tests {
     }
 
     #[test]
+    fn recovery_discovery_queries_only_when_kademlia_enabled() {
+        assert!(should_query_configured_peer_recovery_discovery(
+            &DiscoveryConfig::default()
+        ));
+        assert!(!should_query_configured_peer_recovery_discovery(
+            &DiscoveryConfig {
+                kademlia: false,
+                kademlia_provider_advertisement: false,
+                ..DiscoveryConfig::default()
+            }
+        ));
+    }
+
+    #[test]
     fn public_discovery_quiet_mode_requires_all_configured_peers_to_have_supported_paths() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let direct_peer = peer_id();
@@ -13699,6 +13808,7 @@ mod tests {
                 &metrics,
                 relay,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -14173,6 +14283,7 @@ mod tests {
                 &metrics,
                 allowed,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::OverlayPeer,
         );
@@ -14183,6 +14294,7 @@ mod tests {
                 &metrics,
                 infrastructure,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -14192,6 +14304,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
             ),
             EstablishedConnectionAuthorization::Rejected,
@@ -14219,6 +14332,7 @@ mod tests {
                 &metrics,
                 infrastructure,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -14228,6 +14342,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
             ),
             EstablishedConnectionAuthorization::Rejected,
@@ -14254,12 +14369,52 @@ mod tests {
                 &metrics,
                 probe,
                 true,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructureProbe,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[test]
+    fn relay_server_connections_are_admitted_without_overlay_membership() {
+        let client = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::new(),
+            configured_infrastructure_peers: HashSet::new(),
+        };
+        let infrastructure_peers = InfrastructurePeers::default();
+        let metrics = RuntimeMetrics::default();
+
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                client,
+                false,
+                true,
+            ),
+            EstablishedConnectionAuthorization::InfrastructurePeer,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[test]
+    fn relay_server_external_address_filter_requires_specific_ip() {
+        let concrete_v4: Multiaddr = "/ip4/192.168.41.254/tcp/4001".parse().expect("concrete v4");
+        let unspecified_v4: Multiaddr = "/ip4/0.0.0.0/tcp/4001".parse().expect("unspecified v4");
+        let concrete_v6: Multiaddr = "/ip6/fd00::1/tcp/4001".parse().expect("concrete v6");
+        let unspecified_v6: Multiaddr = "/ip6/::/tcp/4001".parse().expect("unspecified v6");
+
+        assert!(direct_address_is_specific(&concrete_v4));
+        assert!(direct_address_is_specific(&concrete_v6));
+        assert!(!direct_address_is_specific(&unspecified_v4));
+        assert!(!direct_address_is_specific(&unspecified_v6));
     }
 
     #[test]

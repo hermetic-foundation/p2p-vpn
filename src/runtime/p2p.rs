@@ -175,7 +175,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         .build();
 
     let relay_reservations_started = config.relay_reservations.len();
-    install_listeners_and_dials(&mut swarm, local_peer_id, config)?;
+    install_listeners_and_dials(&mut swarm, config)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
     let (kademlia_rendezvous_key, kademlia_membership_records_key, kademlia) =
         start_configured_kademlia(&mut swarm, config)?;
@@ -280,7 +280,6 @@ fn autonat_server_addresses(config: &HostConfig) -> Vec<(PeerId, Multiaddr)> {
 
 fn install_listeners_and_dials(
     swarm: &mut Swarm<Behaviour>,
-    local_peer_id: PeerId,
     config: &HostConfig,
 ) -> Result<(), P2pBuildError> {
     for address in &config.listen_addresses {
@@ -292,17 +291,21 @@ fn install_listeners_and_dials(
     }
 
     for address in &config.relay_reservations {
-        swarm.listen_on(peer_dial_address(local_peer_id, address.clone())?)?;
+        swarm.listen_on(relay_reservation_listen_address(address.clone()))?;
     }
 
     for (peer, address) in &config.bootstrap_peers {
-        swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        if should_seed_kademlia_address_book(&config.discovery, address) {
+            swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        }
         let dial_address = peer_dial_address(*peer, address.clone())?;
         swarm.dial(dial_address)?;
     }
 
     for (peer, address) in &config.known_peers {
-        swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        if should_seed_kademlia_address_book(&config.discovery, address) {
+            swarm.behaviour_mut().kad.add_address(peer, address.clone());
+        }
         if is_relayed_address(address) {
             continue;
         }
@@ -312,6 +315,14 @@ fn install_listeners_and_dials(
     }
 
     Ok(())
+}
+
+fn should_seed_kademlia_address_book(discovery: &DiscoveryConfig, address: &Multiaddr) -> bool {
+    discovery.kademlia || !is_relayed_address(address)
+}
+
+fn relay_reservation_listen_address(address: Multiaddr) -> Multiaddr {
+    address
 }
 
 fn is_relayed_address(address: &Multiaddr) -> bool {
@@ -827,7 +838,7 @@ mod tests {
             external_addresses: Vec::new(),
             bootstrap_peers: vec![(relay, bootstrap_address.clone())],
             known_peers: Vec::new(),
-            relay_reservations: vec![relay_reservation],
+            relay_reservations: vec![relay_reservation.clone()],
             relay_server: true,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
@@ -982,6 +993,54 @@ mod tests {
             listen_address.to_string(),
             format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
         );
+    }
+
+    #[test]
+    fn relay_reservation_listen_address_preserves_base_reservation_address() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let target = Keypair::generate_ed25519().public().to_peer_id();
+        let reservation: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("reservation address");
+
+        let listen_address = relay_reservation_listen_address(reservation.clone());
+
+        assert_eq!(listen_address, reservation);
+        assert_ne!(
+            listen_address.to_string(),
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+        );
+    }
+
+    #[test]
+    fn relayed_known_addresses_seed_kademlia_only_when_discovery_is_enabled() {
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let target = Keypair::generate_ed25519().public().to_peer_id();
+        let direct: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{target}")
+            .parse()
+            .expect("direct address");
+        let relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{target}")
+                .parse()
+                .expect("relayed address");
+        let discovery_disabled = DiscoveryConfig {
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            ..DiscoveryConfig::default()
+        };
+
+        assert!(should_seed_kademlia_address_book(
+            &discovery_disabled,
+            &direct
+        ));
+        assert!(!should_seed_kademlia_address_book(
+            &discovery_disabled,
+            &relayed
+        ));
+        assert!(should_seed_kademlia_address_book(
+            &DiscoveryConfig::default(),
+            &relayed
+        ));
     }
 
     #[test]
@@ -1264,7 +1323,7 @@ mod tests {
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
-            known_peers: vec![(listener_peer, relayed_target_address)],
+            known_peers: vec![(listener_peer, relayed_target_address.clone())],
             relay_reservations: Vec::new(),
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
@@ -1272,6 +1331,10 @@ mod tests {
             discovery,
         })
         .expect("dialer node");
+        dialer
+            .swarm
+            .dial(relayed_target_address.clone())
+            .expect("dial relayed listener");
         let frame = Frame::packet(2, 9, vec![0x45, 0, 0, 20]).expect("frame");
         let request_id = dialer
             .swarm
@@ -1285,6 +1348,143 @@ mod tests {
                 &mut relay.swarm,
                 &mut listener.swarm,
                 &mut dialer.swarm,
+                frame,
+                request_id,
+            ),
+        )
+        .await
+        .expect("relayed packet exchange timed out");
+    }
+
+    #[tokio::test]
+    async fn two_relay_reserved_nodes_exchange_packet_request() {
+        two_relay_reserved_nodes_exchange_packet_request_with_edge_listeners(Vec::new()).await;
+    }
+
+    #[tokio::test]
+    async fn two_relay_reserved_nodes_exchange_packet_request_with_direct_edge_listeners() {
+        two_relay_reserved_nodes_exchange_packet_request_with_edge_listeners(vec![
+            "/ip4/127.0.0.1/tcp/0".parse().expect("node-a listen"),
+            "/ip4/127.0.0.1/tcp/0".parse().expect("node-b listen"),
+        ])
+        .await;
+    }
+
+    async fn two_relay_reserved_nodes_exchange_packet_request_with_edge_listeners(
+        edge_listeners: Vec<Multiaddr>,
+    ) {
+        let discovery = relay_test_discovery();
+        let mut relay = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("relay identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("relay node");
+        let relay_address = next_listen_address(&mut relay.swarm).await;
+        relay.swarm.add_external_address(relay_address.clone());
+        let relay_peer = relay.local_peer_id;
+        let relay_reservation_address = relay_address
+            .clone()
+            .with_p2p(relay_peer)
+            .expect("relay p2p address")
+            .with(Protocol::P2pCircuit);
+
+        let mut node_a = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("node-a identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: edge_listeners.iter().take(1).cloned().collect(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation_address.clone()],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("node-a");
+        let node_a_peer = node_a.local_peer_id;
+        let node_a_relayed_address = relay_reservation_address
+            .clone()
+            .with(Protocol::P2p(node_a_peer));
+
+        let mut node_b = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("node-b identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: edge_listeners.iter().skip(1).take(1).cloned().collect(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(node_a_peer, node_a_relayed_address.clone())],
+            relay_reservations: vec![relay_reservation_address.clone()],
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node-b");
+        let node_b_peer = node_b.local_peer_id;
+        let node_b_relayed_address = relay_reservation_address.with(Protocol::P2p(node_b_peer));
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_relay_reservation(
+                &mut relay.swarm,
+                &mut node_a.swarm,
+                node_a_relayed_address.clone(),
+                relay_peer,
+            ),
+        )
+        .await
+        .expect("node-a relay reservation timed out");
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for_relay_reservation(
+                &mut relay.swarm,
+                &mut node_b.swarm,
+                node_b_relayed_address,
+                relay_peer,
+            ),
+        )
+        .await
+        .expect("node-b relay reservation timed out");
+
+        node_b
+            .swarm
+            .dial(node_a_relayed_address)
+            .expect("dial node-a through relay");
+        let frame = Frame::packet(2, 9, vec![0x45, 0, 0, 20]).expect("frame");
+        let request_id = node_b
+            .swarm
+            .behaviour_mut()
+            .packet
+            .send_request(&node_a_peer, frame.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_relayed_response(
+                &mut relay.swarm,
+                &mut node_a.swarm,
+                &mut node_b.swarm,
                 frame,
                 request_id,
             ),
