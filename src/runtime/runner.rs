@@ -3975,6 +3975,20 @@ fn packet_plane_recovery_targets(
     for (candidate_peer, address) in configured_peer_addresses
         .iter()
         .chain(discovered_peer_addresses.iter())
+        .filter(|(_, address)| relayed_address_relay_peer(address).is_none())
+    {
+        if *candidate_peer != peer {
+            continue;
+        }
+        if !seen.insert((*candidate_peer, address.clone())) {
+            continue;
+        }
+        addresses.push((*candidate_peer, address.clone()));
+    }
+    for (candidate_peer, address) in configured_peer_addresses
+        .iter()
+        .chain(discovered_peer_addresses.iter())
+        .filter(|(_, address)| relayed_address_relay_peer(address).is_some())
     {
         if *candidate_peer != peer {
             continue;
@@ -14030,6 +14044,32 @@ mod tests {
         assert_eq!(
             targets,
             vec![(peer, configured_address), (peer, discovered_address)]
+        );
+    }
+
+    #[test]
+    fn packet_plane_recovery_targets_try_direct_lan_before_relayed_paths() {
+        let local = peer_id();
+        let peer = peer_id();
+        let relay = peer_id();
+        let relayed_address: Multiaddr =
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+        let discovered_lan_address: Multiaddr = format!("/ip4/192.168.0.203/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("lan address");
+
+        let targets = packet_plane_recovery_targets(
+            local,
+            peer,
+            &[(peer, relayed_address.clone())],
+            &[(peer, discovered_lan_address.clone())],
+        );
+
+        assert_eq!(
+            targets,
+            vec![(peer, discovered_lan_address), (peer, relayed_address)]
         );
     }
 
