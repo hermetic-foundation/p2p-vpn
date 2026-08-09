@@ -825,6 +825,7 @@ where
                     &forwarder,
                     &mut paths,
                     &node.configured_peer_addresses,
+                    &node.relay_peer_addresses,
                     &discovered_addresses,
                     &mut path_probe_tracker,
                     &metrics,
@@ -1107,6 +1108,7 @@ fn expire_unconfirmed_path_probes(
     forwarder: &Forwarder,
     paths: &mut PathSet,
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     path_probe_tracker: &mut PathProbeTracker,
     metrics: &RuntimeMetrics,
@@ -1122,6 +1124,7 @@ fn expire_unconfirmed_path_probes(
                 swarm,
                 peer,
                 configured_peer_addresses,
+                relay_addresses,
                 discovered_peer_addresses,
                 metrics,
             );
@@ -4065,6 +4068,7 @@ fn redial_packet_plane_recovery_addresses(
     swarm: &mut Swarm<Behaviour>,
     peer: Libp2pPeerId,
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     metrics: &RuntimeMetrics,
 ) {
@@ -4073,6 +4077,7 @@ fn redial_packet_plane_recovery_addresses(
         local_peer,
         peer,
         configured_peer_addresses,
+        relay_addresses,
         discovered_peer_addresses,
     ) {
         metrics.record_packet_plane_path_recovery_dial_attempt();
@@ -4096,6 +4101,7 @@ fn packet_plane_recovery_targets(
     local_peer: Libp2pPeerId,
     peer: Libp2pPeerId,
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
+    relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
 ) -> Vec<(Libp2pPeerId, Multiaddr)> {
     if peer == local_peer {
@@ -4129,6 +4135,13 @@ fn packet_plane_recovery_targets(
             continue;
         }
         addresses.push((*candidate_peer, address.clone()));
+    }
+    for (_, address) in relay_addresses {
+        let relayed_address = address.clone().with(Protocol::P2pCircuit);
+        if !seen.insert((peer, relayed_address.clone())) {
+            continue;
+        }
+        addresses.push((peer, relayed_address));
     }
     addresses
 }
@@ -4872,6 +4885,7 @@ async fn send_dequeued_packet_plane_datagram(
                         swarm,
                         peer,
                         context.configured_peer_addresses,
+                        context.relay_addresses,
                         &discovered_addresses,
                         context.metrics,
                     );
@@ -4975,6 +4989,7 @@ async fn send_dequeued_packet_plane_fallback(
                         swarm,
                         peer,
                         context.configured_peer_addresses,
+                        context.relay_addresses,
                         &discovered_addresses,
                         context.metrics,
                     );
@@ -6320,6 +6335,7 @@ fn handle_packet_event(
                         swarm,
                         peer,
                         context.configured_peer_addresses,
+                        context.relay_addresses,
                         &discovered_addresses,
                         context.metrics,
                     );
@@ -14559,6 +14575,7 @@ mod tests {
             local,
             peer,
             &[(peer, configured_address.clone()), (other, other_address)],
+            &[],
             &[
                 (peer, discovered_address.clone()),
                 (peer, configured_address.clone()),
@@ -14588,6 +14605,7 @@ mod tests {
             local,
             peer,
             &[(peer, relayed_address.clone())],
+            &[],
             &[(peer, discovered_lan_address.clone())],
         );
 
@@ -14598,11 +14616,32 @@ mod tests {
     }
 
     #[test]
+    fn packet_plane_recovery_targets_synthesize_relay_path_from_known_relay_addresses() {
+        let local = peer_id();
+        let peer = peer_id();
+        let relay = peer_id();
+        let relay_address: Multiaddr = format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let relayed_address: Multiaddr =
+            format!("/ip4/203.0.113.10/tcp/4001/p2p/{relay}/p2p-circuit")
+                .parse()
+                .expect("relayed address");
+
+        let targets =
+            packet_plane_recovery_targets(local, peer, &[], &[(relay, relay_address)], &[]);
+
+        assert_eq!(targets, vec![(peer, relayed_address)]);
+    }
+
+    #[test]
     fn packet_plane_recovery_targets_skip_local_peer() {
         let local = peer_id();
         let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
 
-        assert!(packet_plane_recovery_targets(local, local, &[(local, address)], &[]).is_empty());
+        assert!(
+            packet_plane_recovery_targets(local, local, &[(local, address)], &[], &[]).is_empty()
+        );
     }
 
     #[test]
