@@ -3194,7 +3194,7 @@ fn redial_known_addresses(
 struct RelayReadiness {
     accepted_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashMap<Libp2pPeerId, Vec<Multiaddr>>,
-    attempted_ready_dials: HashSet<(Libp2pPeerId, Libp2pPeerId, Multiaddr)>,
+    attempted_ready_dials: HashMap<(Libp2pPeerId, Libp2pPeerId, Multiaddr), Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -3856,7 +3856,7 @@ impl RelayReadiness {
         let removed_listen_address = self.relayed_listen_addresses.remove(&relay).is_some();
         if removed_reservation || removed_listen_address {
             self.attempted_ready_dials
-                .retain(|(attempted_relay, _, _)| *attempted_relay != relay);
+                .retain(|(attempted_relay, _, _), _| *attempted_relay != relay);
             true
         } else {
             false
@@ -3865,7 +3865,7 @@ impl RelayReadiness {
 
     fn record_peer_connection_lost(&mut self, peer: Libp2pPeerId) {
         self.attempted_ready_dials
-            .retain(|(_, attempted_peer, _)| *attempted_peer != peer);
+            .retain(|(_, attempted_peer, _), _| *attempted_peer != peer);
     }
 
     fn relay_ready(&self, relay: Libp2pPeerId) -> bool {
@@ -3896,9 +3896,20 @@ impl RelayReadiness {
         relay: Libp2pPeerId,
         peer: Libp2pPeerId,
         address: &Multiaddr,
+        now: Instant,
     ) -> bool {
-        self.attempted_ready_dials
-            .insert((relay, peer, address.clone()))
+        let key = (relay, peer, address.clone());
+        if self
+            .attempted_ready_dials
+            .get(&key)
+            .is_some_and(|last_attempt| {
+                now.saturating_duration_since(*last_attempt) < REDIAL_INTERVAL
+            })
+        {
+            return false;
+        }
+        self.attempted_ready_dials.insert(key, now);
+        true
     }
 }
 
@@ -3932,7 +3943,7 @@ fn dial_relay_ready_configured_peers(
         discovered_peer_addresses,
         |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     ) {
-        if !relay_readiness.should_attempt_ready_dial(relay, peer, &address) {
+        if !relay_readiness.should_attempt_ready_dial(relay, peer, &address, Instant::now()) {
             continue;
         }
         metrics.record_redial_attempt();
@@ -5679,14 +5690,7 @@ async fn handle_swarm_event(
                 context.infrastructure_peers,
                 context.metrics,
                 peer_id,
-                context.auto_relay.should_discover_candidates()
-                    && !public_discovery_quiet_mode(
-                        context.forwarder,
-                        context.paths,
-                        context.peer_capabilities,
-                        Some(context.packet_plane),
-                        context.packet_plane_quic.as_deref(),
-                    ),
+                context.auto_relay.should_discover_candidates(),
                 context.relay_server_enabled,
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {}
@@ -13831,6 +13835,7 @@ mod tests {
                 .parse()
                 .expect("relayed address");
         let mut readiness = RelayReadiness::default();
+        let now = Instant::now();
 
         readiness.record_reservation_accepted(relay);
 
@@ -13839,8 +13844,15 @@ mod tests {
         readiness.record_relay_listen_address(relay, relay_address.clone());
 
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
-        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address, now));
+        assert!(!readiness.should_attempt_ready_dial(
+            relay,
+            peer,
+            &address,
+            now + REDIAL_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now + REDIAL_INTERVAL));
     }
 
     #[test]
@@ -13855,18 +13867,19 @@ mod tests {
                 .parse()
                 .expect("relayed address");
         let mut readiness = RelayReadiness::default();
+        let now = Instant::now();
 
         readiness.record_reservation_accepted(relay);
         readiness.record_relay_listen_address(relay, relay_address.clone());
 
         assert_eq!(readiness.ready_relays().len(), 1);
         assert!(readiness.ready_relays().contains(&relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
-        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address, now));
 
         readiness.record_peer_connection_lost(peer);
 
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
     }
 
     #[test]
@@ -13903,12 +13916,13 @@ mod tests {
                 .parse()
                 .expect("relayed address");
         let mut readiness = RelayReadiness::default();
+        let now = Instant::now();
 
         readiness.record_reservation_accepted(relay);
         readiness.record_relay_listen_address(relay, relay_address.clone());
         readiness.record_relay_listen_address(relay, relay_address_backup.clone());
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
 
         assert!(readiness.record_relay_listen_address_lost(relay, &relay_address));
         assert!(readiness.relay_ready(relay));
@@ -13918,7 +13932,7 @@ mod tests {
 
         readiness.record_relay_listen_address(relay, relay_address.clone());
         assert!(readiness.relay_ready(relay));
-        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address, now));
 
         assert!(readiness.record_relay_reservation_lost(relay));
         assert!(!readiness.relay_ready(relay));
@@ -13926,7 +13940,7 @@ mod tests {
 
         readiness.record_reservation_accepted(relay);
         readiness.record_relay_listen_address(relay, relay_address);
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address));
+        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
     }
 
     #[test]

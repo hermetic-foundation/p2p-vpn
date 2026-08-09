@@ -170,7 +170,7 @@ Coverage:
 | Auto relay | Both moving peers accept relay reservations from defaults. |
 | Move away | The moved node loses LAN reachability. |
 | Relay fallback | `pv0` traffic recovers through discovered relay paths. |
-| No config change | The daemon keeps running during the move. |
+| No config change | Generated config hashes stay unchanged across move and return. |
 | Return to LAN | The selected path promotes back to direct. |
 
 The 2026-08-09 VM run passed with minimal NixOS configs.

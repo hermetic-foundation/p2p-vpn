@@ -180,6 +180,14 @@ pkgs.testers.nixosTest {
             "and (.peers == [{\"id\":\"${nodeA.peerId}\",\"vpn_ip\":\"${nodeA.vpnIp}\"}])"
             "' /etc/p2p-vpn/node-b.json"
         )
+        node_a.succeed(
+            "sha256sum /etc/p2p-vpn/node-a.json "
+            "| awk '{print $1}' > /tmp/node-a-config.sha256"
+        )
+        node_b.succeed(
+            "sha256sum /etc/p2p-vpn/node-b.json "
+            "| awk '{print $1}' > /tmp/node-b-config.sha256"
+        )
 
     with subtest("starts on LAN with direct path"):
         node_a.succeed("${health "node-a"}")
@@ -187,8 +195,8 @@ pkgs.testers.nixosTest {
         node_a.wait_until_succeeds("ping -I pv0 -c 3 -W 2 ${nodeB.vpnIp}", timeout=90)
         node_b.wait_until_succeeds("ping -I pv0 -c 3 -W 2 ${nodeA.vpnIp}", timeout=90)
         node_a.wait_until_succeeds("${state "node-a"} | grep -q 'selected_path direct_'", timeout=90)
-        node_a.wait_until_succeeds("${state "node-a"} | awk '/relay_reservations_accepted/ { exit $2 > 0 ? 0 : 1 }'", timeout=90)
-        node_b.wait_until_succeeds("${state "node-b"} | awk '/relay_reservations_accepted/ { exit $2 > 0 ? 0 : 1 }'", timeout=90)
+        node_a.wait_until_succeeds("${state "node-a"} | awk '/auto_relay_active_reservations/ { found = 1; reservations = $2 } END { exit found && reservations > 0 ? 0 : 1 }'", timeout=90)
+        node_b.wait_until_succeeds("${state "node-b"} | awk '/auto_relay_active_reservations/ { found = 1; reservations = $2 } END { exit found && reservations > 0 ? 0 : 1 }'", timeout=90)
 
     with subtest("moved peer recovers through relay without config changes"):
         node_b.succeed("ip link set eth2 up")
@@ -201,6 +209,14 @@ pkgs.testers.nixosTest {
         node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-moved-state | grep -q 'relay_paths 1'", timeout=90)
         node_a.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-a-moved-state")
         node_b.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-b-moved-state")
+        node_a.succeed(
+            "test \"$(sha256sum /etc/p2p-vpn/node-a.json | awk '{print $1}')\" "
+            "= \"$(cat /tmp/node-a-config.sha256)\""
+        )
+        node_b.succeed(
+            "test \"$(sha256sum /etc/p2p-vpn/node-b.json | awk '{print $1}')\" "
+            "= \"$(cat /tmp/node-b-config.sha256)\""
+        )
 
     with subtest("returned peer promotes back to LAN direct path"):
         node_b.succeed("ip link set eth1 up")
@@ -209,5 +225,13 @@ pkgs.testers.nixosTest {
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=120)
         node_a.wait_until_succeeds("${state "node-a"} | tee /tmp/node-a-returned-state | grep -q 'selected_path direct_'", timeout=120)
         node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-returned-state | grep -q 'selected_path direct_'", timeout=120)
+        node_a.succeed(
+            "test \"$(sha256sum /etc/p2p-vpn/node-a.json | awk '{print $1}')\" "
+            "= \"$(cat /tmp/node-a-config.sha256)\""
+        )
+        node_b.succeed(
+            "test \"$(sha256sum /etc/p2p-vpn/node-b.json | awk '{print $1}')\" "
+            "= \"$(cat /tmp/node-b-config.sha256)\""
+        )
   '';
 }
