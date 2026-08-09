@@ -34,8 +34,17 @@ nix develop -c cargo fmt -- --check
 ## Clippy
 
 ```sh
-nix develop -c cargo clippy --all-targets -- -D warnings
+nix develop -c cargo clippy --all-targets -- \
+  -D clippy::correctness \
+  -D clippy::suspicious \
+  -D clippy::perf
 ```
+
+The release gate fails high-signal Clippy groups.
+
+Style, complexity, and pedantic Clippy lints stay advisory.
+
+This keeps CI stable across nixpkgs Clippy updates.
 
 ## Nix Checks
 

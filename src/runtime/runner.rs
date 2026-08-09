@@ -13101,8 +13101,10 @@ mod tests {
             .parse()
             .expect("relay reservation");
         let now = Instant::now();
-        let mut retries =
-            ConfiguredRelayReservationRetries::from_startup_attempts(&[address.clone()], now);
+        let mut retries = ConfiguredRelayReservationRetries::from_startup_attempts(
+            std::slice::from_ref(&address),
+            now,
+        );
 
         assert!(!retries.should_retry(&address, now));
         assert!(!retries.should_retry(&address, now + REDIAL_INTERVAL - Duration::from_millis(1)));

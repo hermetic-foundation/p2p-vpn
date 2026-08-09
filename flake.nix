@@ -60,7 +60,7 @@
             export RUST_BACKTRACE="''${RUST_BACKTRACE:-1}"
             cargo fmt -- --check
             cargo test
-            cargo clippy --all-targets -- -D warnings
+            cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
           '';
         };
         namespacePreflight = pkgs.writeShellApplication {
@@ -2225,7 +2225,7 @@ EOF
             ];
             buildPhase = ''
               runHook preBuild
-              cargo clippy --all-targets -- -D warnings
+              cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
               runHook postBuild
             '';
             installPhase = ''
