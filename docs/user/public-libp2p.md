@@ -205,6 +205,58 @@ Use strict mode only when both hosts should have direct recovery evidence.
 
 Relay-only fallback proof should require `--require-relay`.
 
+## Prove Network Movement
+
+Use the same generated configs for every phase.
+
+Do not add peer addresses, relay routes, or manual OS routes between phases.
+
+| Phase | Host Placement | Required Result |
+| --- | --- | --- |
+| Baseline | Both hosts on LAN | Overlay ping succeeds. |
+| Split | One host on hotspot or VPN | Overlay ping recovers through relay or direct public path. |
+| Return | Both hosts back on LAN | Overlay ping succeeds again. |
+
+For each phase:
+
+1. Run the Host A script on Host A.
+2. Run the Host B script on Host B.
+3. Save both `vpn-repro-evidence.json` files.
+4. Run `public-vpn-evidence-check` against the pair.
+
+Expected proof:
+
+| Requirement | Evidence |
+| --- | --- |
+| Minimal config | Config files contain peer IDs and overlay routes only. |
+| Automatic discovery | No peer underlay addresses are added between phases. |
+| Data plane | `ping_succeeded` is true on both hosts. |
+| Supported path | `peers_with_supported_path` is at least 1. |
+| Packet plane | `packet_plane_sessions` is at least 1. |
+| Fallback | Relay evidence appears during the split phase when direct fails. |
+| Recovery | Direct evidence may reappear after returning to LAN. |
+
+Check a fallback phase:
+
+```sh
+nix run .#public-vpn-evidence-check -- \
+  --host-a HOTSPOT_HOST_A/vpn-repro-evidence.json \
+  --host-b HOTSPOT_HOST_B/vpn-repro-evidence.json \
+  --require-relay \
+  --write-report public-vpn-hotspot-proof.json
+```
+
+Check a strict direct recovery phase when expected:
+
+```sh
+nix run .#public-vpn-evidence-check -- \
+  --host-a LAN_RETURN_HOST_A/vpn-repro-evidence.json \
+  --host-b LAN_RETURN_HOST_B/vpn-repro-evidence.json \
+  --require-direct \
+  --require-quic-session \
+  --write-report public-vpn-lan-return-proof.json
+```
+
 ## No-Route Backoff
 
 Default public IPFS bootstrap peers are retried with backoff when the OS reports

@@ -233,6 +233,41 @@ nix run .#public-vpn-evidence-check -- \
 Add `--require-direct --require-dcutr --require-quic-session` for strict
 hole-punch evidence.
 
+## Public Network-Move Proof
+
+This is the remaining real-world gate.
+
+It must use the same minimal configs for every phase.
+
+| Phase | Topology | Check |
+| --- | --- | --- |
+| LAN baseline | Both hosts on the same LAN | `--require-direct --require-quic-session` when direct is expected. |
+| Public split | One host on hotspot or VPN | `--require-relay` unless direct public recovery is proven. |
+| LAN return | Both hosts on the same LAN again | `--require-direct --require-quic-session` when direct is expected. |
+
+Required evidence per phase:
+
+| Evidence | Source |
+| --- | --- |
+| Host A proof | `HOST_A/vpn-repro-evidence.json` |
+| Host B proof | `HOST_B/vpn-repro-evidence.json` |
+| Machine report | `public-vpn-evidence-check --write-report` |
+| Daemon paths | `daemon-paths-final.json` from both hosts |
+| Metrics | `daemon-status-prometheus-final.txt` from both hosts |
+| Ping output | `ping.txt` from both hosts |
+
+Invalid proof:
+
+| Pattern | Reason |
+| --- | --- |
+| Editing peer addresses between phases | Discovery was not automatic. |
+| Adding OS routes by hand | Routing was not owned by p2p-vpn. |
+| Restarting with different topology config | Movement recovery was not proven. |
+| One-sided evidence only | Bidirectional operation was not proven. |
+
+The goal is complete only after the public split phase proves overlay ping and
+path recovery without manual route edits.
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.
