@@ -156,9 +156,17 @@ The generated configs use:
 | Direct listener | `/ip4/0.0.0.0/tcp/4001` |
 | LAN discovery | mDNS enabled |
 | Public routing | `/ipfs/kad/1.0.0` |
+| Provider ads | enabled |
 | Relay fallback | selected relay reservation |
+| Peer addresses | omitted |
 
 This is the normal mobile profile.
+
+The selected relay is infrastructure only.
+
+It appears in bootstrap and reservation settings.
+
+It is not written into `peers[].addresses`.
 
 To force relay-only testing, disable direct listeners and mDNS in a copy.
 

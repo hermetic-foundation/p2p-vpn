@@ -4201,8 +4201,6 @@ fn public_relay_two_host_configs(
         metric: 100,
     };
 
-    let host_a_relayed = public_relay_peer_circuit_address(relay, &host_a_identity)?;
-    let host_b_relayed = public_relay_peer_circuit_address(relay, &host_b_identity)?;
     let direct_listen_addresses = vec!["/ip4/0.0.0.0/tcp/4001".to_owned()];
     let relay_bootstrap = InitPeer {
         id: relay.id.clone(),
@@ -4232,7 +4230,7 @@ fn public_relay_two_host_configs(
             bootstrap_peers: vec![relay_bootstrap.clone()],
             peers: vec![InitPeer {
                 id: host_b_identity.peer_id.clone(),
-                address: Some(host_b_relayed),
+                address: None,
                 vpn_ip: None,
                 routes: vec![host_b_route.clone()],
             }],
@@ -4257,7 +4255,7 @@ fn public_relay_two_host_configs(
             bootstrap_peers: vec![relay_bootstrap],
             peers: vec![InitPeer {
                 id: host_a_identity.peer_id.clone(),
-                address: Some(host_a_relayed),
+                address: None,
                 vpn_ip: None,
                 routes: vec![host_a_route],
             }],
@@ -4281,39 +4279,11 @@ fn public_ipfs_relay_discovery_config() -> DiscoveryConfig {
     InitDiscoveryFlags {
         disable_mdns: true,
         disable_kademlia: false,
-        disable_kademlia_provider_advertisement: true,
+        disable_kademlia_provider_advertisement: false,
         disable_dcutr: false,
         disable_autonat: false,
     }
     .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), false, true)
-}
-
-fn public_relay_peer_circuit_address(
-    relay: &EndpointArg,
-    peer: &NodeIdentity,
-) -> Result<String, String> {
-    let Some(address) = &relay.address else {
-        return Err(format!(
-            "relay peer {} must include an address as PEER_ID=MULTIADDR",
-            relay.id
-        ));
-    };
-    let mut address = address
-        .parse::<libp2p::Multiaddr>()
-        .map_err(|error| format!("relay peer address for {} is invalid: {error:?}", relay.id))?;
-    if address
-        .iter()
-        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
-    {
-        return Err("validated relay candidate must be a direct relay address".to_owned());
-    }
-    let peer_id = peer
-        .peer_id
-        .parse::<libp2p::PeerId>()
-        .map_err(|error| format!("generated peer id {} is invalid: {error}", peer.peer_id))?;
-    address.push(libp2p::multiaddr::Protocol::P2pCircuit);
-    address.push(libp2p::multiaddr::Protocol::P2p(peer_id));
-    Ok(address.to_string())
 }
 
 fn public_relay_probe_winner(
@@ -10677,9 +10647,25 @@ mod tests {
         );
         assert!(host_a.network.discovery.mdns);
         assert!(host_b.network.discovery.mdns);
+        assert!(host_a.network.discovery.kademlia_provider_advertisement);
+        assert!(host_b.network.discovery.kademlia_provider_advertisement);
         assert_eq!(
             host_a.network.discovery.kademlia_protocol,
             PUBLIC_IPFS_KADEMLIA_PROTOCOL
+        );
+        assert!(
+            host_a
+                .effective_bootstrap_multiaddrs()
+                .expect("Host A effective bootstrap")
+                .len()
+                >= PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
+        );
+        assert!(
+            host_b
+                .effective_bootstrap_multiaddrs()
+                .expect("Host B effective bootstrap")
+                .len()
+                >= PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
         );
         assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
         assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
@@ -10693,8 +10679,8 @@ mod tests {
         );
         assert_eq!(host_a.peers[0].routes[0].prefix, "10.44.0.2/32");
         assert_eq!(host_b.peers[0].routes[0].prefix, "10.44.0.1/32");
-        assert!(host_a.peers[0].addresses[0].contains("/p2p-circuit/p2p/"));
-        assert!(host_b.peers[0].addresses[0].contains("/p2p-circuit/p2p/"));
+        assert!(host_a.peers[0].addresses.is_empty());
+        assert!(host_b.peers[0].addresses.is_empty());
         assert!(host_a.network.bootstrap_peers.iter().any(|peer| {
             peer.id == relay.id && Some(peer.address.as_str()) == relay.address.as_deref()
         }));
