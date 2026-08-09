@@ -60,6 +60,25 @@ Coverage:
 | Data plane | Bidirectional ping crosses the overlay. |
 | Packet plane | A direct LAN packet-plane session is negotiated. |
 
+## NixOS VM Forced Relay
+
+Run the three-node forced-relay check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-forced-relay
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Topology | Data nodes cannot reach each other directly. |
+| Relay | Both data nodes can reach the relay. |
+| Discovery | Public discovery is disabled for isolation. |
+| Minimal config | `vpnIp` plus peer IDs carry overlay IPs. |
+| Data plane | Bidirectional ping crosses `pv0`. |
+| Path selection | Data nodes select `circuit_relay`. |
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

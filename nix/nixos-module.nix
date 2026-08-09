@@ -54,6 +54,16 @@ let
       runtimeGeneratedConfigFile name;
 
   routeObject = prefix: { inherit prefix; };
+  discoverySettings = discovery: {
+    inherit (discovery)
+      mdns
+      kademlia
+      dcutr
+      autonat
+      ;
+    kademlia_provider_advertisement = discovery.kademliaProviderAdvertisement;
+    kademlia_protocol = discovery.kademliaProtocol;
+  };
   compactPeerConfig =
     id: peer:
     {
@@ -68,13 +78,24 @@ let
   generatedSettings =
     instance:
     {
-      network = {
-        name = instance.networkName;
-        local_peer = instance.localPeer;
-      }
-      // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
-      // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
-      // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; };
+      network =
+        {
+          name = instance.networkName;
+          local_peer = instance.localPeer;
+        }
+        // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
+        // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
+        // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; }
+        // optionalAttrs (instance.discovery != null) {
+          discovery = discoverySettings instance.discovery;
+        }
+        // optionalAttrs (instance.relayServer || instance.relayReservations != [ ]) {
+          relay =
+            optionalAttrs instance.relayServer { server = true; }
+            // optionalAttrs (instance.relayReservations != [ ]) {
+              reservations = instance.relayReservations;
+            };
+        };
       peers = mapAttrsToList compactPeerConfig instance.peers;
     };
 
@@ -203,6 +224,90 @@ let
           description = ''
             Overlay prefixes originated by this node in generated minimal
             configs.
+          '';
+        };
+
+        relayServer = mkOption {
+          type = types.bool;
+          default = false;
+          example = true;
+          description = ''
+            Enable the libp2p circuit relay server for this instance.
+
+            Normal VPN nodes should leave this disabled.
+          '';
+        };
+
+        relayReservations = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [ "/ip4/203.0.113.10/tcp/4001/p2p/RELAY_PEER_ID/p2p-circuit" ];
+          description = ''
+            Relay reservation multiaddrs for generated configs.
+
+            Use this for forced relay tests or explicit relay fallback.
+          '';
+        };
+
+        discovery = mkOption {
+          type = types.nullOr (
+            types.submodule (
+              { ... }:
+              {
+                options = {
+                  mdns = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Enable LAN mDNS peer discovery.";
+                  };
+
+                  kademlia = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Enable libp2p Kademlia peer discovery.";
+                  };
+
+                  kademliaProviderAdvertisement = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Advertise this node as a Kademlia provider for the overlay.";
+                  };
+
+                  kademliaProtocol = mkOption {
+                    type = types.str;
+                    default = "/ipfs/kad/1.0.0";
+                    example = "/p2p-vpn/lab/kad/1.0.0";
+                    description = "Kademlia protocol name used for generated configs.";
+                  };
+
+                  dcutr = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Enable libp2p direct connection upgrade through relay.";
+                  };
+
+                  autonat = mkOption {
+                    type = types.bool;
+                    default = true;
+                    description = "Enable libp2p AutoNAT probing.";
+                  };
+                };
+              }
+            )
+          );
+          default = null;
+          example = {
+            mdns = false;
+            kademlia = false;
+            kademliaProviderAdvertisement = false;
+            dcutr = false;
+            autonat = false;
+          };
+          description = ''
+            Optional discovery override for generated minimal configs.
+
+            Leave this unset for normal operation. Set individual fields when a
+            test or deployment needs deterministic discovery behavior.
           '';
         };
 
@@ -497,6 +602,9 @@ in
               && instance.privateKeyFile == null
               && instance.vpnIp == null
               && instance.routes == [ ]
+              && !instance.relayServer
+              && instance.relayReservations == [ ]
+              && instance.discovery == null
               && instance.peers == { });
           message = "services.p2p-vpn.instances.${name} generated config fields cannot be combined with configFile or settings.";
         }

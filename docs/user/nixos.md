@@ -60,6 +60,42 @@ Add a direct LAN IP only as an override:
 
 Use explicit `addresses` only for custom ports, DNS, or relayed paths.
 
+## Discovery Options
+
+Leave discovery unset for normal hosts.
+
+The default profile enables:
+
+| Mechanism | Purpose |
+| --- | --- |
+| mDNS | LAN peer discovery |
+| Kademlia | Public IPFS-compatible routing |
+| DCUtR | Relay-assisted direct upgrade |
+| AutoNAT | Reachability probing |
+
+Override discovery only for deterministic tests or controlled networks:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.discovery = {
+    mdns = false;
+    kademlia = false;
+    kademliaProviderAdvertisement = false;
+    dcutr = false;
+    autonat = false;
+  };
+}
+```
+
+Use a custom Kademlia protocol to isolate a deployment:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.discovery.kademliaProtocol =
+    "/p2p-vpn/lab/kad/1.0.0";
+}
+```
+
 ## Overlay IPs
 
 Use `vpnIp` for ordinary stable host addresses:
@@ -81,6 +117,39 @@ The module writes these as `vpn_ip` fields:
 | `fd00::1` | `fd00::1/128` |
 
 Use `routes` only for prefixes or extra routed networks.
+
+## Relay Options
+
+Enable a relay server on infrastructure nodes:
+
+```nix
+{
+  services.p2p-vpn.instances.relay = {
+    enable = true;
+    relayServer = true;
+  };
+}
+```
+
+Reserve an explicit relay from a VPN node:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.relayReservations = [
+    "/ip4/203.0.113.10/tcp/4001/p2p/RELAY_PEER_ID/p2p-circuit"
+  ];
+}
+```
+
+Use peer `addresses` for forced relay paths:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.peers."REMOTE_PEER_ID".addresses = [
+    "/ip4/203.0.113.10/tcp/4001/p2p/RELAY_PEER_ID/p2p-circuit/p2p/REMOTE_PEER_ID"
+  ];
+}
+```
 
 ## Private Keys
 
