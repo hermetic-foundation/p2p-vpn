@@ -269,6 +269,25 @@ Invalid proof:
 The goal is complete only after the public split phase proves overlay ping and
 path recovery without manual route edits.
 
+Validate all phases together:
+
+```sh
+nix run .#public-vpn-move-evidence-check -- \
+  --lan-baseline-host-a LAN_A/vpn-repro-evidence.json \
+  --lan-baseline-host-b LAN_B/vpn-repro-evidence.json \
+  --public-split-host-a SPLIT_A/vpn-repro-evidence.json \
+  --public-split-host-b SPLIT_B/vpn-repro-evidence.json \
+  --lan-return-host-a RETURN_A/vpn-repro-evidence.json \
+  --lan-return-host-b RETURN_B/vpn-repro-evidence.json \
+  --write-report public-vpn-move-proof.json
+```
+
+Validate the checker itself:
+
+```sh
+nix build .#checks.x86_64-linux.public-vpn-move-evidence-check
+```
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

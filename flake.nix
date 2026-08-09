@@ -125,6 +125,7 @@ USAGE
               ".#checks.$system.public-vpn-repro-structure"
               ".#checks.$system.public-vpn-repro-evidence-structure"
               ".#checks.$system.public-vpn-evidence-check"
+              ".#checks.$system.public-vpn-move-evidence-check"
             )
 
             vm_checks=(
@@ -147,6 +148,7 @@ USAGE
               if [[ "$is_linux" -eq 1 ]]; then
                 printf '%s\n' "external proof still required:"
                 printf '%s\n' "  nix run .#public-vpn-evidence-check -- --host-a HOST_A/vpn-repro-evidence.json --host-b HOST_B/vpn-repro-evidence.json --require-relay --require-direct --require-dcutr --require-quic-session --require-config-match"
+                printf '%s\n' "  nix run .#public-vpn-move-evidence-check -- --lan-baseline-host-a LAN_A/vpn-repro-evidence.json --lan-baseline-host-b LAN_B/vpn-repro-evidence.json --public-split-host-a SPLIT_A/vpn-repro-evidence.json --public-split-host-b SPLIT_B/vpn-repro-evidence.json --lan-return-host-a RETURN_A/vpn-repro-evidence.json --lan-return-host-b RETURN_B/vpn-repro-evidence.json --write-report public-vpn-move-proof.json"
               else
                 printf '%s\n' "NixOS, VM, and public two-host gates are Linux-only."
               fi
@@ -2197,6 +2199,209 @@ EOF
             fi
           '';
         };
+        publicVpnMoveEvidenceCheck = pkgs.writeShellApplication {
+          name = "p2p-vpn-public-vpn-move-evidence-check";
+          runtimeInputs = [
+            publicVpnEvidenceCheck
+            pkgs.coreutils
+            pkgs.jq
+          ];
+          text = ''
+            usage() {
+              cat >&2 <<'EOF'
+Usage:
+  p2p-vpn-public-vpn-move-evidence-check \
+    --lan-baseline-host-a EVIDENCE.json \
+    --lan-baseline-host-b EVIDENCE.json \
+    --public-split-host-a EVIDENCE.json \
+    --public-split-host-b EVIDENCE.json \
+    --lan-return-host-a EVIDENCE.json \
+    --lan-return-host-b EVIDENCE.json \
+    [--write-report REPORT.json]
+
+Checks the full public network-move proof.
+
+Required phases:
+  lan-baseline  direct + QUIC + reciprocal config
+  public-split  relay + reciprocal config
+  lan-return    direct + QUIC + reciprocal config
+EOF
+            }
+
+            lan_baseline_host_a=""
+            lan_baseline_host_b=""
+            public_split_host_a=""
+            public_split_host_b=""
+            lan_return_host_a=""
+            lan_return_host_b=""
+            report=""
+
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                --lan-baseline-host-a)
+                  lan_baseline_host_a="''${2:-}"
+                  shift 2
+                  ;;
+                --lan-baseline-host-b)
+                  lan_baseline_host_b="''${2:-}"
+                  shift 2
+                  ;;
+                --public-split-host-a)
+                  public_split_host_a="''${2:-}"
+                  shift 2
+                  ;;
+                --public-split-host-b)
+                  public_split_host_b="''${2:-}"
+                  shift 2
+                  ;;
+                --lan-return-host-a)
+                  lan_return_host_a="''${2:-}"
+                  shift 2
+                  ;;
+                --lan-return-host-b)
+                  lan_return_host_b="''${2:-}"
+                  shift 2
+                  ;;
+                --write-report)
+                  report="''${2:-}"
+                  shift 2
+                  ;;
+                -h|--help)
+                  usage
+                  exit 0
+                  ;;
+                *)
+                  echo "unknown argument: $1" >&2
+                  usage
+                  exit 2
+                  ;;
+              esac
+            done
+
+            required=(
+              "$lan_baseline_host_a"
+              "$lan_baseline_host_b"
+              "$public_split_host_a"
+              "$public_split_host_b"
+              "$lan_return_host_a"
+              "$lan_return_host_b"
+            )
+            for evidence in "''${required[@]}"; do
+              if [[ -z "$evidence" || ! -s "$evidence" ]]; then
+                echo "missing evidence file: ''${evidence:-<empty>}" >&2
+                usage
+                exit 2
+              fi
+            done
+
+            tmpdir="$(mktemp -d)"
+            trap 'rm -rf "$tmpdir"' EXIT
+
+            run_phase() {
+              phase="$1"
+              host_a="$2"
+              host_b="$3"
+              shift 3
+              phase_report="$tmpdir/$phase.json"
+              phase_stdout="$tmpdir/$phase.stdout"
+              phase_stderr="$tmpdir/$phase.stderr"
+
+              set +e
+              p2p-vpn-public-vpn-evidence-check \
+                --host-a "$host_a" \
+                --host-b "$host_b" \
+                --write-report "$phase_report" \
+                "$@" \
+                > "$phase_stdout" \
+                2> "$phase_stderr"
+              status="$?"
+              set -e
+
+              cat "$phase_stdout"
+              cat "$phase_stderr" >&2
+              printf '%s\n' "$status" > "$tmpdir/$phase.status"
+
+              if [[ ! -s "$phase_report" ]]; then
+                jq -n \
+                  --arg phase "$phase" \
+                  --arg host_a "$host_a" \
+                  --arg host_b "$host_b" \
+                  --argjson status "$status" \
+                  '{schema_version: 1, phase: $phase, host_a: $host_a, host_b: $host_b, status: $status, ok: false, checks: []}' \
+                  > "$phase_report"
+              fi
+            }
+
+            run_phase lan_baseline \
+              "$lan_baseline_host_a" \
+              "$lan_baseline_host_b" \
+              --require-direct \
+              --require-quic-session \
+              --require-config-match
+
+            run_phase public_split \
+              "$public_split_host_a" \
+              "$public_split_host_b" \
+              --require-relay \
+              --require-config-match
+
+            run_phase lan_return \
+              "$lan_return_host_a" \
+              "$lan_return_host_b" \
+              --require-direct \
+              --require-quic-session \
+              --require-config-match
+
+            lan_baseline_status="$(cat "$tmpdir/lan_baseline.status")"
+            public_split_status="$(cat "$tmpdir/public_split.status")"
+            lan_return_status="$(cat "$tmpdir/lan_return.status")"
+            report_tmp="$(mktemp)"
+            jq -n \
+              --slurpfile lan_baseline "$tmpdir/lan_baseline.json" \
+              --slurpfile public_split "$tmpdir/public_split.json" \
+              --slurpfile lan_return "$tmpdir/lan_return.json" \
+              --arg generated_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --argjson lan_baseline_status "$lan_baseline_status" \
+              --argjson public_split_status "$public_split_status" \
+              --argjson lan_return_status "$lan_return_status" \
+              '{
+                schema_version: 1,
+                generated_utc: $generated_utc,
+                requirements: {
+                  lan_baseline: ["direct", "quic_session", "config_match"],
+                  public_split: ["relay", "config_match"],
+                  lan_return: ["direct", "quic_session", "config_match"]
+                },
+                phases: {
+                  lan_baseline: $lan_baseline[0],
+                  public_split: $public_split[0],
+                  lan_return: $lan_return[0]
+                },
+                checks: [
+                  {name: "lan_baseline.phase", ok: ($lan_baseline_status == 0 and $lan_baseline[0].ok == true), detail: $lan_baseline_status},
+                  {name: "public_split.phase", ok: ($public_split_status == 0 and $public_split[0].ok == true), detail: $public_split_status},
+                  {name: "lan_return.phase", ok: ($lan_return_status == 0 and $lan_return[0].ok == true), detail: $lan_return_status}
+                ]
+              }
+              | .ok = (all(.checks[]; .ok == true))' \
+              > "$report_tmp"
+
+            if [[ -n "$report" ]]; then
+              mkdir -p "$(dirname "$report")"
+              cp "$report_tmp" "$report"
+            fi
+
+            jq -r '
+              "public VPN move evidence check: " + (if .ok then "ok" else "failed" end),
+              (.checks[] | "check " + .name + " " + (if .ok then "ok" else "failed" end))
+            ' "$report_tmp"
+
+            if ! jq -e '.ok == true' "$report_tmp" >/dev/null; then
+              jq -r '.checks[] | select(.ok != true) | "failed: " + .name + " detail=" + (.detail | @json)' "$report_tmp" >&2
+              exit 1
+            fi
+          '';
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -2440,6 +2645,7 @@ EOF
           public-relay-repro = publicRelayRepro;
           public-vpn-repro = publicVpnRepro;
           public-vpn-evidence-check = publicVpnEvidenceCheck;
+          public-vpn-move-evidence-check = publicVpnMoveEvidenceCheck;
         };
 
         apps = {
@@ -2512,6 +2718,13 @@ EOF
             program = "${publicVpnEvidenceCheck}/bin/p2p-vpn-public-vpn-evidence-check";
             meta = {
               description = "Validate two-host public VPN repro evidence artifacts";
+            };
+          };
+          public-vpn-move-evidence-check = {
+            type = "app";
+            program = "${publicVpnMoveEvidenceCheck}/bin/p2p-vpn-public-vpn-move-evidence-check";
+            meta = {
+              description = "Validate LAN, public split, and LAN return VPN evidence artifacts";
             };
           };
           tun-e2e = {
@@ -3165,6 +3378,134 @@ EOF
               exit 1
             fi
             grep -q 'failed: pair.config_match' "$TMPDIR/config-fail-error.txt"
+
+            touch $out
+          '';
+          public-vpn-move-evidence-check = pkgs.runCommand "p2p-vpn-public-vpn-move-evidence-check" {
+            nativeBuildInputs = [
+              publicVpnMoveEvidenceCheck
+              pkgs.jq
+            ];
+          } ''
+            write_evidence() {
+              output="$1"
+              artifact_dir="$2"
+              local_route="$3"
+              peer_route="$4"
+              ping_target="$5"
+              direct="$6"
+              relay="$7"
+              quic="$8"
+
+              if [[ "$direct" -eq 1 ]]; then
+                direct_lines='["peer remote selected_path direct_quic_datagram"]'
+              else
+                direct_lines='[]'
+              fi
+              if [[ "$relay" -eq 1 ]]; then
+                relay_lines='["peer remote selected_path circuit relay"]'
+              else
+                relay_lines='[]'
+              fi
+
+              jq -n \
+                --arg artifact_dir "$artifact_dir" \
+                --arg local_route "$local_route" \
+                --arg peer_route "$peer_route" \
+                --arg ping_target "$ping_target" \
+                --argjson direct "$direct" \
+                --argjson relay "$relay" \
+                --argjson quic "$quic" \
+                --argjson direct_lines "$direct_lines" \
+                --argjson relay_lines "$relay_lines" \
+                '{
+                  schema_version: 1,
+                  artifact_dir: $artifact_dir,
+                  config_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  config_summary: {
+                    network_name: "public-vpn-move-proof",
+                    interface_name: "pv0",
+                    local_routes: [$local_route],
+                    peer_ids: ["remote"],
+                    peer_routes: [$peer_route],
+                    peer_count: 1,
+                    peer_address_count: 0,
+                    relay_reservation_count: 1,
+                    discovery: {
+                      mdns: true,
+                      kademlia: true,
+                      kademlia_protocol: "/ipfs/kad/1.0.0"
+                    }
+                  },
+                  ping_target: $ping_target,
+                  health_ready: true,
+                  ping_succeeded: true,
+                  ping_exit: 0,
+                  metrics: {
+                    dcutr_successes: 0,
+                    direct_connections_established: $direct,
+                    relayed_connections_established: $relay,
+                    peers_with_supported_path: 1,
+                    packet_plane_sessions: 1,
+                    packet_plane_quic_sessions: $quic,
+                    healthy_direct_quic_datagram_paths: $direct,
+                    healthy_direct_quic_stream_paths: 0,
+                    healthy_direct_tcp_stream_paths: 0,
+                    healthy_relay_paths: $relay
+                  },
+                  path_evidence: {
+                    direct_lines: $direct_lines,
+                    relay_lines: $relay_lines
+                  }
+                }' > "$output"
+            }
+
+            mkdir -p "$TMPDIR/evidence"
+            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 1 0 1
+            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 1 0 1
+            write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 0 1 0
+            write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 0 1 0
+            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 1 0 1
+            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 1 0 1
+
+            p2p-vpn-public-vpn-move-evidence-check \
+              --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
+              --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
+              --public-split-host-a "$TMPDIR/evidence/split-a.json" \
+              --public-split-host-b "$TMPDIR/evidence/split-b.json" \
+              --lan-return-host-a "$TMPDIR/evidence/return-a.json" \
+              --lan-return-host-b "$TMPDIR/evidence/return-b.json" \
+              --write-report "$TMPDIR/move-report.json" \
+              | tee "$TMPDIR/move-pass-output.txt"
+
+            jq -e '
+              .ok == true
+              and .requirements.lan_baseline == ["direct", "quic_session", "config_match"]
+              and .requirements.public_split == ["relay", "config_match"]
+              and .requirements.lan_return == ["direct", "quic_session", "config_match"]
+              and (.checks | length) == 3
+              and (.phases.lan_baseline.ok == true)
+              and (.phases.public_split.ok == true)
+              and (.phases.lan_return.ok == true)
+            ' "$TMPDIR/move-report.json"
+            grep -q '^public VPN move evidence check: ok$' "$TMPDIR/move-pass-output.txt"
+
+            write_evidence "$TMPDIR/evidence/split-b-no-relay.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 0 0 0
+            if p2p-vpn-public-vpn-move-evidence-check \
+              --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
+              --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
+              --public-split-host-a "$TMPDIR/evidence/split-a.json" \
+              --public-split-host-b "$TMPDIR/evidence/split-b-no-relay.json" \
+              --lan-return-host-a "$TMPDIR/evidence/return-a.json" \
+              --lan-return-host-b "$TMPDIR/evidence/return-b.json" \
+              --write-report "$TMPDIR/move-fail-report.json" \
+              > "$TMPDIR/move-fail-output.txt" 2> "$TMPDIR/move-fail-error.txt"
+            then
+              echo "public split without relay evidence was accepted" >&2
+              exit 1
+            fi
+            grep -q 'failed: public_split.phase' "$TMPDIR/move-fail-error.txt"
+            jq -e '.ok == false and (.phases.public_split.ok == false)' "$TMPDIR/move-fail-report.json"
 
             touch $out
           '';

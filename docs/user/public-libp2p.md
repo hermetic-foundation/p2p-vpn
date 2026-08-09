@@ -260,6 +260,27 @@ nix run .#public-vpn-evidence-check -- \
   --write-report public-vpn-lan-return-proof.json
 ```
 
+Check the full movement proof:
+
+```sh
+nix run .#public-vpn-move-evidence-check -- \
+  --lan-baseline-host-a LAN_A/vpn-repro-evidence.json \
+  --lan-baseline-host-b LAN_B/vpn-repro-evidence.json \
+  --public-split-host-a SPLIT_A/vpn-repro-evidence.json \
+  --public-split-host-b SPLIT_B/vpn-repro-evidence.json \
+  --lan-return-host-a RETURN_A/vpn-repro-evidence.json \
+  --lan-return-host-b RETURN_B/vpn-repro-evidence.json \
+  --write-report public-vpn-move-proof.json
+```
+
+This requires:
+
+| Phase | Required Evidence |
+| --- | --- |
+| LAN baseline | Direct path, QUIC packet session, config match. |
+| Public split | Relay path, config match. |
+| LAN return | Direct path, QUIC packet session, config match. |
+
 ## No-Route Backoff
 
 Default public IPFS bootstrap peers are retried with backoff when the OS reports
