@@ -34,7 +34,7 @@ use crate::{
     },
     path::{PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
-    route::RouteError,
+    route::{IpCidr, RouteError},
     runtime::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
@@ -5557,6 +5557,10 @@ async fn handle_swarm_event(
                 context.local_capabilities,
                 context.packet_plane.primary_listener(),
                 &endpoint,
+                &context
+                    .forwarder
+                    .local_advertised_route_prefixes()
+                    .collect::<Vec<_>>(),
                 context.metrics,
             );
             record_path_established_and_maybe_send_packet_plane_hello(
@@ -5698,6 +5702,10 @@ async fn handle_swarm_event(
                     .as_ref()
                     .and_then(|snapshot| snapshot.listener),
                 packet_plane_quic_snapshot.and_then(|snapshot| snapshot.certificate_der),
+                &context
+                    .forwarder
+                    .local_advertised_route_prefixes()
+                    .collect::<Vec<_>>(),
             );
             if observed_endpoint_update.public_address_accepted {
                 context
@@ -7173,10 +7181,17 @@ fn refreshed_local_capabilities_for_swarm(
 }
 
 fn local_direct_address_candidates(swarm: &Swarm<Behaviour>, forwarder: &Forwarder) -> Vec<String> {
+    let overlay_prefixes = forwarder
+        .local_advertised_route_prefixes()
+        .collect::<Vec<_>>();
     let interface_ips = local_interface_ips(&forwarder.config().interface.name);
     let mut addresses = Vec::new();
     for listener in swarm.listeners() {
-        for address in concrete_direct_listener_addresses(listener, &interface_ips) {
+        for address in concrete_direct_listener_addresses_excluding_overlay(
+            listener,
+            &interface_ips,
+            &overlay_prefixes,
+        ) {
             if addresses.len() >= MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES {
                 return addresses;
             }
@@ -7187,6 +7202,33 @@ fn local_direct_address_candidates(swarm: &Swarm<Behaviour>, forwarder: &Forward
         }
     }
     addresses
+}
+
+fn concrete_direct_listener_addresses_excluding_overlay(
+    listener: &Multiaddr,
+    interface_ips: &[IpAddr],
+    overlay_prefixes: &[IpCidr],
+) -> Vec<Multiaddr> {
+    let filtered_ips = interface_ips
+        .iter()
+        .copied()
+        .filter(|ip| !overlay_prefixes_contain(overlay_prefixes, *ip))
+        .collect::<Vec<_>>();
+    concrete_direct_listener_addresses(listener, &filtered_ips)
+        .into_iter()
+        .filter(|address| {
+            first_ip_in_multiaddr(address)
+                .is_none_or(|ip| !overlay_prefixes_contain(overlay_prefixes, ip))
+        })
+        .collect()
+}
+
+fn first_ip_in_multiaddr(address: &Multiaddr) -> Option<IpAddr> {
+    address.iter().find_map(|protocol| match protocol {
+        Protocol::Ip4(address) => Some(IpAddr::V4(address)),
+        Protocol::Ip6(address) => Some(IpAddr::V6(address)),
+        _ => None,
+    })
 }
 
 fn concrete_direct_listener_addresses(
@@ -7275,6 +7317,10 @@ fn local_interface_ips(excluded_interface_name: &str) -> Vec<IpAddr> {
         }
     }
     addresses
+}
+
+fn overlay_prefixes_contain(prefixes: &[IpCidr], address: IpAddr) -> bool {
+    prefixes.iter().any(|prefix| prefix.contains(address))
 }
 
 fn direct_libp2p_address_ip_is_advertisable(address: IpAddr) -> bool {
@@ -8100,8 +8146,14 @@ fn update_observed_packet_plane_endpoints(
     udp_listener: Option<SocketAddr>,
     quic_listener: Option<SocketAddr>,
     quic_certificate_der: Option<Vec<u8>>,
+    overlay_prefixes: &[IpCidr],
 ) -> ObservedPacketPlaneEndpointUpdate {
-    let endpoints = observed_packet_plane_endpoints(external_address, udp_listener, quic_listener);
+    let endpoints = observed_packet_plane_endpoints(
+        external_address,
+        udp_listener,
+        quic_listener,
+        overlay_prefixes,
+    );
     let mut update = ObservedPacketPlaneEndpointUpdate {
         public_address_accepted: endpoints.public_address_accepted,
         ..ObservedPacketPlaneEndpointUpdate::default()
@@ -8137,9 +8189,12 @@ fn advertise_direct_packet_plane_endpoint_from_path(
     capabilities: &mut ControlCapabilities,
     udp_listener: Option<SocketAddr>,
     endpoint: &ConnectedPoint,
+    overlay_prefixes: &[IpCidr],
     metrics: &RuntimeMetrics,
 ) -> bool {
-    let Some(candidate) = direct_packet_plane_endpoint_from_path(udp_listener, endpoint) else {
+    let Some(candidate) =
+        direct_packet_plane_endpoint_from_path(udp_listener, endpoint, overlay_prefixes)
+    else {
         return false;
     };
     if capabilities
@@ -8182,19 +8237,23 @@ fn replace_packet_plane_endpoint_for_listener(candidates: &mut Vec<String>, cand
 fn direct_packet_plane_endpoint_from_path(
     udp_listener: Option<SocketAddr>,
     endpoint: &ConnectedPoint,
+    overlay_prefixes: &[IpCidr],
 ) -> Option<String> {
     let listener = udp_listener?;
     if listener.port() == 0 || endpoint.is_relayed() {
         return None;
     }
     if !listener.ip().is_unspecified() {
-        return is_usable_direct_packet_endpoint_ip(listener.ip()).then(|| listener.to_string());
+        return (is_usable_direct_packet_endpoint_ip(listener.ip())
+            && !overlay_prefixes_contain(overlay_prefixes, listener.ip()))
+        .then(|| listener.to_string());
     }
 
     let remote_ip = direct_endpoint_remote_ip(endpoint)?;
     let local_ip = local_ip_for_remote(remote_ip)?;
-    is_usable_direct_packet_endpoint_ip(local_ip)
-        .then(|| SocketAddr::new(local_ip, listener.port()).to_string())
+    (is_usable_direct_packet_endpoint_ip(local_ip)
+        && !overlay_prefixes_contain(overlay_prefixes, local_ip))
+    .then(|| SocketAddr::new(local_ip, listener.port()).to_string())
 }
 
 fn is_usable_direct_packet_endpoint_ip(address: IpAddr) -> bool {
@@ -8247,8 +8306,11 @@ fn observed_packet_plane_endpoints(
     external_address: &Multiaddr,
     udp_listener: Option<SocketAddr>,
     quic_listener: Option<SocketAddr>,
+    overlay_prefixes: &[IpCidr],
 ) -> ObservedPacketPlaneEndpoints {
-    let Some(ip) = routable_packet_endpoint_ip_from_external_address(external_address) else {
+    let Some(ip) =
+        routable_packet_endpoint_ip_from_external_address(external_address, overlay_prefixes)
+    else {
         return ObservedPacketPlaneEndpoints::default();
     };
 
@@ -8263,7 +8325,10 @@ fn observed_packet_plane_endpoints(
     }
 }
 
-fn routable_packet_endpoint_ip_from_external_address(address: &Multiaddr) -> Option<IpAddr> {
+fn routable_packet_endpoint_ip_from_external_address(
+    address: &Multiaddr,
+    overlay_prefixes: &[IpCidr],
+) -> Option<IpAddr> {
     if address
         .iter()
         .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
@@ -8277,7 +8342,7 @@ fn routable_packet_endpoint_ip_from_external_address(address: &Multiaddr) -> Opt
             Protocol::Ip6(address) => IpAddr::V6(address),
             _ => continue,
         };
-        if is_routable_packet_endpoint_ip(ip) {
+        if is_routable_packet_endpoint_ip(ip) && !overlay_prefixes_contain(overlay_prefixes, ip) {
             return Some(ip);
         }
     }
@@ -19222,12 +19287,51 @@ mod tests {
     }
 
     #[test]
+    fn configured_overlay_prefixes_are_not_direct_listener_candidates() {
+        let listener: Multiaddr = "/ip4/0.0.0.0/tcp/4001".parse().expect("listener");
+        let overlay_prefixes =
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 45, 0, 0)), 24).expect("overlay prefix")];
+        let addresses = concrete_direct_listener_addresses_excluding_overlay(
+            &listener,
+            &[
+                IpAddr::V4(Ipv4Addr::new(10, 45, 0, 1)),
+                IpAddr::V4(Ipv4Addr::new(192, 168, 0, 10)),
+            ],
+            &overlay_prefixes,
+        );
+
+        assert_eq!(
+            addresses,
+            vec![
+                "/ip4/192.168.0.10/tcp/4001"
+                    .parse::<Multiaddr>()
+                    .expect("expanded listener")
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_overlay_prefixes_are_not_concrete_direct_listener_candidates() {
+        let listener: Multiaddr = "/ip4/10.45.0.1/tcp/4001".parse().expect("listener");
+        let overlay_prefixes =
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 45, 0, 0)), 24).expect("overlay prefix")];
+
+        assert!(concrete_direct_listener_addresses_excluding_overlay(
+            &listener,
+            &[],
+            &overlay_prefixes,
+        )
+        .is_empty());
+    }
+
+    #[test]
     fn observed_packet_plane_endpoints_use_confirmed_public_ip_with_listener_ports() {
         let external_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("multiaddr");
         let endpoints = observed_packet_plane_endpoints(
             &external_address,
             Some("0.0.0.0:51820".parse().expect("udp listener")),
             Some("0.0.0.0:51821".parse().expect("quic listener")),
+            &[],
         );
 
         assert_eq!(
@@ -19248,7 +19352,7 @@ mod tests {
         let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
 
         assert_eq!(
-            observed_packet_plane_endpoints(&private_address, udp_listener, None),
+            observed_packet_plane_endpoints(&private_address, udp_listener, None, &[]),
             ObservedPacketPlaneEndpoints {
                 public_address_accepted: true,
                 udp: Some("192.168.1.10:51820".to_owned()),
@@ -19268,11 +19372,31 @@ mod tests {
         let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
 
         assert_eq!(
-            observed_packet_plane_endpoints(&loopback_address, udp_listener, None),
+            observed_packet_plane_endpoints(&loopback_address, udp_listener, None, &[]),
             ObservedPacketPlaneEndpoints::default()
         );
         assert_eq!(
-            observed_packet_plane_endpoints(&relayed_address, udp_listener, None),
+            observed_packet_plane_endpoints(&relayed_address, udp_listener, None, &[]),
+            ObservedPacketPlaneEndpoints::default()
+        );
+    }
+
+    #[test]
+    fn observed_packet_plane_endpoints_reject_configured_overlay_addresses() {
+        let overlay_address: Multiaddr = "/ip4/10.45.0.2/tcp/4001"
+            .parse()
+            .expect("overlay multiaddr");
+        let udp_listener = Some("0.0.0.0:51820".parse().expect("udp listener"));
+        let overlay_prefixes =
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 45, 0, 0)), 24).expect("overlay prefix")];
+
+        assert_eq!(
+            observed_packet_plane_endpoints(
+                &overlay_address,
+                udp_listener,
+                None,
+                &overlay_prefixes
+            ),
             ObservedPacketPlaneEndpoints::default()
         );
     }
@@ -19289,6 +19413,7 @@ mod tests {
             direct_packet_plane_endpoint_from_path(
                 Some("192.168.1.10:51820".parse().expect("listener")),
                 &endpoint,
+                &[],
             ),
             Some("192.168.1.10:51820".to_owned())
         );
@@ -19306,6 +19431,7 @@ mod tests {
             direct_packet_plane_endpoint_from_path(
                 Some("0.0.0.0:51820".parse().expect("listener")),
                 &endpoint,
+                &[],
             ),
             Some("127.0.0.1:51820".to_owned())
         );
@@ -19325,6 +19451,27 @@ mod tests {
             direct_packet_plane_endpoint_from_path(
                 Some("0.0.0.0:51820".parse().expect("listener")),
                 &endpoint,
+                &[],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn direct_packet_plane_endpoint_rejects_configured_overlay_listener_ip() {
+        let endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/192.168.1.20/tcp/4001".parse().expect("address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let overlay_prefixes =
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 45, 0, 0)), 24).expect("overlay prefix")];
+
+        assert_eq!(
+            direct_packet_plane_endpoint_from_path(
+                Some("10.45.0.1:51820".parse().expect("listener")),
+                &endpoint,
+                &overlay_prefixes,
             ),
             None
         );
@@ -19381,6 +19528,7 @@ mod tests {
                 Some("0.0.0.0:51820".parse().expect("udp listener")),
                 Some("0.0.0.0:51821".parse().expect("quic listener")),
                 None,
+                &[],
             ),
             ObservedPacketPlaneEndpointUpdate {
                 public_address_accepted: true,
@@ -19406,6 +19554,7 @@ mod tests {
                 Some("0.0.0.0:51820".parse().expect("udp listener")),
                 Some("0.0.0.0:51821".parse().expect("quic listener")),
                 Some(vec![0x30, 0x01, 0x02]),
+                &[],
             ),
             ObservedPacketPlaneEndpointUpdate {
                 public_address_accepted: true,
@@ -19431,6 +19580,7 @@ mod tests {
                 Some("0.0.0.0:51820".parse().expect("udp listener")),
                 Some("0.0.0.0:51821".parse().expect("quic listener")),
                 Some(vec![0x30, 0x01, 0x02]),
+                &[],
             ),
             ObservedPacketPlaneEndpointUpdate {
                 public_address_accepted: true,

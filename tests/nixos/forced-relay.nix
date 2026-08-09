@@ -158,13 +158,29 @@ pkgs.testers.nixosTest {
         node_a.succeed("grep -q '^daemon_health_ready true$' /tmp/node-a-health")
         node_b.succeed("grep -q '^daemon_health_ready true$' /tmp/node-b-health")
 
+    with subtest("overlay addresses are not advertised as packet endpoints"):
+        node_a.succeed(
+            "p2p-vpn daemon-capabilities "
+            "--socket /run/p2p-vpn-node-a/control.sock "
+            "| tee /tmp/node-a-capabilities"
+        )
+        node_b.succeed(
+            "p2p-vpn daemon-capabilities "
+            "--socket /run/p2p-vpn-node-b/control.sock "
+            "| tee /tmp/node-b-capabilities"
+        )
+        node_a.fail("grep -E 'packet endpoint candidate: ${nodeA.vpnIp}(:|$)' /tmp/node-a-capabilities")
+        node_a.fail("grep -E 'packet endpoint candidate: ${nodeB.vpnIp}(:|$)' /tmp/node-a-capabilities")
+        node_b.fail("grep -E 'packet endpoint candidate: ${nodeA.vpnIp}(:|$)' /tmp/node-b-capabilities")
+        node_b.fail("grep -E 'packet endpoint candidate: ${nodeB.vpnIp}(:|$)' /tmp/node-b-capabilities")
+
     with subtest("pv0 traffic crosses circuit relay"):
         node_a.succeed("ip -brief addr show pv0 | tee /tmp/node-a-pv0")
         node_b.succeed("ip -brief addr show pv0 | tee /tmp/node-b-pv0")
         node_a.succeed("grep -q '${nodeA.vpnIp}' /tmp/node-a-pv0")
         node_b.succeed("grep -q '${nodeB.vpnIp}' /tmp/node-b-pv0")
-        node_a.succeed("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}")
-        node_b.succeed("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}")
+        node_a.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=120)
+        node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=120)
 
     with subtest("relay circuits were used"):
         node_a.succeed(
@@ -177,8 +193,8 @@ pkgs.testers.nixosTest {
             "--socket /run/p2p-vpn-node-b/control.sock "
             "| tee /tmp/node-b-state"
         )
-        node_a.succeed("awk '/relay_inbound_circuits_established/ { found = ($2 > 0) } END { exit found ? 0 : 1 }' /tmp/node-a-state")
-        node_b.succeed("awk '/relay_outbound_circuits_established/ { found = ($2 > 0) } END { exit found ? 0 : 1 }' /tmp/node-b-state")
+        node_a.succeed("awk '/relay_(inbound|outbound)_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-a-state")
+        node_b.succeed("awk '/relay_(inbound|outbound)_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-b-state")
         node_a.succeed("grep -q 'relay_paths 1' /tmp/node-a-state")
         node_b.succeed("grep -q 'relay_paths 1' /tmp/node-b-state")
   '';

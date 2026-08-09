@@ -14,7 +14,7 @@ use crate::{
         effective_membership_at, merge_membership_records_at, trusted_membership_issuers_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
-    route::{RouteError, RouteTable},
+    route::{IpCidr, RouteError, RouteTable},
     runtime::{
         control::ControlRoute,
         p2p::Behaviour,
@@ -295,6 +295,12 @@ impl Forwarder {
             .routes_for(self.local_peer)
             .map(|route| ControlRoute::new(route.prefix.to_string(), route.metric))
             .collect()
+    }
+
+    pub fn local_advertised_route_prefixes(&self) -> impl Iterator<Item = IpCidr> + '_ {
+        self.routes
+            .routes_for(self.local_peer)
+            .map(|route| route.prefix)
     }
 
     #[must_use]
