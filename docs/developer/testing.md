@@ -77,7 +77,25 @@ Coverage:
 | Discovery | Public discovery is disabled for isolation. |
 | Minimal config | `vpnIp` plus peer IDs carry overlay IPs. |
 | Data plane | Bidirectional ping crosses `pv0`. |
-| Path selection | Data nodes select `circuit_relay`. |
+| Relay proof | Data nodes record relay circuit usage. |
+
+## NixOS VM Network Move
+
+Run the move-recovery check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-network-move
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Initial LAN | mDNS discovers a direct path. |
+| Move away | The moved node loses LAN reachability. |
+| Relay fallback | `pv0` traffic recovers through relay. |
+| No config change | The daemon keeps running during the move. |
+| Return to LAN | The selected path promotes back to direct. |
 
 ## Namespace E2E
 

@@ -60,6 +60,25 @@ Add a direct LAN IP only as an override:
 
 Use explicit `addresses` only for custom ports, DNS, or relayed paths.
 
+## Network Moves
+
+The daemon keeps using the same generated config when a host changes networks.
+
+Expected recovery order:
+
+| Step | Mechanism |
+| --- | --- |
+| LAN available | mDNS and direct paths are preferred. |
+| LAN lost | Existing direct paths are demoted. |
+| Relay available | Relay paths keep overlay traffic moving. |
+| LAN returns | Direct paths are promoted again. |
+
+The VM move test covers this flow:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-network-move
+```
+
 ## Discovery Options
 
 Leave discovery unset for normal hosts.

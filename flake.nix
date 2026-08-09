@@ -1932,6 +1932,9 @@ EOF
         nixosVmForcedRelay = import ./tests/nixos/forced-relay.nix {
           inherit self pkgs package;
         };
+        nixosVmNetworkMove = import ./tests/nixos/network-move.nix {
+          inherit self pkgs package;
+        };
         namespaceSmokePreflighted = pkgs.rustPlatform.buildRustPackage {
           pname = "p2p-vpn-namespace-smoke-preflighted";
           version = "0.1.0";
@@ -2311,6 +2314,7 @@ EOF
           nixos-vm-smoke = nixosVmSmoke;
           nixos-vm-mesh = nixosVmMesh;
           nixos-vm-forced-relay = nixosVmForcedRelay;
+          nixos-vm-network-move = nixosVmNetworkMove;
           public-relay-repro-structure = pkgs.runCommand "p2p-vpn-public-relay-repro-structure" {
             nativeBuildInputs = [
               publicRelayRepro
