@@ -2267,7 +2267,7 @@ EOF
               *) echo "unexpected secret ExecStartPre script: $execStartPreSecretScript" >&2; exit 1 ;;
             esac
             case "$generatedSettings" in
-              *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"routes":[{"prefix":"10.44.0.1/32"}]'*'"ip":"192.168.0.203"'*'"routes":[{"prefix":"10.44.0.2/32"}]'*) ;;
+              *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"vpn_ip":"10.44.0.1"'*'"ip":"192.168.0.203"'*'"vpn_ip":"10.44.0.2"'*) ;;
               *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
             esac
             case "$execStop" in

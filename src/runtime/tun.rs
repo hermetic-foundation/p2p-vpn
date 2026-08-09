@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     PeerId,
-    config::{Config, effective_packet_mtu},
+    config::{Config, effective_packet_mtu, vpn_ip_host_route},
     route::{IpCidr, Route, builtin_ipv4, builtin_ipv6},
 };
 
@@ -39,15 +39,7 @@ pub struct TunRuntimeConfig {
 impl TunRuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
         let local_peer = config.local_peer_id()?;
-        let additional_addresses = config
-            .network
-            .routes
-            .iter()
-            .map(RouteConfigExt::host_address)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+        let additional_addresses = local_tun_addresses(config)?;
         let routes = config
             .compile_routes()?
             .routes()
@@ -99,6 +91,25 @@ impl TunRuntimeConfig {
                 IpAddr::V4(_) => IpAddr::V4(self.addresses.ipv4),
                 IpAddr::V6(_) => IpAddr::V6(self.addresses.ipv6),
             })
+    }
+}
+
+fn local_tun_addresses(config: &Config) -> Result<Vec<IpCidr>, crate::config::ConfigError> {
+    let mut addresses = Vec::new();
+    if let Some(vpn_ip) = &config.network.vpn_ip {
+        push_unique(&mut addresses, vpn_ip_host_route(vpn_ip)?);
+    }
+    for route in &config.network.routes {
+        if let Some(address) = route.host_address()? {
+            push_unique(&mut addresses, address);
+        }
+    }
+    Ok(addresses)
+}
+
+fn push_unique(addresses: &mut Vec<IpCidr>, address: IpCidr) {
+    if !addresses.contains(&address) {
+        addresses.push(address);
     }
 }
 
@@ -676,6 +687,69 @@ mod tests {
                 .iter()
                 .any(|command| command == "ip addr replace 10.45.0.0/24 dev hs0")
         );
+    }
+
+    #[test]
+    fn runtime_config_assigns_local_vpn_ip_as_address_and_route_source() {
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: peer_hex(1),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.44.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: vec![PeerConfig {
+                id: PeerId::from_bytes([
+                    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                ])
+                .to_string(),
+                name: Some("node-b".to_owned()),
+                ip: None,
+                vpn_ip: Some("10.44.0.2".to_owned()),
+                addresses: Vec::new(),
+                routes: Vec::new(),
+            }],
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+
+        let runtime = TunRuntimeConfig::from_config(&config).expect("runtime config");
+        let commands = runtime
+            .route_commands()
+            .into_iter()
+            .map(|command| command.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            runtime.additional_addresses,
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 44, 0, 1)), 32).expect("IPv4 host")]
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "ip addr replace 10.44.0.1/32 dev pv0")
+        );
+        assert!(commands.iter().any(|command| command
+            == "ip route replace 10.44.0.2/32 dev pv0 src 10.44.0.1 metric 3000 mtu 1280 advmss 1240"));
     }
 
     #[test]

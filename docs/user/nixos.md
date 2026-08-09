@@ -73,9 +73,9 @@ Use `vpnIp` for ordinary stable host addresses:
 }
 ```
 
-The module writes these as host routes:
+The module writes these as `vpn_ip` fields:
 
-| Value | Generated route |
+| Value | Compiled daemon route |
 | --- | --- |
 | `10.44.0.1` | `10.44.0.1/32` |
 | `fd00::1` | `fd00::1/128` |

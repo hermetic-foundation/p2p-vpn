@@ -35,8 +35,8 @@ let
         networkName = "nixos-vm-mesh";
         localPeer = local.peerId;
         privateKey = local.privateKey;
-        routes = [ "${local.vpnIp}/32" ];
-        peers.${remote.peerId}.routes = [ "${remote.vpnIp}/32" ];
+        vpnIp = local.vpnIp;
+        peers.${remote.peerId}.vpnIp = remote.vpnIp;
         metricsIntervalSeconds = 1;
         controlSocket = "/run/p2p-vpn-${name}/control.sock";
       };

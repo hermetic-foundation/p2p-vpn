@@ -1344,7 +1344,7 @@ fn parse_cidr(input: &str) -> Result<IpCidr, RoutePrefixError> {
         .map_err(RoutePrefixError::InvalidPrefixLength)
 }
 
-fn vpn_ip_host_route(input: &str) -> Result<IpCidr, ConfigError> {
+pub(crate) fn vpn_ip_host_route(input: &str) -> Result<IpCidr, ConfigError> {
     if input.contains('/') {
         return parse_cidr(input).map_err(ConfigError::RoutePrefix);
     }

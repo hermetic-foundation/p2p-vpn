@@ -54,45 +54,27 @@ let
       runtimeGeneratedConfigFile name;
 
   routeObject = prefix: { inherit prefix; };
-  hostRoute =
-    ip:
-    if builtins.match ".*/.*" ip != null then
-      ip
-    else if builtins.match ".*:.*" ip != null then
-      "${ip}/128"
-    else
-      "${ip}/32";
-  instanceRoutes =
-    instance:
-    optional (instance.vpnIp != null) (hostRoute instance.vpnIp) ++ instance.routes;
-  peerRoutes =
-    peer:
-    optional (peer.vpnIp != null) (hostRoute peer.vpnIp) ++ peer.routes;
   compactPeerConfig =
     id: peer:
-    let
-      routes = peerRoutes peer;
-    in
     {
       inherit id;
     }
     // optionalAttrs (peer.name != null) { inherit (peer) name; }
     // optionalAttrs (peer.ip != null) { inherit (peer) ip; }
+    // optionalAttrs (peer.vpnIp != null) { vpn_ip = peer.vpnIp; }
     // optionalAttrs (peer.addresses != [ ]) { inherit (peer) addresses; }
-    // optionalAttrs (routes != [ ]) { routes = map routeObject routes; };
+    // optionalAttrs (peer.routes != [ ]) { routes = map routeObject peer.routes; };
 
   generatedSettings =
     instance:
-    let
-      routes = instanceRoutes instance;
-    in
     {
       network = {
         name = instance.networkName;
         local_peer = instance.localPeer;
       }
       // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
-      // optionalAttrs (routes != [ ]) { routes = map routeObject routes; };
+      // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
+      // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; };
       peers = mapAttrsToList compactPeerConfig instance.peers;
     };
 
@@ -208,8 +190,9 @@ let
           description = ''
             Stable overlay host IP originated by this node.
 
-            IPv4 values become /32 routes. IPv6 values become /128 routes.
-            CIDR strings are accepted when an explicit prefix is needed.
+            The daemon compiles IPv4 values as /32 routes and IPv6 values as
+            /128 routes. CIDR strings are accepted when an explicit prefix is
+            needed.
           '';
         };
 
@@ -254,8 +237,9 @@ let
                     description = ''
                       Stable overlay host IP this peer may originate.
 
-                      IPv4 values become /32 routes. IPv6 values become /128 routes.
-                      CIDR strings are accepted when an explicit prefix is needed.
+                      The daemon compiles IPv4 values as /32 routes and IPv6
+                      values as /128 routes. CIDR strings are accepted when an
+                      explicit prefix is needed.
                     '';
                   };
 
@@ -285,7 +269,7 @@ let
           default = { };
           example = {
             "12D3KooWRemotePeer" = {
-              routes = [ "10.44.0.2/32" ];
+              vpnIp = "10.44.0.2";
             };
           };
           description = ''
