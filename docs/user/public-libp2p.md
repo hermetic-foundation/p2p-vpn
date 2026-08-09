@@ -162,6 +162,49 @@ This is the normal mobile profile.
 
 To force relay-only testing, disable direct listeners and mDNS in a copy.
 
+## Prove Two-Host Operation
+
+Create host-run scripts from matched configs:
+
+```sh
+P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR=/tmp/p2p-vpn-public-relay \
+nix run .#public-vpn-repro
+```
+
+Run the generated Host A script on Host A.
+
+Run the generated Host B script on Host B.
+
+Each host writes:
+
+| File | Purpose |
+| --- | --- |
+| `vpn-repro-evidence.json` | Machine-readable proof summary. |
+| `daemon-health.txt` | Readiness checks. |
+| `daemon-paths-final.json` | Final selected paths. |
+| `daemon-status-prometheus-final.txt` | Metrics used by the checker. |
+| `ping.txt` | Overlay data-plane ping result. |
+
+Check both evidence files:
+
+```sh
+nix run .#public-vpn-evidence-check -- \
+  --host-a /tmp/host-a/vpn-repro-evidence.json \
+  --host-b /tmp/host-b/vpn-repro-evidence.json \
+  --require-relay \
+  --write-report /tmp/p2p-vpn-public-proof.json
+```
+
+For strict hole-punch proof, add:
+
+```text
+--require-direct --require-dcutr --require-quic-session
+```
+
+Use strict mode only when both hosts should have direct recovery evidence.
+
+Relay-only fallback proof should require `--require-relay`.
+
 ## No-Route Backoff
 
 Default public IPFS bootstrap peers are retried with backoff when the OS reports

@@ -167,6 +167,35 @@ This protects network-move recovery.
 
 The daemon must find a new LAN, relay, or public path.
 
+## Public VPN Evidence Check
+
+Validate the two-host evidence checker:
+
+```sh
+nix build .#checks.x86_64-linux.public-vpn-evidence-check
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Complete evidence | Health, ping, supported path, packet session, relay, direct, DCUtR, and QUIC checks pass. |
+| Missing relay proof | `--require-relay` fails when Host B has no relay evidence. |
+| Report output | The generated JSON report marks each named check. |
+
+Use it after a real hotspot or VPN split:
+
+```sh
+nix run .#public-vpn-evidence-check -- \
+  --host-a HOST_A/vpn-repro-evidence.json \
+  --host-b HOST_B/vpn-repro-evidence.json \
+  --require-relay \
+  --write-report public-vpn-proof.json
+```
+
+Add `--require-direct --require-dcutr --require-quic-session` for strict
+hole-punch evidence.
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

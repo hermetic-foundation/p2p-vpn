@@ -1834,6 +1834,212 @@ EOF
             echo "summary: $summary" >&2
           '';
         };
+        publicVpnEvidenceCheck = pkgs.writeShellApplication {
+          name = "p2p-vpn-public-vpn-evidence-check";
+          runtimeInputs = [
+            pkgs.coreutils
+            pkgs.jq
+          ];
+          text = ''
+            usage() {
+              cat >&2 <<'EOF'
+Usage:
+  p2p-vpn-public-vpn-evidence-check \
+    --host-a HOST_A_EVIDENCE.json \
+    --host-b HOST_B_EVIDENCE.json \
+    [--write-report REPORT.json] \
+    [--require-direct] \
+    [--require-relay] \
+    [--require-dcutr] \
+    [--require-quic-session] \
+    [--min-packet-sessions N]
+
+Checks two public-vpn-repro evidence files for operational two-host proof.
+EOF
+            }
+
+            host_a=""
+            host_b=""
+            report=""
+            require_direct=0
+            require_relay=0
+            require_dcutr=0
+            require_quic=0
+            min_packet_sessions=1
+
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                --host-a)
+                  host_a="''${2:-}"
+                  shift 2
+                  ;;
+                --host-b)
+                  host_b="''${2:-}"
+                  shift 2
+                  ;;
+                --write-report)
+                  report="''${2:-}"
+                  shift 2
+                  ;;
+                --require-direct)
+                  require_direct=1
+                  shift
+                  ;;
+                --require-relay)
+                  require_relay=1
+                  shift
+                  ;;
+                --require-dcutr)
+                  require_dcutr=1
+                  shift
+                  ;;
+                --require-quic-session)
+                  require_quic=1
+                  shift
+                  ;;
+                --min-packet-sessions)
+                  min_packet_sessions="''${2:-}"
+                  shift 2
+                  ;;
+                -h|--help)
+                  usage
+                  exit 0
+                  ;;
+                *)
+                  echo "unknown argument: $1" >&2
+                  usage
+                  exit 2
+                  ;;
+              esac
+            done
+
+            if [[ -z "$host_a" || -z "$host_b" ]]; then
+              usage
+              exit 2
+            fi
+            if [[ ! "$min_packet_sessions" =~ ^[0-9]+$ ]]; then
+              echo "--min-packet-sessions must be a non-negative integer" >&2
+              exit 2
+            fi
+            for evidence in "$host_a" "$host_b"; do
+              if [[ ! -s "$evidence" ]]; then
+                echo "missing evidence file: $evidence" >&2
+                exit 2
+              fi
+              jq -e 'type == "object" and .schema_version == 1' "$evidence" >/dev/null
+            done
+
+            report_tmp="$(mktemp)"
+            jq -n \
+              --slurpfile host_a "$host_a" \
+              --slurpfile host_b "$host_b" \
+              --argjson require_direct "$require_direct" \
+              --argjson require_relay "$require_relay" \
+              --argjson require_dcutr "$require_dcutr" \
+              --argjson require_quic "$require_quic" \
+              --argjson min_packet_sessions "$min_packet_sessions" \
+              '
+              def metric($e; $name): ($e.metrics[$name] // 0);
+              def direct_evidence($e):
+                ((metric($e; "direct_connections_established") > 0)
+                or (metric($e; "healthy_direct_quic_datagram_paths") > 0)
+                or (metric($e; "healthy_direct_quic_stream_paths") > 0)
+                or (metric($e; "healthy_direct_tcp_stream_paths") > 0)
+                or (($e.path_evidence.direct_lines // []) | length > 0));
+              def relay_evidence($e):
+                ((metric($e; "relayed_connections_established") > 0)
+                or (metric($e; "healthy_relay_paths") > 0)
+                or (($e.path_evidence.relay_lines // []) | length > 0));
+              def checks($name; $e): [
+                {
+                  name: ($name + ".health_ready"),
+                  ok: ($e.health_ready == true),
+                  detail: ($e.health_ready // null)
+                },
+                {
+                  name: ($name + ".ping_succeeded"),
+                  ok: ($e.ping_succeeded == true and ($e.ping_exit // 1) == 0),
+                  detail: { ping_succeeded: ($e.ping_succeeded // null), ping_exit: ($e.ping_exit // null) }
+                },
+                {
+                  name: ($name + ".supported_path"),
+                  ok: (metric($e; "peers_with_supported_path") >= 1),
+                  detail: metric($e; "peers_with_supported_path")
+                },
+                {
+                  name: ($name + ".packet_sessions"),
+                  ok: (metric($e; "packet_plane_sessions") >= $min_packet_sessions),
+                  detail: metric($e; "packet_plane_sessions")
+                },
+                {
+                  name: ($name + ".quic_session"),
+                  ok: (($require_quic == 0) or (metric($e; "packet_plane_quic_sessions") >= 1)),
+                  detail: metric($e; "packet_plane_quic_sessions")
+                },
+                {
+                  name: ($name + ".direct_evidence"),
+                  ok: (($require_direct == 0) or direct_evidence($e)),
+                  detail: {
+                    direct_connections_established: metric($e; "direct_connections_established"),
+                    healthy_direct_quic_datagram_paths: metric($e; "healthy_direct_quic_datagram_paths"),
+                    healthy_direct_quic_stream_paths: metric($e; "healthy_direct_quic_stream_paths"),
+                    healthy_direct_tcp_stream_paths: metric($e; "healthy_direct_tcp_stream_paths"),
+                    direct_lines: (($e.path_evidence.direct_lines // []) | length)
+                  }
+                },
+                {
+                  name: ($name + ".relay_evidence"),
+                  ok: (($require_relay == 0) or relay_evidence($e)),
+                  detail: {
+                    relayed_connections_established: metric($e; "relayed_connections_established"),
+                    healthy_relay_paths: metric($e; "healthy_relay_paths"),
+                    relay_lines: (($e.path_evidence.relay_lines // []) | length)
+                  }
+                },
+                {
+                  name: ($name + ".dcutr_evidence"),
+                  ok: (($require_dcutr == 0) or (metric($e; "dcutr_successes") >= 1)),
+                  detail: metric($e; "dcutr_successes")
+                }
+              ];
+              ($host_a[0]) as $a |
+              ($host_b[0]) as $b |
+              (checks("host_a"; $a) + checks("host_b"; $b)) as $checks |
+              {
+                schema_version: 1,
+                generated_utc: (now | todateiso8601),
+                host_a: $a.artifact_dir,
+                host_b: $b.artifact_dir,
+                requirements: {
+                  min_packet_sessions: $min_packet_sessions,
+                  require_quic_session: ($require_quic == 1),
+                  require_direct: ($require_direct == 1),
+                  require_relay: ($require_relay == 1),
+                  require_dcutr: ($require_dcutr == 1)
+                },
+                checks: $checks,
+                ok: (all($checks[]; .ok == true))
+              }
+            ' > "$report_tmp"
+
+            if [[ -n "$report" ]]; then
+              mkdir -p "$(dirname "$report")"
+              cp "$report_tmp" "$report"
+            fi
+
+            jq -r '
+              "public VPN evidence check: " + (if .ok then "ok" else "failed" end),
+              ("host_a=" + (.host_a // "unknown")),
+              ("host_b=" + (.host_b // "unknown")),
+              (.checks[] | "check " + .name + " " + (if .ok then "ok" else "failed" end))
+            ' "$report_tmp"
+
+            if ! jq -e '.ok == true' "$report_tmp" >/dev/null; then
+              jq -r '.checks[] | select(.ok != true) | "failed: " + .name + " detail=" + (.detail | @json)' "$report_tmp" >&2
+              exit 1
+            fi
+          '';
+        };
         moduleEval = lib.nixosSystem {
           inherit system;
           modules = [
@@ -2076,6 +2282,7 @@ EOF
           namespace-repro = namespaceRepro;
           public-relay-repro = publicRelayRepro;
           public-vpn-repro = publicVpnRepro;
+          public-vpn-evidence-check = publicVpnEvidenceCheck;
         };
 
         apps = {
@@ -2134,6 +2341,13 @@ EOF
             program = "${publicVpnRepro}/bin/p2p-vpn-public-vpn-repro";
             meta = {
               description = "Generate two-host public relay VPN data-plane repro scripts";
+            };
+          };
+          public-vpn-evidence-check = {
+            type = "app";
+            program = "${publicVpnEvidenceCheck}/bin/p2p-vpn-public-vpn-evidence-check";
+            meta = {
+              description = "Validate two-host public VPN repro evidence artifacts";
             };
           };
           tun-e2e = {
@@ -2629,6 +2843,105 @@ EOF
               --arg artifact_dir "$artifacts" \
               --arg config "$config" \
               "$artifacts/vpn-repro-evidence.json"
+
+            touch $out
+          '';
+          public-vpn-evidence-check = pkgs.runCommand "p2p-vpn-public-vpn-evidence-check" {
+            nativeBuildInputs = [
+              publicVpnEvidenceCheck
+              pkgs.jq
+            ];
+          } ''
+            host_a="$TMPDIR/host-a-evidence.json"
+            host_b="$TMPDIR/host-b-evidence.json"
+            host_b_no_relay="$TMPDIR/host-b-no-relay-evidence.json"
+            report="$TMPDIR/evidence-report.json"
+
+            cat > "$host_a" <<'EOF'
+{
+  "schema_version": 1,
+  "artifact_dir": "/tmp/host-a",
+  "health_ready": true,
+  "ping_succeeded": true,
+  "ping_exit": 0,
+  "metrics": {
+    "dcutr_successes": 1,
+    "direct_connections_established": 1,
+    "relayed_connections_established": 1,
+    "peers_with_supported_path": 1,
+    "packet_plane_sessions": 1,
+    "packet_plane_quic_sessions": 1,
+    "healthy_direct_quic_datagram_paths": 1,
+    "healthy_direct_quic_stream_paths": 0,
+    "healthy_direct_tcp_stream_paths": 0,
+    "healthy_relay_paths": 1
+  },
+  "path_evidence": {
+    "direct_lines": ["peer b selected_path direct_quic_datagram"],
+    "relay_lines": ["peer b selected_path circuit relay"]
+  }
+}
+EOF
+            cat > "$host_b" <<'EOF'
+{
+  "schema_version": 1,
+  "artifact_dir": "/tmp/host-b",
+  "health_ready": true,
+  "ping_succeeded": true,
+  "ping_exit": 0,
+  "metrics": {
+    "dcutr_successes": 1,
+    "direct_connections_established": 1,
+    "relayed_connections_established": 1,
+    "peers_with_supported_path": 1,
+    "packet_plane_sessions": 1,
+    "packet_plane_quic_sessions": 1,
+    "healthy_direct_quic_datagram_paths": 1,
+    "healthy_direct_quic_stream_paths": 0,
+    "healthy_direct_tcp_stream_paths": 0,
+    "healthy_relay_paths": 1
+  },
+  "path_evidence": {
+    "direct_lines": ["peer a selected_path direct_quic_datagram"],
+    "relay_lines": ["peer a selected_path circuit relay"]
+  }
+}
+EOF
+            jq '.metrics.relayed_connections_established = 0
+              | .metrics.healthy_relay_paths = 0
+              | .path_evidence.relay_lines = []' \
+              "$host_b" > "$host_b_no_relay"
+
+            p2p-vpn-public-vpn-evidence-check \
+              --host-a "$host_a" \
+              --host-b "$host_b" \
+              --require-direct \
+              --require-relay \
+              --require-dcutr \
+              --require-quic-session \
+              --write-report "$report" \
+              | tee "$TMPDIR/pass-output.txt"
+
+            jq -e '
+              .ok == true
+              and .requirements.require_direct == true
+              and .requirements.require_relay == true
+              and .requirements.require_dcutr == true
+              and .requirements.require_quic_session == true
+              and (.checks | length) == 16
+            ' "$report"
+            grep -q '^public VPN evidence check: ok$' "$TMPDIR/pass-output.txt"
+
+            if p2p-vpn-public-vpn-evidence-check \
+              --host-a "$host_a" \
+              --host-b "$host_b_no_relay" \
+              --require-relay \
+              > "$TMPDIR/fail-output.txt" 2> "$TMPDIR/fail-error.txt"
+            then
+              echo "missing relay evidence was accepted" >&2
+              exit 1
+            fi
+            grep -q 'failed: host_b.relay_evidence' "$TMPDIR/fail-error.txt"
 
             touch $out
           '';
