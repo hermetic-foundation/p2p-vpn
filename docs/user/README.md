@@ -36,7 +36,7 @@ Start with:
 | Value | Configure It When |
 | --- | --- |
 | `network.private_key` | Always. |
-| `network.builtin_ip` | You want a stable overlay IP. |
+| `network.vpn_ip` | You want a stable overlay IP. |
 | `peers.<id>` | Always for each trusted peer. |
 | `peers.<id>.vpn_ip` | You want the peer to have a stable overlay IP. |
 

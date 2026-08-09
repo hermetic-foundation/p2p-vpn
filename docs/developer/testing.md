@@ -83,7 +83,7 @@ Coverage:
 | Forced relay | `nixos-vm-forced-relay` |
 | Network move | `nixos-vm-network-move` |
 | Public tooling | Public relay and VPN repro structure checks |
-| Evidence validation | `public-vpn-evidence-check` |
+| Evidence validation | `public-vpn-evidence-check`, `public-vpn-move-evidence-check` |
 
 This gate is local.
 
