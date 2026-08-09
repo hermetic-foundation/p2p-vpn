@@ -227,6 +227,7 @@ nix run .#public-vpn-evidence-check -- \
   --host-a HOST_A/vpn-repro-evidence.json \
   --host-b HOST_B/vpn-repro-evidence.json \
   --require-relay \
+  --require-config-match \
   --write-report public-vpn-proof.json
 ```
 
@@ -242,7 +243,7 @@ It must use the same minimal configs for every phase.
 | Phase | Topology | Check |
 | --- | --- | --- |
 | LAN baseline | Both hosts on the same LAN | `--require-direct --require-quic-session` when direct is expected. |
-| Public split | One host on hotspot or VPN | `--require-relay` unless direct public recovery is proven. |
+| Public split | One host on hotspot or VPN | `--require-relay --require-config-match` unless direct public recovery is proven. |
 | LAN return | Both hosts on the same LAN again | `--require-direct --require-quic-session` when direct is expected. |
 
 Required evidence per phase:

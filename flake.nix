@@ -146,7 +146,7 @@ USAGE
               printf '%s\n' ""
               if [[ "$is_linux" -eq 1 ]]; then
                 printf '%s\n' "external proof still required:"
-                printf '%s\n' "  nix run .#public-vpn-evidence-check -- --host-a HOST_A/vpn-repro-evidence.json --host-b HOST_B/vpn-repro-evidence.json --require-relay --require-direct --require-dcutr --require-quic-session"
+                printf '%s\n' "  nix run .#public-vpn-evidence-check -- --host-a HOST_A/vpn-repro-evidence.json --host-b HOST_B/vpn-repro-evidence.json --require-relay --require-direct --require-dcutr --require-quic-session --require-config-match"
               else
                 printf '%s\n' "NixOS, VM, and public two-host gates are Linux-only."
               fi
@@ -1642,6 +1642,28 @@ EOF
                 echo "  if [[ -s \"\$health_log\" ]] && grep -q '^daemon_health_ready true$' \"\$health_log\"; then"
                 echo "    health_ready=true"
                 echo "  fi"
+                echo "  config_sha256=\"\""
+                echo "  config_summary_json='{}'"
+                echo "  if [[ -s \"\$config\" ]]; then"
+                echo "    config_sha256=\"\$(sha256sum \"\$config\" | awk '{ print \$1 }')\""
+                echo "    config_summary_json=\"\$(jq -c '"
+                echo "      def host_route(\$ip): if (\$ip | test(\":\")) then (\$ip + \"/128\") else (\$ip + \"/32\") end;"
+                echo "      {"
+                echo "        network_name: (.network.name // null),"
+                echo "        interface_name: (.interface.name // \"pv0\"),"
+                echo "        local_routes: (((.network.routes // []) | map(.prefix)) + (if .network.vpn_ip then [host_route(.network.vpn_ip)] else [] end) | sort),"
+                echo "        peer_ids: ((.peers // []) | map(.id) | sort),"
+                echo "        peer_routes: (([(.peers // [])[].routes[]?.prefix] + [(.peers // [])[] | select(.vpn_ip != null) | host_route(.vpn_ip)]) | sort),"
+                echo "        peer_count: ((.peers // []) | length),"
+                echo "        peer_address_count: ([(.peers // [])[].addresses[]?] | length),"
+                echo "        relay_reservation_count: ((.network.relay.reservations // []) | length),"
+                echo "        discovery: {"
+                echo "          mdns: (if (.network.discovery | type) == \"object\" and (.network.discovery | has(\"mdns\")) then .network.discovery.mdns else true end),"
+                echo "          kademlia: (if (.network.discovery | type) == \"object\" and (.network.discovery | has(\"kademlia\")) then .network.discovery.kademlia else true end),"
+                echo "          kademlia_protocol: (.network.discovery.kademlia_protocol // \"/p2p-vpn/kad/1\")"
+                echo "        }"
+                echo "      }' \"\$config\" 2>/dev/null || printf '{}')\""
+                echo "  fi"
                 echo "  ping_exit=\"\$(result_status ping)\""
                 echo "  if [[ \"\$ping_exit\" == null ]]; then"
                 echo "    ping_succeeded=false"
@@ -1658,6 +1680,8 @@ EOF
                 echo "    --arg generated_utc \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\"
                 echo "    --arg artifact_dir \"\$artifact_dir\" \\"
                 echo "    --arg config \"\$config\" \\"
+                echo "    --arg config_sha256 \"\$config_sha256\" \\"
+                echo "    --argjson config_summary \"\$config_summary_json\" \\"
                 echo "    --arg ping_target \"\$ping_target\" \\"
                 echo "    --argjson health_ready \"\$health_ready\" \\"
                 echo "    --argjson ping_succeeded \"\$ping_succeeded\" \\"
@@ -1682,6 +1706,8 @@ EOF
                 echo "      generated_utc: \$generated_utc,"
                 echo "      artifact_dir: \$artifact_dir,"
                 echo "      config: \$config,"
+                echo "      config_sha256: \$config_sha256,"
+                echo "      config_summary: \$config_summary,"
                 echo "      ping_target: \$ping_target,"
                 echo "      health_ready: \$health_ready,"
                 echo "      ping_succeeded: \$ping_succeeded,"
@@ -1945,6 +1971,7 @@ Usage:
     [--require-relay] \
     [--require-dcutr] \
     [--require-quic-session] \
+    [--require-config-match] \
     [--min-packet-sessions N]
 
 Checks two public-vpn-repro evidence files for operational two-host proof.
@@ -1958,6 +1985,7 @@ EOF
             require_relay=0
             require_dcutr=0
             require_quic=0
+            require_config_match=0
             min_packet_sessions=1
 
             while [[ "$#" -gt 0 ]]; do
@@ -1988,6 +2016,10 @@ EOF
                   ;;
                 --require-quic-session)
                   require_quic=1
+                  shift
+                  ;;
+                --require-config-match)
+                  require_config_match=1
                   shift
                   ;;
                 --min-packet-sessions)
@@ -2030,9 +2062,12 @@ EOF
               --argjson require_relay "$require_relay" \
               --argjson require_dcutr "$require_dcutr" \
               --argjson require_quic "$require_quic" \
+              --argjson require_config_match "$require_config_match" \
               --argjson min_packet_sessions "$min_packet_sessions" \
               '
               def metric($e; $name): ($e.metrics[$name] // 0);
+              def route_set($e; $name): (($e.config_summary[$name] // []) | sort);
+              def summary($e; $name): ($e.config_summary[$name] // null);
               def direct_evidence($e):
                 ((metric($e; "direct_connections_established") > 0)
                 or (metric($e; "healthy_direct_quic_datagram_paths") > 0)
@@ -2043,6 +2078,21 @@ EOF
                 ((metric($e; "relayed_connections_established") > 0)
                 or (metric($e; "healthy_relay_paths") > 0)
                 or (($e.path_evidence.relay_lines // []) | length > 0));
+              def has_config_summary($e):
+                (($e.config_summary // null) | type) == "object"
+                and (($e.config_sha256 // "") | length) > 0;
+              def reciprocal_config($a; $b):
+                has_config_summary($a)
+                and has_config_summary($b)
+                and summary($a; "network_name") == summary($b; "network_name")
+                and summary($a; "peer_count") == 1
+                and summary($b; "peer_count") == 1
+                and summary($a; "peer_address_count") == 0
+                and summary($b; "peer_address_count") == 0
+                and route_set($a; "local_routes") == route_set($b; "peer_routes")
+                and route_set($b; "local_routes") == route_set($a; "peer_routes")
+                and (($a.ping_target // "") as $target | route_set($b; "local_routes") | index($target + "/32") or index($target + "/128"))
+                and (($b.ping_target // "") as $target | route_set($a; "local_routes") | index($target + "/32") or index($target + "/128"));
               def checks($name; $e): [
                 {
                   name: ($name + ".health_ready"),
@@ -2097,7 +2147,20 @@ EOF
               ];
               ($host_a[0]) as $a |
               ($host_b[0]) as $b |
-              (checks("host_a"; $a) + checks("host_b"; $b)) as $checks |
+              (checks("host_a"; $a) + checks("host_b"; $b) + [
+                {
+                  name: "pair.config_match",
+                  ok: (($require_config_match == 0) or reciprocal_config($a; $b)),
+                  detail: {
+                    host_a_config_sha256: ($a.config_sha256 // null),
+                    host_b_config_sha256: ($b.config_sha256 // null),
+                    host_a_config_summary: ($a.config_summary // null),
+                    host_b_config_summary: ($b.config_summary // null),
+                    host_a_ping_target: ($a.ping_target // null),
+                    host_b_ping_target: ($b.ping_target // null)
+                  }
+                }
+              ]) as $checks |
               {
                 schema_version: 1,
                 generated_utc: (now | todateiso8601),
@@ -2108,7 +2171,8 @@ EOF
                   require_quic_session: ($require_quic == 1),
                   require_direct: ($require_direct == 1),
                   require_relay: ($require_relay == 1),
-                  require_dcutr: ($require_dcutr == 1)
+                  require_dcutr: ($require_dcutr == 1),
+                  require_config_match: ($require_config_match == 1)
                 },
                 checks: $checks,
                 ok: (all($checks[]; .ok == true))
@@ -2917,6 +2981,15 @@ EOF
               and (.generated_utc | type == "string")
               and .artifact_dir == $artifact_dir
               and .config == $config
+              and (.config_sha256 | test("^[0-9a-f]{64}$"))
+              and .config_summary.network_name == "public-vpn-repro-evidence-structure"
+              and .config_summary.interface_name == "hs-repro0"
+              and .config_summary.peer_count == 0
+              and .config_summary.peer_address_count == 0
+              and (.config_summary.local_routes | length) == 0
+              and (.config_summary.peer_routes | length) == 0
+              and .config_summary.discovery.mdns == false
+              and .config_summary.discovery.kademlia == false
               and .ping_target == "10.42.0.2"
               and .health_ready == true
               and .ping_succeeded == true
@@ -2954,12 +3027,30 @@ EOF
             host_a="$TMPDIR/host-a-evidence.json"
             host_b="$TMPDIR/host-b-evidence.json"
             host_b_no_relay="$TMPDIR/host-b-no-relay-evidence.json"
+            host_b_bad_config="$TMPDIR/host-b-bad-config-evidence.json"
             report="$TMPDIR/evidence-report.json"
 
             cat > "$host_a" <<'EOF'
 {
   "schema_version": 1,
   "artifact_dir": "/tmp/host-a",
+  "config_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "config_summary": {
+    "network_name": "public-vpn-proof",
+    "interface_name": "pv0",
+    "local_routes": ["10.42.0.1/32"],
+    "peer_ids": ["peer-b"],
+    "peer_routes": ["10.42.0.2/32"],
+    "peer_count": 1,
+    "peer_address_count": 0,
+    "relay_reservation_count": 1,
+    "discovery": {
+      "mdns": true,
+      "kademlia": true,
+      "kademlia_protocol": "/ipfs/kad/1.0.0"
+    }
+  },
+  "ping_target": "10.42.0.2",
   "health_ready": true,
   "ping_succeeded": true,
   "ping_exit": 0,
@@ -2985,6 +3076,23 @@ EOF
 {
   "schema_version": 1,
   "artifact_dir": "/tmp/host-b",
+  "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "config_summary": {
+    "network_name": "public-vpn-proof",
+    "interface_name": "pv0",
+    "local_routes": ["10.42.0.2/32"],
+    "peer_ids": ["peer-a"],
+    "peer_routes": ["10.42.0.1/32"],
+    "peer_count": 1,
+    "peer_address_count": 0,
+    "relay_reservation_count": 1,
+    "discovery": {
+      "mdns": true,
+      "kademlia": true,
+      "kademlia_protocol": "/ipfs/kad/1.0.0"
+    }
+  },
+  "ping_target": "10.42.0.1",
   "health_ready": true,
   "ping_succeeded": true,
   "ping_exit": 0,
@@ -3010,6 +3118,8 @@ EOF
               | .metrics.healthy_relay_paths = 0
               | .path_evidence.relay_lines = []' \
               "$host_b" > "$host_b_no_relay"
+            jq '.config_summary.peer_address_count = 1' \
+              "$host_b" > "$host_b_bad_config"
 
             p2p-vpn-public-vpn-evidence-check \
               --host-a "$host_a" \
@@ -3018,6 +3128,7 @@ EOF
               --require-relay \
               --require-dcutr \
               --require-quic-session \
+              --require-config-match \
               --write-report "$report" \
               | tee "$TMPDIR/pass-output.txt"
 
@@ -3027,7 +3138,9 @@ EOF
               and .requirements.require_relay == true
               and .requirements.require_dcutr == true
               and .requirements.require_quic_session == true
-              and (.checks | length) == 16
+              and .requirements.require_config_match == true
+              and (.checks | length) == 17
+              and (.checks[] | select(.name == "pair.config_match").ok) == true
             ' "$report"
             grep -q '^public VPN evidence check: ok$' "$TMPDIR/pass-output.txt"
 
@@ -3041,6 +3154,17 @@ EOF
               exit 1
             fi
             grep -q 'failed: host_b.relay_evidence' "$TMPDIR/fail-error.txt"
+
+            if p2p-vpn-public-vpn-evidence-check \
+              --host-a "$host_a" \
+              --host-b "$host_b_bad_config" \
+              --require-config-match \
+              > "$TMPDIR/config-fail-output.txt" 2> "$TMPDIR/config-fail-error.txt"
+            then
+              echo "mismatched config evidence was accepted" >&2
+              exit 1
+            fi
+            grep -q 'failed: pair.config_match' "$TMPDIR/config-fail-error.txt"
 
             touch $out
           '';

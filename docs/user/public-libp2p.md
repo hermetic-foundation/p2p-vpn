@@ -192,6 +192,7 @@ nix run .#public-vpn-evidence-check -- \
   --host-a /tmp/host-a/vpn-repro-evidence.json \
   --host-b /tmp/host-b/vpn-repro-evidence.json \
   --require-relay \
+  --require-config-match \
   --write-report /tmp/p2p-vpn-public-proof.json
 ```
 
@@ -243,6 +244,7 @@ nix run .#public-vpn-evidence-check -- \
   --host-a HOTSPOT_HOST_A/vpn-repro-evidence.json \
   --host-b HOTSPOT_HOST_B/vpn-repro-evidence.json \
   --require-relay \
+  --require-config-match \
   --write-report public-vpn-hotspot-proof.json
 ```
 
@@ -254,6 +256,7 @@ nix run .#public-vpn-evidence-check -- \
   --host-b LAN_RETURN_HOST_B/vpn-repro-evidence.json \
   --require-direct \
   --require-quic-session \
+  --require-config-match \
   --write-report public-vpn-lan-return-proof.json
 ```
 
