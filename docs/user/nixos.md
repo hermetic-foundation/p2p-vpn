@@ -150,6 +150,20 @@ Enable a relay server on infrastructure nodes:
 }
 ```
 
+Tune automatic relay discovery only when needed:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.autoRelay = {
+    maxCandidates = 16;
+    maxReservations = 2;
+    retryIntervalSeconds = 30;
+  };
+}
+```
+
+Leave `autoRelay` unset for compact default configs.
+
 Reserve an explicit relay from a VPN node:
 
 ```nix

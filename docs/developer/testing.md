@@ -59,6 +59,7 @@ Coverage:
 | Secrets | `privateKeyFile` is injected at service start. |
 | Minimal config | ID-only peer configs serialize as compact JSON. |
 | Defaults | Discovery, relay, packet-plane, queue, and resources are omitted. |
+| Auto relay | Typed policy writes `network.relay.auto` only when set. |
 | Firewall | Configured TCP, UDP, and packet-plane ports are opened. |
 
 ## NixOS VM Mesh

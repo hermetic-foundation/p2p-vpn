@@ -89,11 +89,20 @@ let
         // optionalAttrs (instance.discovery != null) {
           discovery = discoverySettings instance.discovery;
         }
-        // optionalAttrs (instance.relayServer || instance.relayReservations != [ ]) {
+        // optionalAttrs (
+          instance.relayServer || instance.relayReservations != [ ] || instance.autoRelay != null
+        ) {
           relay =
             optionalAttrs instance.relayServer { server = true; }
             // optionalAttrs (instance.relayReservations != [ ]) {
               reservations = instance.relayReservations;
+            }
+            // optionalAttrs (instance.autoRelay != null) {
+              auto = {
+                max_candidates = instance.autoRelay.maxCandidates;
+                max_reservations = instance.autoRelay.maxReservations;
+                retry_interval_seconds = instance.autoRelay.retryIntervalSeconds;
+              };
             };
         };
       peers = mapAttrsToList compactPeerConfig instance.peers;
@@ -246,6 +255,50 @@ let
             Relay reservation multiaddrs for generated configs.
 
             Use this for forced relay tests or explicit relay fallback.
+          '';
+        };
+
+        autoRelay = mkOption {
+          type = types.nullOr (
+            types.submodule (
+              { ... }:
+              {
+                options = {
+                  maxCandidates = mkOption {
+                    type = types.ints.unsigned;
+                    default = 16;
+                    example = 32;
+                    description = "Maximum discovered relay candidates to retain.";
+                  };
+
+                  maxReservations = mkOption {
+                    type = types.ints.unsigned;
+                    default = 2;
+                    example = 4;
+                    description = "Maximum automatic relay reservations to keep active.";
+                  };
+
+                  retryIntervalSeconds = mkOption {
+                    type = types.ints.positive;
+                    default = 30;
+                    example = 60;
+                    description = "Delay before retrying a failed automatic relay reservation.";
+                  };
+                };
+              }
+            )
+          );
+          default = null;
+          example = {
+            maxCandidates = 16;
+            maxReservations = 2;
+            retryIntervalSeconds = 30;
+          };
+          description = ''
+            Optional automatic relay reservation policy for generated configs.
+
+            Leave unset to use compact runtime defaults. Set this when public
+            relay discovery needs tighter or broader reservation behavior.
           '';
         };
 

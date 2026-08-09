@@ -1867,6 +1867,11 @@ EOF
                     ip = "192.168.0.203";
                     vpnIp = "10.44.0.2";
                   };
+                  autoRelay = {
+                    maxCandidates = 12;
+                    maxReservations = 3;
+                    retryIntervalSeconds = 45;
+                  };
                 };
                 services.p2p-vpn.instances.node-d = {
                   enable = true;
@@ -2310,6 +2315,17 @@ EOF
               *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"vpn_ip":"10.44.0.1"'*'"ip":"192.168.0.203"'*'"vpn_ip":"10.44.0.2"'*) ;;
               *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
             esac
+            printf '%s' "$generatedSettings" > generated-settings.json
+            jq -e '
+              .network.relay.auto == {
+                "max_candidates": 12,
+                "max_reservations": 3,
+                "retry_interval_seconds": 45
+              }
+            ' generated-settings.json >/dev/null || {
+              echo "generated settings missing auto relay policy: $generatedSettings" >&2
+              exit 1
+            }
             printf '%s' "$generatedMinimalSettings" > generated-minimal.json
             jq -e '
               keys == ["network", "peers"]
