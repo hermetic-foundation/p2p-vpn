@@ -2351,9 +2351,34 @@ fn query_configured_peer_recovery_discovery(
         log_runtime_event(
             LogLevel::Info,
             "peer_recovery_discovery_query",
-            &[("peer", &peer.to_string())],
+            &[("peer", &peer.to_string()), ("reason", "periodic")],
         );
     }
+}
+
+fn query_configured_peer_recovery_discovery_for_peer(
+    swarm: &mut Swarm<Behaviour>,
+    network_name: &str,
+    membership_tag: Option<&str>,
+    peer: Libp2pPeerId,
+    metrics: &RuntimeMetrics,
+    reason: &'static str,
+) {
+    swarm
+        .behaviour_mut()
+        .kad
+        .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
+            network_name,
+            membership_tag,
+            peer,
+        ));
+    swarm.behaviour_mut().kad.get_closest_peers(peer);
+    metrics.record_kademlia_provider_lookup();
+    log_runtime_event(
+        LogLevel::Info,
+        "peer_recovery_discovery_query",
+        &[("peer", &peer.to_string()), ("reason", reason)],
+    );
 }
 
 fn should_query_configured_peer_recovery_discovery(discovery: &DiscoveryConfig) -> bool {
@@ -5646,6 +5671,18 @@ async fn handle_swarm_event(
                 context
                     .packet_plane_negotiator
                     .remove_peer(PeerId::from_libp2p(peer_id));
+                if context.forwarder.is_configured_transport_peer(peer_id)
+                    && should_query_configured_peer_recovery_discovery(context.discovery)
+                {
+                    query_configured_peer_recovery_discovery_for_peer(
+                        swarm,
+                        &context.local_capabilities.network_name,
+                        context.local_capabilities.membership_tag.as_deref(),
+                        peer_id,
+                        context.metrics,
+                        "connection_closed",
+                    );
+                }
                 if context
                     .relay_readiness
                     .record_relay_reservation_lost(peer_id)
@@ -5677,6 +5714,16 @@ async fn handle_swarm_event(
                 && context.forwarder.is_configured_transport_peer(peer_id)
             {
                 context.relay_readiness.record_peer_connection_lost(peer_id);
+                if should_query_configured_peer_recovery_discovery(context.discovery) {
+                    query_configured_peer_recovery_discovery_for_peer(
+                        swarm,
+                        &context.local_capabilities.network_name,
+                        context.local_capabilities.membership_tag.as_deref(),
+                        peer_id,
+                        context.metrics,
+                        "outgoing_connection_error",
+                    );
+                }
             }
             record_discovered_outgoing_connection_failure(
                 context.discovered_peer_addresses,
@@ -8478,7 +8525,9 @@ fn invalidate_peer_capabilities_when_disconnected(
     peer: Libp2pPeerId,
     remaining_connections: u32,
 ) {
-    let _ = (forwarder, peer_capabilities, peer, remaining_connections);
+    if remaining_connections == 0 {
+        invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
+    }
 }
 
 fn invalidate_peer_capabilities(
@@ -12939,6 +12988,97 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_invalidation_clears_capabilities_only_after_last_connection() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            remote,
+            1,
+        );
+        assert!(peer_capabilities.contains(remote_overlay));
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            remote,
+            0,
+        );
+        assert!(!peer_capabilities.contains(remote_overlay));
+    }
+
+    #[test]
+    fn disconnect_invalidation_ignores_unconfigured_peers() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let unconfigured = peer_id();
+        let unconfigured_overlay = PeerId::from_libp2p(unconfigured);
+        let config = config_with_peer(&local_identity, configured);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            unconfigured_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            unconfigured,
+            0,
+        );
+
+        assert!(peer_capabilities.contains(unconfigured_overlay));
+    }
+
+    #[tokio::test]
+    async fn targeted_recovery_discovery_records_query_attempt() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+
+        query_configured_peer_recovery_discovery_for_peer(
+            &mut node.swarm,
+            "lab",
+            None,
+            remote,
+            &metrics,
+            "test",
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.kademlia_provider_lookups, 1);
+    }
+
+    #[test]
     fn public_discovery_quiet_mode_requires_all_configured_peers_to_have_supported_paths() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let direct_peer = peer_id();
@@ -15977,7 +16117,7 @@ mod tests {
     }
 
     #[test]
-    fn peer_capabilities_survive_transient_disconnects() {
+    fn peer_capabilities_survive_partial_disconnects_until_last_connection_closes() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -16038,7 +16178,7 @@ mod tests {
             remote,
             0,
         );
-        assert!(peer_capabilities.contains(remote_overlay));
+        assert!(!peer_capabilities.contains(remote_overlay));
     }
 
     #[test]
