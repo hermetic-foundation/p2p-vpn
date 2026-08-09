@@ -99,7 +99,7 @@ Expected recovery order:
 | --- | --- |
 | LAN available | mDNS and direct paths are preferred. |
 | LAN lost | Existing direct paths are demoted. |
-| Relay available | Relay paths keep overlay traffic moving. |
+| Relay available | Automatically discovered relay paths keep traffic moving. |
 | LAN returns | Direct paths are promoted again. |
 
 The VM move test covers this flow:
@@ -107,6 +107,10 @@ The VM move test covers this flow:
 ```sh
 nix build .#checks.x86_64-linux.nixos-vm-network-move
 ```
+
+The test uses the minimal peer shape.
+
+It does not hardcode relay routes in either VPN node config.
 
 ## Discovery Options
 

@@ -119,21 +119,23 @@ Coverage:
 
 | Scenario | Assertion |
 | --- | --- |
+| Minimal config | Generated JSON has no relay routes or discovery override. |
 | Initial LAN | mDNS discovers a direct path. |
+| Auto relay | Both moving peers accept relay reservations from defaults. |
 | Move away | The moved node loses LAN reachability. |
-| Relay fallback | `pv0` traffic recovers through relay. |
+| Relay fallback | `pv0` traffic recovers through discovered relay paths. |
 | No config change | The daemon keeps running during the move. |
 | Return to LAN | The selected path promotes back to direct. |
 
-The committed-source run on 2026-08-09 passed from `main`.
+The 2026-08-09 VM run passed with minimal NixOS configs.
 
 Observed path events:
 
 | Event | Evidence |
 | --- | --- |
 | Direct start | Initial `pv0` traffic used a direct LAN path. |
-| Relay fallback | `path_fell_back_to_relay` was emitted after movement. |
-| Direct recovery | `path_promoted_to_direct` was emitted after LAN return. |
+| Relay fallback | Relay paths and circuit counters appeared after movement. |
+| Direct recovery | State returned to `selected_path direct_*` after LAN return. |
 
 ## Underlay Candidate Hygiene
 

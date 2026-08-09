@@ -24,9 +24,6 @@ let
     vlanMoved = "192.168.52.254";
   };
 
-  relayForLan = "/ip4/${relay.vlanLan}/tcp/4001/p2p/${relay.peerId}/p2p-circuit";
-  relayForMoved = "/ip4/${relay.vlanMoved}/tcp/4001/p2p/${relay.peerId}/p2p-circuit";
-
   common =
     { ... }:
     {
@@ -39,16 +36,9 @@ let
         package
         pkgs.iproute2
         pkgs.iputils
+        pkgs.jq
       ];
     };
-
-  discovery = {
-    mdns = true;
-    kademlia = false;
-    kademliaProviderAdvertisement = false;
-    dcutr = false;
-    autonat = false;
-  };
 
   nodeAModule =
     { ... }:
@@ -68,12 +58,7 @@ let
         localPeer = nodeA.peerId;
         privateKey = nodeA.privateKey;
         vpnIp = nodeA.vpnIp;
-        inherit discovery;
-        relayReservations = [ relayForLan ];
-        peers.${nodeB.peerId} = {
-          vpnIp = nodeB.vpnIp;
-          addresses = [ "${relayForLan}/p2p/${nodeB.peerId}" ];
-        };
+        peers.${nodeB.peerId}.vpnIp = nodeB.vpnIp;
         metricsIntervalSeconds = 5;
         controlSocket = "/run/p2p-vpn-node-a/control.sock";
       };
@@ -106,12 +91,7 @@ let
         localPeer = nodeB.peerId;
         privateKey = nodeB.privateKey;
         vpnIp = nodeB.vpnIp;
-        inherit discovery;
-        relayReservations = [ relayForMoved ];
-        peers.${nodeA.peerId} = {
-          vpnIp = nodeA.vpnIp;
-          addresses = [ "${relayForMoved}/p2p/${nodeA.peerId}" ];
-        };
+        peers.${nodeA.peerId}.vpnIp = nodeA.vpnIp;
         metricsIntervalSeconds = 5;
         controlSocket = "/run/p2p-vpn-node-b/control.sock";
       };
@@ -143,7 +123,6 @@ let
         networkName = "nixos-vm-network-move";
         localPeer = relay.peerId;
         privateKey = relay.privateKey;
-        inherit discovery;
         relayServer = true;
         metricsIntervalSeconds = 5;
         controlSocket = "/run/p2p-vpn-relay/control.sock";
@@ -184,6 +163,23 @@ pkgs.testers.nixosTest {
     node_b.wait_for_unit("p2p-vpn-node-b.service")
     node_a.wait_for_file("/run/p2p-vpn-node-a/control.sock")
     node_b.wait_for_file("/run/p2p-vpn-node-b/control.sock")
+    node_b.succeed("ip link set eth2 down")
+
+    with subtest("generated VPN configs do not hard-code relay routing"):
+        node_a.succeed(
+            "jq -e '"
+            "(.network | has(\"relay\") | not) "
+            "and (.network | has(\"discovery\") | not) "
+            "and (.peers == [{\"id\":\"${nodeB.peerId}\",\"vpn_ip\":\"${nodeB.vpnIp}\"}])"
+            "' /etc/p2p-vpn/node-a.json"
+        )
+        node_b.succeed(
+            "jq -e '"
+            "(.network | has(\"relay\") | not) "
+            "and (.network | has(\"discovery\") | not) "
+            "and (.peers == [{\"id\":\"${nodeA.peerId}\",\"vpn_ip\":\"${nodeA.vpnIp}\"}])"
+            "' /etc/p2p-vpn/node-b.json"
+        )
 
     with subtest("starts on LAN with direct path"):
         node_a.succeed("${health "node-a"}")
@@ -191,8 +187,11 @@ pkgs.testers.nixosTest {
         node_a.wait_until_succeeds("ping -I pv0 -c 3 -W 2 ${nodeB.vpnIp}", timeout=90)
         node_b.wait_until_succeeds("ping -I pv0 -c 3 -W 2 ${nodeA.vpnIp}", timeout=90)
         node_a.wait_until_succeeds("${state "node-a"} | grep -q 'selected_path direct_'", timeout=90)
+        node_a.wait_until_succeeds("${state "node-a"} | awk '/relay_reservations_accepted/ { exit $2 > 0 ? 0 : 1 }'", timeout=90)
+        node_b.wait_until_succeeds("${state "node-b"} | awk '/relay_reservations_accepted/ { exit $2 > 0 ? 0 : 1 }'", timeout=90)
 
     with subtest("moved peer recovers through relay without config changes"):
+        node_b.succeed("ip link set eth2 up")
         node_b.succeed("ip link set eth1 down")
         node_a.fail("ping -c 1 -W 1 ${nodeB.lanIp}")
         node_b.succeed("ping -c 1 -W 1 ${relay.vlanMoved}")

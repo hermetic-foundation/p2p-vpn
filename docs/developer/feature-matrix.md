@@ -18,7 +18,7 @@ Status is conservative.
 | --- | --- | --- |
 | Static LAN peers | Operational | Two-host LAN proof, namespace E2E. |
 | Circuit relay fallback | Operational | Forced-relay LAN proof, namespace E2E. |
-| Network move recovery | Operational | Committed-source NixOS network-move VM proof. |
+| Network move recovery | Operational | Minimal-config NixOS network-move VM proof. |
 | Bounded queues | Operational | `cargo test queue::tests`. |
 | Route ownership | Operational | `cargo test route::tests`. |
 | Control protocol | Operational | `cargo test runtime::control`. |
@@ -47,8 +47,8 @@ Status is conservative.
 | 2026-08-05 | LAN direct two-host test | Bidirectional ping passed. |
 | 2026-08-05 | Forced relay two-host test | Bidirectional relay ping passed. |
 | 2026-08-09 | Forced-relay VM candidate filter | Overlay addresses were not advertised as underlay candidates. |
-| 2026-08-09 | NixOS network-move VM test | LAN to relay to LAN recovery passed. |
-| 2026-08-09 | Committed-source network-move VM test | Direct LAN, relay fallback, and direct re-promotion passed from `main`. |
+| 2026-08-09 | NixOS network-move VM test | Minimal config recovered LAN to discovered relay to LAN. |
+| 2026-08-09 | Relay-ready dialing regression | Stale direct connections no longer suppress relay fallback dials. |
 
 ## Main Remaining Gap
 

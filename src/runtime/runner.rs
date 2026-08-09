@@ -2319,6 +2319,7 @@ fn handle_redial_tick(
             &node.relay_peer_addresses,
             &node.configured_peer_addresses,
             discovered_peer_addresses,
+            paths,
             metrics,
             relay,
         );
@@ -3278,12 +3279,23 @@ impl AutoRelayState {
         if self.policy.max_candidates == 0 {
             return false;
         }
-        if self
+        if let Some((_, existing_address)) = self
             .candidates
-            .iter()
-            .any(|(candidate_peer, _)| *candidate_peer == peer)
+            .iter_mut()
+            .find(|(candidate_peer, _)| *candidate_peer == peer)
         {
-            return false;
+            if *existing_address == address {
+                return false;
+            }
+
+            *existing_address = address;
+            if !self.accepted_reservation_peers.contains(&peer) {
+                self.pending_reservations.remove(&peer);
+                self.attempted_reservations
+                    .retain(|(attempted_peer, _)| *attempted_peer != peer);
+                self.retry_after.remove(&peer);
+            }
+            return true;
         }
         if self.candidates.len() >= self.policy.max_candidates {
             return false;
@@ -3429,8 +3441,14 @@ struct RelayInfrastructurePeerSnapshot {
 
 impl InfrastructurePeers {
     fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) -> bool {
-        if self.peers.contains_key(&peer) || self.peers.len() >= AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS
-        {
+        if let Some(existing_address) = self.peers.get_mut(&peer) {
+            if *existing_address == address {
+                return false;
+            }
+            *existing_address = address;
+            return true;
+        }
+        if self.peers.len() >= AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS {
             return false;
         }
 
@@ -3800,6 +3818,7 @@ fn dial_relay_ready_configured_peers(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &DiscoveredPeerAddresses,
+    paths: &PathSet,
     metrics: &RuntimeMetrics,
     relay: Libp2pPeerId,
 ) {
@@ -3820,7 +3839,7 @@ fn dial_relay_ready_configured_peers(
         &available_relay_addresses,
         configured_peer_addresses,
         discovered_peer_addresses,
-        |peer| swarm.is_connected(peer),
+        |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     ) {
         if !relay_readiness.should_attempt_ready_dial(relay, peer, &address) {
             continue;
@@ -3858,7 +3877,7 @@ fn relay_ready_configured_peer_targets(
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &DiscoveredPeerAddresses,
-    mut is_connected: impl FnMut(&Libp2pPeerId) -> bool,
+    mut connection_state: impl FnMut(&Libp2pPeerId) -> RedialConnectionState,
 ) -> Vec<(Libp2pPeerId, Multiaddr)> {
     let mut seen = HashSet::new();
     let mut addresses = Vec::new();
@@ -3873,7 +3892,7 @@ fn relay_ready_configured_peer_targets(
         .map(|(peer, address)| (peer, address))
         .chain(discovered)
     {
-        if *peer == local_peer || is_connected(peer) {
+        if *peer == local_peer || connection_state(peer).has_usable_relay_path() {
             continue;
         }
         if !configured_peer_set.contains(peer) {
@@ -3894,7 +3913,7 @@ fn relay_ready_configured_peer_targets(
         .map(|(_, address)| address.clone().with(Protocol::P2pCircuit))
         .collect::<Vec<_>>();
     for peer in configured_peers {
-        if peer == local_peer || is_connected(&peer) {
+        if peer == local_peer || connection_state(&peer).has_usable_relay_path() {
             continue;
         }
         for address in &relay_reservation_addresses {
@@ -4121,6 +4140,10 @@ enum RedialConnectionState {
 impl RedialConnectionState {
     const fn is_connected(self) -> bool {
         !matches!(self, Self::Disconnected | Self::ConnectedNoUsablePath)
+    }
+
+    const fn has_usable_relay_path(self) -> bool {
+        matches!(self, Self::RelayOnly | Self::DirectAndRelay)
     }
 }
 
@@ -5848,6 +5871,7 @@ async fn handle_swarm_event(
                     context.relay_addresses,
                     context.configured_peer_addresses,
                     context.discovered_peer_addresses,
+                    context.paths,
                     context.metrics,
                     relay,
                 );
@@ -8959,6 +8983,7 @@ fn handle_behaviour_event(
     match event {
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
+                let infrastructure_address = address.clone();
                 learn_peer_address(
                     swarm,
                     context.forwarder,
@@ -8970,6 +8995,17 @@ fn handle_behaviour_event(
                     context.discovery,
                     DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
                 );
+                if context.auto_relay.should_discover_candidates() {
+                    admit_kademlia_relay_infrastructure_peer(
+                        swarm,
+                        context.forwarder,
+                        context.infrastructure_peers,
+                        context.auto_relay,
+                        context.metrics,
+                        peer,
+                        std::slice::from_ref(&infrastructure_address).iter(),
+                    );
+                }
             }
         }
         BehaviourEvent::Mdns(mdns::Event::Expired(peers)) if context.discovery.mdns => {
@@ -9033,6 +9069,7 @@ fn handle_behaviour_event(
             context.forwarder,
             context.relay_readiness,
             context.auto_relay,
+            context.paths,
             context.relay_addresses,
             context.configured_peer_addresses,
             context.discovered_peer_addresses,
@@ -9565,6 +9602,7 @@ fn handle_relay_event(
     forwarder: &Forwarder,
     relay_readiness: &mut RelayReadiness,
     auto_relay: &mut AutoRelayState,
+    paths: &PathSet,
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
     discovered_peer_addresses: &DiscoveredPeerAddresses,
@@ -9586,6 +9624,7 @@ fn handle_relay_event(
             relay_addresses,
             configured_peer_addresses,
             discovered_peer_addresses,
+            paths,
             metrics,
             relay_peer_id,
         );
@@ -13362,7 +13401,13 @@ mod tests {
                 (direct_peer, direct),
             ],
             &DiscoveredPeerAddresses::default(),
-            |candidate| *candidate == connected,
+            |candidate| {
+                if *candidate == connected {
+                    RedialConnectionState::DirectAndRelay
+                } else {
+                    RedialConnectionState::Disconnected
+                }
+            },
         );
 
         assert_eq!(targets, vec![(peer, relayed)]);
@@ -13391,7 +13436,7 @@ mod tests {
             &[],
             &[],
             &discovered,
-            |_| false,
+            |_| RedialConnectionState::Disconnected,
         );
 
         assert_eq!(targets, vec![(peer, discovered_relayed)]);
@@ -13416,7 +13461,7 @@ mod tests {
             &[],
             &[(peer, relayed.clone())],
             &discovered,
-            |_| false,
+            |_| RedialConnectionState::Disconnected,
         );
 
         assert_eq!(targets, vec![(peer, relayed)]);
@@ -13442,7 +13487,61 @@ mod tests {
             &[(relay, relay_address)],
             &[],
             &DiscoveredPeerAddresses::default(),
-            |candidate| *candidate == connected,
+            |candidate| {
+                if *candidate == connected {
+                    RedialConnectionState::DirectAndRelay
+                } else {
+                    RedialConnectionState::Disconnected
+                }
+            },
+        );
+
+        assert_eq!(targets, vec![(peer, relayed_address)]);
+    }
+
+    #[test]
+    fn relay_ready_peer_targets_include_peer_with_no_usable_path() {
+        let local = peer_id();
+        let relay = peer_id();
+        let peer = peer_id();
+        let relayed: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("relayed address");
+
+        let targets = relay_ready_configured_peer_targets(
+            local,
+            relay,
+            [peer],
+            &[],
+            &[(peer, relayed.clone())],
+            &DiscoveredPeerAddresses::default(),
+            |_| RedialConnectionState::ConnectedNoUsablePath,
+        );
+
+        assert_eq!(targets, vec![(peer, relayed)]);
+    }
+
+    #[test]
+    fn relay_ready_peer_targets_synthesize_backup_for_direct_only_peer() {
+        let local = peer_id();
+        let relay = peer_id();
+        let peer = peer_id();
+        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let relayed_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
+            .parse()
+            .expect("relayed address");
+
+        let targets = relay_ready_configured_peer_targets(
+            local,
+            relay,
+            [peer],
+            &[(relay, relay_address)],
+            &[],
+            &DiscoveredPeerAddresses::default(),
+            |_| RedialConnectionState::DirectOnly,
         );
 
         assert_eq!(targets, vec![(peer, relayed_address)]);
@@ -13693,7 +13792,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_relay_state_keeps_one_candidate_address_per_relay_peer() {
+    fn auto_relay_state_rotates_candidate_address_for_same_relay_peer() {
         let relay_a = peer_id();
         let relay_b = peer_id();
         let address_a_tcp: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_a}")
@@ -13712,12 +13811,41 @@ mod tests {
         });
 
         assert!(state.record_candidate(relay_a, address_a_tcp.clone()));
-        assert!(!state.record_candidate(relay_a, address_a_quic));
+        assert!(state.record_candidate(relay_a, address_a_quic.clone()));
         assert!(state.record_candidate(relay_b, address_b.clone()));
 
         assert_eq!(
             state.next_reservation_targets(Instant::now()),
-            vec![(relay_a, address_a_tcp), (relay_b, address_b)]
+            vec![(relay_a, address_a_quic), (relay_b, address_b)]
+        );
+    }
+
+    #[test]
+    fn auto_relay_state_rotating_pending_candidate_retries_new_address() {
+        let relay = peer_id();
+        let stale_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("stale relay address");
+        let fresh_address: Multiaddr = format!("/ip4/127.0.0.2/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("fresh relay address");
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 30,
+        });
+        let now = Instant::now();
+
+        assert!(state.record_candidate(relay, stale_address.clone()));
+        assert_eq!(
+            state.next_reservation_targets(now),
+            vec![(relay, stale_address)]
+        );
+
+        assert!(state.record_candidate(relay, fresh_address.clone()));
+        assert_eq!(
+            state.next_reservation_targets(now),
+            vec![(relay, fresh_address)]
         );
     }
 
