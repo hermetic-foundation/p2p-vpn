@@ -70,11 +70,18 @@ Run the two-node VM mesh check:
 nix build .#checks.x86_64-linux.nixos-vm-mesh
 ```
 
+Equivalent explicit minimal-config alias:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-minimal-lan
+```
+
 Coverage:
 
 | Scenario | Assertion |
 | --- | --- |
 | Minimal config | Peer IDs plus route ownership are enough. |
+| Generated JSON | No peer addresses, relay block, or discovery override. |
 | Discovery | No explicit peer dial addresses are configured. |
 | TUN setup | Both nodes create default `pv0`. |
 | Data plane | Bidirectional ping crosses the overlay. |

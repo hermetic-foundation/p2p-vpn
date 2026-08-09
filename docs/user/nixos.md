@@ -36,6 +36,16 @@ Use typed module options for ordinary NixOS hosts:
 }
 ```
 
+Required values:
+
+| Field | Purpose |
+| --- | --- |
+| `networkName` | Shared overlay name. |
+| `localPeer` | This host's libp2p peer ID. |
+| `privateKeyFile` | This host's identity key. |
+| `vpnIp` | This host's overlay IP. |
+| `peers.<id>.vpnIp` | Remote peer authorization. |
+
 That is enough for the default profile:
 
 | Item | Default |
@@ -59,6 +69,25 @@ Add a direct LAN IP only as an override:
 ```
 
 Use explicit `addresses` only for custom ports, DNS, or relayed paths.
+
+## Minimal LAN Proof
+
+Run the minimal LAN VM check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-minimal-lan
+```
+
+This check verifies:
+
+| Requirement | Evidence |
+| --- | --- |
+| No peer addresses | Generated JSON has no `addresses`. |
+| No relay config | Generated JSON has no `network.relay`. |
+| No discovery override | Generated JSON omits `network.discovery`. |
+| Default interface | Both nodes create `pv0`. |
+| Automatic routing | `ping -I pv0` succeeds both ways. |
+| Direct LAN path | State reports `selected_path direct_*`. |
 
 ## Network Moves
 

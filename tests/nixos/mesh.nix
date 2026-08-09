@@ -28,6 +28,7 @@ let
         package
         pkgs.iproute2
         pkgs.iputils
+        pkgs.jq
       ];
 
       services.p2p-vpn.instances.${name} = {
@@ -70,7 +71,29 @@ pkgs.testers.nixosTest {
     node_a.wait_for_file("/run/p2p-vpn-node-a/control.sock")
     node_b.wait_for_file("/run/p2p-vpn-node-b/control.sock")
 
-    with subtest("minimal configs produce healthy peers"):
+    with subtest("generated configs stay minimal"):
+        node_a.succeed(
+            "jq -e '"
+            ".network.name == \"nixos-vm-mesh\" "
+            "and .network.local_peer == \"${nodeA.peerId}\" "
+            "and .network.vpn_ip == \"${nodeA.vpnIp}\" "
+            "and (.network | has(\"discovery\") | not) "
+            "and (.network | has(\"relay\") | not) "
+            "and (.peers == [{\"id\":\"${nodeB.peerId}\",\"vpn_ip\":\"${nodeB.vpnIp}\"}])"
+            "' /etc/p2p-vpn/node-a.json"
+        )
+        node_b.succeed(
+            "jq -e '"
+            ".network.name == \"nixos-vm-mesh\" "
+            "and .network.local_peer == \"${nodeB.peerId}\" "
+            "and .network.vpn_ip == \"${nodeB.vpnIp}\" "
+            "and (.network | has(\"discovery\") | not) "
+            "and (.network | has(\"relay\") | not) "
+            "and (.peers == [{\"id\":\"${nodeA.peerId}\",\"vpn_ip\":\"${nodeA.vpnIp}\"}])"
+            "' /etc/p2p-vpn/node-b.json"
+        )
+
+    with subtest("minimal configs discover healthy peers"):
         node_a.succeed("${health "node-a"} | tee /tmp/node-a-health")
         node_b.succeed("${health "node-b"} | tee /tmp/node-b-health")
         node_a.succeed("grep -q '^daemon_health_ready true$' /tmp/node-a-health")

@@ -2374,6 +2374,7 @@ EOF
             touch $out
           '';
           nixos-vm-smoke = nixosVmSmoke;
+          nixos-vm-minimal-lan = nixosVmMesh;
           nixos-vm-mesh = nixosVmMesh;
           nixos-vm-forced-relay = nixosVmForcedRelay;
           nixos-vm-network-move = nixosVmNetworkMove;
