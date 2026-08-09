@@ -52,6 +52,43 @@ This keeps CI stable across nixpkgs Clippy updates.
 nix flake check
 ```
 
+## Operational Release Gate
+
+Run the local Hyprspace-replacement gate:
+
+```sh
+nix run .#check-operational
+```
+
+List the gate without running it:
+
+```sh
+nix run .#check-operational -- --list
+```
+
+Skip VM checks during iteration:
+
+```sh
+nix run .#check-operational -- --skip-vms
+```
+
+Coverage:
+
+| Scenario | Checks |
+| --- | --- |
+| Rust package | `package`, `fmt`, `clippy` |
+| Release archive | `releaseArchiveSanity` |
+| NixOS service | `nixos-module` |
+| Minimal LAN | `nixos-vm-minimal-lan` |
+| Forced relay | `nixos-vm-forced-relay` |
+| Network move | `nixos-vm-network-move` |
+| Public tooling | Public relay and VPN repro structure checks |
+| Evidence validation | `public-vpn-evidence-check` |
+
+This gate is local.
+
+It does not replace the real hotspot/VPN evidence run.
+
 ## NixOS Module Check
 
 Run the module evaluation check:

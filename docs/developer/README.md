@@ -27,8 +27,10 @@ nix run .#check-fast
 ## Full Local Check
 
 ```sh
-nix flake check
+nix run .#check-operational
 ```
+
+Use `nix flake check` when you want every exported check.
 
 Some checks need Linux namespace and TUN privileges.
 

@@ -63,6 +63,99 @@
             cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
           '';
         };
+        checkOperational = pkgs.writeShellApplication {
+          name = "p2p-vpn-check-operational";
+          runtimeInputs = [
+            pkgs.coreutils
+            pkgs.nix
+          ];
+          text = ''
+            usage() {
+              cat <<'USAGE'
+Usage: p2p-vpn-check-operational [--list] [--skip-vms]
+
+Runs the local operational release gate for p2p-vpn.
+
+Options:
+  --list      Print the checks without running them.
+  --skip-vms  Omit NixOS VM checks.
+USAGE
+            }
+
+            list_only=0
+            skip_vms=0
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                --list)
+                  list_only=1
+                  ;;
+                --skip-vms)
+                  skip_vms=1
+                  ;;
+                -h|--help)
+                  usage
+                  exit 0
+                  ;;
+                *)
+                  echo "unknown argument: $1" >&2
+                  usage >&2
+                  exit 2
+                  ;;
+              esac
+              shift
+            done
+
+            if [[ ! -f flake.nix || ! -f Cargo.toml ]]; then
+              echo "p2p-vpn-check-operational must be run from the p2p-vpn repository root" >&2
+              exit 2
+            fi
+
+            system="${system}"
+            is_linux="${if pkgs.stdenv.isLinux then "1" else "0"}"
+            checks=(
+              ".#checks.$system.package"
+              ".#checks.$system.fmt"
+              ".#checks.$system.clippy"
+              ".#checks.$system.releaseArchiveSanity"
+            )
+
+            linux_checks=(
+              ".#checks.$system.nixos-module"
+              ".#checks.$system.public-relay-repro-structure"
+              ".#checks.$system.public-vpn-repro-structure"
+              ".#checks.$system.public-vpn-repro-evidence-structure"
+              ".#checks.$system.public-vpn-evidence-check"
+            )
+
+            vm_checks=(
+              ".#checks.$system.nixos-vm-minimal-lan"
+              ".#checks.$system.nixos-vm-forced-relay"
+              ".#checks.$system.nixos-vm-network-move"
+            )
+
+            if [[ "$is_linux" -eq 1 ]]; then
+              checks+=("''${linux_checks[@]}")
+              if [[ "$skip_vms" -eq 0 ]]; then
+                checks+=("''${vm_checks[@]}")
+              fi
+            fi
+
+            if [[ "$list_only" -eq 1 ]]; then
+              printf '%s\n' "operational check targets:"
+              printf '  %s\n' "''${checks[@]}"
+              printf '%s\n' ""
+              if [[ "$is_linux" -eq 1 ]]; then
+                printf '%s\n' "external proof still required:"
+                printf '%s\n' "  nix run .#public-vpn-evidence-check -- --host-a HOST_A/vpn-repro-evidence.json --host-b HOST_B/vpn-repro-evidence.json --require-relay --require-direct --require-dcutr --require-quic-session"
+              else
+                printf '%s\n' "NixOS, VM, and public two-host gates are Linux-only."
+              fi
+              exit 0
+            fi
+
+            nix build --no-write-lock-file -L "''${checks[@]}"
+          '';
+        };
         namespacePreflight = pkgs.writeShellApplication {
           name = "p2p-vpn-namespace-preflight";
           runtimeInputs = [
@@ -2235,6 +2328,7 @@ EOF
         packages = {
           default = package;
           check-fast = checkFast;
+          check-operational = checkOperational;
           debug-bundle = debugBundle;
           membership-record-repro = membershipRecordRepro;
 
@@ -2297,6 +2391,13 @@ EOF
             program = "${checkFast}/bin/p2p-vpn-check-fast";
             meta = {
               description = "Run formatter, tests, and clippy in the Nix tool environment";
+            };
+          };
+          check-operational = {
+            type = "app";
+            program = "${checkOperational}/bin/p2p-vpn-check-operational";
+            meta = {
+              description = "Run the local operational release gate";
             };
           };
           membership-record-repro = {
