@@ -1856,6 +1856,13 @@ EOF
                   vpnIp = "fd00::1";
                   peers."3333333333333333333333333333333333333333333333333333333333333333".vpnIp = "fd00::2";
                 };
+                services.p2p-vpn.instances.node-e = {
+                  enable = true;
+                  networkName = "nixos-module-minimal";
+                  localPeer = "4444444444444444444444444444444444444444444444444444444444444444";
+                  privateKey = "BASE64_PRIVATE_KEY";
+                  peers."5555555555555555555555555555555555555555555555555555555555555555" = { };
+                };
               }
             )
           ];
@@ -2210,10 +2217,12 @@ EOF
           '';
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
           nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
+            nativeBuildInputs = [ pkgs.jq ];
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
             execStartSettings = moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStart;
             execStartSecret = moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStart;
+            execStartMinimal = moduleEval.config.systemd.services.p2p-vpn-node-e.serviceConfig.ExecStart;
             execStartPreSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre;
             execStartPreSecretScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre
@@ -2221,6 +2230,7 @@ EOF
             execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
             execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
             generatedSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-c.json".source;
+            generatedMinimalSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-e.json".source;
             killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
             timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
             runtimeDirectory = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectory;
@@ -2264,6 +2274,10 @@ EOF
               *"p2p-vpn up --config /run/p2p-vpn-node-d/config.json --control-socket /run/p2p-vpn-node-d/control.sock"*) ;;
               *) echo "unexpected secret ExecStart: $execStartSecret" >&2; exit 1 ;;
             esac
+            case "$execStartMinimal" in
+              *"p2p-vpn up --config /etc/p2p-vpn/node-e.json --control-socket /run/p2p-vpn-node-e/control.sock"*) ;;
+              *) echo "unexpected minimal ExecStart: $execStartMinimal" >&2; exit 1 ;;
+            esac
             case "$execStartPreSecret" in
               *"p2p-vpn-node-d-write-config"*) ;;
               *) echo "unexpected secret ExecStartPre: $execStartPreSecret" >&2; exit 1 ;;
@@ -2276,6 +2290,18 @@ EOF
               *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"vpn_ip":"10.44.0.1"'*'"ip":"192.168.0.203"'*'"vpn_ip":"10.44.0.2"'*) ;;
               *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
             esac
+            printf '%s' "$generatedMinimalSettings" > generated-minimal.json
+            jq -e '
+              keys == ["network", "peers"]
+              and (.network | keys == ["local_peer", "name", "private_key"])
+              and (.network.name == "nixos-module-minimal")
+              and (.network.local_peer == "4444444444444444444444444444444444444444444444444444444444444444")
+              and (.network.private_key == "BASE64_PRIVATE_KEY")
+              and (.peers == [{"id":"5555555555555555555555555555555555555555555555555555555555555555"}])
+            ' generated-minimal.json >/dev/null || {
+              echo "minimal generated settings are not compact: $generatedMinimalSettings" >&2
+              exit 1
+            }
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;
               *) echo "unexpected ExecStop: $execStop" >&2; exit 1 ;;

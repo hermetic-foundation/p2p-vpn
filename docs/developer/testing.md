@@ -42,6 +42,24 @@ nix develop -c cargo clippy --all-targets -- -D warnings
 nix flake check
 ```
 
+## NixOS Module Check
+
+Run the module evaluation check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-module
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Service wiring | `ExecStart` uses the generated config path. |
+| Secrets | `privateKeyFile` is injected at service start. |
+| Minimal config | ID-only peer configs serialize as compact JSON. |
+| Defaults | Discovery, relay, packet-plane, queue, and resources are omitted. |
+| Firewall | Configured TCP, UDP, and packet-plane ports are opened. |
+
 ## NixOS VM Mesh
 
 Run the two-node VM mesh check:
