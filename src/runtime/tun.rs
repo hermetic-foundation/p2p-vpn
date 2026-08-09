@@ -468,6 +468,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -507,6 +508,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -547,6 +549,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 100,
@@ -566,6 +569,7 @@ mod tests {
                 id: remote.to_string(),
                 name: Some("node-b".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -608,6 +612,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![
                     RouteConfig {
                         prefix: "10.44.0.1/32".to_owned(),
@@ -683,6 +688,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -703,6 +709,7 @@ mod tests {
                 .to_string(),
                 name: Some("node-b".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.99/24".to_owned(),
@@ -751,6 +758,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.1/32".to_owned(),
                     metric: 100,
@@ -774,6 +782,7 @@ mod tests {
                 .to_string(),
                 name: Some("node-b".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.2/32".to_owned(),

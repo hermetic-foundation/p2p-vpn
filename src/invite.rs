@@ -192,6 +192,7 @@ pub fn import_invite_config_at(
             membership_key: invite.payload.membership_key.clone(),
             previous_membership_tags: invite.payload.previous_membership_tags.clone(),
             member_records: Vec::new(),
+            vpn_ip: None,
             routes: options.local_routes,
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
@@ -213,6 +214,7 @@ pub fn import_invite_config_at(
             id: invite.payload.inviter_peer.clone(),
             name: options.peer_name,
             ip: None,
+            vpn_ip: None,
             addresses: invite.payload.inviter_addresses.clone(),
             routes: invite.payload.inviter_routes.clone(),
         }],
@@ -565,6 +567,7 @@ mod tests {
                 membership_key: Some(STANDARD.encode([7_u8; 32])),
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 100,

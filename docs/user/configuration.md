@@ -25,7 +25,9 @@ Everything else can be omitted for the default profile.
 | `interface.mtu` | `1280` |
 | `peers[].name` | unset |
 | `peers[].addresses` | empty |
+| `peers[].vpn_ip` | unset |
 | `peers[].routes` | empty |
+| `network.vpn_ip` | unset |
 | `network.routes` | empty |
 | `network.listen_addresses` | `/ip4/0.0.0.0/tcp/4001` |
 | `network.external_addresses` | empty |
@@ -67,12 +69,12 @@ Add route ownership for human-chosen VPN IPs:
     "name": "lab",
     "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY",
-    "routes": [{ "prefix": "10.44.0.1/32" }]
+    "vpn_ip": "10.44.0.1"
   },
   "peers": [
     {
       "id": "REMOTE_PEER_ID",
-      "routes": [{ "prefix": "10.44.0.2/32" }]
+      "vpn_ip": "10.44.0.2"
     }
   ]
 }
@@ -81,6 +83,10 @@ Add route ownership for human-chosen VPN IPs:
 This is optional.
 
 Without it, `status` shows built-in IPs derived from peer IDs.
+
+`vpnIp` is accepted as a JSON alias.
+
+Use `routes` only for prefixes or additional routed networks.
 
 ### Explicit Dial Address
 
@@ -104,6 +110,7 @@ Addresses and routes are optional.
 | `id` | Remote peer ID. Required. |
 | `name` | Optional label. |
 | `ip` | Optional direct IP. Uses TCP port `4001`. |
+| `vpn_ip` | Optional stable overlay host IP. |
 | `addresses` | Optional direct or relayed libp2p multiaddrs. |
 | `routes` | Optional prefixes this peer may originate. |
 
@@ -126,7 +133,8 @@ The daemon rejects overlapping prefixes owned by different peers.
 | Built-in IPv4 host route | Derived from peer ID. |
 | Built-in IPv6 host route | Derived from peer ID. |
 
-You only need explicit route entries for stable, chosen IPs.
+Use `vpn_ip` for stable, chosen host addresses.
+Use explicit route entries for prefixes.
 
 Without them, peers still get built-in host routes.
 

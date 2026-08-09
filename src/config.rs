@@ -92,6 +92,13 @@ impl Config {
             prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(local_peer)), 128)?,
             metric: 0,
         })?;
+        if let Some(vpn_ip) = &self.network.vpn_ip {
+            table.insert_authorized(Route {
+                owner: local_peer,
+                prefix: vpn_ip_host_route(vpn_ip)?,
+                metric: 0,
+            })?;
+        }
         for route in &self.network.routes {
             table.insert_authorized(Route {
                 owner: local_peer,
@@ -113,6 +120,13 @@ impl Config {
                 metric: 0,
             })?;
 
+            if let Some(vpn_ip) = &peer.vpn_ip {
+                table.insert_authorized(Route {
+                    owner,
+                    prefix: vpn_ip_host_route(vpn_ip)?,
+                    metric: 0,
+                })?;
+            }
             for route in &peer.routes {
                 table.insert_authorized(Route {
                     owner,
@@ -457,6 +471,8 @@ pub struct NetworkConfig {
     pub previous_membership_tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_records: Vec<SignedMembershipRecord>,
+    #[serde(default, alias = "vpnIp", skip_serializing_if = "Option::is_none")]
+    pub vpn_ip: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<RouteConfig>,
     #[serde(
@@ -671,6 +687,8 @@ pub struct PeerConfig {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
+    #[serde(default, alias = "vpnIp", skip_serializing_if = "Option::is_none")]
+    pub vpn_ip: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addresses: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -806,6 +824,7 @@ impl Default for RuntimeDefaults {
 pub struct InitPeer {
     pub id: String,
     pub address: Option<String>,
+    pub vpn_ip: Option<String>,
     pub routes: Vec<RouteConfig>,
 }
 
@@ -814,6 +833,7 @@ pub struct InitConfigTemplate {
     pub identity: NodeIdentity,
     pub network_name: String,
     pub membership_key: Option<String>,
+    pub vpn_ip: Option<String>,
     pub local_routes: Vec<RouteConfig>,
     pub interface_name: String,
     pub mtu: u16,
@@ -842,6 +862,7 @@ impl InitConfigTemplate {
                 membership_key: self.membership_key,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: self.vpn_ip,
                 routes: self.local_routes,
                 listen_addresses: self.listen_addresses,
                 external_addresses: self.external_addresses,
@@ -1323,6 +1344,22 @@ fn parse_cidr(input: &str) -> Result<IpCidr, RoutePrefixError> {
         .map_err(RoutePrefixError::InvalidPrefixLength)
 }
 
+fn vpn_ip_host_route(input: &str) -> Result<IpCidr, ConfigError> {
+    if input.contains('/') {
+        return parse_cidr(input).map_err(ConfigError::RoutePrefix);
+    }
+
+    let address = input.parse::<IpAddr>().map_err(|_| {
+        ConfigError::RoutePrefix(RoutePrefixError::InvalidAddress(input.to_owned()))
+    })?;
+    let prefix_len = match address {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+
+    IpCidr::new(address, prefix_len).map_err(ConfigError::Route)
+}
+
 fn parse_multiaddrs(input: &[String]) -> Result<Vec<libp2p::Multiaddr>, ConfigError> {
     input
         .iter()
@@ -1535,6 +1572,9 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
         {
             existing.addresses.push(address);
         }
+        if existing.vpn_ip.is_none() {
+            existing.vpn_ip = peer.vpn_ip;
+        }
         for route in peer.routes {
             if !existing.routes.contains(&route) {
                 existing.routes.push(route);
@@ -1547,6 +1587,7 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: InitPeer) {
         id: peer.id,
         name: None,
         ip: None,
+        vpn_ip: peer.vpn_ip,
         addresses: peer.address.into_iter().collect(),
         routes: peer.routes,
     });
@@ -1777,6 +1818,7 @@ mod tests {
                 membership_key: Some(key),
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1832,6 +1874,7 @@ mod tests {
                     base64::engine::general_purpose::STANDARD.encode([9_u8; 32]),
                 ],
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1873,6 +1916,7 @@ mod tests {
                 membership_key: Some(base64::engine::general_purpose::STANDARD.encode([7_u8; 32])),
                 previous_membership_tags: vec!["not-base64".to_owned()],
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -1916,6 +1960,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2149,6 +2194,39 @@ mod tests {
     }
 
     #[test]
+    fn config_vpn_ip_shortcuts_compile_to_host_routes() {
+        let config: Config = serde_json::from_str(
+            r#"{
+              "network": {
+                "name": "dev",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                "vpn_ip": "10.44.0.1"
+              },
+              "peers": [
+                {
+                  "id": "0100000000000000000000000000000000000000000000000000000000000000",
+                  "vpnIp": "fd00::2"
+                }
+              ]
+            }"#,
+        )
+        .expect("config");
+
+        let local_peer = config.local_peer_id().expect("local peer");
+        let remote_peer = config.peers[0].peer_id().expect("remote peer");
+        let routes = config.compile_routes().expect("routes");
+
+        assert!(routes.authorizes_route(
+            local_peer,
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 44, 0, 1)), 32).expect("cidr")
+        ));
+        assert!(routes.authorizes_route(
+            remote_peer,
+            IpCidr::new("fd00::2".parse::<IpAddr>().expect("ip"), 128).expect("cidr")
+        ));
+    }
+
+    #[test]
     fn config_compiles_builtin_and_advertised_routes() {
         let config = Config {
             network: NetworkConfig {
@@ -2159,6 +2237,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 75,
@@ -2178,6 +2257,7 @@ mod tests {
                 id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
                 name: Some("one".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.7.99/24".to_owned(),
@@ -2221,6 +2301,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/16".to_owned(),
                     metric: 50,
@@ -2240,6 +2321,7 @@ mod tests {
                 id: "0100000000000000000000000000000000000000000000000000000000000000".to_owned(),
                 name: Some("one".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.9.0/24".to_owned(),
@@ -2270,6 +2352,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2315,6 +2398,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2352,6 +2436,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2396,6 +2481,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2419,6 +2505,7 @@ mod tests {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -2449,6 +2536,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2472,6 +2560,7 @@ mod tests {
                 id: remote.peer_id,
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -2497,6 +2586,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2515,6 +2605,7 @@ mod tests {
                         .to_owned(),
                     name: Some("one".to_owned()),
                     ip: None,
+                    vpn_ip: None,
                     addresses: Vec::new(),
                     routes: vec![RouteConfig {
                         prefix: "10.42.0.0/16".to_owned(),
@@ -2526,6 +2617,7 @@ mod tests {
                         .to_owned(),
                     name: Some("two".to_owned()),
                     ip: None,
+                    vpn_ip: None,
                     addresses: Vec::new(),
                     routes: vec![RouteConfig {
                         prefix: "10.42.9.0/24".to_owned(),
@@ -2560,6 +2652,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: vec!["/ip4/203.0.113.10/udp/4001/quic-v1".to_owned()],
@@ -2591,6 +2684,7 @@ mod tests {
                 id: remote.to_string(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
                 routes: Vec::new(),
             }],
@@ -2627,6 +2721,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
                 external_addresses: Vec::new(),
@@ -2661,6 +2756,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2695,6 +2791,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2756,6 +2853,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2801,6 +2899,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2878,6 +2977,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2917,6 +3017,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2956,6 +3057,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -2995,6 +3097,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3041,6 +3144,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3132,6 +3236,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3234,6 +3339,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: vec!["not-a-multiaddr".to_owned()],
                 external_addresses: Vec::new(),
@@ -3250,6 +3356,7 @@ mod tests {
                 id: remote.to_string(),
                 name: None,
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -3294,6 +3401,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3313,6 +3421,7 @@ mod tests {
                 id: configured.to_string(),
                 name: None,
                 ip: None,
+                vpn_ip: None,
                 addresses: Vec::new(),
                 routes: Vec::new(),
             }],
@@ -3357,6 +3466,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -3419,6 +3529,7 @@ mod tests {
             identity: identity.clone(),
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
                 metric: 100,
@@ -3441,12 +3552,14 @@ mod tests {
             bootstrap_peers: vec![InitPeer {
                 id: remote.to_string(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                vpn_ip: None,
                 routes: Vec::new(),
             }],
             peers: vec![
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    vpn_ip: None,
                     routes: vec![RouteConfig {
                         prefix: "10.42.0.0/24".to_owned(),
                         metric: 100,
@@ -3455,6 +3568,7 @@ mod tests {
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/udp/4001/quic-v1".to_owned()),
+                    vpn_ip: None,
                     routes: vec![RouteConfig {
                         prefix: "fd00::/64".to_owned(),
                         metric: 100,
@@ -3463,6 +3577,7 @@ mod tests {
                 InitPeer {
                     id: remote.to_string(),
                     address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    vpn_ip: None,
                     routes: vec![RouteConfig {
                         prefix: "10.42.0.0/24".to_owned(),
                         metric: 100,

@@ -118,8 +118,12 @@ enum Command {
         public_ipfs_profile: bool,
         #[arg(long = "peer")]
         peers: Vec<EndpointArg>,
+        #[arg(long = "vpn-ip")]
+        vpn_ip: Option<String>,
         #[arg(long = "local-route")]
         local_routes: Vec<LocalRouteArg>,
+        #[arg(long = "peer-vpn-ip")]
+        peer_vpn_ips: Vec<PeerVpnIpArg>,
         #[arg(long = "peer-route")]
         peer_routes: Vec<PeerRouteArg>,
         #[arg(long = "relay-reservation")]
@@ -595,7 +599,9 @@ async fn main() -> Result<(), String> {
             ipfs_bootstrap_peers,
             public_ipfs_profile,
             peers,
+            vpn_ip,
             local_routes,
+            peer_vpn_ips,
             peer_routes,
             relay_reservations,
             relay_peers,
@@ -653,7 +659,9 @@ async fn main() -> Result<(), String> {
             ipfs_bootstrap_peers: ipfs_bootstrap_peers || public_ipfs_profile,
             public_ipfs_profile,
             peers,
+            vpn_ip,
             local_routes,
+            peer_vpn_ips,
             peer_routes,
             discovery: InitDiscoveryFlags {
                 disable_mdns,
@@ -1108,7 +1116,9 @@ struct InitConfigArgs {
     ipfs_bootstrap_peers: bool,
     public_ipfs_profile: bool,
     peers: Vec<EndpointArg>,
+    vpn_ip: Option<String>,
     local_routes: Vec<LocalRouteArg>,
+    peer_vpn_ips: Vec<PeerVpnIpArg>,
     peer_routes: Vec<PeerRouteArg>,
     discovery: DiscoveryConfig,
     relay: RelayConfig,
@@ -1126,6 +1136,12 @@ struct EndpointArg {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LocalRouteArg {
     route: RouteConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PeerVpnIpArg {
+    id: String,
+    vpn_ip: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1311,6 +1327,27 @@ impl FromStr for LocalRouteArg {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Ok(Self {
             route: parse_route_arg(input, "local route")?,
+        })
+    }
+}
+
+impl FromStr for PeerVpnIpArg {
+    type Err = String;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let (id, vpn_ip) = input
+            .split_once('=')
+            .ok_or_else(|| "peer VPN IP must be PEER_ID=IP".to_owned())?;
+        if id.is_empty() {
+            return Err("peer id cannot be empty".to_owned());
+        }
+        if vpn_ip.is_empty() {
+            return Err("peer VPN IP cannot be empty".to_owned());
+        }
+
+        Ok(Self {
+            id: id.to_owned(),
+            vpn_ip: vpn_ip.to_owned(),
         })
     }
 }
@@ -1831,6 +1868,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         identity,
         network_name: args.network,
         membership_key: args.membership_key,
+        vpn_ip: args.vpn_ip,
         local_routes: args
             .local_routes
             .into_iter()
@@ -1842,7 +1880,7 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         external_addresses: args.external_addresses,
         packet_plane: args.packet_plane,
         bootstrap_peers,
-        peers: init_peers(args.peers, args.peer_routes),
+        peers: init_peers(args.peers, args.peer_vpn_ips, args.peer_routes),
         discovery: args.discovery,
         relay,
     }
@@ -1954,18 +1992,30 @@ impl From<EndpointArg> for InitPeer {
         Self {
             id: value.id,
             address: value.address,
+            vpn_ip: None,
             routes: Vec::new(),
         }
     }
 }
 
-fn init_peers(addresses: Vec<EndpointArg>, routes: Vec<PeerRouteArg>) -> Vec<InitPeer> {
+fn init_peers(
+    addresses: Vec<EndpointArg>,
+    vpn_ips: Vec<PeerVpnIpArg>,
+    routes: Vec<PeerRouteArg>,
+) -> Vec<InitPeer> {
     addresses
         .into_iter()
         .map(EndpointArg::into)
+        .chain(vpn_ips.into_iter().map(|vpn_ip| InitPeer {
+            id: vpn_ip.id,
+            address: None,
+            vpn_ip: Some(vpn_ip.vpn_ip),
+            routes: Vec::new(),
+        }))
         .chain(routes.into_iter().map(|route| InitPeer {
             id: route.id,
             address: None,
+            vpn_ip: None,
             routes: vec![route.route],
         }))
         .collect()
@@ -2222,7 +2272,11 @@ fn route_owner_details(
             "local",
             config.network.local_peer.clone(),
             "-".to_owned(),
-            route_source(&config.network.routes, route),
+            route_source(
+                config.network.vpn_ip.as_deref(),
+                &config.network.routes,
+                route,
+            ),
         );
     }
 
@@ -2235,7 +2289,7 @@ fn route_owner_details(
         "peer",
         peer.id.clone(),
         peer.name.clone().unwrap_or_else(|| "-".to_owned()),
-        route_source(&peer.routes, route),
+        route_source(peer.vpn_ip.as_deref(), &peer.routes, route),
     )
 }
 
@@ -2446,7 +2500,11 @@ fn push_route_ownership_status(
 ) {
     let local_peer = config.local_peer_id().expect("status config is valid");
     for route in routes.routes_for(local_peer) {
-        let source = route_source(&config.network.routes, route);
+        let source = route_source(
+            config.network.vpn_ip.as_deref(),
+            &config.network.routes,
+            route,
+        );
         lines.push(format!(
             "local route: {} metric {} {source}",
             route.prefix, route.metric
@@ -2455,7 +2513,7 @@ fn push_route_ownership_status(
     for peer in &config.peers {
         let owner = peer.peer_id().expect("status config is valid");
         for route in routes.routes_for(owner) {
-            let source = route_source(&peer.routes, route);
+            let source = route_source(peer.vpn_ip.as_deref(), &peer.routes, route);
             lines.push(format!(
                 "peer route: {} {} metric {} {source}",
                 peer.id, route.prefix, route.metric
@@ -2464,7 +2522,15 @@ fn push_route_ownership_status(
     }
 }
 
-fn route_source(configured_routes: &[RouteConfig], route: p2p_vpn::route::Route) -> &'static str {
+fn route_source(
+    vpn_ip: Option<&str>,
+    configured_routes: &[RouteConfig],
+    route: p2p_vpn::route::Route,
+) -> &'static str {
+    if vpn_ip.is_some_and(|vpn_ip| vpn_ip_route_matches(vpn_ip, route)) {
+        return "vpn-ip";
+    }
+
     if configured_routes.iter().any(|configured| {
         configured.metric == route.metric
             && configured
@@ -2475,6 +2541,26 @@ fn route_source(configured_routes: &[RouteConfig], route: p2p_vpn::route::Route)
     } else {
         "built-in"
     }
+}
+
+fn vpn_ip_route_matches(vpn_ip: &str, route: p2p_vpn::route::Route) -> bool {
+    if route.metric != 0 {
+        return false;
+    }
+
+    if vpn_ip.contains('/') {
+        return RouteConfig {
+            prefix: vpn_ip.to_owned(),
+            metric: 0,
+        }
+        .prefix()
+        .is_ok_and(|prefix| prefix == route.prefix);
+    }
+
+    vpn_ip.parse::<IpAddr>().is_ok_and(|address| match address {
+        IpAddr::V4(_) => route.prefix.to_string() == format!("{address}/32"),
+        IpAddr::V6(_) => route.prefix.to_string() == format!("{address}/128"),
+    })
 }
 
 fn metrics(path: &PathBuf, format: MetricsFormat) -> Result<(), String> {
@@ -2553,7 +2639,7 @@ fn push_peer_config_lines(
             lines.push(format!("peer address: {} {}", peer.id, address));
         }
         for route in routes.routes_for(peer_id) {
-            let source = route_source(&peer.routes, route);
+            let source = route_source(peer.vpn_ip.as_deref(), &peer.routes, route);
             lines.push(format!(
                 "peer route: {} {} metric {} {source}",
                 peer.id, route.prefix, route.metric
@@ -4085,6 +4171,7 @@ fn public_relay_two_host_configs(
     let relay_bootstrap = InitPeer {
         id: relay.id.clone(),
         address: relay.address.clone(),
+        vpn_ip: None,
         routes: Vec::new(),
     };
     let relay_config = RelayConfig {
@@ -4098,6 +4185,7 @@ fn public_relay_two_host_configs(
         identity: host_a_identity.clone(),
         network_name: args.two_host_network.clone(),
         membership_key: None,
+        vpn_ip: None,
         local_routes: vec![host_a_route.clone()],
         interface_name: args.host_a_interface.clone(),
         mtu: args.two_host_mtu,
@@ -4108,6 +4196,7 @@ fn public_relay_two_host_configs(
         peers: vec![InitPeer {
             id: host_b_identity.peer_id.clone(),
             address: Some(host_b_relayed),
+            vpn_ip: None,
             routes: vec![host_b_route.clone()],
         }],
         discovery: discovery.clone(),
@@ -4119,6 +4208,7 @@ fn public_relay_two_host_configs(
         identity: host_b_identity,
         network_name: args.two_host_network.clone(),
         membership_key: None,
+        vpn_ip: None,
         local_routes: vec![host_b_route],
         interface_name: args.host_b_interface.clone(),
         mtu: args.two_host_mtu,
@@ -4129,6 +4219,7 @@ fn public_relay_two_host_configs(
         peers: vec![InitPeer {
             id: host_a_identity.peer_id.clone(),
             address: Some(host_a_relayed),
+            vpn_ip: None,
             routes: vec![host_a_route],
         }],
         discovery,
@@ -4231,6 +4322,8 @@ fn public_relay_config_args(output: PathBuf, relay: EndpointArg, force: bool) ->
         ipfs_bootstrap_peers: true,
         public_ipfs_profile: true,
         peers: Vec::new(),
+        vpn_ip: None,
+        peer_vpn_ips: Vec::new(),
         local_routes: Vec::new(),
         peer_routes: Vec::new(),
         discovery: InitDiscoveryFlags {
@@ -4764,6 +4857,7 @@ fn relay_scan_config(
                     identity,
                     network_name: "relay-scan".to_owned(),
                     membership_key: None,
+                    vpn_ip: None,
                     local_routes: Vec::new(),
                     interface_name: "pv0".to_owned(),
                     mtu: 1280,
@@ -5810,6 +5904,10 @@ mod tests {
                 id: "peer-a".to_owned(),
                 address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
             }],
+            vec![PeerVpnIpArg {
+                id: "peer-a".to_owned(),
+                vpn_ip: "10.42.0.2".to_owned(),
+            }],
             vec![
                 PeerRouteArg {
                     id: "peer-a".to_owned(),
@@ -5834,11 +5932,19 @@ mod tests {
                 InitPeer {
                     id: "peer-a".to_owned(),
                     address: Some("/ip4/127.0.0.1/tcp/4001".to_owned()),
+                    vpn_ip: None,
                     routes: Vec::new(),
                 },
                 InitPeer {
                     id: "peer-a".to_owned(),
                     address: None,
+                    vpn_ip: Some("10.42.0.2".to_owned()),
+                    routes: Vec::new(),
+                },
+                InitPeer {
+                    id: "peer-a".to_owned(),
+                    address: None,
+                    vpn_ip: None,
                     routes: vec![RouteConfig {
                         prefix: "10.42.0.0/24".to_owned(),
                         metric: 100,
@@ -5847,6 +5953,7 @@ mod tests {
                 InitPeer {
                     id: "peer-a".to_owned(),
                     address: None,
+                    vpn_ip: None,
                     routes: vec![RouteConfig {
                         prefix: "fd00::/64".to_owned(),
                         metric: 250,
@@ -5868,6 +5975,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: Some("10.44.0.1".to_owned()),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 0,
@@ -5895,6 +6003,7 @@ mod tests {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: Some("10.44.0.2".to_owned()),
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -5957,6 +6066,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: Some("10.44.0.1".to_owned()),
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 50,
@@ -5984,6 +6094,7 @@ mod tests {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: Some("10.44.0.2".to_owned()),
                 addresses: Vec::new(),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -6001,7 +6112,7 @@ mod tests {
         let lines =
             route_lines(&config, Some("10.42.0.9".parse().expect("destination"))).expect("routes");
 
-        assert!(lines.iter().any(|line| line == "compiled routes: 6"));
+        assert!(lines.iter().any(|line| line == "compiled routes: 8"));
         assert!(lines.iter().any(|line| line
             == &format!(
                 "resolve: 10.42.0.9 -> 10.42.0.0/24 owner peer {} name remote metric 100 configured",
@@ -6017,6 +6128,16 @@ mod tests {
                 "route: 10.42.0.0/24 owner peer {} name remote metric 100 configured",
                 remote.peer_id
             )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "route: 10.44.0.1/32 owner local {} name - metric 0 vpn-ip",
+                local.peer_id
+            )));
+        assert!(lines.iter().any(|line| line
+            == &format!(
+                "route: 10.44.0.2/32 owner peer {} name remote metric 0 vpn-ip",
+                remote.peer_id
+            )));
     }
 
     #[test]
@@ -6030,6 +6151,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -6082,6 +6204,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -6098,6 +6221,7 @@ mod tests {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: vec![
                     "/ip4/127.0.0.1/tcp/4001".to_owned(),
                     format!(
@@ -6288,6 +6412,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -6304,6 +6429,7 @@ mod tests {
                 id: remote.peer_id.clone(),
                 name: Some("remote".to_owned()),
                 ip: None,
+                vpn_ip: None,
                 addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_owned()],
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
@@ -6466,6 +6592,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: Vec::new(),
                 listen_addresses: Vec::new(),
                 external_addresses: Vec::new(),
@@ -6483,6 +6610,7 @@ mod tests {
                     id: remote.peer_id.clone(),
                     name: Some("remote".to_owned()),
                     ip: None,
+                    vpn_ip: None,
                     addresses: vec![
                         "/ip4/127.0.0.1/udp/4001/quic-v1".to_owned(),
                         "/ip4/127.0.0.1/tcp/4001".to_owned(),
@@ -6497,6 +6625,7 @@ mod tests {
                     id: relay.peer_id.clone(),
                     name: Some("discovered".to_owned()),
                     ip: None,
+                    vpn_ip: None,
                     addresses: Vec::new(),
                     routes: Vec::new(),
                 },
@@ -6649,6 +6778,7 @@ mod tests {
                 membership_key: None,
                 previous_membership_tags: Vec::new(),
                 member_records: Vec::new(),
+                vpn_ip: None,
                 routes: vec![RouteConfig {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 50,
@@ -6813,10 +6943,14 @@ mod tests {
             "--disable-kademlia-provider-advertisement",
             "--membership-key",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "--vpn-ip",
+            "10.41.0.2",
             "--local-route",
             "10.41.0.0/24,75",
             "--peer",
             "12D3KooWPeer=/ip4/127.0.0.1/tcp/4001",
+            "--peer-vpn-ip",
+            "12D3KooWPeer=10.42.0.2",
             "--peer-route",
             "12D3KooWPeer=10.42.0.0/24,250",
             "--relay-max-reservations",
@@ -6843,7 +6977,9 @@ mod tests {
         let Command::InitConfig {
             peers,
             ipfs_bootstrap_peers,
+            vpn_ip,
             local_routes,
+            peer_vpn_ips,
             peer_routes,
             kademlia_protocol,
             disable_kademlia_provider_advertisement,
@@ -6871,6 +7007,7 @@ mod tests {
             }]
         );
         assert!(!ipfs_bootstrap_peers);
+        assert_eq!(vpn_ip.as_deref(), Some("10.41.0.2"));
         assert_eq!(
             local_routes,
             vec![LocalRouteArg {
@@ -6878,6 +7015,13 @@ mod tests {
                     prefix: "10.41.0.0/24".to_owned(),
                     metric: 75,
                 },
+            }]
+        );
+        assert_eq!(
+            peer_vpn_ips,
+            vec![PeerVpnIpArg {
+                id: "12D3KooWPeer".to_owned(),
+                vpn_ip: "10.42.0.2".to_owned(),
             }]
         );
         assert_eq!(
@@ -9402,6 +9546,7 @@ mod tests {
             identity: issuer,
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -9509,6 +9654,7 @@ mod tests {
             identity: issuer.clone(),
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -9610,6 +9756,7 @@ mod tests {
             identity: issuer,
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -9695,6 +9842,7 @@ mod tests {
             identity: issuer,
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -9832,6 +9980,7 @@ mod tests {
             identity: issuer,
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -9952,6 +10101,7 @@ mod tests {
             identity: issuer.clone(),
             network_name: "lab".to_owned(),
             membership_key: None,
+            vpn_ip: None,
             local_routes: Vec::new(),
             interface_name: "hs0".to_owned(),
             mtu: 1280,
@@ -10105,6 +10255,8 @@ mod tests {
             ipfs_bootstrap_peers: true,
             public_ipfs_profile: false,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig {
@@ -10162,6 +10314,8 @@ mod tests {
             ipfs_bootstrap_peers: true,
             public_ipfs_profile: false,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: InitDiscoveryFlags {
@@ -10257,6 +10411,8 @@ mod tests {
             ipfs_bootstrap_peers: false,
             public_ipfs_profile: true,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: InitDiscoveryFlags {
@@ -10315,6 +10471,8 @@ mod tests {
             ipfs_bootstrap_peers: true,
             public_ipfs_profile: true,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: InitDiscoveryFlags {
@@ -10355,6 +10513,7 @@ mod tests {
             vec![InitPeer {
                 id: relay.peer_id.clone(),
                 address: Some("/ip4/127.0.0.1/tcp/4002".to_owned()),
+                vpn_ip: None,
                 routes: Vec::new(),
             }]
         );
@@ -10543,12 +10702,14 @@ mod tests {
                 id: peer.peer_id.clone(),
                 address: None,
             }],
+            vpn_ip: None,
             local_routes: vec![LocalRouteArg {
                 route: RouteConfig {
                     prefix: "10.42.0.0/24".to_owned(),
                     metric: 90,
                 },
             }],
+            peer_vpn_ips: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
             relay: RelayConfig::default(),
@@ -10611,12 +10772,14 @@ mod tests {
                 id: peer.peer_id.clone(),
                 address: None,
             }],
+            vpn_ip: None,
             local_routes: vec![LocalRouteArg {
                 route: RouteConfig {
                     prefix: "10.43.0.0/24".to_owned(),
                     metric: 80,
                 },
             }],
+            peer_vpn_ips: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
             relay: RelayConfig::default(),
@@ -10717,6 +10880,8 @@ mod tests {
             ipfs_bootstrap_peers: false,
             public_ipfs_profile: false,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
@@ -10765,6 +10930,8 @@ mod tests {
             ipfs_bootstrap_peers: false,
             public_ipfs_profile: false,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),
@@ -10781,6 +10948,55 @@ mod tests {
 
         config.validate_runtime().expect("runtime-valid config");
         assert_eq!(config.network.previous_membership_tags, vec![previous_tag]);
+    }
+
+    #[test]
+    fn init_config_writes_vpn_ip_shortcuts() {
+        let output = temp_config_path("p2p-vpn-init-config-vpn-ip");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+
+        init_config(InitConfigArgs {
+            output: output.clone(),
+            network: "lab".to_owned(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            interface: "pv0".to_owned(),
+            mtu: 1280,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            relay_peers: Vec::new(),
+            ipfs_bootstrap_peers: false,
+            public_ipfs_profile: false,
+            peers: vec![EndpointArg {
+                id: remote.peer_id.clone(),
+                address: None,
+            }],
+            vpn_ip: Some("10.44.0.1".to_owned()),
+            peer_vpn_ips: vec![PeerVpnIpArg {
+                id: remote.peer_id,
+                vpn_ip: "10.44.0.2".to_owned(),
+            }],
+            local_routes: Vec::new(),
+            peer_routes: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+            force: true,
+        })
+        .expect("init config");
+
+        let config = Config::load(&output).expect("load generated config");
+        let _ = std::fs::remove_file(&output);
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(config.network.vpn_ip.as_deref(), Some("10.44.0.1"));
+        assert!(config.network.routes.is_empty());
+        assert_eq!(config.peers[0].vpn_ip.as_deref(), Some("10.44.0.2"));
+        assert!(config.peers[0].routes.is_empty());
     }
 
     #[test]
@@ -10802,6 +11018,8 @@ mod tests {
             ipfs_bootstrap_peers: false,
             public_ipfs_profile: false,
             peers: Vec::new(),
+            vpn_ip: None,
+            peer_vpn_ips: Vec::new(),
             local_routes: Vec::new(),
             peer_routes: Vec::new(),
             discovery: DiscoveryConfig::default(),

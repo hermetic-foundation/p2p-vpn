@@ -62,12 +62,12 @@ This is the "ID plus IP" shape:
     "name": "lab",
     "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY",
-    "routes": [{ "prefix": "10.44.0.1/32" }]
+    "vpn_ip": "10.44.0.1"
   },
   "peers": [
     {
       "id": "REMOTE_PEER_ID",
-      "routes": [{ "prefix": "10.44.0.2/32" }]
+      "vpn_ip": "10.44.0.2"
     }
   ]
 }
@@ -79,7 +79,7 @@ If discovery cannot find the peer, add only the LAN IP:
 {
   "id": "REMOTE_PEER_ID",
   "ip": "REMOTE_IP",
-  "routes": [{ "prefix": "10.44.0.2/32" }]
+  "vpn_ip": "10.44.0.2"
 }
 ```
 
@@ -149,7 +149,8 @@ Use routes only when you want stable overlay IPs:
 
 ```text
 --peer PEER_ID
---peer-route PEER_ID=CIDR
+--vpn-ip LOCAL_IP
+--peer-vpn-ip PEER_ID=PEER_IP
 ```
 
 Example for Node A:
@@ -159,8 +160,8 @@ nix run .# -- init-config \
   --output host-a.json \
   --network lab \
   --peer NODE_B_PEER_ID \
-  --peer-route NODE_B_PEER_ID=10.44.0.2/32 \
-  --local-route 10.44.0.1/32 \
+  --vpn-ip 10.44.0.1 \
+  --peer-vpn-ip NODE_B_PEER_ID=10.44.0.2 \
   --force
 ```
 
@@ -171,8 +172,8 @@ nix run .# -- init-config \
   --output host-b.json \
   --network lab \
   --peer NODE_A_PEER_ID \
-  --peer-route NODE_A_PEER_ID=10.44.0.1/32 \
-  --local-route 10.44.0.2/32 \
+  --vpn-ip 10.44.0.2 \
+  --peer-vpn-ip NODE_A_PEER_ID=10.44.0.1 \
   --force
 ```
 
