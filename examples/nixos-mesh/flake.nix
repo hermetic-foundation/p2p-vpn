@@ -35,8 +35,8 @@
                 networkName = "lab";
                 localPeer = "NODE_A_PEER_ID";
                 privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
-                routes = [ "10.44.0.1/32" ];
-                peers."NODE_B_PEER_ID".routes = [ "10.44.0.2/32" ];
+                vpnIp = "10.44.0.1";
+                peers."NODE_B_PEER_ID".vpnIp = "10.44.0.2";
                 metricsIntervalSeconds = 10;
                 openFirewall = true;
               };
@@ -58,8 +58,8 @@
                 networkName = "lab";
                 localPeer = "NODE_B_PEER_ID";
                 privateKeyFile = "/run/secrets/p2p-vpn/node-b.key";
-                routes = [ "10.44.0.2/32" ];
-                peers."NODE_A_PEER_ID".routes = [ "10.44.0.1/32" ];
+                vpnIp = "10.44.0.2";
+                peers."NODE_A_PEER_ID".vpnIp = "10.44.0.1";
                 metricsIntervalSeconds = 10;
                 openFirewall = true;
               };

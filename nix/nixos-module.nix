@@ -54,25 +54,45 @@ let
       runtimeGeneratedConfigFile name;
 
   routeObject = prefix: { inherit prefix; };
+  hostRoute =
+    ip:
+    if builtins.match ".*/.*" ip != null then
+      ip
+    else if builtins.match ".*:.*" ip != null then
+      "${ip}/128"
+    else
+      "${ip}/32";
+  instanceRoutes =
+    instance:
+    optional (instance.vpnIp != null) (hostRoute instance.vpnIp) ++ instance.routes;
+  peerRoutes =
+    peer:
+    optional (peer.vpnIp != null) (hostRoute peer.vpnIp) ++ peer.routes;
   compactPeerConfig =
     id: peer:
+    let
+      routes = peerRoutes peer;
+    in
     {
       inherit id;
     }
     // optionalAttrs (peer.name != null) { inherit (peer) name; }
     // optionalAttrs (peer.ip != null) { inherit (peer) ip; }
     // optionalAttrs (peer.addresses != [ ]) { inherit (peer) addresses; }
-    // optionalAttrs (peer.routes != [ ]) { routes = map routeObject peer.routes; };
+    // optionalAttrs (routes != [ ]) { routes = map routeObject routes; };
 
   generatedSettings =
     instance:
+    let
+      routes = instanceRoutes instance;
+    in
     {
       network = {
         name = instance.networkName;
         local_peer = instance.localPeer;
       }
       // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
-      // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; };
+      // optionalAttrs (routes != [ ]) { routes = map routeObject routes; };
       peers = mapAttrsToList compactPeerConfig instance.peers;
     };
 
@@ -181,6 +201,18 @@ let
           '';
         };
 
+        vpnIp = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "10.44.0.1";
+          description = ''
+            Stable overlay host IP originated by this node.
+
+            IPv4 values become /32 routes. IPv6 values become /128 routes.
+            CIDR strings are accepted when an explicit prefix is needed.
+          '';
+        };
+
         routes = mkOption {
           type = types.listOf types.str;
           default = [ ];
@@ -212,6 +244,18 @@ let
                       Optional direct peer IP for the default TCP libp2p port.
 
                       Omit this for discovery-only operation.
+                    '';
+                  };
+
+                  vpnIp = mkOption {
+                    type = types.nullOr types.str;
+                    default = null;
+                    example = "10.44.0.2";
+                    description = ''
+                      Stable overlay host IP this peer may originate.
+
+                      IPv4 values become /32 routes. IPv6 values become /128 routes.
+                      CIDR strings are accepted when an explicit prefix is needed.
                     '';
                   };
 
@@ -467,6 +511,7 @@ in
             || (instance.localPeer == null
               && instance.privateKey == null
               && instance.privateKeyFile == null
+              && instance.vpnIp == null
               && instance.routes == [ ]
               && instance.peers == { });
           message = "services.p2p-vpn.instances.${name} generated config fields cannot be combined with configFile or settings.";

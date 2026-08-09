@@ -29,9 +29,9 @@ Use typed module options for ordinary NixOS hosts:
     networkName = "lab";
     localPeer = "LOCAL_PEER_ID";
     privateKeyFile = "/run/secrets/p2p-vpn/lab.key";
+    vpnIp = "10.44.0.1";
 
-    routes = [ "10.44.0.1/32" ];
-    peers."REMOTE_PEER_ID".routes = [ "10.44.0.2/32" ];
+    peers."REMOTE_PEER_ID".vpnIp = "10.44.0.2";
   };
 }
 ```
@@ -54,12 +54,33 @@ Add a direct LAN IP only as an override:
 {
   services.p2p-vpn.instances.lab.peers."REMOTE_PEER_ID" = {
     ip = "192.168.0.203";
-    routes = [ "10.44.0.2/32" ];
   };
 }
 ```
 
 Use explicit `addresses` only for custom ports, DNS, or relayed paths.
+
+## Overlay IPs
+
+Use `vpnIp` for ordinary stable host addresses:
+
+```nix
+{
+  services.p2p-vpn.instances.lab = {
+    vpnIp = "10.44.0.1";
+    peers."REMOTE_PEER_ID".vpnIp = "10.44.0.2";
+  };
+}
+```
+
+The module writes these as host routes:
+
+| Value | Generated route |
+| --- | --- |
+| `10.44.0.1` | `10.44.0.1/32` |
+| `fd00::1` | `fd00::1/128` |
+
+Use `routes` only for prefixes or extra routed networks.
 
 ## Private Keys
 
