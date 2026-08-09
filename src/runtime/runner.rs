@@ -3275,6 +3275,9 @@ impl PublicDiscoveryBackoff {
         if !self.bootstrap_peers.contains(&peer) || !dial_error_reports_public_no_route(error) {
             return None;
         }
+        if self.suppresses(now) {
+            return None;
+        }
 
         self.consecutive_no_route_failures = self.consecutive_no_route_failures.saturating_add(1);
         let shift = self.consecutive_no_route_failures.saturating_sub(1).min(8);
@@ -3579,14 +3582,12 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
     peer: Libp2pPeerId,
     mut addresses: impl Iterator<Item = &'a Multiaddr>,
 ) {
-    if peer == *swarm.local_peer_id()
-        || forwarder.is_configured_transport_peer(peer)
-        || infrastructure_peers.contains(peer)
-    {
+    if peer == *swarm.local_peer_id() || forwarder.is_configured_transport_peer(peer) {
         return;
     }
 
-    let Some(address) = addresses.find_map(|address| auto_relay_candidate_address(peer, address))
+    let local_networks = local_interface_networks("");
+    let Some(address) = best_auto_relay_candidate_address(peer, &mut addresses, &local_networks)
     else {
         return;
     };
@@ -3712,15 +3713,7 @@ fn auto_relay_candidate_addresses(peer: Libp2pPeerId, info: &identify::Info) -> 
         return Vec::new();
     }
 
-    info.listen_addrs
-        .iter()
-        .filter_map(|address| auto_relay_candidate_address(peer, address))
-        .fold(Vec::new(), |mut addresses, address| {
-            if !addresses.contains(&address) {
-                addresses.push(address);
-            }
-            addresses
-        })
+    ranked_auto_relay_candidate_addresses(peer, &info.listen_addrs, &local_interface_networks(""))
 }
 
 fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
@@ -3741,6 +3734,50 @@ fn auto_relay_candidate_address(peer: Libp2pPeerId, address: &Multiaddr) -> Opti
     }
 
     Some(peer_dial_address(peer, address.clone()))
+}
+
+fn best_auto_relay_candidate_address<'a>(
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = &'a Multiaddr>,
+    local_networks: &[LocalInterfaceNetwork],
+) -> Option<Multiaddr> {
+    ranked_auto_relay_candidate_addresses(peer, addresses, local_networks)
+        .into_iter()
+        .next()
+}
+
+fn ranked_auto_relay_candidate_addresses<'a>(
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = &'a Multiaddr>,
+    local_networks: &[LocalInterfaceNetwork],
+) -> Vec<Multiaddr> {
+    let mut candidates = addresses
+        .into_iter()
+        .filter_map(|address| auto_relay_candidate_address(peer, address))
+        .fold(Vec::new(), |mut addresses, address| {
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+            addresses
+        });
+    candidates.sort_by_key(|address| auto_relay_candidate_address_rank(address, local_networks));
+    candidates
+}
+
+fn auto_relay_candidate_address_rank(
+    address: &Multiaddr,
+    local_networks: &[LocalInterfaceNetwork],
+) -> u8 {
+    let Some(ip) = first_ip_in_multiaddr(address) else {
+        return 3;
+    };
+    if local_networks.iter().any(|network| network.contains(ip)) {
+        return 0;
+    }
+    if !private_ip_address(ip) && direct_libp2p_address_ip_is_advertisable(ip) {
+        return 1;
+    }
+    2
 }
 
 fn supports_auto_relay_candidate_transport(address: &Multiaddr) -> bool {
@@ -7558,6 +7595,28 @@ fn replace_first_ip_protocol(address: &Multiaddr, ip: IpAddr) -> Multiaddr {
     result
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LocalInterfaceNetwork {
+    ip: IpAddr,
+    netmask: IpAddr,
+}
+
+impl LocalInterfaceNetwork {
+    fn contains(self, address: IpAddr) -> bool {
+        match (self.ip, self.netmask, address) {
+            (IpAddr::V4(ip), IpAddr::V4(netmask), IpAddr::V4(address)) => {
+                let mask = u32::from(netmask);
+                u32::from(ip) & mask == u32::from(address) & mask
+            }
+            (IpAddr::V6(ip), IpAddr::V6(netmask), IpAddr::V6(address)) => {
+                let mask = u128::from(netmask);
+                u128::from(ip) & mask == u128::from(address) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
 fn local_interface_ips(excluded_interface_name: &str) -> Vec<IpAddr> {
     let Ok(interfaces) = if_addrs::get_if_addrs() else {
         return Vec::new();
@@ -7573,6 +7632,42 @@ fn local_interface_ips(excluded_interface_name: &str) -> Vec<IpAddr> {
         }
     }
     addresses
+}
+
+fn local_interface_networks(excluded_interface_name: &str) -> Vec<LocalInterfaceNetwork> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    interfaces
+        .into_iter()
+        .filter(|interface| {
+            interface.name != excluded_interface_name
+                && interface.is_oper_up()
+                && !interface.is_loopback()
+                && !interface.is_p2p()
+        })
+        .filter_map(|interface| match interface.addr {
+            if_addrs::IfAddr::V4(address) => {
+                let ip = IpAddr::V4(address.ip);
+                direct_libp2p_address_ip_is_advertisable(ip).then_some(LocalInterfaceNetwork {
+                    ip,
+                    netmask: IpAddr::V4(address.netmask),
+                })
+            }
+            if_addrs::IfAddr::V6(address) => {
+                let ip = IpAddr::V6(address.ip);
+                direct_libp2p_address_ip_is_advertisable(ip).then_some(LocalInterfaceNetwork {
+                    ip,
+                    netmask: IpAddr::V6(address.netmask),
+                })
+            }
+        })
+        .fold(Vec::new(), |mut networks, network| {
+            if !networks.contains(&network) {
+                networks.push(network);
+            }
+            networks
+        })
 }
 
 fn overlay_prefixes_contain(prefixes: &[IpCidr], address: IpAddr) -> bool {
@@ -7598,6 +7693,13 @@ fn direct_libp2p_address_ip_is_advertisable(address: IpAddr) -> bool {
                 || address.is_multicast()
                 || address.is_unicast_link_local())
         }
+    }
+}
+
+fn private_ip_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => address.is_private(),
+        IpAddr::V6(address) => (address.segments()[0] & 0xfe00) == 0xfc00,
     }
 }
 
@@ -13509,6 +13611,38 @@ mod tests {
     }
 
     #[test]
+    fn public_discovery_backoff_does_not_extend_during_suppressed_burst() {
+        let mut backoff = PublicDiscoveryBackoff::from_bootstrap_defaults(true);
+        let public_peer = *backoff
+            .bootstrap_peers
+            .iter()
+            .next()
+            .expect("public bootstrap peer");
+        let address: Multiaddr = format!("/ip4/203.0.113.1/tcp/4001/p2p/{public_peer}")
+            .parse()
+            .expect("public address");
+        let error = DialError::Transport(vec![(
+            address,
+            TransportError::Other(io::Error::from_raw_os_error(101)),
+        )]);
+        let now = Instant::now();
+
+        assert_eq!(
+            backoff.record_outgoing_error(Some(public_peer), &error, now),
+            Some(PUBLIC_DISCOVERY_BACKOFF_BASE)
+        );
+        let first_suppressed_until = backoff.suppressed_until;
+
+        assert_eq!(
+            backoff.record_outgoing_error(Some(public_peer), &error, now + Duration::from_secs(1)),
+            None
+        );
+
+        assert_eq!(backoff.suppressed_until, first_suppressed_until);
+        assert_eq!(backoff.consecutive_no_route_failures, 1);
+    }
+
+    #[test]
     fn configured_peer_keeps_supported_path_after_transient_relay_connection_closes() {
         let peer = peer_id();
         let overlay = PeerId::from_libp2p(peer);
@@ -14011,6 +14145,57 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_candidate_addresses_prefer_same_local_subnet() {
+        let peer = peer_id();
+        let same_subnet: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("same-subnet relay address");
+        let other_private_subnet: Multiaddr = format!("/ip4/192.168.52.254/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("other-subnet relay address");
+        let public_address: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("public relay address");
+        let local_networks = [LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 1)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        }];
+
+        let addresses = [
+            other_private_subnet.clone(),
+            public_address.clone(),
+            same_subnet.clone(),
+        ];
+        let ranked = ranked_auto_relay_candidate_addresses(peer, &addresses, &local_networks);
+
+        assert_eq!(
+            ranked,
+            vec![same_subnet, public_address, other_private_subnet]
+        );
+    }
+
+    #[test]
+    fn local_interface_network_matches_ipv4_and_ipv6_subnets() {
+        let ipv4 = LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 10)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        };
+        let ipv6 = LocalInterfaceNetwork {
+            ip: IpAddr::V6("2001:db8:abcd::1".parse().expect("ipv6 ip")),
+            netmask: IpAddr::V6("ffff:ffff:ffff:ffff::".parse().expect("ipv6 netmask")),
+        };
+
+        assert!(ipv4.contains(IpAddr::V4(Ipv4Addr::new(192, 168, 51, 254))));
+        assert!(!ipv4.contains(IpAddr::V4(Ipv4Addr::new(192, 168, 52, 254))));
+        assert!(ipv6.contains(IpAddr::V6(
+            "2001:db8:abcd::ffff".parse().expect("ipv6 address")
+        )));
+        assert!(!ipv6.contains(IpAddr::V6(
+            "2001:db8:abce::1".parse().expect("ipv6 address")
+        )));
+    }
+
+    #[test]
     fn auto_relay_state_attempts_candidates_regardless_of_autonat_reachability() {
         let relay = peer_id();
         let public_relay = peer_id();
@@ -14507,6 +14692,66 @@ mod tests {
         assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
         assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
         assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[tokio::test]
+    async fn kademlia_relay_infrastructure_rotates_existing_relay_address() {
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let relay = peer_id();
+        let stale_address: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("stale relay address");
+        let fresh_address: Multiaddr = format!("/ip4/192.168.52.254/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("fresh relay address");
+        let mut infrastructure_peers = InfrastructurePeers::default();
+        let mut auto_relay = AutoRelayState::default();
+        let metrics = RuntimeMetrics::default();
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let config = config_with_peer(&local_identity, peer_id());
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let now = Instant::now();
+
+        assert!(infrastructure_peers.insert(relay, stale_address.clone()));
+        assert!(auto_relay.record_candidate(relay, stale_address));
+        assert_eq!(auto_relay.next_reservation_targets(now).len(), 1);
+        assert!(auto_relay.release_reservation_for_retry_after(relay, now));
+
+        admit_kademlia_relay_infrastructure_peer(
+            &mut node.swarm,
+            &forwarder,
+            &mut infrastructure_peers,
+            &mut auto_relay,
+            &metrics,
+            relay,
+            std::slice::from_ref(&fresh_address).iter(),
+        );
+
+        assert_eq!(infrastructure_peers.peers.get(&relay), Some(&fresh_address));
+        assert_eq!(
+            auto_relay.next_reservation_targets(now),
+            vec![(relay, fresh_address)]
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.auto_relay_infrastructure_candidates, 1);
+        assert_eq!(snapshot.auto_relay_infrastructure_dial_attempts, 1);
     }
 
     #[tokio::test]
