@@ -106,6 +106,61 @@ Notes:
 | Generated-host reservations | Optional for public repros. |
 | Public DHT membership | Still not operational proof. |
 
+## 2026-08-09 Public Relay Repro Refresh
+
+Command:
+
+```sh
+P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=45 \
+P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=60 \
+P2P_VPN_RELAY_MAX_CANDIDATES=12 \
+P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=8 \
+nix run .#public-relay-repro
+```
+
+Artifact directory:
+
+```text
+/tmp/p2p-vpn-public-relay-repro.F3LdV4he
+```
+
+Result:
+
+```text
+public relay scan: ok
+public relay candidates: 12
+public relay probe: ok
+public relay probe mode: relayed_peer_circuit
+public relay candidates: 2 succeeded 1
+```
+
+Evidence:
+
+| Item | Result |
+| --- | --- |
+| Public routing peers | 11 discovered. |
+| Closest-peer lookup | 20 results, 0 errors. |
+| Relay-hop candidates | 12 candidate addresses. |
+| Host-reachable candidates | 8 after IPv6 skips. |
+| Validated candidates | 2 probed. |
+| Relayed peer circuit | 1 outbound circuit. |
+| Generated host configs | Host A and Host B JSON written. |
+
+Selected relay candidate:
+
+```text
+/ip4/159.100.30.75/udp/4001/quic-v1/p2p/12D3KooWSqLypHvFrpsN59nw9mkjfDkTf7fWx32yhjWAMXie433Y
+```
+
+Limits:
+
+| Gap | Status |
+| --- | --- |
+| Generated-host reservations | Disabled for this run. |
+| Membership DHT propagation | Disabled for this run. |
+| Strict DCUtR success | Disabled for this run. |
+| Two-host public VPN ping | Not part of this run. |
+
 ## Current Conclusion
 
 | Capability | Evidence |

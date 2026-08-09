@@ -234,4 +234,13 @@ lookups continue during the backoff window.
 
 Public bootstrap and relay candidate discovery have been observed.
 
-LAN relay fallback is proven. Public non-LAN DCUtR still needs host evidence.
+The latest public relay repro found a usable relayed-peer circuit.
+
+| Evidence | Status |
+| --- | --- |
+| Public relay scan | 12 candidates found. |
+| Public relay validation | 1 of 2 probed candidates passed. |
+| Relayed peer circuit | Proven through a selected public relay. |
+| Generated two-host configs | Written by the repro. |
+| Two-host public VPN ping | Still requires two separated hosts. |
+| Public non-LAN DCUtR | Still needs host evidence. |

@@ -49,9 +49,12 @@ Status is conservative.
 | 2026-08-09 | Forced-relay VM candidate filter | Overlay addresses were not advertised as underlay candidates. |
 | 2026-08-09 | NixOS network-move VM test | Minimal config recovered LAN to discovered relay to LAN. |
 | 2026-08-09 | Relay-ready dialing regression | Stale direct connections no longer suppress relay fallback dials. |
+| 2026-08-09 | Public relay repro refresh | Public relay scan found 12 candidates; one relayed peer circuit passed. |
 
 ## Main Remaining Gap
 
 Public non-LAN proof is still open.
 
 The next evidence target is a host pair split by hotspot or VPN.
+
+That run must prove overlay ping and route recovery without manual route edits.
