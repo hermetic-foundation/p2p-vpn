@@ -31,7 +31,6 @@ At the protocol level, a peer entry can be just an ID:
 {
   "network": {
     "name": "lab",
-    "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY"
   },
   "peers": [
@@ -60,7 +59,6 @@ This is the "ID plus IP" shape:
 {
   "network": {
     "name": "lab",
-    "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY",
     "vpn_ip": "10.44.0.1"
   },

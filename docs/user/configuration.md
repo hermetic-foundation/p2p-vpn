@@ -11,11 +11,16 @@ Most sections have defaults.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `network.name` | yes | Overlay name. Peers must match. |
-| `network.local_peer` | yes | Local libp2p peer ID. |
 | `network.private_key` | yes | Base64 local identity key. |
 | `peers[].id` | for VPN traffic | Authorized remote overlay peer. |
 
 Everything else can be omitted for the default profile.
+
+`network.local_peer` is optional.
+
+When omitted, p2p-vpn derives it from `network.private_key`.
+
+Set it only to assert the key belongs to an expected peer ID.
 
 ## Defaulted Fields
 
@@ -50,7 +55,6 @@ It relies on discovery for reachability:
 {
   "network": {
     "name": "lab",
-    "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY"
   },
   "peers": [
@@ -67,7 +71,6 @@ Add route ownership for human-chosen VPN IPs:
 {
   "network": {
     "name": "lab",
-    "local_peer": "LOCAL_PEER_ID",
     "private_key": "BASE64_PRIVATE_KEY",
     "vpn_ip": "10.44.0.1"
   },

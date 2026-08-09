@@ -2090,7 +2090,6 @@ EOF
                 services.p2p-vpn.instances.node-e = {
                   enable = true;
                   networkName = "nixos-module-minimal";
-                  localPeer = "4444444444444444444444444444444444444444444444444444444444444444";
                   privateKey = "BASE64_PRIVATE_KEY";
                   peers."5555555555555555555555555555555555555555555555555555555555555555" = { };
                 };
@@ -2543,9 +2542,8 @@ EOF
             printf '%s' "$generatedMinimalSettings" > generated-minimal.json
             jq -e '
               keys == ["network", "peers"]
-              and (.network | keys == ["local_peer", "name", "private_key"])
+              and (.network | keys == ["name", "private_key"])
               and (.network.name == "nixos-module-minimal")
-              and (.network.local_peer == "4444444444444444444444444444444444444444444444444444444444444444")
               and (.network.private_key == "BASE64_PRIVATE_KEY")
               and (.peers == [{"id":"5555555555555555555555555555555555555555555555555555555555555555"}])
             ' generated-minimal.json >/dev/null || {

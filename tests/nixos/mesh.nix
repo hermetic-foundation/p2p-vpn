@@ -34,7 +34,6 @@ let
       services.p2p-vpn.instances.${name} = {
         enable = true;
         networkName = "nixos-vm-mesh";
-        localPeer = local.peerId;
         privateKey = local.privateKey;
         vpnIp = local.vpnIp;
         peers.${remote.peerId}.vpnIp = remote.vpnIp;
@@ -75,7 +74,7 @@ pkgs.testers.nixosTest {
         node_a.succeed(
             "jq -e '"
             ".network.name == \"nixos-vm-mesh\" "
-            "and .network.local_peer == \"${nodeA.peerId}\" "
+            "and (.network | has(\"local_peer\") | not) "
             "and .network.vpn_ip == \"${nodeA.vpnIp}\" "
             "and (.network | has(\"discovery\") | not) "
             "and (.network | has(\"relay\") | not) "
@@ -85,7 +84,7 @@ pkgs.testers.nixosTest {
         node_b.succeed(
             "jq -e '"
             ".network.name == \"nixos-vm-mesh\" "
-            "and .network.local_peer == \"${nodeB.peerId}\" "
+            "and (.network | has(\"local_peer\") | not) "
             "and .network.vpn_ip == \"${nodeB.vpnIp}\" "
             "and (.network | has(\"discovery\") | not) "
             "and (.network | has(\"relay\") | not) "

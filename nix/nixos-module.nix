@@ -81,8 +81,8 @@ let
       network =
         {
           name = instance.networkName;
-          local_peer = instance.localPeer;
         }
+        // optionalAttrs (instance.localPeer != null) { local_peer = instance.localPeer; }
         // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
         // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
         // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; }
@@ -148,7 +148,6 @@ let
           example = {
             network = {
               name = "lab";
-              local_peer = "LOCAL_PEER_ID";
               private_key = "BASE64_PRIVATE_KEY";
             };
             peers = [
@@ -185,7 +184,11 @@ let
           description = ''
             Local libp2p peer ID for generated minimal configs.
 
-            Required when neither configFile nor settings is set.
+            Omit this when privateKey or privateKeyFile is set. The daemon
+            derives the local peer ID from the private key at runtime.
+
+            Set this only to assert that a private key belongs to an expected
+            peer ID.
           '';
         };
 
@@ -635,9 +638,9 @@ in
           assertion =
             instance.configFile != null
             || instance.settings != null
-            || (instance.localPeer != null
-              && (instance.privateKey != null || instance.privateKeyFile != null));
-          message = "services.p2p-vpn.instances.${name} requires configFile, settings, or generated config fields localPeer plus privateKey/privateKeyFile.";
+            || instance.privateKey != null
+            || instance.privateKeyFile != null;
+          message = "services.p2p-vpn.instances.${name} requires configFile, settings, privateKey, or privateKeyFile.";
         }
         {
           assertion = instance.configFile == null || instance.settings == null;

@@ -1892,7 +1892,8 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
     config
         .validate_runtime()
         .map_err(|error| format!("generated config is invalid: {error:?}"))?;
-    let rendered = serde_json::to_string_pretty(&config)
+    let rendered_config = compact_generated_config(config.clone());
+    let rendered = serde_json::to_string_pretty(&rendered_config)
         .map_err(|error| format!("failed to render config: {error}"))?;
 
     if args.output.to_string_lossy() == "-" {
@@ -1901,10 +1902,23 @@ fn init_config(args: InitConfigArgs) -> Result<(), String> {
         fs::write(&args.output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
-        println!("local peer: {}", config.network.local_peer);
+        println!(
+            "local peer: {}",
+            config
+                .local_peer()
+                .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+        );
     }
 
     Ok(())
+}
+
+fn compact_generated_config(mut config: Config) -> Config {
+    if config.network.private_key.is_some() {
+        config.network.local_peer.clear();
+    }
+
+    config
 }
 
 fn invite_export(
@@ -1981,7 +1995,12 @@ fn invite_import(args: InviteImportArgs) -> Result<(), String> {
         fs::write(&args.output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
         println!("wrote {}", args.output.display());
-        println!("local peer: {}", config.network.local_peer);
+        println!(
+            "local peer: {}",
+            config
+                .local_peer()
+                .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+        );
         println!("invited by: {}", invite.payload.inviter_peer);
     }
 
@@ -2129,6 +2148,9 @@ fn status_lines(config: &Config) -> Result<Vec<String>, String> {
     let local_peer = config
         .local_peer_id()
         .map_err(|error| format!("failed to parse local peer id: {error:?}"))?;
+    let local_peer_display = config
+        .local_peer()
+        .map_err(|error| format!("failed to resolve local peer: {error:?}"))?;
     let local_addresses = TunAddresses::for_peer(local_peer);
     let mut lines = Vec::new();
 
@@ -2145,7 +2167,7 @@ fn status_lines(config: &Config) -> Result<Vec<String>, String> {
         "effective packet mtu: {}",
         config.effective_packet_mtu()
     ));
-    lines.push(format!("local peer: {}", config.network.local_peer));
+    lines.push(format!("local peer: {local_peer_display}"));
     lines.push(format!("local overlay ipv4: {}", local_addresses.ipv4));
     lines.push(format!("local overlay ipv6: {}", local_addresses.ipv6));
     lines.push(format!(
@@ -2271,7 +2293,7 @@ fn route_owner_details(
     if route.owner == local_peer {
         return (
             "local",
-            config.network.local_peer.clone(),
+            config.local_peer().expect("route config is valid"),
             "-".to_owned(),
             route_source(
                 config.network.vpn_ip.as_deref(),
@@ -3133,6 +3155,9 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
     let local_peer = config
         .local_peer_id()
         .map_err(|error| format!("failed to parse local peer id: {error:?}"))?;
+    let local_peer_display = config
+        .local_peer()
+        .map_err(|error| format!("failed to resolve local peer: {error:?}"))?;
     let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local(
         &config.network.name,
         config
@@ -3159,7 +3184,7 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
             .collect(),
     );
     let mut lines = vec![
-        format!("local peer: {}", config.network.local_peer),
+        format!("local peer: {local_peer_display}"),
         format!("configured peers: {}", config.peers.len()),
     ];
 
@@ -4134,8 +4159,18 @@ fn write_public_relay_two_host_configs_from_relay_check(
     let (host_a, host_b) = public_relay_two_host_configs(args, &relay)?;
     write_config_output(&host_a, host_a_output, args.force)?;
     write_config_output(&host_b, host_b_output, args.force)?;
-    println!("Host A local peer: {}", host_a.network.local_peer);
-    println!("Host B local peer: {}", host_b.network.local_peer);
+    println!(
+        "Host A local peer: {}",
+        host_a
+            .local_peer()
+            .map_err(|error| format!("failed to resolve Host A local peer: {error:?}"))?
+    );
+    println!(
+        "Host B local peer: {}",
+        host_b
+            .local_peer()
+            .map_err(|error| format!("failed to resolve Host B local peer: {error:?}"))?
+    );
     println!(
         "Host A ping target: {}",
         route_ping_target(&args.host_b_route, "Host B")?
@@ -4182,51 +4217,55 @@ fn public_relay_two_host_configs(
     let mut discovery = public_ipfs_relay_discovery_config();
     discovery.mdns = true;
 
-    let host_a = InitConfigTemplate {
-        identity: host_a_identity.clone(),
-        network_name: args.two_host_network.clone(),
-        membership_key: None,
-        vpn_ip: None,
-        local_routes: vec![host_a_route.clone()],
-        interface_name: args.host_a_interface.clone(),
-        mtu: args.two_host_mtu,
-        listen_addresses: direct_listen_addresses.clone(),
-        external_addresses: Vec::new(),
-        packet_plane: PacketPlaneConfig::default(),
-        bootstrap_peers: vec![relay_bootstrap.clone()],
-        peers: vec![InitPeer {
-            id: host_b_identity.peer_id.clone(),
-            address: Some(host_b_relayed),
+    let host_a = compact_generated_config(
+        InitConfigTemplate {
+            identity: host_a_identity.clone(),
+            network_name: args.two_host_network.clone(),
+            membership_key: None,
             vpn_ip: None,
-            routes: vec![host_b_route.clone()],
-        }],
-        discovery: discovery.clone(),
-        relay: relay_config.clone(),
-    }
-    .into_config();
+            local_routes: vec![host_a_route.clone()],
+            interface_name: args.host_a_interface.clone(),
+            mtu: args.two_host_mtu,
+            listen_addresses: direct_listen_addresses.clone(),
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: vec![relay_bootstrap.clone()],
+            peers: vec![InitPeer {
+                id: host_b_identity.peer_id.clone(),
+                address: Some(host_b_relayed),
+                vpn_ip: None,
+                routes: vec![host_b_route.clone()],
+            }],
+            discovery: discovery.clone(),
+            relay: relay_config.clone(),
+        }
+        .into_config(),
+    );
 
-    let host_b = InitConfigTemplate {
-        identity: host_b_identity,
-        network_name: args.two_host_network.clone(),
-        membership_key: None,
-        vpn_ip: None,
-        local_routes: vec![host_b_route],
-        interface_name: args.host_b_interface.clone(),
-        mtu: args.two_host_mtu,
-        listen_addresses: direct_listen_addresses,
-        external_addresses: Vec::new(),
-        packet_plane: PacketPlaneConfig::default(),
-        bootstrap_peers: vec![relay_bootstrap],
-        peers: vec![InitPeer {
-            id: host_a_identity.peer_id.clone(),
-            address: Some(host_a_relayed),
+    let host_b = compact_generated_config(
+        InitConfigTemplate {
+            identity: host_b_identity,
+            network_name: args.two_host_network.clone(),
+            membership_key: None,
             vpn_ip: None,
-            routes: vec![host_a_route],
-        }],
-        discovery,
-        relay: relay_config,
-    }
-    .into_config();
+            local_routes: vec![host_b_route],
+            interface_name: args.host_b_interface.clone(),
+            mtu: args.two_host_mtu,
+            listen_addresses: direct_listen_addresses,
+            external_addresses: Vec::new(),
+            packet_plane: PacketPlaneConfig::default(),
+            bootstrap_peers: vec![relay_bootstrap],
+            peers: vec![InitPeer {
+                id: host_a_identity.peer_id.clone(),
+                address: Some(host_a_relayed),
+                vpn_ip: None,
+                routes: vec![host_a_route],
+            }],
+            discovery,
+            relay: relay_config,
+        }
+        .into_config(),
+    );
 
     host_a
         .validate_runtime()
@@ -4384,7 +4423,12 @@ fn write_config_output(config: &Config, output: &Path, force: bool) -> Result<()
         fs::write(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
-        println!("local peer: {}", config.network.local_peer);
+        println!(
+            "local peer: {}",
+            config
+                .local_peer()
+                .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+        );
     }
 
     Ok(())
@@ -10639,8 +10683,14 @@ mod tests {
         );
         assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
         assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
-        assert_eq!(host_a.peers[0].id, host_b.network.local_peer);
-        assert_eq!(host_b.peers[0].id, host_a.network.local_peer);
+        assert_eq!(
+            host_a.peers[0].id,
+            host_b.local_peer().expect("Host B peer")
+        );
+        assert_eq!(
+            host_b.peers[0].id,
+            host_a.local_peer().expect("Host A peer")
+        );
         assert_eq!(host_a.peers[0].routes[0].prefix, "10.44.0.2/32");
         assert_eq!(host_b.peers[0].routes[0].prefix, "10.44.0.1/32");
         assert!(host_a.peers[0].addresses[0].contains("/p2p-circuit/p2p/"));
@@ -11053,9 +11103,8 @@ mod tests {
             network.get("name").and_then(|name| name.as_str()),
             Some("lab")
         );
-        assert!(network.contains_key("local_peer"));
         assert!(network.contains_key("private_key"));
-        assert_eq!(network.len(), 3, "{rendered}");
+        assert_eq!(network.len(), 2, "{rendered}");
     }
 
     #[test]

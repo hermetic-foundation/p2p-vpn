@@ -27,7 +27,6 @@ Use typed module options for ordinary NixOS hosts:
     enable = true;
 
     networkName = "lab";
-    localPeer = "LOCAL_PEER_ID";
     privateKeyFile = "/run/secrets/p2p-vpn/lab.key";
     vpnIp = "10.44.0.1";
 
@@ -41,10 +40,13 @@ Required values:
 | Field | Purpose |
 | --- | --- |
 | `networkName` | Shared overlay name. |
-| `localPeer` | This host's libp2p peer ID. |
 | `privateKeyFile` | This host's identity key. |
 | `vpnIp` | This host's overlay IP. |
 | `peers.<id>.vpnIp` | Remote peer authorization. |
+
+`localPeer` is optional.
+
+Set it only to assert the private key matches an expected peer ID.
 
 That is enough for the default profile:
 
@@ -241,7 +243,6 @@ Use `privateKey` only for throwaway test hosts:
 ```nix
 {
   services.p2p-vpn.instances.lab = {
-    localPeer = "LOCAL_PEER_ID";
     privateKey = "BASE64_PRIVATE_KEY";
     peers."REMOTE_PEER_ID" = { };
   };
@@ -261,7 +262,6 @@ Use `settings` only when you need full JSON control:
     settings = {
       network = {
         name = "lab";
-        local_peer = "LOCAL_PEER_ID";
         private_key = "BASE64_PRIVATE_KEY";
       };
       peers = [

@@ -4556,8 +4556,7 @@ impl OverlayMembership {
         let mut configured_infrastructure_peers = HashSet::new();
         peers.insert(
             config
-                .network
-                .local_peer
+                .local_peer()?
                 .parse()
                 .map_err(ConfigError::Libp2pPeerId)?,
         );
@@ -14797,6 +14796,23 @@ mod tests {
         assert!(membership.allows_configured_infrastructure(relay));
         assert!(membership.allows_configured_infrastructure(peer_address_relay));
         assert!(!membership.allows(peer_id()));
+    }
+
+    #[test]
+    fn overlay_membership_derives_local_peer_when_config_omits_assertion() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let local = local_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("local peer");
+        let remote = peer_id();
+        let mut config = config_with_peer(&local_identity, remote);
+        config.network.local_peer.clear();
+
+        let membership = OverlayMembership::from_config(&config).expect("membership");
+
+        assert!(membership.allows(local));
+        assert!(membership.allows(remote));
     }
 
     #[test]

@@ -303,7 +303,15 @@ impl Config {
     }
 
     pub fn local_peer_id(&self) -> Result<PeerId, ConfigError> {
-        PeerId::from_str(&self.network.local_peer).map_err(ConfigError::PeerId)
+        PeerId::from_str(&self.local_peer()?).map_err(ConfigError::PeerId)
+    }
+
+    pub fn local_peer(&self) -> Result<String, ConfigError> {
+        if self.network.local_peer.is_empty() {
+            return Ok(self.identity()?.peer_id);
+        }
+
+        Ok(self.network.local_peer.clone())
     }
 
     pub fn identity(&self) -> Result<NodeIdentity, ConfigError> {
@@ -313,7 +321,7 @@ impl Config {
             .clone()
             .ok_or(ConfigError::MissingPrivateKey)?;
         let identity = NodeIdentity::from_private_key(&private_key)?;
-        if identity.peer_id != self.network.local_peer {
+        if !self.network.local_peer.is_empty() && identity.peer_id != self.network.local_peer {
             return Err(ConfigError::IdentityPeerMismatch {
                 expected: self.network.local_peer.clone(),
                 actual: identity.peer_id,
@@ -462,6 +470,7 @@ impl Config {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NetworkConfig {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub local_peer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
@@ -1636,6 +1645,47 @@ mod tests {
             config.network.listen_addresses,
             vec!["/ip4/0.0.0.0/tcp/4001".to_owned()]
         );
+    }
+
+    #[test]
+    fn omitted_local_peer_derives_from_private_key() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "lab",
+                "private_key": identity.private_key
+            },
+            "peers": [
+                { "id": "1111111111111111111111111111111111111111111111111111111111111111" }
+            ]
+        }))
+        .expect("minimal config without local peer");
+
+        config.validate_runtime().expect("runtime-valid config");
+        assert_eq!(config.local_peer().expect("local peer"), identity.peer_id);
+        assert_eq!(
+            config.local_peer_id().expect("overlay peer"),
+            PeerId::from_str(&identity.peer_id).expect("derived overlay peer")
+        );
+    }
+
+    #[test]
+    fn explicit_local_peer_still_rejects_private_key_mismatch() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "lab",
+                "local_peer": "0000000000000000000000000000000000000000000000000000000000000000",
+                "private_key": identity.private_key
+            },
+            "peers": []
+        }))
+        .expect("config with mismatched local peer");
+
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::IdentityPeerMismatch { .. })
+        ));
     }
 
     #[test]
