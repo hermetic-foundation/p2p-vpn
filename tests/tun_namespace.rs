@@ -42,6 +42,7 @@ const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
 const RELAY_PROMOTION_TEST_NAME: &str = "tun_namespace_relay_overlay_promotes_to_direct_path";
+const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_after_network_move";
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
 const NETWORK_NAME: &str = "tun-e2e";
 const NODE_A_LOCAL_ROUTE_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 41, 0, 9);
@@ -103,6 +104,16 @@ fn tun_namespace_relay_overlay_promotes_to_direct_path() {
         Ok("orchestrator") => run_relay_promotion_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(RELAY_PROMOTION_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_recovers_relay_and_direct_after_network_move() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_network_move_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(NETWORK_MOVE_TEST_NAME),
     }
 }
 
@@ -778,6 +789,137 @@ fn run_relay_promotion_orchestrator() {
     cleanup_temp_dir(temp_dir);
 }
 
+fn run_network_move_orchestrator() {
+    let identity_relay = NodeIdentity::generate_ed25519().expect("relay identity");
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-network-move-tun-e2e-{}",
+        std::process::id()
+    ));
+    init_namespace_temp_dir(&temp_dir, NETWORK_MOVE_TEST_NAME);
+    let start_relay = temp_dir.join("start-relay");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_b = network_move_overlay_config("b", &identity_b, &identity_a, &identity_relay);
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+
+    let mut relay = spawn_node(
+        NETWORK_MOVE_TEST_NAME,
+        "relay",
+        &identity_relay,
+        None,
+        None,
+        &temp_dir,
+        &start_relay,
+    );
+    let mut node_b = spawn_node(
+        NETWORK_MOVE_TEST_NAME,
+        "b",
+        &identity_b,
+        Some(&identity_a),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_b,
+    );
+    let mut node_a = spawn_node(
+        NETWORK_MOVE_TEST_NAME,
+        "a",
+        &identity_a,
+        Some(&identity_b),
+        Some(&identity_relay),
+        &temp_dir,
+        &start_a,
+    );
+    wait_for_child_namespace(relay.id());
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_network_move_underlay(relay.id(), node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.253.0.2"]);
+
+    fs::write(&start_relay, b"start").expect("write relay start file");
+    wait_for_file(&temp_dir.join("ready-relay"));
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    wait_for_daemon_running(&temp_dir, "b");
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    wait_for_packet_plane_sessions(&temp_dir, "a");
+    wait_for_packet_plane_sessions(&temp_dir, "b");
+    wait_for_selected_path(&temp_dir, "a", "direct_udp_datagram");
+
+    let direct_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    set_network_move_direct_link(node_a.id(), node_b.id(), false);
+    wait_for_selected_path(&temp_dir, "a", "circuit_relay");
+    let relay_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+
+    set_network_move_direct_link(node_a.id(), node_b.id(), true);
+    wait_for_selected_path(&temp_dir, "a", "direct_udp_datagram");
+    let restored_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    stop_child(&mut relay);
+    assert_ping_success(
+        "network-move direct overlay host ping",
+        &direct_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    assert_ping_success(
+        "network-move relay fallback overlay host ping",
+        &relay_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    assert_ping_success(
+        "network-move restored direct overlay host ping",
+        &restored_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let relay_log = read_log(&temp_dir.join("node-relay.log"));
+    let initiator_log = read_log(&temp_dir.join("node-a.log"));
+    let responder_log = read_log(&temp_dir.join("node-b.log"));
+    assert!(
+        relay_log.contains("CircuitReqAccepted"),
+        "relay did not accept a circuit during network move\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
+    );
+    assert!(
+        initiator_log.contains("event=path_fell_back_to_relay")
+            && (initiator_log.contains("previous_path=direct_udp_datagram")
+                || initiator_log.contains("previous_path=direct_tcp_stream"))
+            && initiator_log.contains("current_path=circuit_relay")
+            && initiator_log.contains("event=path_promoted_to_direct")
+            && initiator_log.contains("previous_path=circuit_relay")
+            && (initiator_log.contains("current_path=direct_udp_datagram")
+                || initiator_log.contains("current_path=direct_tcp_stream"))
+            && initiator_log.contains("path=direct_udp_datagram"),
+        "node A did not automatically fall back to relay and refresh direct datagrams\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nrelay log:\n{relay_log}",
+    );
+    cleanup_temp_dir(temp_dir);
+}
+
 fn run_dht_orchestrator() {
     let identity_bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
     let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
@@ -1233,6 +1375,32 @@ fn wait_for_direct_promotion(temp_dir: &Path, role: &str) {
     );
 }
 
+fn wait_for_selected_path(temp_dir: &Path, role: &str, expected: &str) {
+    let context = format!("selected path {expected}");
+    wait_for_daemon_state(
+        temp_dir,
+        role,
+        scaled_wait_timeout(Duration::from_secs(60)),
+        &context,
+        |lines| {
+            lines.iter().any(|line| {
+                if line.starts_with("peer selected path:") {
+                    return line
+                        .split_whitespace()
+                        .nth(4)
+                        .is_some_and(|selected| selected == expected);
+                }
+                line.starts_with("peer state:")
+                    && line
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|window| window == ["selected_path", expected])
+            })
+        },
+    );
+}
+
 fn wait_for_daemon_state<F>(
     temp_dir: &Path,
     role: &str,
@@ -1577,6 +1745,48 @@ fn configure_relay_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
     configure_three_node_underlay(pid_relay, pid_a, pid_b, "relay", "10.251.0");
 }
 
+fn configure_network_move_underlay(pid_relay: u32, pid_a: u32, pid_b: u32) {
+    configure_three_node_underlay(pid_relay, pid_a, pid_b, "mv", "10.251.0");
+    run_command(
+        "ip",
+        &[
+            "link",
+            "add",
+            "veth-dir-a",
+            "type",
+            "veth",
+            "peer",
+            "name",
+            "veth-dir-b",
+        ],
+    );
+    run_command(
+        "ip",
+        &["link", "set", "veth-dir-a", "netns", &pid_a.to_string()],
+    );
+    run_command(
+        "ip",
+        &["link", "set", "veth-dir-b", "netns", &pid_b.to_string()],
+    );
+    ns_command(
+        pid_a,
+        "ip",
+        &["addr", "add", "10.253.0.1/24", "dev", "veth-dir-a"],
+    );
+    ns_command(
+        pid_b,
+        "ip",
+        &["addr", "add", "10.253.0.2/24", "dev", "veth-dir-b"],
+    );
+    set_network_move_direct_link(pid_a, pid_b, true);
+}
+
+fn set_network_move_direct_link(pid_a: u32, pid_b: u32, up: bool) {
+    let state = if up { "up" } else { "down" };
+    ns_command(pid_a, "ip", &["link", "set", "veth-dir-a", state]);
+    ns_command(pid_b, "ip", &["link", "set", "veth-dir-b", state]);
+}
+
 fn configure_three_node_underlay(pid_infra: u32, pid_a: u32, pid_b: u32, name: &str, prefix: &str) {
     let bridge = format!("br-{name}");
     run_command("ip", &["link", "add", &bridge, "type", "bridge"]);
@@ -1668,6 +1878,9 @@ fn run_node_child() {
                 }
                 "a" | "b" if is_relay_promotion_test_child() => {
                     relay_promotion_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" if is_network_move_test_child() => {
+                    network_move_overlay_config(&role, &local, &remote, infra)
                 }
                 "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
                 other => panic!("unknown node role {other}"),
@@ -1837,6 +2050,62 @@ fn relay_promotion_overlay_config(
         other => panic!("unknown relay promotion node role {other}"),
     };
     enable_test_packet_plane(&mut config, packet_endpoint);
+    config
+}
+
+fn network_move_overlay_config(
+    role: &str,
+    local: &NodeIdentity,
+    remote: &NodeIdentity,
+    relay: &NodeIdentity,
+) -> Config {
+    let relay_base = format!(
+        "/ip4/10.251.0.254/tcp/42200/p2p/{}/p2p-circuit",
+        relay.peer_id
+    );
+    let relayed_remote = format!("{relay_base}/p2p/{}", remote.peer_id);
+    let (
+        interface,
+        listen,
+        direct_remote,
+        packet_endpoint,
+        local_routes,
+        peer_routes,
+        reservations,
+    ) = match role {
+        "a" => (
+            "hse2ea",
+            "/ip4/10.253.0.1/tcp/42401",
+            "/ip4/10.253.0.2/tcp/42402",
+            "10.253.0.1:43401",
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+            Vec::new(),
+            Vec::new(),
+        ),
+        "b" => (
+            "hse2eb",
+            "/ip4/10.253.0.2/tcp/42402",
+            "/ip4/10.253.0.1/tcp/42401",
+            "10.253.0.2:43402",
+            Vec::new(),
+            vec![RouteConfig {
+                prefix: "10.41.0.0/24".to_owned(),
+                metric: 100,
+            }],
+            vec![relay_base],
+        ),
+        other => panic!("unknown network move node role {other}"),
+    };
+    let mut peer = peer_config(remote, Some(direct_remote), peer_routes);
+    peer.addresses.push(relayed_remote);
+    let mut config = node_config(NETWORK_NAME, interface, local, listen, local_routes, peer);
+    config.network.discovery = relay_promotion_test_discovery();
+    config.network.relay.reservations = reservations;
+    enable_test_packet_plane(&mut config, packet_endpoint);
+    config.network.packet_plane.session_ttl_seconds = 3;
     config
 }
 
@@ -2376,6 +2645,10 @@ fn is_direct_quic_test_child() -> bool {
 
 fn is_relay_promotion_test_child() -> bool {
     env::args().any(|argument| argument == RELAY_PROMOTION_TEST_NAME)
+}
+
+fn is_network_move_test_child() -> bool {
+    env::args().any(|argument| argument == NETWORK_MOVE_TEST_NAME)
 }
 
 fn is_invite_relay_test_child() -> bool {
