@@ -280,6 +280,7 @@ This requires:
 | LAN baseline | Direct path, QUIC packet session, config match. |
 | Public split | Relay path, config match. |
 | LAN return | Direct path, QUIC packet session, config match. |
+| All phases | Same Host A config and same Host B config. |
 
 ## No-Route Backoff
 

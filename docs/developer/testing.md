@@ -282,6 +282,8 @@ nix run .#public-vpn-move-evidence-check -- \
   --write-report public-vpn-move-proof.json
 ```
 
+This also rejects config changes between phases.
+
 Validate the checker itself:
 
 ```sh

@@ -2225,6 +2225,7 @@ Required phases:
   lan-baseline  direct + QUIC + reciprocal config
   public-split  relay + reciprocal config
   lan-return    direct + QUIC + reciprocal config
+  all phases    same Host A config and same Host B config
 EOF
             }
 
@@ -2370,7 +2371,8 @@ EOF
                 requirements: {
                   lan_baseline: ["direct", "quic_session", "config_match"],
                   public_split: ["relay", "config_match"],
-                  lan_return: ["direct", "quic_session", "config_match"]
+                  lan_return: ["direct", "quic_session", "config_match"],
+                  stable_configs: ["same_host_a_config", "same_host_b_config"]
                 },
                 phases: {
                   lan_baseline: $lan_baseline[0],
@@ -2380,7 +2382,41 @@ EOF
                 checks: [
                   {name: "lan_baseline.phase", ok: ($lan_baseline_status == 0 and $lan_baseline[0].ok == true), detail: $lan_baseline_status},
                   {name: "public_split.phase", ok: ($public_split_status == 0 and $public_split[0].ok == true), detail: $public_split_status},
-                  {name: "lan_return.phase", ok: ($lan_return_status == 0 and $lan_return[0].ok == true), detail: $lan_return_status}
+                  {name: "lan_return.phase", ok: ($lan_return_status == 0 and $lan_return[0].ok == true), detail: $lan_return_status},
+                  {
+                    name: "host_a.stable_config",
+                    ok: (
+                      ($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) as $baseline_sha
+                      | ($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) as $split_sha
+                      | ($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) as $return_sha
+                      | ($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_summary) as $baseline_summary
+                      | ($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_summary) as $split_summary
+                      | ($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_summary) as $return_summary
+                      | ($baseline_sha != null and $baseline_sha == $split_sha and $baseline_sha == $return_sha and $baseline_summary == $split_summary and $baseline_summary == $return_summary)
+                    ),
+                    detail: {
+                      lan_baseline: (($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) // null),
+                      public_split: (($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) // null),
+                      lan_return: (($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_a_config_sha256) // null)
+                    }
+                  },
+                  {
+                    name: "host_b.stable_config",
+                    ok: (
+                      ($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) as $baseline_sha
+                      | ($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) as $split_sha
+                      | ($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) as $return_sha
+                      | ($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_summary) as $baseline_summary
+                      | ($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_summary) as $split_summary
+                      | ($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_summary) as $return_summary
+                      | ($baseline_sha != null and $baseline_sha == $split_sha and $baseline_sha == $return_sha and $baseline_summary == $split_summary and $baseline_summary == $return_summary)
+                    ),
+                    detail: {
+                      lan_baseline: (($lan_baseline[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) // null),
+                      public_split: (($public_split[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) // null),
+                      lan_return: (($lan_return[0].checks[] | select(.name == "pair.config_match").detail.host_b_config_sha256) // null)
+                    }
+                  }
                 ]
               }
               | .ok = (all(.checks[]; .ok == true))' \
@@ -3393,9 +3429,10 @@ EOF
               local_route="$3"
               peer_route="$4"
               ping_target="$5"
-              direct="$6"
-              relay="$7"
-              quic="$8"
+              config_sha256="$6"
+              direct="$7"
+              relay="$8"
+              quic="$9"
 
               if [[ "$direct" -eq 1 ]]; then
                 direct_lines='["peer remote selected_path direct_quic_datagram"]'
@@ -3413,6 +3450,7 @@ EOF
                 --arg local_route "$local_route" \
                 --arg peer_route "$peer_route" \
                 --arg ping_target "$ping_target" \
+                --arg config_sha256 "$config_sha256" \
                 --argjson direct "$direct" \
                 --argjson relay "$relay" \
                 --argjson quic "$quic" \
@@ -3421,7 +3459,7 @@ EOF
                 '{
                   schema_version: 1,
                   artifact_dir: $artifact_dir,
-                  config_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  config_sha256: $config_sha256,
                   config_summary: {
                     network_name: "public-vpn-move-proof",
                     interface_name: "pv0",
@@ -3461,12 +3499,15 @@ EOF
             }
 
             mkdir -p "$TMPDIR/evidence"
-            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 1 0 1
-            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 1 0 1
-            write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 0 1 0
-            write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 0 1 0
-            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" 1 0 1
-            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 1 0 1
+            host_a_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            host_b_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            changed_host_b_sha="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 1
+            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 1
+            write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 0 1 0
+            write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 1 0
+            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 1
+            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 1
 
             p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
@@ -3483,14 +3524,17 @@ EOF
               and .requirements.lan_baseline == ["direct", "quic_session", "config_match"]
               and .requirements.public_split == ["relay", "config_match"]
               and .requirements.lan_return == ["direct", "quic_session", "config_match"]
-              and (.checks | length) == 3
+              and .requirements.stable_configs == ["same_host_a_config", "same_host_b_config"]
+              and (.checks | length) == 5
               and (.phases.lan_baseline.ok == true)
               and (.phases.public_split.ok == true)
               and (.phases.lan_return.ok == true)
+              and (.checks[] | select(.name == "host_a.stable_config").ok) == true
+              and (.checks[] | select(.name == "host_b.stable_config").ok) == true
             ' "$TMPDIR/move-report.json"
             grep -q '^public VPN move evidence check: ok$' "$TMPDIR/move-pass-output.txt"
 
-            write_evidence "$TMPDIR/evidence/split-b-no-relay.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" 0 0 0
+            write_evidence "$TMPDIR/evidence/split-b-no-relay.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 0 0
             if p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
               --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
@@ -3506,6 +3550,23 @@ EOF
             fi
             grep -q 'failed: public_split.phase' "$TMPDIR/move-fail-error.txt"
             jq -e '.ok == false and (.phases.public_split.ok == false)' "$TMPDIR/move-fail-report.json"
+
+            write_evidence "$TMPDIR/evidence/split-b-changed-config.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$changed_host_b_sha" 0 1 0
+            if p2p-vpn-public-vpn-move-evidence-check \
+              --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
+              --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
+              --public-split-host-a "$TMPDIR/evidence/split-a.json" \
+              --public-split-host-b "$TMPDIR/evidence/split-b-changed-config.json" \
+              --lan-return-host-a "$TMPDIR/evidence/return-a.json" \
+              --lan-return-host-b "$TMPDIR/evidence/return-b.json" \
+              --write-report "$TMPDIR/move-config-fail-report.json" \
+              > "$TMPDIR/move-config-fail-output.txt" 2> "$TMPDIR/move-config-fail-error.txt"
+            then
+              echo "public movement with changed Host B config was accepted" >&2
+              exit 1
+            fi
+            grep -q 'failed: host_b.stable_config' "$TMPDIR/move-config-fail-error.txt"
+            jq -e '.ok == false and (.checks[] | select(.name == "host_b.stable_config").ok) == false' "$TMPDIR/move-config-fail-report.json"
 
             touch $out
           '';
