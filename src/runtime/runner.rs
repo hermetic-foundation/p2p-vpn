@@ -6162,6 +6162,7 @@ fn redial_configured_peer_after_supported_path_loss(
         context.paths,
         context.metrics,
     );
+    dial_ready_relays_for_configured_peer(swarm, context, peer);
 }
 
 fn peer_lacks_supported_packet_path(
@@ -6172,6 +6173,32 @@ fn peer_lacks_supported_packet_path(
     let overlay_peer = PeerId::from_libp2p(peer);
     let support = packet_transport_support(peer_capabilities, overlay_peer);
     !paths.has_supported_path(overlay_peer, support)
+}
+
+fn dial_ready_relays_for_configured_peer(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+) {
+    if !context.forwarder.is_configured_transport_peer(peer)
+        || !peer_lacks_supported_packet_path(context.paths, context.peer_capabilities, peer)
+    {
+        return;
+    }
+
+    for relay in context.relay_readiness.ready_relays() {
+        dial_relay_ready_configured_peers(
+            swarm,
+            context.forwarder,
+            context.relay_readiness,
+            context.relay_addresses,
+            context.configured_peer_addresses,
+            context.discovered_peer_addresses,
+            context.paths,
+            context.metrics,
+            relay,
+        );
+    }
 }
 
 fn handle_outgoing_connection_error(
@@ -6326,7 +6353,7 @@ fn handle_packet_event(
             let in_flight = context.packet_in_flight.complete(request_id);
             context.metrics.record_outbound_failure();
             if let Some(request) = in_flight {
-                maybe_demote_stream_fallback_path(
+                let demoted = maybe_demote_stream_fallback_path(
                     context.paths,
                     context.metrics,
                     request.peer,
@@ -6334,6 +6361,9 @@ fn handle_packet_event(
                     &error,
                 );
                 if let Some(peer) = context.forwarder.transport_peer_for_overlay(request.peer) {
+                    if demoted {
+                        dial_ready_relays_for_configured_peer(swarm, context, peer);
+                    }
                     let discovered_addresses = context.discovered_peer_addresses.as_vec();
                     redial_packet_plane_recovery_addresses(
                         swarm,
