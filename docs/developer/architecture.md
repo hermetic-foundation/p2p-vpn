@@ -93,6 +93,22 @@ exists.
 | Direct TCP stream | stream fallback |
 | Circuit relay | fallback |
 
+## Candidate Hygiene
+
+Path discovery advertises underlay addresses only.
+
+Configured overlay prefixes are filtered from:
+
+| Candidate Source | Filtered Values |
+| --- | --- |
+| libp2p listener candidates | Concrete and wildcard-expanded VPN addresses. |
+| UDP packet-plane candidates | Observed or configured VPN endpoints. |
+| QUIC packet-plane candidates | Observed or configured VPN endpoints. |
+
+This prevents recursive routing after a peer moves networks.
+
+The daemon must rediscover LAN, relay, or public paths instead.
+
 ## Relay Behavior
 
 Circuit relay is a fallback path.

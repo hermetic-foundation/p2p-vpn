@@ -32,6 +32,7 @@ Status is conservative.
 | Public IPFS bootstrap | Partial | Rootless bootstrap checks. |
 | Public relay discovery | Partial | `relay-scan` and `relay-check`. |
 | Public DCUtR proof | Partial | Needs non-LAN topology evidence. |
+| Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
 | Signed membership records | Partial | Local and DHT tests; public DHT evidence remains. |
 | NixOS module | Operational | NixOS module and VM smoke checks. |
@@ -45,6 +46,7 @@ Status is conservative.
 | 2026-08-04 | Public bootstrap smoke | Bootstrap and AutoNAT observed. |
 | 2026-08-05 | LAN direct two-host test | Bidirectional ping passed. |
 | 2026-08-05 | Forced relay two-host test | Bidirectional relay ping passed. |
+| 2026-08-09 | Forced-relay VM candidate filter | Overlay addresses were not advertised as underlay candidates. |
 | 2026-08-09 | NixOS network-move VM test | LAN to relay to LAN recovery passed. |
 
 ## Main Remaining Gap

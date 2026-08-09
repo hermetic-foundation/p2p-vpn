@@ -22,6 +22,7 @@ Focused examples:
 nix develop -c cargo test queue::tests
 nix develop -c cargo test route::tests
 nix develop -c cargo test packet_plane
+nix develop -c cargo test overlay
 ```
 
 ## Format
@@ -96,6 +97,7 @@ Coverage:
 | Minimal config | `vpnIp` plus peer IDs carry overlay IPs. |
 | Data plane | Bidirectional ping crosses `pv0`. |
 | Relay proof | Data nodes record relay circuit usage. |
+| Candidate hygiene | Overlay IPs are not advertised as underlay endpoints. |
 
 ## NixOS VM Network Move
 
@@ -114,6 +116,27 @@ Coverage:
 | Relay fallback | `pv0` traffic recovers through relay. |
 | No config change | The daemon keeps running during the move. |
 | Return to LAN | The selected path promotes back to direct. |
+
+## Underlay Candidate Hygiene
+
+Run the focused regression tests:
+
+```sh
+nix develop -c cargo test overlay
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Listener expansion | Configured VPN prefixes are not direct dial candidates. |
+| Concrete listeners | Concrete VPN listeners are rejected as direct candidates. |
+| Observed UDP endpoints | VPN endpoints are rejected as packet-plane candidates. |
+| Configured packet endpoints | VPN endpoints are rejected before advertisement. |
+
+This protects network-move recovery.
+
+The daemon must find a new LAN, relay, or public path.
 
 ## Namespace E2E
 
