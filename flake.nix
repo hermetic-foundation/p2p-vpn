@@ -227,6 +227,7 @@
             vpn_host_b_route="''${P2P_VPN_REPRO_VPN_HOST_B_ROUTE:-10.42.0.2/32}"
             vpn_network="''${P2P_VPN_REPRO_VPN_NETWORK:-public-vpn-repro}"
             require_vpn_relay_reservations="''${P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS:-1}"
+            require_dcutr="''${P2P_VPN_REPRO_REQUIRE_DCUTR:-1}"
             relay_check_base_args=()
             if [[ -n "$base_config" ]]; then
               relay_check_base_args=(--config "$base_config")
@@ -259,6 +260,7 @@
                 echo "P2P_VPN_REPRO_VPN_HOST_B_ROUTE=$vpn_host_b_route"
                 echo "P2P_VPN_REPRO_VPN_NETWORK=$vpn_network"
                 echo "P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=$require_vpn_relay_reservations"
+                echo "P2P_VPN_REPRO_REQUIRE_DCUTR=$require_dcutr"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
                 echo "P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=$candidate_timeout"
                 echo "P2P_VPN_RELAY_MAX_CANDIDATES=$max_candidates"
@@ -343,6 +345,7 @@
                 printf "export P2P_VPN_REPRO_VPN_HOST_B_ROUTE=%q\n" "$vpn_host_b_route"
                 printf "export P2P_VPN_REPRO_VPN_NETWORK=%q\n" "$vpn_network"
                 printf "export P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=%q\n" "$require_vpn_relay_reservations"
+                printf "export P2P_VPN_REPRO_REQUIRE_DCUTR=%q\n" "$require_dcutr"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
                 printf "export P2P_VPN_RELAY_MAX_CANDIDATES=%q\n" "$max_candidates"
@@ -615,15 +618,22 @@
                 return 2
               fi
 
+              vpn_host_a_check_config="$artifact_dir/public-vpn-host-a.relay-check.json"
+              vpn_host_b_check_config="$artifact_dir/public-vpn-host-b.relay-check.json"
+              jq '.network.listen_addresses = ["/ip4/0.0.0.0/tcp/0"]' \
+                "$vpn_host_a_config" > "$vpn_host_a_check_config"
+              jq '.network.listen_addresses = ["/ip4/0.0.0.0/tcp/0"]' \
+                "$vpn_host_b_config" > "$vpn_host_b_check_config"
+
               p2p-vpn bootstrap-check \
-                --config "$vpn_host_a_config" \
+                --config "$vpn_host_a_check_config" \
                 --timeout-seconds "$candidate_timeout" \
                 --require-relay-reservations \
                 --write-report "$vpn_host_a_relay_reservation_report" \
                 --force
 
               p2p-vpn bootstrap-check \
-                --config "$vpn_host_b_config" \
+                --config "$vpn_host_b_check_config" \
                 --timeout-seconds "$candidate_timeout" \
                 --require-relay-reservations \
                 --write-report "$vpn_host_b_relay_reservation_report" \
@@ -662,6 +672,7 @@
               p2p-vpn init-config \
                 --output "$membership_config" \
                 --network "$membership_network" \
+                --listen-address /ip4/0.0.0.0/tcp/0 \
                 --public-ipfs-profile \
                 --disable-dcutr \
                 --force
@@ -1024,7 +1035,11 @@
               phase_started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               phase_started="$(date +%s)"
               set +e
-              timeout --kill-after=5s "''${phase_timeout}s" "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
+              if declare -F "$1" >/dev/null; then
+                "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
+              else
+                timeout --kill-after=5s "''${phase_timeout}s" "$@" > >(tee "$phase_stdout") 2> >(tee "$phase_stderr" >&2)
+              fi
               phase_status="$?"
               set -e
               phase_finished="$(date +%s)"
@@ -1104,15 +1119,20 @@
                 record_phase_result "generated two-host VPN relay reservation check disabled" 0 "$phase_utc" "$phase_utc" 0 "" ""
               fi
 
-              run_phase "probing candidates for DCUtR success evidence" \
-                p2p-vpn relay-check \
-                "''${relay_check_base_args[@]}" \
-                --relay-candidates-file "$candidates" \
-                --timeout-seconds "$candidate_timeout" \
-                --max-validation-candidates "$max_validation" \
-                --require-dcutr-success \
-                --write-report "$dcutr_report" \
-                --force
+              if [[ "$require_dcutr" == 1 ]]; then
+                run_phase "probing candidates for DCUtR success evidence" \
+                  p2p-vpn relay-check \
+                  "''${relay_check_base_args[@]}" \
+                  --relay-candidates-file "$candidates" \
+                  --timeout-seconds "$candidate_timeout" \
+                  --max-validation-candidates "$max_validation" \
+                  --require-dcutr-success \
+                  --write-report "$dcutr_report" \
+                  --force
+              else
+                phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                record_phase_result "DCUtR success evidence check disabled" 0 "$phase_utc" "$phase_utc" 0 "" ""
+              fi
             else
               echo "candidate file is empty; skipping relay-check probes" >&2
               status=1
@@ -2379,10 +2399,17 @@ EOF
             grep -q 'public-vpn-host-b.json' "$script"
             grep -q 'public-vpn-host-a-relay-reservation-check.json' "$script"
             grep -q 'public-vpn-host-b-relay-reservation-check.json' "$script"
+            grep -q 'public-vpn-host-a.relay-check.json' "$script"
+            grep -q 'public-vpn-host-b.relay-check.json' "$script"
+            grep -Fq '.network.listen_addresses = ["/ip4/0.0.0.0/tcp/0"]' "$script"
             grep -q 'P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS' "$script"
+            grep -q 'P2P_VPN_REPRO_REQUIRE_DCUTR' "$script"
+            grep -q 'DCUtR success evidence check disabled' "$script"
             grep -q 'P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS' "$script"
+            grep -q 'declare -F "$1"' "$script"
             grep -q 'timeout --kill-after=5s' "$script"
             grep -q 'checking generated two-host VPN relay reservations' "$script"
+            grep -q -- '--listen-address /ip4/0.0.0.0/tcp/0' "$script"
             grep -q 'write_bootstrap_summary_json' "$script"
             grep -q -- '--write-host-a-config' "$script"
             grep -q -- '--write-host-b-config' "$script"

@@ -76,6 +76,18 @@ nix run .# -- relay-check \
   --timeout-seconds 45
 ```
 
+## Faster Relay Repro
+
+Skip strict DCUtR proof when validating relay discovery and generated configs:
+
+```sh
+P2P_VPN_REPRO_REQUIRE_DCUTR=0 \
+nix run .#public-relay-repro
+```
+
+This still records scan, relay, generated config, and relay-reservation
+artifacts.
+
 ## Use A Validated Relay
 
 Generate a relay-assisted config:

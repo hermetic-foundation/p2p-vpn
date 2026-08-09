@@ -75,6 +75,36 @@ It also proved a relayed circuit and generated relay-assisted configs.
 The DCUtR-required phase reached relayed circuits but did not record a libp2p
 DCUtR success event.
 
+## 2026-08-09 Public Relay Repro
+
+Command:
+
+```sh
+P2P_VPN_REPRO_REQUIRE_DCUTR=0 \
+P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1 \
+nix run .#public-relay-repro
+```
+
+Result:
+
+```text
+public relay candidate validation: ok
+relayed peer circuit: ok
+membership DHT publish: quorum failed
+generated-host relay reservations: no accepted reservation
+strict DCUtR proof: skipped
+```
+
+Notes:
+
+| Item | Evidence |
+| --- | --- |
+| Shell function phases | Run in-process. |
+| Local listen collision | Avoided with ephemeral check ports. |
+| Public relay probing | Reached a real public relay. |
+| Generated-host reservations | Reached relay policy, not local bind failure. |
+| Public DHT membership | Still not operational proof. |
+
 ## Current Conclusion
 
 | Capability | Evidence |
@@ -83,4 +113,6 @@ DCUtR success event.
 | Public relay candidate discovery | Proven. |
 | Public relay reservation | Proven for at least one run. |
 | Public relayed circuit | Proven for at least one run. |
+| Generated-host relay reservation | Not consistently proven. |
+| Public membership DHT propagation | Not proven yet. |
 | Public DCUtR success | Not proven yet. |
