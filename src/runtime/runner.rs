@@ -6928,7 +6928,7 @@ async fn handle_packet_plane_received(
     let result = match received.frame.header.payload_type {
         PayloadType::IpPacket => match context
             .forwarder
-            .accept_inbound_packet(transport_peer, &received.frame)
+            .accept_inbound_stream_packet(transport_peer, &received.frame)
         {
             Ok(packet) => {
                 context.writer.write_packet(packet)?;

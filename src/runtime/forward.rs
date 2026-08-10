@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn inbound_stream_packet_does_not_use_datagram_replay_window() {
+    fn inbound_stream_or_packet_plane_packet_does_not_use_overlay_replay_window() {
         let remote = Keypair::generate_ed25519().public().to_peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = config_for(remote);
@@ -1227,7 +1227,7 @@ mod tests {
         assert_eq!(
             forwarder
                 .accept_inbound_stream_packet(remote, &stream)
-                .expect("stream fallback bypasses datagram replay window"),
+                .expect("stream fallback and packet-plane datagrams bypass inner replay"),
             stream.payload.as_slice()
         );
     }
