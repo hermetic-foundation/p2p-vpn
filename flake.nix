@@ -131,6 +131,7 @@ USAGE
 
             vm_checks=(
               ".#checks.$system.nixos-vm-minimal-lan"
+              ".#checks.$system.nixos-vm-quic-stream"
               ".#checks.$system.nixos-vm-forced-relay"
               ".#checks.$system.nixos-vm-network-move"
             )
@@ -3190,6 +3191,9 @@ EOF
         nixosVmMesh = import ./tests/nixos/mesh.nix {
           inherit self pkgs package;
         };
+        nixosVmQuicStream = import ./tests/nixos/quic-stream.nix {
+          inherit self pkgs package;
+        };
         nixosVmForcedRelay = import ./tests/nixos/forced-relay.nix {
           inherit self pkgs package;
         };
@@ -3636,6 +3640,7 @@ EOF
           nixos-vm-smoke = nixosVmSmoke;
           nixos-vm-minimal-lan = nixosVmMesh;
           nixos-vm-mesh = nixosVmMesh;
+          nixos-vm-quic-stream = nixosVmQuicStream;
           nixos-vm-forced-relay = nixosVmForcedRelay;
           nixos-vm-network-move = nixosVmNetworkMove;
           public-relay-repro-structure = pkgs.runCommand "p2p-vpn-public-relay-repro-structure" {

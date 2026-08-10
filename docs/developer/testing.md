@@ -80,6 +80,7 @@ Coverage:
 | Release archive | `releaseArchiveSanity` |
 | NixOS service | `nixos-module` |
 | Minimal LAN | `nixos-vm-minimal-lan` |
+| QUIC stream | `nixos-vm-quic-stream` |
 | Forced relay | `nixos-vm-forced-relay` |
 | Network move | `nixos-vm-network-move` |
 | Public tooling | Public relay and VPN repro structure checks |
@@ -132,6 +133,26 @@ Coverage:
 | TUN setup | Both nodes create default `pv0`. |
 | Data plane | Bidirectional ping crosses the overlay. |
 | Packet plane | A direct LAN packet-plane session is negotiated. |
+
+## NixOS VM QUIC Stream
+
+Run the direct QUIC stream fallback check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-quic-stream
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Test config | libp2p QUIC listen address is explicit. |
+| Packet plane | Owned UDP and owned QUIC packet planes are disabled. |
+| Data plane | Bidirectional ping crosses `pv0`. |
+| Path proof | Selected path is `direct_quic_stream`. |
+| Connection pin | `daemon-paths` reports a live `connection_id`. |
+| Metrics | QUIC stream fallback packets are counted. |
+| Fallback order | TCP and relay fallback counters stay at zero. |
 
 ## NixOS VM Forced Relay
 
@@ -199,6 +220,7 @@ Coverage:
 | Release archive | Archive sanity check passed. |
 | NixOS module | Module evaluation and service assertions passed. |
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
+| QUIC stream | `nixos-vm-quic-stream` passed. |
 | Forced relay | `nixos-vm-forced-relay` passed. |
 | Network move | `nixos-vm-network-move` passed. |
 | Public repro tooling | Structure and evidence checker tests passed. |
