@@ -135,7 +135,7 @@ The relay is added as infrastructure.
 
 It is not added to `peers[]`.
 
-## Generate Two Host Configs
+## Generate Minimal Two-Host Configs
 
 Use this for a mobile LAN-to-hotspot test:
 
@@ -153,20 +153,19 @@ The generated configs use:
 | Setting | Value |
 | --- | --- |
 | Interface | `pv0` |
-| Direct listener | `/ip4/0.0.0.0/tcp/4001` |
-| LAN discovery | mDNS enabled |
-| Public routing | `/ipfs/kad/1.0.0` |
-| Provider ads | enabled |
-| Relay fallback | selected relay reservation |
+| LAN discovery | default mDNS |
+| Public routing | default IPFS-compatible Kademlia |
+| Provider ads | default enabled |
+| Relay fallback | automatic relay candidates |
 | Peer addresses | omitted |
+| Relay reservations | omitted |
+| Bootstrap peers | omitted from JSON; defaults apply at runtime |
 
 This is the normal mobile profile.
 
-The selected relay is infrastructure only.
+The selected relay remains in the relay-check report.
 
-It appears in bootstrap and reservation settings.
-
-It is not written into `peers[].addresses`.
+It is not written into the host configs.
 
 To force relay-only testing, disable direct listeners and mDNS in a copy.
 

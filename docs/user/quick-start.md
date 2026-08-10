@@ -107,7 +107,6 @@ Run this on Node A:
 nix run .# -- init-config \
   --output host-a.json \
   --network lab \
-  --interface pv0 \
   --force
 ```
 
@@ -117,7 +116,6 @@ Run this on Node B:
 nix run .# -- init-config \
   --output host-b.json \
   --network lab \
-  --interface pv0 \
   --force
 ```
 

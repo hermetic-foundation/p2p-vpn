@@ -4186,56 +4186,36 @@ fn write_public_relay_two_host_configs_from_relay_check(
 #[allow(clippy::similar_names)]
 fn public_relay_two_host_configs(
     args: &RelayCheckArgs,
-    relay: &EndpointArg,
+    _relay: &EndpointArg,
 ) -> Result<(Config, Config), String> {
     let host_a_identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate Host A identity: {error:?}"))?;
     let host_b_identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate Host B identity: {error:?}"))?;
-    let host_a_route = RouteConfig {
-        prefix: args.host_a_route.clone(),
-        metric: 100,
-    };
-    let host_b_route = RouteConfig {
-        prefix: args.host_b_route.clone(),
-        metric: 100,
-    };
-
-    let direct_listen_addresses = vec!["/ip4/0.0.0.0/tcp/4001".to_owned()];
-    let relay_bootstrap = InitPeer {
-        id: relay.id.clone(),
-        address: relay.address.clone(),
-        vpn_ip: None,
-        routes: Vec::new(),
-    };
-    let relay_config = RelayConfig {
-        reservations: vec![relay_reservation_address(relay)?],
-        ..RelayConfig::default()
-    };
-    let mut discovery = public_ipfs_relay_discovery_config();
-    discovery.mdns = true;
+    let host_a_vpn_ip = route_ping_target(&args.host_a_route, "Host A")?;
+    let host_b_vpn_ip = route_ping_target(&args.host_b_route, "Host B")?;
 
     let host_a = compact_generated_config(
         InitConfigTemplate {
             identity: host_a_identity.clone(),
             network_name: args.two_host_network.clone(),
             membership_key: None,
-            vpn_ip: None,
-            local_routes: vec![host_a_route.clone()],
+            vpn_ip: Some(host_a_vpn_ip),
+            local_routes: Vec::new(),
             interface_name: args.host_a_interface.clone(),
             mtu: args.two_host_mtu,
-            listen_addresses: direct_listen_addresses.clone(),
+            listen_addresses: default_listen_addresses(),
             external_addresses: Vec::new(),
             packet_plane: PacketPlaneConfig::default(),
-            bootstrap_peers: vec![relay_bootstrap.clone()],
+            bootstrap_peers: Vec::new(),
             peers: vec![InitPeer {
                 id: host_b_identity.peer_id.clone(),
                 address: None,
-                vpn_ip: None,
-                routes: vec![host_b_route.clone()],
+                vpn_ip: Some(host_b_vpn_ip.clone()),
+                routes: Vec::new(),
             }],
-            discovery: discovery.clone(),
-            relay: relay_config.clone(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
         }
         .into_config(),
     );
@@ -4245,22 +4225,22 @@ fn public_relay_two_host_configs(
             identity: host_b_identity,
             network_name: args.two_host_network.clone(),
             membership_key: None,
-            vpn_ip: None,
-            local_routes: vec![host_b_route],
+            vpn_ip: Some(host_b_vpn_ip),
+            local_routes: Vec::new(),
             interface_name: args.host_b_interface.clone(),
             mtu: args.two_host_mtu,
-            listen_addresses: direct_listen_addresses,
+            listen_addresses: default_listen_addresses(),
             external_addresses: Vec::new(),
             packet_plane: PacketPlaneConfig::default(),
-            bootstrap_peers: vec![relay_bootstrap],
+            bootstrap_peers: Vec::new(),
             peers: vec![InitPeer {
                 id: host_a_identity.peer_id.clone(),
                 address: None,
-                vpn_ip: None,
-                routes: vec![host_a_route],
+                vpn_ip: host_a.network.vpn_ip.clone(),
+                routes: Vec::new(),
             }],
-            discovery,
-            relay: relay_config,
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
         }
         .into_config(),
     );
@@ -4273,17 +4253,6 @@ fn public_relay_two_host_configs(
         .map_err(|error| format!("generated Host B config is invalid: {error:?}"))?;
 
     Ok((host_a, host_b))
-}
-
-fn public_ipfs_relay_discovery_config() -> DiscoveryConfig {
-    InitDiscoveryFlags {
-        disable_mdns: true,
-        disable_kademlia: false,
-        disable_kademlia_provider_advertisement: false,
-        disable_dcutr: false,
-        disable_autonat: false,
-    }
-    .into_config(PRIVATE_KADEMLIA_PROTOCOL.to_owned(), false, true)
 }
 
 fn public_relay_probe_winner(
@@ -10675,38 +10644,18 @@ mod tests {
         assert_eq!(host_b.interface.name, "hs-b");
         assert_eq!(host_a.interface.mtu, 1420);
         assert_eq!(host_b.interface.mtu, 1420);
-        assert_eq!(
-            host_a.network.listen_addresses,
-            vec!["/ip4/0.0.0.0/tcp/4001"]
-        );
-        assert_eq!(
-            host_b.network.listen_addresses,
-            vec!["/ip4/0.0.0.0/tcp/4001"]
-        );
-        assert!(host_a.network.discovery.mdns);
-        assert!(host_b.network.discovery.mdns);
-        assert!(host_a.network.discovery.kademlia_provider_advertisement);
-        assert!(host_b.network.discovery.kademlia_provider_advertisement);
-        assert_eq!(
-            host_a.network.discovery.kademlia_protocol,
-            PUBLIC_IPFS_KADEMLIA_PROTOCOL
-        );
-        assert!(
-            host_a
-                .effective_bootstrap_multiaddrs()
-                .expect("Host A effective bootstrap")
-                .len()
-                >= PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
-        );
-        assert!(
-            host_b
-                .effective_bootstrap_multiaddrs()
-                .expect("Host B effective bootstrap")
-                .len()
-                >= PUBLIC_IPFS_BOOTSTRAP_PEERS.len() + 1
-        );
-        assert_eq!(host_a.network.routes[0].prefix, "10.44.0.1/32");
-        assert_eq!(host_b.network.routes[0].prefix, "10.44.0.2/32");
+        assert_eq!(host_a.network.listen_addresses, default_listen_addresses());
+        assert_eq!(host_b.network.listen_addresses, default_listen_addresses());
+        assert_eq!(host_a.network.discovery, DiscoveryConfig::default());
+        assert_eq!(host_b.network.discovery, DiscoveryConfig::default());
+        assert!(host_a.network.bootstrap_peers.is_empty());
+        assert!(host_b.network.bootstrap_peers.is_empty());
+        assert_eq!(host_a.network.relay, RelayConfig::default());
+        assert_eq!(host_b.network.relay, RelayConfig::default());
+        assert_eq!(host_a.network.vpn_ip.as_deref(), Some("10.44.0.1"));
+        assert_eq!(host_b.network.vpn_ip.as_deref(), Some("10.44.0.2"));
+        assert!(host_a.network.routes.is_empty());
+        assert!(host_b.network.routes.is_empty());
         assert_eq!(
             host_a.peers[0].id,
             host_b.local_peer().expect("Host B peer")
@@ -10715,17 +10664,12 @@ mod tests {
             host_b.peers[0].id,
             host_a.local_peer().expect("Host A peer")
         );
-        assert_eq!(host_a.peers[0].routes[0].prefix, "10.44.0.2/32");
-        assert_eq!(host_b.peers[0].routes[0].prefix, "10.44.0.1/32");
+        assert_eq!(host_a.peers[0].vpn_ip.as_deref(), Some("10.44.0.2"));
+        assert_eq!(host_b.peers[0].vpn_ip.as_deref(), Some("10.44.0.1"));
+        assert!(host_a.peers[0].routes.is_empty());
+        assert!(host_b.peers[0].routes.is_empty());
         assert!(host_a.peers[0].addresses.is_empty());
         assert!(host_b.peers[0].addresses.is_empty());
-        assert!(host_a.network.bootstrap_peers.iter().any(|peer| {
-            peer.id == relay.id && Some(peer.address.as_str()) == relay.address.as_deref()
-        }));
-        assert_eq!(
-            host_a.network.relay.reservations,
-            vec![format!("{relay_address}/p2p-circuit")]
-        );
         assert_eq!(
             route_ping_target(&args.host_b_route, "Host B").unwrap(),
             "10.44.0.2"
