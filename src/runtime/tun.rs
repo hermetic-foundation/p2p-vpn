@@ -58,6 +58,14 @@ impl TunRuntimeConfig {
     }
 
     #[must_use]
+    pub fn sysctl_commands(&self) -> Vec<SysctlCommand> {
+        vec![
+            SysctlCommand::set(format!("net.ipv4.conf.{}.rp_filter", self.name), "0"),
+            SysctlCommand::set(format!("net.ipv4.conf.{}.accept_local", self.name), "1"),
+        ]
+    }
+
+    #[must_use]
     pub fn route_commands(&self) -> Vec<IpCommand> {
         let mut commands = vec![IpCommand::addr_add_v6(
             self.name.clone(),
@@ -194,6 +202,35 @@ impl IpCommand {
 impl fmt::Display for IpCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "ip {}", self.args.join(" "))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysctlCommand {
+    key: String,
+    value: String,
+}
+
+impl SysctlCommand {
+    #[must_use]
+    pub fn set(key: String, value: impl Into<String>) -> Self {
+        Self {
+            key,
+            value: value.into(),
+        }
+    }
+
+    pub fn execute(&self) -> Result<ExitStatus, io::Error> {
+        Command::new("sysctl")
+            .arg("-w")
+            .arg(format!("{}={}", self.key, self.value))
+            .status()
+    }
+}
+
+impl fmt::Display for SysctlCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "sysctl -w {}={}", self.key, self.value)
     }
 }
 
@@ -750,6 +787,34 @@ mod tests {
         );
         assert!(commands.iter().any(|command| command
             == "ip route replace 10.44.0.2/32 dev pv0 src 10.44.0.1 metric 3000 mtu 1280 advmss 1240"));
+    }
+
+    #[test]
+    fn sysctl_commands_prepare_tun_for_overlay_host_routes() {
+        let runtime = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses {
+                ipv4: Ipv4Addr::new(100, 64, 0, 1),
+                ipv6: "fd00::1".parse().expect("IPv6 address"),
+            },
+            additional_addresses: Vec::new(),
+            routes: Vec::new(),
+        };
+
+        let commands = runtime
+            .sysctl_commands()
+            .into_iter()
+            .map(|command| command.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            commands,
+            vec![
+                "sysctl -w net.ipv4.conf.pv0.rp_filter=0",
+                "sysctl -w net.ipv4.conf.pv0.accept_local=1",
+            ]
+        );
     }
 
     #[test]

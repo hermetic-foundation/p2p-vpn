@@ -45,7 +45,7 @@ use p2p_vpn::{
         remote::{RemotePeerStatus, query_peer_status},
         runner::{self, ShutdownReason},
         service::SERVICE_PROTOCOL,
-        tun::{TunAddresses, TunDevice, TunRuntimeConfig, route_advmss},
+        tun::{SysctlCommand, TunAddresses, TunDevice, TunRuntimeConfig, route_advmss},
     },
     wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
@@ -5761,9 +5761,13 @@ async fn up(
     println!("address4: {}/32", runtime.addresses.ipv4);
     println!("address6: {}/128", runtime.addresses.ipv6);
 
+    let sysctl_commands = runtime.sysctl_commands();
     let commands = runtime.route_commands();
     if dry_run {
         println!("dry-run: would create Linux TUN interface and run:");
+        for command in &sysctl_commands {
+            println!("{command}");
+        }
         for command in commands {
             println!("{command}");
         }
@@ -5802,6 +5806,8 @@ async fn up(
             .map_err(|error| format!("failed to inspect TUN device: {error:?}"))?
     );
 
+    apply_tun_sysctls(&sysctl_commands)?;
+
     for command in commands {
         let status = command
             .execute()
@@ -5810,6 +5816,9 @@ async fn up(
             return Err(format!("`{command}` exited with {status}"));
         }
     }
+
+    apply_tun_sysctls(&sysctl_commands)?;
+    spawn_tun_sysctl_reconciler(sysctl_commands);
 
     println!("starting libp2p packet forwarding runtime");
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
@@ -5822,6 +5831,41 @@ async fn up(
     ))
     .await
     .map_err(|error| format!("runtime failed: {error:?}"))
+}
+
+fn apply_tun_sysctls(commands: &[SysctlCommand]) -> Result<(), String> {
+    for command in commands {
+        let status = command
+            .execute()
+            .map_err(|error| format!("failed to execute `{command}`: {error}"))?;
+        if !status.success() {
+            return Err(format!("`{command}` exited with {status}"));
+        }
+    }
+    Ok(())
+}
+
+fn spawn_tun_sysctl_reconciler(commands: Vec<SysctlCommand>) {
+    tokio::spawn(async move {
+        for delay in [
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            Duration::from_secs(15),
+        ] {
+            tokio::time::sleep(delay).await;
+            for command in &commands {
+                match command.execute() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => eprintln!(
+                        "level=warn event=tun_sysctl_reconcile_failed command=\"{command}\" status=\"{status}\""
+                    ),
+                    Err(error) => eprintln!(
+                        "level=warn event=tun_sysctl_reconcile_failed command=\"{command}\" error=\"{error}\""
+                    ),
+                }
+            }
+        }
+    });
 }
 
 async fn shutdown_signal() -> ShutdownReason {

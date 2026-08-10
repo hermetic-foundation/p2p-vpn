@@ -2676,6 +2676,10 @@ fn peer_config(
 
 fn open_and_configure_tun(config: &TunRuntimeConfig) -> TunDevice {
     let device = TunDevice::open(config).expect("open TUN device");
+    for command in config.sysctl_commands() {
+        let status = command.execute().expect("execute sysctl command");
+        assert!(status.success(), "`{command}` exited with {status}");
+    }
     for command in config.route_commands() {
         let status = command.execute().expect("execute ip command");
         assert!(status.success(), "`{command}` exited with {status}");
