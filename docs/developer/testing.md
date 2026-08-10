@@ -173,7 +173,7 @@ Coverage:
 | No config change | Generated config hashes stay unchanged across move and return. |
 | Return to LAN | The selected path promotes back to direct. |
 
-The 2026-08-09 VM run passed with minimal NixOS configs.
+The 2026-08-10 VM run passed with minimal NixOS configs.
 
 Observed path events:
 
@@ -182,6 +182,30 @@ Observed path events:
 | Direct start | Initial `pv0` traffic used a direct LAN path. |
 | Relay fallback | Relay paths and circuit counters appeared after movement. |
 | Direct recovery | State returned to `selected_path direct_*` after LAN return. |
+
+## Latest Local Gate
+
+The 2026-08-10 local operational gate passed:
+
+```sh
+nix run .#check-operational
+```
+
+Coverage:
+
+| Area | Evidence |
+| --- | --- |
+| Rust package | Package, format, and high-signal Clippy checks passed. |
+| Release archive | Archive sanity check passed. |
+| NixOS module | Module evaluation and service assertions passed. |
+| Minimal LAN | `nixos-vm-minimal-lan` passed. |
+| Forced relay | `nixos-vm-forced-relay` passed. |
+| Network move | `nixos-vm-network-move` passed. |
+| Public repro tooling | Structure and evidence checker tests passed. |
+
+Style and pedantic Clippy lints are advisory.
+
+The gate intentionally does not replace real separated-host proof.
 
 ## Underlay Candidate Hygiene
 
