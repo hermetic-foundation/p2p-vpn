@@ -323,7 +323,7 @@ The latest public relay repro found a usable relayed-peer circuit.
 
 | Evidence | Status |
 | --- | --- |
-| Public relay scan | 12 candidates found. |
+| Public relay scan | 8 candidates found on 2026-08-10. |
 | Public relay validation | 1 of 2 probed candidates passed. |
 | Relayed peer circuit | Proven through a selected public relay. |
 | Generated two-host configs | Written by the repro. |

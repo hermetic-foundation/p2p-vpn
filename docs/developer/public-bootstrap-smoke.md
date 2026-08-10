@@ -161,6 +161,56 @@ Limits:
 | Strict DCUtR success | Disabled for this run. |
 | Two-host public VPN ping | Not part of this run. |
 
+## 2026-08-10 Public Relay Repro Refresh
+
+Command:
+
+```sh
+nix run .#public-relay-repro
+```
+
+Artifact directory:
+
+```text
+/tmp/p2p-vpn-public-relay-repro.JkTEdWAZ
+```
+
+Result:
+
+```text
+public relay scan: ok
+public relay candidates: 8
+public relay probe: ok
+public relay probe mode: relayed_peer_circuit
+public relay candidates: 2 succeeded 1
+```
+
+Evidence:
+
+| Item | Result |
+| --- | --- |
+| Public routing peers | 11 discovered. |
+| Relay-hop candidates | 8 candidate addresses. |
+| Host-reachable candidates | 7 after IPv6 skip. |
+| Validated candidates | 2 probed. |
+| Relayed peer circuit | 1 outbound circuit. |
+| Generated host configs | Host A and Host B JSON written. |
+
+Selected relay candidate:
+
+```text
+/ip4/174.27.30.52/udp/25977/quic-v1/p2p/12D3KooWJrmFfkrB4B7aj2zVRsoGrSyGaaqaZzNz8GcL3F8YmCFh
+```
+
+Limits:
+
+| Gap | Status |
+| --- | --- |
+| Generated-host reservations | Disabled for this run. |
+| Membership DHT propagation | Disabled for this run. |
+| Strict DCUtR success | Disabled for this run. |
+| Two-host public VPN ping | Not part of this run. |
+
 ## Current Conclusion
 
 | Capability | Evidence |
