@@ -2326,6 +2326,7 @@ async fn run_ready_node(
         config.network.packet_plane.replay_window_limit(),
         config.network.relay.auto,
         false,
+        None,
         std::future::pending::<runner::ShutdownReason>(),
     ))
     .await
