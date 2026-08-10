@@ -5777,6 +5777,15 @@ fn packet_plane_send_fallback_backend(
     None
 }
 
+fn has_active_packet_plane_session(
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+    peer: PeerId,
+) -> bool {
+    packet_plane.is_some_and(|packet_plane| packet_plane.has_session(peer))
+        || packet_plane_quic.is_some_and(|packet_plane| packet_plane.has_session(peer))
+}
+
 fn packet_plane_send_stream_fallback_path(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
@@ -6125,16 +6134,30 @@ async fn handle_swarm_event(
             invalidate_peer_capabilities_when_disconnected(
                 context.forwarder,
                 context.peer_capabilities,
+                Some(context.packet_plane),
+                context.packet_plane_quic.as_deref(),
                 peer_id,
                 num_established,
             );
             if num_established == 0 {
                 context.inbound_packet_rate_limiters.remove(peer_id);
-                context
-                    .packet_plane_negotiator
-                    .remove_peer(PeerId::from_libp2p(peer_id));
+                let overlay_peer = PeerId::from_libp2p(peer_id);
+                if !has_active_packet_plane_session(
+                    Some(context.packet_plane),
+                    context.packet_plane_quic.as_deref(),
+                    overlay_peer,
+                ) {
+                    context.packet_plane_negotiator.remove_peer(overlay_peer);
+                }
                 if context.forwarder.is_configured_transport_peer(peer_id)
                     && should_query_configured_peer_recovery_discovery(context.discovery)
+                    && peer_lacks_supported_packet_path(
+                        context.paths,
+                        context.peer_capabilities,
+                        Some(context.packet_plane),
+                        context.packet_plane_quic.as_deref(),
+                        peer_id,
+                    )
                 {
                     query_configured_peer_recovery_discovery_for_peer(
                         swarm,
@@ -6188,7 +6211,15 @@ async fn handle_swarm_event(
                 && context.forwarder.is_configured_transport_peer(peer_id)
             {
                 context.relay_readiness.record_peer_connection_lost(peer_id);
-                if should_query_configured_peer_recovery_discovery(context.discovery) {
+                if should_query_configured_peer_recovery_discovery(context.discovery)
+                    && peer_lacks_supported_packet_path(
+                        context.paths,
+                        context.peer_capabilities,
+                        Some(context.packet_plane),
+                        context.packet_plane_quic.as_deref(),
+                        peer_id,
+                    )
+                {
                     query_configured_peer_recovery_discovery_for_peer(
                         swarm,
                         &context.local_capabilities.network_name,
@@ -6452,7 +6483,13 @@ fn redial_configured_peer_after_supported_path_loss(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
-        || !peer_lacks_supported_packet_path(context.paths, context.peer_capabilities, peer)
+        || !peer_lacks_supported_packet_path(
+            context.paths,
+            context.peer_capabilities,
+            Some(context.packet_plane),
+            context.packet_plane_quic.as_deref(),
+            peer,
+        )
     {
         return;
     }
@@ -6479,10 +6516,19 @@ fn redial_configured_peer_after_supported_path_loss(
 fn peer_lacks_supported_packet_path(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: Libp2pPeerId,
 ) -> bool {
     let overlay_peer = PeerId::from_libp2p(peer);
-    let support = packet_transport_support(peer_capabilities, overlay_peer);
+    let datagram_backend = local_packet_datagram_backend(
+        peer_capabilities,
+        packet_plane,
+        packet_plane_quic,
+        overlay_peer,
+    );
+    let support =
+        packet_transport_support_for_backend(peer_capabilities, overlay_peer, datagram_backend);
     !paths.has_supported_path(overlay_peer, support)
 }
 
@@ -6492,7 +6538,13 @@ fn dial_ready_relays_for_configured_peer(
     peer: Libp2pPeerId,
 ) {
     if !context.forwarder.is_configured_transport_peer(peer)
-        || !peer_lacks_supported_packet_path(context.paths, context.peer_capabilities, peer)
+        || !peer_lacks_supported_packet_path(
+            context.paths,
+            context.peer_capabilities,
+            Some(context.packet_plane),
+            context.packet_plane_quic.as_deref(),
+            peer,
+        )
     {
         return;
     }
@@ -9092,10 +9144,15 @@ fn invalidate_peer_capabilities_on_first_connection(
 fn invalidate_peer_capabilities_when_disconnected(
     forwarder: &Forwarder,
     peer_capabilities: &mut PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     peer: Libp2pPeerId,
     remaining_connections: u32,
 ) {
-    if remaining_connections == 0 {
+    let overlay_peer = PeerId::from_libp2p(peer);
+    if remaining_connections == 0
+        && !has_active_packet_plane_session(packet_plane, packet_plane_quic, overlay_peer)
+    {
         invalidate_peer_capabilities(forwarder, peer_capabilities, peer);
     }
 }
@@ -13770,6 +13827,8 @@ mod tests {
         invalidate_peer_capabilities_when_disconnected(
             &forwarder,
             &mut peer_capabilities,
+            None,
+            None,
             remote,
             1,
         );
@@ -13778,6 +13837,8 @@ mod tests {
         invalidate_peer_capabilities_when_disconnected(
             &forwarder,
             &mut peer_capabilities,
+            None,
+            None,
             remote,
             0,
         );
@@ -13801,11 +13862,60 @@ mod tests {
         invalidate_peer_capabilities_when_disconnected(
             &forwarder,
             &mut peer_capabilities,
+            None,
+            None,
             unconfigured,
             0,
         );
 
         assert!(peer_capabilities.contains(unconfigured_overlay));
+    }
+
+    #[tokio::test]
+    async fn disconnect_invalidation_keeps_capabilities_while_packet_plane_session_exists() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &test_packet_plane_secret(11),
+            &test_packet_plane_secret(13),
+            1280,
+        );
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true),
+        );
+
+        invalidate_peer_capabilities_when_disconnected(
+            &forwarder,
+            &mut peer_capabilities,
+            Some(&sender_packet_plane),
+            None,
+            remote,
+            0,
+        );
+
+        assert!(peer_capabilities.contains(remote_overlay));
     }
 
     #[tokio::test]
@@ -14057,6 +14167,8 @@ mod tests {
         assert!(!peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
+            None,
+            None,
             peer
         ));
 
@@ -14064,6 +14176,8 @@ mod tests {
         assert!(!peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
+            None,
+            None,
             peer
         ));
 
@@ -14071,6 +14185,8 @@ mod tests {
         assert!(peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
+            None,
+            None,
             peer
         ));
 
@@ -14078,6 +14194,8 @@ mod tests {
         assert!(!peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
+            None,
+            None,
             peer
         ));
 
@@ -14085,7 +14203,55 @@ mod tests {
         assert!(peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
+            None,
+            None,
             peer
+        ));
+    }
+
+    #[tokio::test]
+    async fn configured_peer_keeps_owned_udp_path_after_stream_connection_closes() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote = remote_identity
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("remote libp2p peer");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut sender_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("sender socket")])
+                .await
+                .expect("sender packet plane");
+        let mut receiver_packet_plane =
+            PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("receiver socket")])
+                .await
+                .expect("receiver packet plane");
+        establish_test_packet_plane_sessions(
+            &mut sender_packet_plane,
+            &mut receiver_packet_plane,
+            &local_identity,
+            &remote_identity,
+            &test_packet_plane_secret(7),
+            &test_packet_plane_secret(9),
+            1280,
+        );
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established(remote_overlay, PathKind::DirectUdpDatagram);
+        paths.record_closed(remote_overlay, PathKind::DirectTcpStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280).with_owned_udp_packet_plane(true),
+        );
+
+        assert!(!peer_lacks_supported_packet_path(
+            &paths,
+            &peer_capabilities,
+            Some(&sender_packet_plane),
+            None,
+            remote,
         ));
     }
 
@@ -17537,6 +17703,8 @@ mod tests {
         invalidate_peer_capabilities_when_disconnected(
             &forwarder,
             &mut peer_capabilities,
+            None,
+            None,
             remote,
             1,
         );
@@ -17545,6 +17713,8 @@ mod tests {
         invalidate_peer_capabilities_when_disconnected(
             &forwarder,
             &mut peer_capabilities,
+            None,
+            None,
             remote,
             0,
         );
