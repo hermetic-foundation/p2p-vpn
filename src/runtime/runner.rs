@@ -26,8 +26,8 @@ use tokio::sync::mpsc;
 use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
     config::{
-        AutoRelayConfig, Config, ConfigError, DiscoveryConfig, QueueConfig, ResourceConfig,
-        public_ipfs_bootstrap_peer_configs,
+        AutoRelayConfig, Config, ConfigError, DiscoveryConfig, PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+        QueueConfig, ResourceConfig, public_ipfs_bootstrap_peer_configs,
     },
     identity::NodeIdentity,
     membership::{SignedMembershipRecord, effective_membership_at},
@@ -70,6 +70,7 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
 const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
 const PUBLIC_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(10);
 const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(5);
@@ -320,6 +321,12 @@ where
 {
     let identity = config.identity()?;
     let public_bootstrap_defaults = config.uses_public_ipfs_bootstrap_defaults();
+    let effective_bootstrap_peers = config.effective_bootstrap_multiaddrs()?;
+    let startup_bootstrap_peers = if public_bootstrap_defaults {
+        Vec::new()
+    } else {
+        effective_bootstrap_peers.clone()
+    };
     let mut node = build_node(&HostConfig {
         identity,
         network_name: config.network.name.clone(),
@@ -329,7 +336,7 @@ where
         max_concurrent_packet_streams: config.resources.packet_stream_limit(),
         listen_addresses: config.listen_multiaddrs()?,
         external_addresses: config.external_multiaddrs()?,
-        bootstrap_peers: config.effective_bootstrap_multiaddrs()?,
+        bootstrap_peers: startup_bootstrap_peers,
         known_peers: config.peer_multiaddrs()?,
         relay_reservations: config.relay_reservation_multiaddrs()?,
         relay_server: config.network.relay.server,
@@ -337,6 +344,10 @@ where
         resources: config.resources,
         discovery: config.network.discovery.clone(),
     })?;
+    node.bootstrap_peer_addresses = effective_bootstrap_peers;
+    if public_bootstrap_defaults {
+        reconcile_public_kademlia_mode(&mut node.swarm, &config.network.discovery, true);
+    }
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let packet_plane = PacketPlaneRuntime::bind_with_replay_window_limit(
         config.packet_plane_listen_addrs()?,
@@ -384,6 +395,7 @@ where
         config.network.packet_plane.replay_window_limit(),
         config.network.relay.auto,
         public_bootstrap_defaults,
+        public_bootstrap_defaults.then(|| Instant::now() + PUBLIC_DISCOVERY_LAN_FIRST_GRACE),
         shutdown,
     ))
     .await
@@ -432,6 +444,7 @@ pub async fn run_node(
         options.packet_plane_replay_windows_per_session,
         options.auto_relay,
         false,
+        None,
         std::future::pending::<ShutdownReason>(),
     ))
     .await
@@ -468,6 +481,7 @@ pub async fn run_node_until<Shutdown>(
     packet_plane_replay_windows_per_session: usize,
     auto_relay_config: AutoRelayConfig,
     public_bootstrap_defaults: bool,
+    public_discovery_holdoff_until: Option<Instant>,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -584,6 +598,16 @@ where
     log_startup_status(node.startup);
     log_packet_plane_status(packet_plane.snapshot());
     log_packet_plane_quic_status(&packet_plane_quic_snapshot);
+    if public_discovery_holdoff_until.is_some() {
+        log_runtime_event(
+            LogLevel::Info,
+            "public_discovery_lan_first_holdoff_enabled",
+            &[(
+                "seconds",
+                &PUBLIC_DISCOVERY_LAN_FIRST_GRACE.as_secs().to_string(),
+            )],
+        );
+    }
     log_runtime_event(
         LogLevel::Info,
         "runtime_started",
@@ -602,7 +626,13 @@ where
                 print_metrics(
                     &metrics,
                     queues.total_stats(),
-                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                    runtime_path_stats(
+                        &forwarder,
+                        &paths,
+                        &peer_capabilities,
+                        Some(&packet_plane),
+                        packet_plane_quic.as_ref(),
+                    ),
                 );
                 return Ok(());
             }
@@ -728,6 +758,19 @@ where
                 }
             }
             _ = timers.redial.tick() => {
+                let public_discovery_quiet = public_discovery_suppressed(
+                    public_discovery_holdoff_until,
+                    &forwarder,
+                    &paths,
+                    &peer_capabilities,
+                    Some(&packet_plane),
+                    packet_plane_quic.as_ref(),
+                );
+                reconcile_public_kademlia_mode(
+                    &mut node.swarm,
+                    &discovery,
+                    public_discovery_quiet,
+                );
                 expire_pending_auto_relay_reservations(
                     &mut auto_relay,
                     &metrics,
@@ -742,6 +785,7 @@ where
                     &mut relay_readiness,
                     &mut configured_relay_reservation_retries,
                     &public_discovery_backoff,
+                    public_discovery_quiet,
                     &metrics,
                 );
             }
@@ -752,6 +796,19 @@ where
                     .tick()
                     .await;
             }, if timers.kademlia_refresh.is_some() => {
+                let public_discovery_quiet = public_discovery_suppressed(
+                    public_discovery_holdoff_until,
+                    &forwarder,
+                    &paths,
+                    &peer_capabilities,
+                    Some(&packet_plane),
+                    packet_plane_quic.as_ref(),
+                );
+                reconcile_public_kademlia_mode(
+                    &mut node.swarm,
+                    &discovery,
+                    public_discovery_quiet,
+                );
                 refresh_kademlia_rendezvous(
                     &mut node.swarm,
                     &KademliaRefreshContext {
@@ -768,13 +825,7 @@ where
                         advertise_provider: discovery.kademlia_provider_advertisement,
                         auto_relay: &auto_relay,
                         public_discovery_backoff: &public_discovery_backoff,
-                        public_discovery_quiet: public_discovery_quiet_mode(
-                            &forwarder,
-                            &paths,
-                            &peer_capabilities,
-                            Some(&packet_plane),
-                            packet_plane_quic.as_ref(),
-                        ),
+                        public_discovery_quiet,
                         metrics: &metrics,
                     },
                 );
@@ -857,7 +908,13 @@ where
                     local_capabilities: &local_capabilities,
                     metrics: &metrics,
                     queue: queues.total_stats(),
-                    path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                    path_stats: runtime_path_stats(
+                        &forwarder,
+                        &paths,
+                        &peer_capabilities,
+                        Some(&packet_plane),
+                        packet_plane_quic.as_ref(),
+                    ),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     auto_relay: auto_relay.snapshot(Instant::now()),
                     relay_infrastructure: infrastructure_peers.snapshot(&node.swarm),
@@ -877,7 +934,13 @@ where
                     print_metrics(
                         &metrics,
                         queues.total_stats(),
-                        runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                        runtime_path_stats(
+                            &forwarder,
+                            &paths,
+                            &peer_capabilities,
+                            Some(&packet_plane),
+                            packet_plane_quic.as_ref(),
+                        ),
                     );
                     return Ok(());
                 }
@@ -892,7 +955,13 @@ where
                 print_metrics(
                     &metrics,
                     queues.total_stats(),
-                    runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+                    runtime_path_stats(
+                        &forwarder,
+                        &paths,
+                        &peer_capabilities,
+                        Some(&packet_plane),
+                        packet_plane_quic.as_ref(),
+                    ),
                 );
             }
         }
@@ -1347,8 +1416,13 @@ fn handle_runtime_control_request(
             None
         }
         RuntimeControlRequest::Peers { respond_to } => {
-            let lines =
-                runtime_peer_lines(context.forwarder, context.paths, context.peer_capabilities);
+            let lines = runtime_peer_lines(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                &context.packet_plane,
+                &context.packet_plane_quic,
+            );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket peers response receiver dropped");
             }
@@ -1362,16 +1436,26 @@ fn handle_runtime_control_request(
             None
         }
         RuntimeControlRequest::Paths { respond_to } => {
-            let lines =
-                runtime_path_lines(context.forwarder, context.paths, context.peer_capabilities);
+            let lines = runtime_path_lines(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                &context.packet_plane,
+                &context.packet_plane_quic,
+            );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket paths response receiver dropped");
             }
             None
         }
         RuntimeControlRequest::Mtu { respond_to } => {
-            let lines =
-                runtime_mtu_lines(context.forwarder, context.paths, context.peer_capabilities);
+            let lines = runtime_mtu_lines(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                &context.packet_plane,
+                &context.packet_plane_quic,
+            );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket mtu response receiver dropped");
             }
@@ -1405,6 +1489,8 @@ fn runtime_peer_lines(
     forwarder: &Forwarder,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
 ) -> Vec<String> {
     let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
     let mut peers = sorted_configured_peers(forwarder);
@@ -1414,7 +1500,10 @@ fn runtime_peer_lines(
         let transport = forwarder
             .transport_peer_for_overlay(peer)
             .map_or_else(|| "none".to_owned(), |peer| peer.to_string());
-        let support = packet_transport_support(peer_capabilities, peer);
+        let datagram_backend =
+            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let support =
+            packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
         let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
         let healthy_paths = candidates
@@ -1480,13 +1569,18 @@ fn runtime_path_lines(
     forwarder: &Forwarder,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
 ) -> Vec<String> {
     let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
     let mut peers = sorted_configured_peers(forwarder);
     let mut lines = vec![format!("peers: {}", peers.len())];
 
     for peer in peers.drain(..) {
-        let support = packet_transport_support(peer_capabilities, peer);
+        let datagram_backend =
+            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let support =
+            packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
         let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
@@ -1530,6 +1624,8 @@ fn runtime_mtu_lines(
     forwarder: &Forwarder,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
 ) -> Vec<String> {
     let local_mtu = u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX);
     let mut peers = sorted_configured_peers(forwarder);
@@ -1540,7 +1636,10 @@ fn runtime_mtu_lines(
     ];
 
     for peer in peers.drain(..) {
-        let support = packet_transport_support(peer_capabilities, peer);
+        let datagram_backend =
+            local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+        let support =
+            packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
         let selected_path = paths.best_supported_for(peer, support);
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         let selected_path_mtu = selected_path.map(|path| path.effective_mtu(peer_mtu));
@@ -2297,6 +2396,7 @@ fn handle_redial_tick(
     relay_readiness: &mut RelayReadiness,
     configured_relay_reservation_retries: &mut ConfiguredRelayReservationRetries,
     public_discovery_backoff: &PublicDiscoveryBackoff,
+    public_discovery_quiet: bool,
     metrics: &RuntimeMetrics,
 ) {
     expire_discovered_peer_addresses(discovered_peer_addresses, metrics);
@@ -2306,7 +2406,7 @@ fn handle_redial_tick(
         relay_readiness,
         configured_relay_reservation_retries,
     );
-    if should_query_configured_peer_recovery_discovery(&node.discovery) {
+    if !public_discovery_quiet && should_query_configured_peer_recovery_discovery(&node.discovery) {
         query_configured_peer_recovery_discovery(
             &mut node.swarm,
             &node.network_name,
@@ -2318,12 +2418,15 @@ fn handle_redial_tick(
     }
     let discovered_addresses = discovered_peer_addresses.redial_candidates_at(Instant::now());
     let now = Instant::now();
-    let bootstrap_addresses = node
-        .bootstrap_peer_addresses
-        .iter()
-        .filter(|(peer, _)| public_discovery_backoff.should_dial_bootstrap_peer(*peer, now))
-        .cloned()
-        .collect::<Vec<_>>();
+    let bootstrap_addresses = if public_discovery_quiet {
+        Vec::new()
+    } else {
+        node.bootstrap_peer_addresses
+            .iter()
+            .filter(|(peer, _)| public_discovery_backoff.should_dial_bootstrap_peer(*peer, now))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     redial_known_addresses(
         &mut node.swarm,
         &bootstrap_addresses,
@@ -2648,6 +2751,10 @@ struct KademliaRefreshContext<'a> {
 }
 
 fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaRefreshContext<'_>) {
+    if context.public_discovery_quiet {
+        return;
+    }
+
     if context.auto_relay.should_discover_candidates() {
         query_auto_relay_infrastructure(swarm, context.metrics, "kademlia_refresh");
     }
@@ -2671,10 +2778,6 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
                 ));
             swarm.behaviour_mut().kad.get_closest_peers(peer);
         }
-    }
-
-    if context.public_discovery_quiet {
-        return;
     }
 
     if context.advertise_provider {
@@ -5709,6 +5812,41 @@ fn packet_transport_support_for_backend(
         quic_datagrams: backend == Some(PacketDatagramBackend::OwnedQuic)
             && peer_capabilities.supports_owned_quic_packet_plane_for(peer),
     }
+}
+
+fn public_discovery_suppressed(
+    holdoff_until: Option<Instant>,
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
+) -> bool {
+    holdoff_until.is_some_and(|until| Instant::now() < until)
+        || public_discovery_quiet_mode(
+            forwarder,
+            paths,
+            peer_capabilities,
+            packet_plane,
+            packet_plane_quic,
+        )
+}
+
+fn reconcile_public_kademlia_mode(
+    swarm: &mut Swarm<Behaviour>,
+    discovery: &DiscoveryConfig,
+    public_discovery_suppressed: bool,
+) {
+    if !discovery.kademlia || discovery.kademlia_protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
+        return;
+    }
+
+    let mode = if public_discovery_suppressed {
+        kad::Mode::Client
+    } else {
+        kad::Mode::Server
+    };
+    swarm.behaviour_mut().kad.set_mode(Some(mode));
 }
 
 fn public_discovery_quiet_mode(
@@ -10350,9 +10488,13 @@ fn runtime_path_stats(
     forwarder: &Forwarder,
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
+    packet_plane: Option<&PacketPlaneRuntime>,
+    packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
 ) -> crate::path::PathRuntimeStats {
     paths.runtime_stats_for_peers(forwarder.configured_overlay_peers(), |peer| {
-        packet_transport_support(peer_capabilities, peer)
+        let datagram_backend =
+            local_packet_datagram_backend(peer_capabilities, packet_plane, packet_plane_quic, peer);
+        packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend)
     })
 }
 
@@ -11271,7 +11413,7 @@ mod tests {
             peer_capabilities: &peer_capabilities,
             metrics: &metrics,
             queue: crate::queue::QueueStats::default(),
-            path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities),
+            path_stats: runtime_path_stats(&forwarder, &paths, &peer_capabilities, None, None),
             packet_in_flight: PacketInFlightStats {
                 packets: 2,
                 peers: 1,
@@ -11547,7 +11689,15 @@ mod tests {
         paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(1180));
         paths.record_established_with_mtu(remote_overlay, PathKind::CircuitRelay, Some(1000));
 
-        let peer_lines = runtime_peer_lines(&forwarder, &paths, &peer_capabilities);
+        let empty_packet_plane = PacketPlaneSnapshot::default();
+        let empty_packet_plane_quic = PacketPlaneQuicSnapshot::default();
+        let peer_lines = runtime_peer_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &empty_packet_plane,
+            &empty_packet_plane_quic,
+        );
         assert!(peer_lines.contains(&"peers: 1".to_owned()));
         assert!(peer_lines.iter().any(|line| {
             line == &format!(
@@ -11562,7 +11712,13 @@ mod tests {
             "peer advertised route: {remote_overlay} 10.20.0.0/24 metric 70"
         )));
 
-        let path_lines = runtime_path_lines(&forwarder, &paths, &peer_capabilities);
+        let path_lines = runtime_path_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &empty_packet_plane,
+            &empty_packet_plane_quic,
+        );
         assert!(path_lines.contains(&format!(
             "peer selected path: {remote_overlay} direct_tcp_stream score 40 mtu 1180"
         )));
@@ -11570,7 +11726,13 @@ mod tests {
             "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown"
         )));
 
-        let mtu_lines = runtime_mtu_lines(&forwarder, &paths, &peer_capabilities);
+        let mtu_lines = runtime_mtu_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &empty_packet_plane,
+            &empty_packet_plane_quic,
+        );
         assert!(mtu_lines.contains(&"local effective packet mtu: 1280".to_owned()));
         assert!(mtu_lines.contains(&"peers: 1".to_owned()));
         assert!(mtu_lines.contains(&format!(
@@ -11606,10 +11768,69 @@ mod tests {
         let forwarder = Forwarder::from_config(&config_with_peer(&local_identity, peer_id()))
             .expect("forwarder");
 
-        let mtu_lines =
-            runtime_mtu_lines(&forwarder, &PathSet::new(), &PeerCapabilities::default());
+        let mtu_lines = runtime_mtu_lines(
+            &forwarder,
+            &PathSet::new(),
+            &PeerCapabilities::default(),
+            &PacketPlaneSnapshot::default(),
+            &PacketPlaneQuicSnapshot::default(),
+        );
 
         assert!(mtu_lines.contains(&OVERLAY_FRAGMENTATION_POLICY_LINE.to_owned()));
+    }
+
+    #[test]
+    fn runtime_control_views_select_owned_udp_packet_plane_when_session_exists() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut paths = PathSet::new();
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(1180));
+        paths.record_established_with_mtu(remote_overlay, PathKind::DirectUdpDatagram, Some(1200));
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1200).with_owned_udp_packet_plane(true),
+        );
+        let packet_plane = test_packet_plane_snapshot(remote_overlay);
+        let packet_plane_quic = PacketPlaneQuicSnapshot::default();
+
+        let peer_lines = runtime_peer_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &packet_plane,
+            &packet_plane_quic,
+        );
+        assert!(peer_lines.iter().any(|line| {
+            line == &format!(
+                "peer: {remote_overlay} transport {remote} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane true owned_quic_packet_plane false healthy_paths 2 selected_path direct_udp_datagram"
+            )
+        }));
+
+        let path_lines = runtime_path_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &packet_plane,
+            &packet_plane_quic,
+        );
+        assert!(path_lines.contains(&format!(
+            "peer selected path: {remote_overlay} direct_udp_datagram score 95 mtu 1200"
+        )));
+
+        let mtu_lines = runtime_mtu_lines(
+            &forwarder,
+            &paths,
+            &peer_capabilities,
+            &packet_plane,
+            &packet_plane_quic,
+        );
+        assert!(mtu_lines.contains(&format!(
+            "peer mtu: {remote_overlay} validated true effective_mtu 1200 selected_path direct_udp_datagram selected_path_mtu 1200"
+        )));
     }
 
     #[test]
@@ -12080,10 +12301,7 @@ mod tests {
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 0);
         assert_eq!(snapshot.kademlia_provider_advertisements, 0);
-        assert_eq!(
-            snapshot.auto_relay_discovery_queries,
-            AUTO_RELAY_DISCOVERY_QUERY_FANOUT as u64
-        );
+        assert_eq!(snapshot.auto_relay_discovery_queries, 0);
         assert_eq!(snapshot.kademlia_bootstrap_refreshes, 0);
         assert_eq!(snapshot.kademlia_bootstrap_failures, 0);
     }
@@ -12189,7 +12407,7 @@ mod tests {
             .expect("forwarder");
 
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
-        assert!(node.startup.kademlia.rendezvous_lookup_started);
+        assert!(!node.startup.kademlia.rendezvous_lookup_started);
 
         let auto_relay = AutoRelayState::default();
         let public_discovery_backoff = PublicDiscoveryBackoff::default();
@@ -21513,7 +21731,7 @@ mod tests {
         datagram_capabilities = datagram_capabilities.with_owned_udp_packet_plane(true);
         peer_capabilities.record(datagram_overlay, datagram_capabilities);
 
-        let stats = runtime_path_stats(&forwarder, &paths, &peer_capabilities);
+        let stats = runtime_path_stats(&forwarder, &paths, &peer_capabilities, None, None);
 
         assert_eq!(stats.healthy_direct_udp_datagram_paths, 1);
         assert_eq!(stats.healthy_direct_quic_datagram_paths, 0);

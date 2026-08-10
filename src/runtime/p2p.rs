@@ -356,29 +356,18 @@ fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerI
 }
 
 fn start_kademlia(
-    swarm: &mut Swarm<Behaviour>,
+    _swarm: &mut Swarm<Behaviour>,
     rendezvous_key: Option<&kad::RecordKey>,
-    advertise_provider: bool,
+    _advertise_provider: bool,
 ) -> Result<KademliaStartupStatus, P2pBuildError> {
-    let Some(rendezvous_key) = rendezvous_key else {
+    let Some(_rendezvous_key) = rendezvous_key else {
         return Ok(KademliaStartupStatus::default());
     };
 
-    if advertise_provider {
-        swarm
-            .behaviour_mut()
-            .kad
-            .start_providing(rendezvous_key.clone())?;
-    }
-    swarm
-        .behaviour_mut()
-        .kad
-        .get_providers(rendezvous_key.clone());
-
     Ok(KademliaStartupStatus {
-        bootstrap_started: swarm.behaviour_mut().kad.bootstrap().is_ok(),
-        rendezvous_advertise_started: advertise_provider,
-        rendezvous_lookup_started: true,
+        bootstrap_started: false,
+        rendezvous_advertise_started: false,
+        rendezvous_lookup_started: false,
     })
 }
 
@@ -628,8 +617,8 @@ mod tests {
         .expect("node should build");
 
         assert_eq!(node.discovery.kademlia_protocol, "/ipfs/kad/1.0.0");
-        assert!(node.startup.kademlia.rendezvous_advertise_started);
-        assert!(node.startup.kademlia.rendezvous_lookup_started);
+        assert!(!node.startup.kademlia.rendezvous_advertise_started);
+        assert!(!node.startup.kademlia.rendezvous_lookup_started);
     }
 
     #[tokio::test]
@@ -814,7 +803,7 @@ mod tests {
         .expect("node should build and queue DNS dial");
 
         assert_eq!(node.bootstrap_peer_addresses.len(), 1);
-        assert!(node.startup.kademlia.bootstrap_started);
+        assert!(!node.startup.kademlia.bootstrap_started);
     }
 
     #[tokio::test]
@@ -846,9 +835,9 @@ mod tests {
         })
         .expect("node");
 
-        assert!(node.startup.kademlia.bootstrap_started);
-        assert!(node.startup.kademlia.rendezvous_advertise_started);
-        assert!(node.startup.kademlia.rendezvous_lookup_started);
+        assert!(!node.startup.kademlia.bootstrap_started);
+        assert!(!node.startup.kademlia.rendezvous_advertise_started);
+        assert!(!node.startup.kademlia.rendezvous_lookup_started);
         assert!(node.startup.mdns_enabled);
         assert!(node.startup.dcutr_enabled);
         assert!(node.startup.autonat_enabled);
