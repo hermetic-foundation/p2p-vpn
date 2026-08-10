@@ -281,6 +281,26 @@ Required evidence per phase:
 | Metrics | `daemon-status-prometheus-final.txt` from both hosts |
 | Ping output | `ping.txt` from both hosts |
 
+Capture phases from the same running daemon:
+
+```sh
+nix run .#public-vpn-capture -- \
+  --artifact-dir PHASE_A \
+  --config HOST_A_CONFIG.json \
+  --socket RUN_DIR/control.sock \
+  --daemon-log RUN_DIR/p2p-vpn-daemon.log \
+  --ping-target 10.42.0.2 \
+  --phase lan-baseline
+```
+
+Use the same config path and socket for every phase on that host.
+
+| Phase | Capture Flags |
+| --- | --- |
+| LAN baseline | Add `--require-quic-session` when direct QUIC is expected. |
+| Public split | Require relay in the checker, not in capture. |
+| LAN return | Add `--require-quic-session` when direct QUIC is expected. |
+
 Invalid proof:
 
 | Pattern | Reason |

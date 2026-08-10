@@ -124,6 +124,7 @@ USAGE
               ".#checks.$system.public-relay-repro-structure"
               ".#checks.$system.public-vpn-repro-structure"
               ".#checks.$system.public-vpn-repro-evidence-structure"
+              ".#checks.$system.public-vpn-capture-structure"
               ".#checks.$system.public-vpn-evidence-check"
               ".#checks.$system.public-vpn-move-evidence-check"
             )
@@ -1955,6 +1956,458 @@ EOF
             echo "summary: $summary" >&2
           '';
         };
+        publicVpnCapture = pkgs.writeShellApplication {
+          name = "p2p-vpn-public-vpn-capture";
+          runtimeInputs = [
+            package
+            pkgs.coreutils
+            pkgs.iproute2
+            pkgs.iputils
+            pkgs.jq
+            pkgs.procps
+          ];
+          text = ''
+            usage() {
+              cat <<'USAGE'
+Usage: p2p-vpn-public-vpn-capture --artifact-dir DIR --config CONFIG --socket SOCKET --ping-target IP [options]
+
+Capture one movement-test phase from an already-running p2p-vpn daemon.
+
+Required:
+  --artifact-dir DIR       Directory for this phase's artifacts.
+  --config CONFIG          Config used by this host for config-match proof.
+  --socket SOCKET          Existing daemon control socket.
+  --ping-target IP         Remote tunnel address to ping.
+
+Options:
+  --daemon-log FILE        Existing daemon log to tail.
+  --phase NAME             Phase label stored in metadata.
+  --ping-count N           ICMP packet count. Default: 3.
+  --ping-timeout SECONDS   Per-packet ping timeout. Default: 2.
+  --health-wait SECONDS    Health wait timeout. Default: 60.
+  --metrics-interval SEC   Metadata only. Default: 5.
+  --require-quic-session   Require QUIC packet-plane readiness.
+  --no-packet-session      Do not require a packet-plane session in health.
+  --write-evidence-only    Rebuild vpn-repro-evidence.json from existing files.
+USAGE
+            }
+
+            artifact_dir="''${P2P_VPN_VPN_CAPTURE_DIR:-}"
+            config="''${P2P_VPN_VPN_CAPTURE_CONFIG:-}"
+            control_socket="''${P2P_VPN_VPN_CAPTURE_CONTROL_SOCKET:-}"
+            daemon_log="''${P2P_VPN_VPN_CAPTURE_DAEMON_LOG:-}"
+            phase="''${P2P_VPN_VPN_CAPTURE_PHASE:-capture}"
+            ping_target="''${P2P_VPN_VPN_CAPTURE_PING_TARGET:-}"
+            ping_count="''${P2P_VPN_VPN_CAPTURE_PING_COUNT:-3}"
+            ping_timeout="''${P2P_VPN_VPN_CAPTURE_PING_TIMEOUT_SECONDS:-2}"
+            health_wait="''${P2P_VPN_VPN_CAPTURE_HEALTH_WAIT_SECONDS:-60}"
+            metrics_interval="''${P2P_VPN_VPN_CAPTURE_METRICS_INTERVAL_SECONDS:-5}"
+            require_packet_session="''${P2P_VPN_VPN_CAPTURE_REQUIRE_PACKET_SESSION:-1}"
+            require_quic_session="''${P2P_VPN_VPN_CAPTURE_REQUIRE_QUIC_SESSION:-0}"
+            write_evidence_only=0
+
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                --artifact-dir)
+                  artifact_dir="''${2:-}"
+                  shift 2
+                  ;;
+                --config)
+                  config="''${2:-}"
+                  shift 2
+                  ;;
+                --socket)
+                  control_socket="''${2:-}"
+                  shift 2
+                  ;;
+                --daemon-log)
+                  daemon_log="''${2:-}"
+                  shift 2
+                  ;;
+                --phase)
+                  phase="''${2:-}"
+                  shift 2
+                  ;;
+                --ping-target)
+                  ping_target="''${2:-}"
+                  shift 2
+                  ;;
+                --ping-count)
+                  ping_count="''${2:-}"
+                  shift 2
+                  ;;
+                --ping-timeout)
+                  ping_timeout="''${2:-}"
+                  shift 2
+                  ;;
+                --health-wait)
+                  health_wait="''${2:-}"
+                  shift 2
+                  ;;
+                --metrics-interval)
+                  metrics_interval="''${2:-}"
+                  shift 2
+                  ;;
+                --require-quic-session)
+                  require_quic_session=1
+                  shift
+                  ;;
+                --no-packet-session)
+                  require_packet_session=0
+                  shift
+                  ;;
+                --write-evidence-only)
+                  write_evidence_only=1
+                  shift
+                  ;;
+                -h|--help)
+                  usage
+                  exit 0
+                  ;;
+                *)
+                  echo "unknown argument: $1" >&2
+                  usage >&2
+                  exit 2
+                  ;;
+              esac
+            done
+
+            missing=0
+            if [[ -z "$artifact_dir" ]]; then
+              echo "missing --artifact-dir" >&2
+              missing=1
+            fi
+            if [[ -z "$config" ]]; then
+              echo "missing --config" >&2
+              missing=1
+            elif [[ ! -s "$config" ]]; then
+              echo "config is missing or empty: $config" >&2
+              missing=1
+            fi
+            if [[ "$write_evidence_only" -ne 1 ]]; then
+              if [[ -z "$control_socket" ]]; then
+                echo "missing --socket" >&2
+                missing=1
+              elif [[ ! -S "$control_socket" ]]; then
+                echo "control socket is missing or not a socket: $control_socket" >&2
+                missing=1
+              fi
+              if [[ -z "$ping_target" ]]; then
+                echo "missing --ping-target" >&2
+                missing=1
+              fi
+            fi
+            if [[ "$missing" -ne 0 ]]; then
+              usage >&2
+              exit 2
+            fi
+
+            mkdir -p "$artifact_dir"
+            metadata="$artifact_dir/vpn-repro-metadata.txt"
+            host_network_before="$artifact_dir/vpn-repro-host-network-before.txt"
+            host_network_after="$artifact_dir/vpn-repro-host-network-after.txt"
+            health_log="$artifact_dir/daemon-health.txt"
+            state_log="$artifact_dir/daemon-state.txt"
+            state_json="$artifact_dir/daemon-state.json"
+            peers_log="$artifact_dir/daemon-peers.txt"
+            peers_json="$artifact_dir/daemon-peers.json"
+            routes_log="$artifact_dir/daemon-routes.txt"
+            routes_json="$artifact_dir/daemon-routes.json"
+            paths_log="$artifact_dir/daemon-paths.txt"
+            paths_json="$artifact_dir/daemon-paths.json"
+            mtu_log="$artifact_dir/daemon-mtu.txt"
+            mtu_json="$artifact_dir/daemon-mtu.json"
+            capabilities_log="$artifact_dir/daemon-capabilities.txt"
+            capabilities_json="$artifact_dir/daemon-capabilities.json"
+            status_log="$artifact_dir/daemon-status.txt"
+            prometheus_log="$artifact_dir/daemon-status-prometheus.txt"
+            final_status_log="$artifact_dir/daemon-status-final.txt"
+            final_prometheus_log="$artifact_dir/daemon-status-prometheus-final.txt"
+            final_state_json="$artifact_dir/daemon-state-final.json"
+            final_paths_json="$artifact_dir/daemon-paths-final.json"
+            daemon_log_tail="$artifact_dir/p2p-vpn-daemon-tail.txt"
+            result_log="$artifact_dir/vpn-repro-result.txt"
+            ping_log="$artifact_dir/ping.txt"
+            evidence_json="$artifact_dir/vpn-repro-evidence.json"
+
+            write_metadata() {
+              peer_count="$(jq '(.peers // []) | length' "$config" 2>/dev/null || echo unknown)"
+              route_count="$(jq '(.network.routes // []) | length' "$config" 2>/dev/null || echo unknown)"
+              interface_name="$(jq -r '.interface.name // "pv0"' "$config" 2>/dev/null || echo unknown)"
+              interface_mtu="$(jq -r '.interface.mtu // "unknown"' "$config" 2>/dev/null || echo unknown)"
+              {
+                echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "phase=$phase"
+                echo "working_directory=$(pwd)"
+                echo "system=$(uname -a)"
+                echo "p2p_vpn_binary=$(command -v p2p-vpn)"
+                echo "p2p_vpn_version=$(p2p-vpn --version 2>/dev/null || echo unknown)"
+                echo "artifact_dir=$artifact_dir"
+                echo "config=$config"
+                echo "peer_count=$peer_count"
+                echo "route_count=$route_count"
+                echo "interface_name=$interface_name"
+                echo "interface_mtu=$interface_mtu"
+                echo "control_socket=$control_socket"
+                echo "daemon_log=$daemon_log"
+                echo "daemon_log_tail=$daemon_log_tail"
+                echo "host_network_before=$host_network_before"
+                echo "host_network_after=$host_network_after"
+                echo "result_log=$result_log"
+                echo "ping_target=$ping_target"
+                echo "ping_count=$ping_count"
+                echo "ping_timeout_seconds=$ping_timeout"
+                echo "health_wait_seconds=$health_wait"
+                echo "metrics_interval_seconds=$metrics_interval"
+                echo "require_packet_session=$require_packet_session"
+                echo "require_quic_session=$require_quic_session"
+              } > "$metadata"
+            }
+
+            capture_host_network() {
+              target="$1"
+              {
+                echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "system=$(uname -a)"
+                echo
+                echo "[ip -br addr]"
+                ip -br addr || true
+                echo
+                echo "[ip -d addr]"
+                ip -d addr || true
+                echo
+                echo "[ip -s link]"
+                ip -s link || true
+                echo
+                echo "[ip route show]"
+                ip route show || true
+                echo
+                echo "[ip -6 route show]"
+                ip -6 route show || true
+                if [[ -n "$ping_target" ]]; then
+                  echo
+                  echo "[ip route get $ping_target]"
+                  ip route get "$ping_target" || true
+                fi
+                echo
+                echo "[ss -lunp]"
+                ss -lunp || true
+                echo
+                echo "[ps -o pid,ppid,stat,comm,args -C p2p-vpn]"
+                ps -o pid,ppid,stat,comm,args -C p2p-vpn || true
+              } > "$target" 2>&1
+            }
+
+            record_status() {
+              label="$1"
+              status="$2"
+              printf '%s %s exit=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" "$status" >> "$result_log"
+            }
+
+            capture_daemon_views() {
+              p2p-vpn daemon-state --socket "$control_socket" | tee "$state_log"
+              p2p-vpn daemon-state --socket "$control_socket" --format json > "$state_json"
+              p2p-vpn daemon-peers --socket "$control_socket" | tee "$peers_log"
+              p2p-vpn daemon-peers --socket "$control_socket" --format json > "$peers_json"
+              p2p-vpn daemon-routes --socket "$control_socket" | tee "$routes_log"
+              p2p-vpn daemon-routes --socket "$control_socket" --format json > "$routes_json"
+              p2p-vpn daemon-paths --socket "$control_socket" | tee "$paths_log"
+              p2p-vpn daemon-paths --socket "$control_socket" --format json > "$paths_json"
+              p2p-vpn daemon-mtu --socket "$control_socket" | tee "$mtu_log"
+              p2p-vpn daemon-mtu --socket "$control_socket" --format json > "$mtu_json"
+              p2p-vpn daemon-capabilities --socket "$control_socket" | tee "$capabilities_log"
+              p2p-vpn daemon-capabilities --socket "$control_socket" --format json > "$capabilities_json"
+              p2p-vpn daemon-status --socket "$control_socket" | tee "$status_log"
+              p2p-vpn daemon-status --socket "$control_socket" --format prometheus | tee "$prometheus_log"
+            }
+
+            metric_value() {
+              metric="$1"
+              if [[ -s "$final_prometheus_log" ]]; then
+                awk -v metric="$metric" '$1 == metric { value = $2 } END { if (value == "") value = 0; print value }' "$final_prometheus_log"
+              else
+                printf '0\n'
+              fi
+            }
+
+            result_status() {
+              label="$1"
+              if [[ -s "$result_log" ]]; then
+                awk -v label="$label" '$2 == label { value = $3 } END { sub(/^exit=/, "", value); if (value == "") value = "null"; print value }' "$result_log"
+              else
+                printf 'null\n'
+              fi
+            }
+
+            json_lines() {
+              file="$1"
+              if [[ -s "$file" ]]; then
+                jq -R -s 'split("\n")[:-1]' "$file"
+              else
+                printf '[]\n'
+              fi
+            }
+
+            json_view_lines() {
+              file="$1"
+              if [[ -s "$file" ]]; then
+                jq '.lines // []' "$file"
+              else
+                printf '[]\n'
+              fi
+            }
+
+            write_evidence_summary() {
+              health_ready=false
+              if [[ -s "$health_log" ]] && grep -q '^daemon_health_ready true$' "$health_log"; then
+                health_ready=true
+              fi
+              config_sha256=""
+              config_summary_json='{}'
+              if [[ -s "$config" ]]; then
+                config_sha256="$(sha256sum "$config" | awk '{ print $1 }')"
+                config_summary_json="$(jq -c '
+                  def host_route($ip): if ($ip | test(":")) then ($ip + "/128") else ($ip + "/32") end;
+                  {
+                    network_name: (.network.name // null),
+                    interface_name: (.interface.name // "pv0"),
+                    local_routes: (((.network.routes // []) | map(.prefix)) + (if .network.vpn_ip then [host_route(.network.vpn_ip)] else [] end) | sort),
+                    peer_ids: ((.peers // []) | map(.id) | sort),
+                    peer_routes: (([(.peers // [])[].routes[]?.prefix] + [(.peers // [])[] | select(.vpn_ip != null) | host_route(.vpn_ip)]) | sort),
+                    peer_count: ((.peers // []) | length),
+                    peer_address_count: ([(.peers // [])[].addresses[]?] | length),
+                    relay_reservation_count: ((.network.relay.reservations // []) | length),
+                    discovery: {
+                      mdns: (if (.network.discovery | type) == "object" and (.network.discovery | has("mdns")) then .network.discovery.mdns else true end),
+                      kademlia: (if (.network.discovery | type) == "object" and (.network.discovery | has("kademlia")) then .network.discovery.kademlia else true end),
+                      kademlia_protocol: (.network.discovery.kademlia_protocol // "/p2p-vpn/kad/1")
+                    }
+                  }' "$config" 2>/dev/null || printf '{}')"
+              fi
+              ping_exit="$(result_status ping)"
+              if [[ "$ping_exit" == null ]]; then
+                ping_succeeded=false
+              elif [[ "$ping_exit" == 0 ]]; then
+                ping_succeeded=true
+              else
+                ping_succeeded=false
+              fi
+              path_lines_json="$(json_view_lines "$final_paths_json")"
+              state_lines_json="$(json_view_lines "$final_state_json")"
+              health_lines_json="$(json_lines "$health_log")"
+              result_lines_json="$(json_lines "$result_log")"
+              jq -n \
+                --arg generated_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg artifact_dir "$artifact_dir" \
+                --arg config "$config" \
+                --arg config_sha256 "$config_sha256" \
+                --argjson config_summary "$config_summary_json" \
+                --arg ping_target "$ping_target" \
+                --argjson health_ready "$health_ready" \
+                --argjson ping_succeeded "$ping_succeeded" \
+                --argjson ping_exit "$ping_exit" \
+                --argjson health_lines "$health_lines_json" \
+                --argjson result_lines "$result_lines_json" \
+                --argjson path_lines "$path_lines_json" \
+                --argjson state_lines "$state_lines_json" \
+                --arg path_promotions_to_direct "$(metric_value p2p_vpn_path_promotions_to_direct)" \
+                --arg dcutr_successes "$(metric_value p2p_vpn_dcutr_successes)" \
+                --arg direct_connections "$(metric_value p2p_vpn_direct_connections_established)" \
+                --arg relayed_connections "$(metric_value p2p_vpn_relayed_connections_established)" \
+                --arg peers_with_supported_path "$(metric_value p2p_vpn_path_peers_with_supported_path)" \
+                --arg packet_plane_sessions "$(metric_value p2p_vpn_packet_plane_sessions)" \
+                --arg packet_plane_quic_sessions "$(metric_value p2p_vpn_packet_plane_quic_sessions)" \
+                --arg healthy_direct_quic_datagram_paths "$(metric_value p2p_vpn_path_healthy_direct_quic_datagram_paths)" \
+                --arg healthy_direct_quic_stream_paths "$(metric_value p2p_vpn_path_healthy_direct_quic_stream_paths)" \
+                --arg healthy_direct_tcp_stream_paths "$(metric_value p2p_vpn_path_healthy_direct_tcp_stream_paths)" \
+                --arg healthy_relay_paths "$(metric_value p2p_vpn_path_healthy_relay_paths)" \
+                '{
+                  schema_version: 1,
+                  generated_utc: $generated_utc,
+                  artifact_dir: $artifact_dir,
+                  config: $config,
+                  config_sha256: $config_sha256,
+                  config_summary: $config_summary,
+                  ping_target: $ping_target,
+                  health_ready: $health_ready,
+                  ping_succeeded: $ping_succeeded,
+                  ping_exit: $ping_exit,
+                  metrics: {
+                    path_promotions_to_direct: ($path_promotions_to_direct | tonumber),
+                    dcutr_successes: ($dcutr_successes | tonumber),
+                    direct_connections_established: ($direct_connections | tonumber),
+                    relayed_connections_established: ($relayed_connections | tonumber),
+                    peers_with_supported_path: ($peers_with_supported_path | tonumber),
+                    packet_plane_sessions: ($packet_plane_sessions | tonumber),
+                    packet_plane_quic_sessions: ($packet_plane_quic_sessions | tonumber),
+                    healthy_direct_quic_datagram_paths: ($healthy_direct_quic_datagram_paths | tonumber),
+                    healthy_direct_quic_stream_paths: ($healthy_direct_quic_stream_paths | tonumber),
+                    healthy_direct_tcp_stream_paths: ($healthy_direct_tcp_stream_paths | tonumber),
+                    healthy_relay_paths: ($healthy_relay_paths | tonumber)
+                  },
+                  path_evidence: {
+                    direct_lines: [$path_lines[] | select(test("direct "))],
+                    relay_lines: [$path_lines[] | select(test("circuit relay|relay true"))]
+                  },
+                  health_lines: $health_lines,
+                  result_lines: $result_lines,
+                  final_state_lines: $state_lines,
+                  final_path_lines: $path_lines
+                }' > "$evidence_json"
+            }
+
+            capture_final_artifacts() {
+              if [[ -r "$daemon_log" ]]; then
+                tail -n 200 "$daemon_log" > "$daemon_log_tail" 2>/dev/null || true
+              fi
+              if [[ -S "$control_socket" ]]; then
+                p2p-vpn daemon-status --socket "$control_socket" > "$final_status_log" 2> "$final_status_log.stderr"; record_status final_status "$?"
+                p2p-vpn daemon-status --socket "$control_socket" --format prometheus > "$final_prometheus_log" 2> "$final_prometheus_log.stderr"; record_status final_prometheus "$?"
+                p2p-vpn daemon-state --socket "$control_socket" --format json > "$final_state_json" 2> "$final_state_json.stderr"; record_status final_state_json "$?"
+                p2p-vpn daemon-paths --socket "$control_socket" --format json > "$final_paths_json" 2> "$final_paths_json.stderr"; record_status final_paths_json "$?"
+              else
+                record_status final_artifacts 2
+              fi
+              write_evidence_summary
+            }
+
+            write_metadata
+            if [[ "$write_evidence_only" -eq 1 ]]; then
+              write_evidence_summary
+              echo "evidence summary: $evidence_json" >&2
+              exit 0
+            fi
+
+            capture_host_network "$host_network_before"
+            health_args=(--socket "$control_socket" --wait-seconds "$health_wait" --require-validated-peers --require-supported-paths)
+            if [[ "$require_packet_session" == 1 ]]; then
+              health_args+=(--require-packet-plane-session)
+            fi
+            if [[ "$require_quic_session" == 1 ]]; then
+              health_args+=(--require-packet-plane-quic-session)
+            fi
+
+            set +e
+            p2p-vpn daemon-health "''${health_args[@]}" | tee "$health_log"
+            health_status="''${PIPESTATUS[0]}"
+            set -e
+            record_status daemon_health "$health_status"
+            if [[ "$health_status" -eq 0 ]]; then
+              capture_daemon_views
+              set +e
+              ping -c "$ping_count" -W "$ping_timeout" "$ping_target" | tee "$ping_log"
+              ping_status="''${PIPESTATUS[0]}"
+              set -e
+              record_status ping "$ping_status"
+            else
+              ping_status="$health_status"
+            fi
+            capture_host_network "$host_network_after"
+            capture_final_artifacts
+            echo "capture $phase complete; artifacts in $artifact_dir"
+            exit "$ping_status"
+          '';
+        };
         publicVpnEvidenceCheck = pkgs.writeShellApplication {
           name = "p2p-vpn-public-vpn-evidence-check";
           runtimeInputs = [
@@ -2680,6 +3133,7 @@ EOF
           namespace-repro = namespaceRepro;
           public-relay-repro = publicRelayRepro;
           public-vpn-repro = publicVpnRepro;
+          public-vpn-capture = publicVpnCapture;
           public-vpn-evidence-check = publicVpnEvidenceCheck;
           public-vpn-move-evidence-check = publicVpnMoveEvidenceCheck;
         };
@@ -2747,6 +3201,13 @@ EOF
             program = "${publicVpnRepro}/bin/p2p-vpn-public-vpn-repro";
             meta = {
               description = "Generate two-host public relay VPN data-plane repro scripts";
+            };
+          };
+          public-vpn-capture = {
+            type = "app";
+            program = "${publicVpnCapture}/bin/p2p-vpn-public-vpn-capture";
+            meta = {
+              description = "Capture one public VPN movement-test phase from an existing daemon";
             };
           };
           public-vpn-evidence-check = {
@@ -3239,6 +3700,126 @@ EOF
               and (.config_summary.peer_routes | length) == 0
               and .config_summary.discovery.mdns == false
               and .config_summary.discovery.kademlia == false
+              and .ping_target == "10.42.0.2"
+              and .health_ready == true
+              and .ping_succeeded == true
+              and .ping_exit == 0
+              and .metrics.path_promotions_to_direct == 1
+              and .metrics.dcutr_successes == 2
+              and .metrics.direct_connections_established == 3
+              and .metrics.relayed_connections_established == 4
+              and .metrics.peers_with_supported_path == 5
+              and .metrics.packet_plane_sessions == 6
+              and .metrics.packet_plane_quic_sessions == 7
+              and .metrics.healthy_direct_quic_datagram_paths == 8
+              and .metrics.healthy_direct_quic_stream_paths == 9
+              and .metrics.healthy_direct_tcp_stream_paths == 10
+              and .metrics.healthy_relay_paths == 11
+              and (.path_evidence.direct_lines | length) == 1
+              and (.path_evidence.relay_lines | length) == 1
+              and (.health_lines | length) == 5
+              and (.result_lines | length) == 2
+              and (.final_state_lines | length) == 2
+              and (.final_path_lines | length) == 2
+            ' \
+              --arg artifact_dir "$artifacts" \
+              --arg config "$config" \
+              "$artifacts/vpn-repro-evidence.json"
+
+            touch $out
+          '';
+          public-vpn-capture-structure = pkgs.runCommand "p2p-vpn-public-vpn-capture-structure" {
+            nativeBuildInputs = [
+              package
+              publicVpnCapture
+              pkgs.jq
+            ];
+          } ''
+            script="$(command -v p2p-vpn-public-vpn-capture)"
+            test -x "$script"
+            bash -n "$script"
+            p2p-vpn-public-vpn-capture --help | grep -q 'Capture one movement-test phase'
+            grep -q -- '--write-evidence-only' "$script"
+            grep -q 'daemon-status-prometheus-final.txt' "$script"
+            grep -q 'daemon-paths-final.json' "$script"
+            grep -q 'p2p_vpn_path_healthy_relay_paths' "$script"
+
+            config="$TMPDIR/public-vpn-capture-config.json"
+            artifacts="$TMPDIR/public-vpn-capture"
+            mkdir -p "$artifacts"
+
+            p2p-vpn init-config \
+              --output "$config" \
+              --network public-vpn-capture-structure \
+              --interface pv0 \
+              --local-route 10.42.0.1/32 \
+              --peer 5555555555555555555555555555555555555555555555555555555555555555 \
+              --peer-route 5555555555555555555555555555555555555555555555555555555555555555=10.42.0.2/32 \
+              --force
+
+            cat > "$artifacts/daemon-health.txt" <<'EOF'
+daemon_health_ready true
+daemon_health_check daemon_running ok control socket responded
+daemon_health_check validated_peers ok 1 peers validated
+daemon_health_check supported_paths ok 1 peers have supported paths
+daemon_health_check packet_plane_session ok 1 sessions active
+EOF
+            cat > "$artifacts/vpn-repro-result.txt" <<'EOF'
+1970-01-01T00:00:00Z daemon_health exit=0
+1970-01-01T00:00:01Z ping exit=0
+EOF
+            cat > "$artifacts/daemon-status-prometheus-final.txt" <<'EOF'
+p2p_vpn_path_promotions_to_direct 1
+p2p_vpn_dcutr_successes 2
+p2p_vpn_direct_connections_established 3
+p2p_vpn_relayed_connections_established 4
+p2p_vpn_path_peers_with_supported_path 5
+p2p_vpn_packet_plane_sessions 6
+p2p_vpn_packet_plane_quic_sessions 7
+p2p_vpn_path_healthy_direct_quic_datagram_paths 8
+p2p_vpn_path_healthy_direct_quic_stream_paths 9
+p2p_vpn_path_healthy_direct_tcp_stream_paths 10
+p2p_vpn_path_healthy_relay_paths 11
+EOF
+            cat > "$artifacts/daemon-paths-final.json" <<'EOF'
+{
+  "lines": [
+    "peer node-b direct true protocol quic",
+    "peer node-b circuit relay true reservation active"
+  ]
+}
+EOF
+            cat > "$artifacts/daemon-state-final.json" <<'EOF'
+{
+  "lines": [
+    "peer node-b validated true",
+    "packet-plane session node-b active"
+  ]
+}
+EOF
+
+            p2p-vpn-public-vpn-capture \
+              --artifact-dir "$artifacts" \
+              --config "$config" \
+              --ping-target 10.42.0.2 \
+              --phase lan-baseline \
+              --write-evidence-only
+
+            test -s "$artifacts/vpn-repro-evidence.json"
+            jq -e '
+              .schema_version == 1
+              and (.generated_utc | type == "string")
+              and .artifact_dir == $artifact_dir
+              and .config == $config
+              and (.config_sha256 | test("^[0-9a-f]{64}$"))
+              and .config_summary.network_name == "public-vpn-capture-structure"
+              and .config_summary.interface_name == "pv0"
+              and .config_summary.peer_count == 1
+              and .config_summary.peer_address_count == 0
+              and .config_summary.local_routes == ["10.42.0.1/32"]
+              and .config_summary.peer_routes == ["10.42.0.2/32"]
+              and .config_summary.discovery.mdns == true
+              and .config_summary.discovery.kademlia == true
               and .ping_target == "10.42.0.2"
               and .health_ready == true
               and .ping_succeeded == true

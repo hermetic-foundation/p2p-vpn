@@ -228,10 +228,27 @@ Do not add peer addresses, relay routes, or manual OS routes between phases.
 
 For each phase:
 
-1. Run the Host A script on Host A.
-2. Run the Host B script on Host B.
-3. Save both `vpn-repro-evidence.json` files.
-4. Run `public-vpn-evidence-check` against the pair.
+1. Start the Host A and Host B scripts once on LAN.
+2. Keep both daemons running.
+3. Move one host between LAN, hotspot, and LAN return.
+4. Run `public-vpn-capture` for each phase.
+5. Run `public-vpn-evidence-check` against each phase pair.
+
+Capture a phase from an existing daemon:
+
+```sh
+nix run .#public-vpn-capture -- \
+  --artifact-dir /tmp/p2p-vpn-lan-a \
+  --config /tmp/public-vpn-host-a.json \
+  --socket /tmp/p2p-vpn-repro/control.sock \
+  --daemon-log /tmp/p2p-vpn-repro/p2p-vpn-daemon.log \
+  --ping-target 10.42.0.2 \
+  --phase lan-baseline \
+  --require-quic-session
+```
+
+For the hotspot phase, omit `--require-quic-session` unless direct QUIC is
+expected.
 
 Expected proof:
 
