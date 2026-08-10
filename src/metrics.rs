@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{path::PathRuntimeStats, queue::QueueStats, runtime::control::ControlRejectionReason};
+use crate::{
+    PathKind, path::PathRuntimeStats, queue::QueueStats, runtime::control::ControlRejectionReason,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutoNatReachability {
@@ -55,6 +57,9 @@ pub struct RuntimeMetrics {
     tun_write_bytes: AtomicU64,
     outbound_sent_packets: AtomicU64,
     outbound_stream_fallback_packets: AtomicU64,
+    outbound_direct_quic_stream_fallback_packets: AtomicU64,
+    outbound_direct_tcp_stream_fallback_packets: AtomicU64,
+    outbound_relay_stream_fallback_packets: AtomicU64,
     outbound_quic_datagram_packets: AtomicU64,
     outbound_quic_datagram_unavailable_packets: AtomicU64,
     outbound_path_probes_sent: AtomicU64,
@@ -223,9 +228,24 @@ impl RuntimeMetrics {
         self.outbound_sent_packets.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_outbound_stream_fallback(&self) {
+    pub fn record_outbound_stream_fallback(&self, path: PathKind) {
         self.outbound_stream_fallback_packets
             .fetch_add(1, Ordering::Relaxed);
+        match path {
+            PathKind::DirectQuicStream => {
+                self.outbound_direct_quic_stream_fallback_packets
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            PathKind::DirectTcpStream => {
+                self.outbound_direct_tcp_stream_fallback_packets
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            PathKind::CircuitRelay => {
+                self.outbound_relay_stream_fallback_packets
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            PathKind::DirectUdpDatagram | PathKind::DirectQuicDatagram => {}
+        }
     }
 
     pub fn record_outbound_quic_datagram(&self) {
@@ -914,6 +934,15 @@ impl RuntimeMetrics {
         snapshot.outbound_stream_fallback_packets = self
             .outbound_stream_fallback_packets
             .load(Ordering::Relaxed);
+        snapshot.outbound_direct_quic_stream_fallback_packets = self
+            .outbound_direct_quic_stream_fallback_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_direct_tcp_stream_fallback_packets = self
+            .outbound_direct_tcp_stream_fallback_packets
+            .load(Ordering::Relaxed);
+        snapshot.outbound_relay_stream_fallback_packets = self
+            .outbound_relay_stream_fallback_packets
+            .load(Ordering::Relaxed);
         snapshot.outbound_quic_datagram_packets =
             self.outbound_quic_datagram_packets.load(Ordering::Relaxed);
         snapshot.outbound_quic_datagram_unavailable_packets = self
@@ -1296,6 +1325,9 @@ pub struct RuntimeSnapshot {
     pub tun_write_bytes: u64,
     pub outbound_sent_packets: u64,
     pub outbound_stream_fallback_packets: u64,
+    pub outbound_direct_quic_stream_fallback_packets: u64,
+    pub outbound_direct_tcp_stream_fallback_packets: u64,
+    pub outbound_relay_stream_fallback_packets: u64,
     pub outbound_quic_datagram_packets: u64,
     pub outbound_quic_datagram_unavailable_packets: u64,
     pub outbound_path_probes_sent: u64,
@@ -1461,6 +1493,18 @@ impl RuntimeSnapshot {
             format!(
                 "outbound_stream_fallback_packets {}",
                 self.outbound_stream_fallback_packets
+            ),
+            format!(
+                "outbound_direct_quic_stream_fallback_packets {}",
+                self.outbound_direct_quic_stream_fallback_packets
+            ),
+            format!(
+                "outbound_direct_tcp_stream_fallback_packets {}",
+                self.outbound_direct_tcp_stream_fallback_packets
+            ),
+            format!(
+                "outbound_relay_stream_fallback_packets {}",
+                self.outbound_relay_stream_fallback_packets
             ),
             format!(
                 "outbound_quic_datagram_packets {}",
@@ -2142,7 +2186,7 @@ mod tests {
         metrics.record_tun_read(20);
         metrics.record_tun_write(40);
         metrics.record_outbound_sent();
-        metrics.record_outbound_stream_fallback();
+        metrics.record_outbound_stream_fallback(PathKind::DirectQuicStream);
         metrics.record_outbound_quic_datagram();
         metrics.record_outbound_quic_datagram_unavailable();
         metrics.record_outbound_path_probe_sent();
@@ -2675,6 +2719,9 @@ mod tests {
         let snapshot = populated_snapshot();
 
         assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_quic_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_relay_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_quic_datagram_packets, 1);
         assert_eq!(snapshot.outbound_quic_datagram_unavailable_packets, 1);
     }
@@ -2719,6 +2766,9 @@ mod tests {
 
         assert_metric_line(&snapshot, "queue_queued_packets 2");
         assert_metric_line(&snapshot, "outbound_stream_fallback_packets 1");
+        assert_metric_line(&snapshot, "outbound_direct_quic_stream_fallback_packets 1");
+        assert_metric_line(&snapshot, "outbound_direct_tcp_stream_fallback_packets 0");
+        assert_metric_line(&snapshot, "outbound_relay_stream_fallback_packets 0");
         assert_metric_line(&snapshot, "outbound_quic_datagram_packets 1");
         assert_metric_line(&snapshot, "outbound_quic_datagram_unavailable_packets 1");
         assert_metric_line(&snapshot, "outbound_path_probes_sent 1");

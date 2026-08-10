@@ -2055,6 +2055,18 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
             snapshot.outbound_stream_fallback_packets
         ),
         format!(
+            "outbound_direct_quic_stream_fallback_packets {}",
+            snapshot.outbound_direct_quic_stream_fallback_packets
+        ),
+        format!(
+            "outbound_direct_tcp_stream_fallback_packets {}",
+            snapshot.outbound_direct_tcp_stream_fallback_packets
+        ),
+        format!(
+            "outbound_relay_stream_fallback_packets {}",
+            snapshot.outbound_relay_stream_fallback_packets
+        ),
+        format!(
             "outbound_quic_datagram_packets {}",
             snapshot.outbound_quic_datagram_packets
         ),
@@ -5390,7 +5402,7 @@ fn send_dequeued_stream_fallback(
         Ok(request_id) => {
             context.packet_in_flight.record(packet, request_id, path);
             context.metrics.record_outbound_sent();
-            context.metrics.record_outbound_stream_fallback();
+            context.metrics.record_outbound_stream_fallback(path.kind);
         }
         Err(error) => {
             maybe_learn_path_mtu(context, packet.peer(), path.kind, path.relay_peer, &error);
@@ -12115,6 +12127,9 @@ mod tests {
                 "packet_plane_session_ttl_seconds 90",
                 "packet_plane_replay_windows_per_session 256",
                 "outbound_stream_fallback_packets 0",
+                "outbound_direct_quic_stream_fallback_packets 0",
+                "outbound_direct_tcp_stream_fallback_packets 0",
+                "outbound_relay_stream_fallback_packets 0",
                 "outbound_quic_datagram_packets 0",
                 "outbound_quic_datagram_unavailable_packets 0",
                 "path_promotions_to_direct 0",
@@ -19126,9 +19141,76 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 1);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_quic_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_relay_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 0);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_records_direct_quic_stream_fallback() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_quic_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_relay_stream_fallback_packets, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
     }
 
@@ -19242,6 +19324,7 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 3);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 3);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 3);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 0);
         assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 3);
@@ -19389,6 +19472,7 @@ mod tests {
         let snapshot = metrics.snapshot(queues.total_stats());
         assert_eq!(snapshot.outbound_sent_packets, 2);
         assert_eq!(snapshot.outbound_stream_fallback_packets, 2);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 2);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 0);
         assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 2);

@@ -101,6 +101,14 @@ Capability advertisement follows local support:
 | Owned UDP packet plane only | Direct UDP datagram |
 | Stream-only libp2p | Direct QUIC stream |
 
+Stream fallback evidence is split by selected path:
+
+| Metric | Meaning |
+| --- | --- |
+| `outbound_direct_quic_stream_fallback_packets` | Packets sent through selected direct QUIC stream fallback. |
+| `outbound_direct_tcp_stream_fallback_packets` | Packets sent through selected direct TCP stream fallback. |
+| `outbound_relay_stream_fallback_packets` | Packets sent through selected circuit relay stream fallback. |
+
 ## Candidate Hygiene
 
 Path discovery advertises underlay addresses only.

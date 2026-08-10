@@ -32,6 +32,15 @@ sudo p2p-vpn daemon-health \
 | `daemon-mtu` | MTU and fragmentation policy. |
 | `daemon-capabilities` | Local and peer capability state. |
 
+Useful packet-path counters:
+
+| Counter | Meaning |
+| --- | --- |
+| `outbound_quic_datagram_packets` | Packets sent over QUIC datagram packet plane. |
+| `outbound_direct_quic_stream_fallback_packets` | Packets sent over direct QUIC stream fallback. |
+| `outbound_direct_tcp_stream_fallback_packets` | Packets sent over direct TCP stream fallback. |
+| `outbound_relay_stream_fallback_packets` | Packets sent over relay stream fallback. |
+
 Example:
 
 ```sh
