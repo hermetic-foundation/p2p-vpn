@@ -5835,12 +5835,9 @@ async fn up(
 
 fn apply_tun_sysctls(commands: &[SysctlCommand]) -> Result<(), String> {
     for command in commands {
-        let status = command
+        command
             .execute()
             .map_err(|error| format!("failed to execute `{command}`: {error}"))?;
-        if !status.success() {
-            return Err(format!("`{command}` exited with {status}"));
-        }
     }
     Ok(())
 }
@@ -5855,10 +5852,7 @@ fn spawn_tun_sysctl_reconciler(commands: Vec<SysctlCommand>) {
             tokio::time::sleep(delay).await;
             for command in &commands {
                 match command.execute() {
-                    Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!(
-                        "level=warn event=tun_sysctl_reconcile_failed command=\"{command}\" status=\"{status}\""
-                    ),
+                    Ok(()) => {}
                     Err(error) => eprintln!(
                         "level=warn event=tun_sysctl_reconcile_failed command=\"{command}\" error=\"{error}\""
                     ),

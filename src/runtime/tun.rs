@@ -1,7 +1,8 @@
 use std::{
-    fmt,
+    fmt, fs,
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::PathBuf,
     process::{Command, ExitStatus},
 };
 
@@ -60,8 +61,8 @@ impl TunRuntimeConfig {
     #[must_use]
     pub fn sysctl_commands(&self) -> Vec<SysctlCommand> {
         vec![
-            SysctlCommand::set(format!("net.ipv4.conf.{}.rp_filter", self.name), "0"),
-            SysctlCommand::set(format!("net.ipv4.conf.{}.accept_local", self.name), "1"),
+            SysctlCommand::set_interface(self.name.clone(), "rp_filter", "0"),
+            SysctlCommand::set_interface(self.name.clone(), "accept_local", "1"),
         ]
     }
 
@@ -209,22 +210,38 @@ impl fmt::Display for IpCommand {
 pub struct SysctlCommand {
     key: String,
     value: String,
+    proc_path: PathBuf,
 }
 
 impl SysctlCommand {
     #[must_use]
     pub fn set(key: String, value: impl Into<String>) -> Self {
+        let proc_path = PathBuf::from("/proc/sys").join(key.replace('.', "/"));
         Self {
             key,
             value: value.into(),
+            proc_path,
         }
     }
 
-    pub fn execute(&self) -> Result<ExitStatus, io::Error> {
-        Command::new("sysctl")
-            .arg("-w")
-            .arg(format!("{}={}", self.key, self.value))
-            .status()
+    #[must_use]
+    pub fn set_interface(
+        interface: String,
+        field: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let field = field.into();
+        Self {
+            key: format!("net.ipv4.conf.{interface}.{field}"),
+            value: value.into(),
+            proc_path: PathBuf::from("/proc/sys/net/ipv4/conf")
+                .join(interface)
+                .join(field),
+        }
+    }
+
+    pub fn execute(&self) -> Result<(), io::Error> {
+        fs::write(&self.proc_path, format!("{}\n", self.value))
     }
 }
 
