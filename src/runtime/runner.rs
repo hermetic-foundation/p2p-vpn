@@ -6944,7 +6944,11 @@ async fn handle_packet_plane_received(
             .map(|()| context.metrics.record_inbound_keepalive_accepted()),
         PayloadType::PathProbe => context
             .forwarder
-            .accept_inbound_control_frame(transport_peer, &received.frame, PayloadType::PathProbe)
+            .validate_inbound_packet_plane_control_frame(
+                transport_peer,
+                &received.frame,
+                PayloadType::PathProbe,
+            )
             .map(|()| context.metrics.record_inbound_path_probe_accepted()),
     };
 

@@ -450,6 +450,15 @@ impl Forwarder {
         )
     }
 
+    pub fn validate_inbound_packet_plane_control_frame(
+        &self,
+        peer: Libp2pPeerId,
+        frame: &Frame,
+        expected_payload_type: PayloadType,
+    ) -> Result<(), ForwardError> {
+        self.validate_inbound_frame_metadata(peer, frame, expected_payload_type)
+    }
+
     fn validate_inbound_frame_metadata(
         &self,
         peer: Libp2pPeerId,
@@ -1363,6 +1372,31 @@ mod tests {
         assert!(matches!(
             forwarder.accept_inbound_control_frame(remote, &rejected, PayloadType::PathProbe),
             Err(ForwardError::PacketTooLarge { actual: 5, max: 4 })
+        ));
+    }
+
+    #[test]
+    fn packet_plane_path_probe_validation_does_not_share_overlay_replay_window() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_for(remote);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let start = Instant::now();
+        forwarder
+            .accept_sequence_at(remote_overlay, 7, 128, start)
+            .expect("later packet accepted");
+        let probe = Frame::path_probe(7, 1, vec![1, 2, 3, 4]).expect("probe");
+
+        forwarder
+            .validate_inbound_packet_plane_control_frame(remote, &probe, PayloadType::PathProbe)
+            .expect("outer packet-plane replay protects packet-plane probes");
+        assert!(matches!(
+            forwarder.accept_inbound_control_frame(remote, &probe, PayloadType::PathProbe),
+            Err(ForwardError::PacketOutsideReplayWindow {
+                peer,
+                session_id: 7,
+                sequence: 1,
+            }) if peer == remote_overlay
         ));
     }
 
