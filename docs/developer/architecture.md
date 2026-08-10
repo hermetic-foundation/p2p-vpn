@@ -109,6 +109,11 @@ Stream fallback evidence is split by selected path:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent through selected direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent through selected circuit relay stream fallback. |
 
+Path evidence includes the latest libp2p `connection_id`.
+
+That ID is the handle needed for connection-pinned stream sends through
+`NotifyHandler::One(connection_id)`.
+
 ## Candidate Hygiene
 
 Path discovery advertises underlay addresses only.

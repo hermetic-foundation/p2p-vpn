@@ -32,6 +32,8 @@ sudo p2p-vpn daemon-health \
 | `daemon-mtu` | MTU and fragmentation policy. |
 | `daemon-capabilities` | Local and peer capability state. |
 
+`daemon-paths` and `daemon-state` include `connection_id` for live paths.
+
 Useful packet-path counters:
 
 | Counter | Meaning |

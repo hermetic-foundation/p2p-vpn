@@ -16,7 +16,7 @@ use libp2p::{
     multiaddr::Protocol,
     relay,
     request_response::{self, Message},
-    swarm::{DialError, SwarmEvent},
+    swarm::{ConnectionId, DialError, SwarmEvent},
 };
 use rand_core::{OsRng, RngCore as _};
 use rustls::pki_types::CertificateDer;
@@ -1590,7 +1590,7 @@ fn runtime_path_lines(
         let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer selected path: {peer} {} score {} mtu {} relay_peer {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+            "peer selected path: {peer} {} score {} mtu {} relay_peer {} connection_id {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             selected_path.map_or("none", |path| path.kind.wire_name()),
             selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
             selected_path.map_or_else(
@@ -1598,6 +1598,7 @@ fn runtime_path_lines(
                 |path| path.effective_mtu(peer_mtu).to_string()
             ),
             selected_path.map_or_else(|| "none".to_owned(), relay_peer_value),
+            selected_path.map_or_else(|| "unknown".to_owned(), path_connection_id_value),
             selected_path.map_or("unknown", |path| path.origin.wire_name()),
             selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
             selected_path.is_some_and(|path| path.established_as_relayed),
@@ -1611,7 +1612,7 @@ fn runtime_path_lines(
         lines.push(format!("peer path candidates: {peer} {}", candidates.len()));
         for candidate in candidates {
             lines.push(format!(
-                "peer path: {peer} {} healthy {} relay {} direct {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+                "peer path: {peer} {} healthy {} relay {} direct {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} connection_id {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
                 candidate.kind.wire_name(),
                 candidate.healthy,
                 candidate.relay,
@@ -1624,6 +1625,7 @@ fn runtime_path_lines(
                     .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
                 candidate.effective_mtu(peer_mtu),
                 path_rtt_value(candidate),
+                path_connection_id_value(candidate),
                 candidate.origin.wire_name(),
                 candidate.connection_role.wire_name(),
                 candidate.established_as_relayed,
@@ -1643,6 +1645,13 @@ fn runtime_path_lines(
 fn path_rtt_value(path: crate::path::PathCandidate) -> String {
     path.observed_rtt_ms
         .map_or_else(|| "unknown".to_owned(), |rtt| rtt.to_string())
+}
+
+fn path_connection_id_value(path: crate::path::PathCandidate) -> String {
+    path.latest_connection_id.map_or_else(
+        || "unknown".to_owned(),
+        |connection_id| connection_id.to_string(),
+    )
 }
 
 fn relay_peer_value(path: crate::path::PathCandidate) -> String {
@@ -2364,7 +2373,7 @@ fn extend_runtime_peer_state_lines(
         .count();
 
     lines.push(format!(
-        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} selected_path_relay_peer {} selected_path_origin {} selected_path_connection_role {} selected_path_established_as_relayed {} selected_path_first_seen_unix_seconds {} selected_path_last_established_unix_seconds {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} selected_path_relay_peer {} selected_path_connection_id {} selected_path_origin {} selected_path_connection_role {} selected_path_established_as_relayed {} selected_path_first_seen_unix_seconds {} selected_path_last_established_unix_seconds {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
         peer_capabilities.contains(peer),
         peer_capabilities.effective_mtu_for(peer, local_mtu),
         support.quic_datagrams,
@@ -2381,6 +2390,7 @@ fn extend_runtime_peer_state_lines(
         ),
         selected_path.map_or_else(|| "unknown".to_owned(), path_rtt_value),
         selected_path.map_or_else(|| "none".to_owned(), relay_peer_value),
+        selected_path.map_or_else(|| "unknown".to_owned(), path_connection_id_value),
         selected_path.map_or("unknown", |path| path.origin.wire_name()),
         selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
         selected_path.is_some_and(|path| path.established_as_relayed),
@@ -2403,7 +2413,7 @@ fn extend_runtime_peer_state_lines(
     for candidate in candidates {
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer path state: {peer} {} healthy {} relay {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+            "peer path state: {peer} {} healthy {} relay {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} connection_id {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             candidate.kind.wire_name(),
             candidate.healthy,
             candidate.relay,
@@ -2415,6 +2425,7 @@ fn extend_runtime_peer_state_lines(
                 .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
             candidate.effective_mtu(peer_mtu),
             path_rtt_value(candidate),
+            path_connection_id_value(candidate),
             candidate.origin.wire_name(),
             candidate.connection_role.wire_name(),
             candidate.established_as_relayed,
@@ -6058,6 +6069,7 @@ async fn handle_swarm_event(
         }
         SwarmEvent::ConnectionEstablished {
             peer_id,
+            connection_id,
             endpoint,
             num_established,
             ..
@@ -6155,6 +6167,7 @@ async fn handle_swarm_event(
                 context.packet_plane_quic.as_deref(),
                 context.packet_plane_negotiator,
                 peer_id,
+                connection_id,
                 &endpoint,
             );
             send_control_capabilities(
@@ -6186,6 +6199,7 @@ async fn handle_swarm_event(
         }
         SwarmEvent::ConnectionClosed {
             peer_id,
+            connection_id,
             endpoint,
             num_established,
             ..
@@ -6198,6 +6212,7 @@ async fn handle_swarm_event(
                 context.forwarder,
                 context.metrics,
                 peer_id,
+                connection_id,
                 &endpoint,
             );
             redial_configured_peer_after_supported_path_loss(swarm, &mut context, peer_id);
@@ -9304,9 +9319,12 @@ fn record_path_established_and_maybe_send_packet_plane_hello(
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
     packet_plane_negotiator: &mut PacketPlaneNegotiator,
     peer: Libp2pPeerId,
+    connection_id: ConnectionId,
     endpoint: &ConnectedPoint,
 ) {
-    let Some(change) = record_path_established(paths, forwarder, metrics, peer, endpoint) else {
+    let Some(change) =
+        record_path_established(paths, forwarder, metrics, peer, connection_id, endpoint)
+    else {
         return;
     };
     let kind = path_kind_for_endpoint(endpoint);
@@ -9342,6 +9360,7 @@ fn record_path_established(
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
+    connection_id: ConnectionId,
     endpoint: &ConnectedPoint,
 ) -> Option<crate::path::PathSelectionChange> {
     if !forwarder.is_configured_transport_peer(peer) {
@@ -9361,6 +9380,7 @@ fn record_path_established(
         path_origin_for_endpoint(endpoint),
         path_connection_role_for_endpoint(endpoint),
         endpoint.is_relayed(),
+        Some(connection_id),
         Some(current_unix_seconds_lossy()),
     );
     record_path_selection_change(metrics, change);
@@ -9372,16 +9392,18 @@ fn record_path_closed(
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
+    connection_id: ConnectionId,
     endpoint: &ConnectedPoint,
 ) {
     if !forwarder.is_configured_transport_peer(peer) {
         return;
     }
 
-    let change = paths.record_closed_for_relay(
+    let change = paths.record_closed_for_relay_connection(
         PeerId::from_libp2p(peer),
         path_kind_for_endpoint(endpoint),
         relay_peer_for_endpoint(endpoint),
+        Some(connection_id),
     );
     record_path_selection_change(metrics, change);
 }
@@ -11858,7 +11880,17 @@ mod tests {
                 .with_advertised_routes(vec![ControlRoute::new("10.20.0.0/24", 70)]),
         );
         let mut paths = PathSet::new();
-        paths.record_established_with_mtu(remote_overlay, PathKind::DirectTcpStream, Some(1180));
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectTcpStream,
+            None,
+            Some(1180),
+            crate::path::PathOrigin::Identify,
+            crate::path::PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(42)),
+            Some(123),
+        );
         paths.record_established_with_mtu(remote_overlay, PathKind::CircuitRelay, Some(1000));
 
         let empty_packet_plane = PacketPlaneSnapshot::default();
@@ -11894,8 +11926,9 @@ mod tests {
         assert!(path_lines.iter().any(|line| {
             line.starts_with(&format!(
                 "peer selected path: {remote_overlay} direct_tcp_stream score 40 mtu 1180 "
-            )) && line.contains(" origin unknown ")
-                && line.contains(" connection_role unknown ")
+            )) && line.contains(" connection_id 42 ")
+                && line.contains(" origin identify ")
+                && line.contains(" connection_role dialer ")
                 && line.contains(" established_as_relayed false ")
         }));
         assert!(path_lines.iter().any(|line| {
@@ -21876,6 +21909,7 @@ mod tests {
             None,
             &mut negotiator,
             remote,
+            ConnectionId::new_unchecked(1),
             &relay_endpoint,
         );
         assert!(!negotiator.has_pending(remote_overlay));
@@ -21892,6 +21926,7 @@ mod tests {
             None,
             &mut negotiator,
             remote,
+            ConnectionId::new_unchecked(2),
             &direct_endpoint,
         );
 
