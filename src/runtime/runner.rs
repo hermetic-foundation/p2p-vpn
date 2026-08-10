@@ -1065,6 +1065,10 @@ async fn send_packet_plane_path_probe(
         peer,
         local_mtu,
     );
+    let path = packet_datagram_backend_path_kind(backend);
+    if path_probe_tracker.has_pending(peer, path, Instant::now()) {
+        return;
+    }
     let token = fresh_path_probe_token();
     let payload = mtu_sized_path_probe_payload(probe_mtu, Some(token));
     match forwarder.path_probe_frame_with_mtu(probe_mtu, &payload) {
@@ -1073,23 +1077,12 @@ async fn send_packet_plane_path_probe(
                 .await
             {
                 Ok(_) => {
-                    path_probe_tracker.record(
-                        peer,
-                        packet_datagram_backend_path_kind(backend),
-                        token,
-                        Instant::now(),
-                    );
+                    path_probe_tracker.record(peer, path, token, Instant::now());
                     metrics.record_outbound_path_probe_sent();
                 }
                 Err(error) => {
                     metrics.record_outbound_path_probe_failure();
-                    maybe_demote_packet_plane_send_path(
-                        paths,
-                        metrics,
-                        peer,
-                        packet_datagram_backend_path_kind(backend),
-                        &error,
-                    );
+                    maybe_demote_packet_plane_send_path(paths, metrics, peer, path, &error);
                     eprintln!("packet-plane path probe to {peer} failed: {error:?}");
                 }
             }
@@ -1225,6 +1218,13 @@ struct PathProbeTracker {
 }
 
 impl PathProbeTracker {
+    fn has_pending(&mut self, peer: PeerId, path: PathKind, now: Instant) -> bool {
+        self.drop_rtt_expired(now);
+        self.pending
+            .values()
+            .any(|probe| probe.peer == peer && probe.path == path)
+    }
+
     fn record(&mut self, peer: PeerId, path: PathKind, token: u64, now: Instant) {
         self.drop_rtt_expired(now);
         if self.pending.len() >= MAX_PENDING_PATH_PROBES
@@ -19995,6 +19995,42 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probe_failures, 1);
         assert_eq!(snapshot.packet_plane_path_demotions, 1);
         assert_eq!(snapshot.path_fallbacks_to_relay, 1);
+    }
+
+    #[test]
+    fn path_probe_tracker_reports_pending_peer_path_until_timeout() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut path_probe_tracker = PathProbeTracker::default();
+        let start = Instant::now();
+
+        assert!(!path_probe_tracker.has_pending(
+            remote_overlay,
+            PathKind::DirectUdpDatagram,
+            start
+        ));
+        path_probe_tracker.record(remote_overlay, PathKind::DirectUdpDatagram, 7, start);
+        assert!(path_probe_tracker.has_pending(
+            remote_overlay,
+            PathKind::DirectUdpDatagram,
+            start + Duration::from_millis(1)
+        ));
+        assert!(!path_probe_tracker.has_pending(
+            remote_overlay,
+            PathKind::CircuitRelay,
+            start + Duration::from_millis(1)
+        ));
+
+        let expired = path_probe_tracker.expire_unconfirmed(
+            start + PATH_PROBE_TIMEOUT + Duration::from_millis(1),
+            PATH_PROBE_TIMEOUT,
+        );
+        assert_eq!(expired.len(), 1);
+        assert!(!path_probe_tracker.has_pending(
+            remote_overlay,
+            PathKind::DirectUdpDatagram,
+            start + PATH_PROBE_TIMEOUT + Duration::from_millis(2)
+        ));
     }
 
     #[test]
