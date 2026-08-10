@@ -260,7 +260,7 @@ hole-punch evidence.
 
 ## Public Network-Move Proof
 
-This is the remaining real-world gate.
+This is the repeatable real-world gate.
 
 It must use the same minimal configs for every phase.
 

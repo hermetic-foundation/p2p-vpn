@@ -253,7 +253,7 @@ Expected proof:
 
 | Requirement | Evidence |
 | --- | --- |
-| Minimal config | Config files contain peer IDs and overlay routes only. |
+| Minimal config | Config files contain peer IDs and `vpn_ip` route shortcuts. |
 | Automatic discovery | No peer underlay addresses are added between phases. |
 | Data plane | `ping_succeeded` is true on both hosts. |
 | Supported path | `peers_with_supported_path` is at least 1. |

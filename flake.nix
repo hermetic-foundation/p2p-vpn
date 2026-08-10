@@ -1321,7 +1321,9 @@ EOF
             route_ping_target_from_config() {
               config_path="$1"
               jq -r '
-                [(.network.routes // [])[].prefix // ""]
+                def host_route($ip): if ($ip | test(":")) then ($ip + "/128") else ($ip + "/32") end;
+                ([if .network.vpn_ip then host_route(.network.vpn_ip) else empty end]
+                + [(.network.routes // [])[].prefix // ""])
                 | map(select(length > 0))
                 | .[0] // ""
                 | sub("/.*$"; "")
@@ -1663,7 +1665,7 @@ EOF
                 echo "        discovery: {"
                 echo "          mdns: (if (.network.discovery | type) == \"object\" and (.network.discovery | has(\"mdns\")) then .network.discovery.mdns else true end),"
                 echo "          kademlia: (if (.network.discovery | type) == \"object\" and (.network.discovery | has(\"kademlia\")) then .network.discovery.kademlia else true end),"
-                echo "          kademlia_protocol: (.network.discovery.kademlia_protocol // \"/p2p-vpn/kad/1\")"
+                echo "          kademlia_protocol: (.network.discovery.kademlia_protocol // \"/ipfs/kad/1.0.0\")"
                 echo "        }"
                 echo "      }' \"\$config\" 2>/dev/null || printf '{}')\""
                 echo "  fi"
@@ -2281,7 +2283,7 @@ USAGE
                     discovery: {
                       mdns: (if (.network.discovery | type) == "object" and (.network.discovery | has("mdns")) then .network.discovery.mdns else true end),
                       kademlia: (if (.network.discovery | type) == "object" and (.network.discovery | has("kademlia")) then .network.discovery.kademlia else true end),
-                      kademlia_protocol: (.network.discovery.kademlia_protocol // "/p2p-vpn/kad/1")
+                      kademlia_protocol: (.network.discovery.kademlia_protocol // "/ipfs/kad/1.0.0")
                     }
                   }' "$config" 2>/dev/null || printf '{}')"
               fi
@@ -3642,7 +3644,7 @@ EOF
               --output "$host_a_config" \
               --network public-vpn-repro-structure \
               --interface hs-repro0 \
-              --local-route 10.42.0.1/32 \
+              --vpn-ip 10.42.0.1 \
               --disable-mdns \
               --disable-kademlia \
               --force
@@ -3650,7 +3652,7 @@ EOF
               --output "$host_b_config" \
               --network public-vpn-repro-structure \
               --interface hs-repro0 \
-              --local-route 10.42.0.2/32 \
+              --vpn-ip 10.42.0.2 \
               --disable-mdns \
               --disable-kademlia \
               --force
