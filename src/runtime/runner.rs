@@ -21841,6 +21841,44 @@ mod tests {
     }
 
     #[test]
+    fn packet_transport_decision_orders_stream_fallback_paths() {
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established(remote_overlay, PathKind::CircuitRelay);
+        paths.record_established(remote_overlay, PathKind::DirectTcpStream);
+        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+
+        let decision =
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay);
+        let PacketTransportDecision::StreamFallback { path } = decision else {
+            panic!("expected QUIC stream fallback decision, got {decision:?}");
+        };
+        assert_eq!(path.kind, PathKind::DirectQuicStream);
+
+        paths.mark_unhealthy(remote_overlay, PathKind::DirectQuicStream);
+        let decision =
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay);
+        let PacketTransportDecision::StreamFallback { path } = decision else {
+            panic!("expected TCP stream fallback decision, got {decision:?}");
+        };
+        assert_eq!(path.kind, PathKind::DirectTcpStream);
+
+        paths.mark_unhealthy(remote_overlay, PathKind::DirectTcpStream);
+        let decision =
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay);
+        let PacketTransportDecision::StreamFallback { path } = decision else {
+            panic!("expected relay stream fallback decision, got {decision:?}");
+        };
+        assert_eq!(path.kind, PathKind::CircuitRelay);
+    }
+
+    #[test]
     fn packet_transport_decision_blocks_datagram_only_paths_until_local_support_exists() {
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
