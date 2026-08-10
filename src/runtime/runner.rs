@@ -57,6 +57,7 @@ use crate::{
             PacketPlaneSessionRole, PacketPlaneSessionSnapshot, PacketPlaneSnapshot,
             VerifiedPacketPlaneHandshake,
         },
+        pinned_packet_stream,
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
@@ -5409,9 +5410,18 @@ fn send_dequeued_stream_fallback(
     path: crate::path::PathCandidate,
     context: &mut QueueDrainContext<'_>,
 ) {
+    if path.kind == PathKind::DirectQuicStream {
+        send_dequeued_pinned_quic_stream(swarm, forwarder, packet, peer_mtu, path, context);
+        return;
+    }
+
     match forwarder.send_queued_packet_with_mtu(swarm, packet, peer_mtu) {
         Ok(request_id) => {
-            context.packet_in_flight.record(packet, request_id, path);
+            context.packet_in_flight.record(
+                packet,
+                PacketInFlightId::RequestResponse(request_id),
+                path,
+            );
             context.metrics.record_outbound_sent();
             context.metrics.record_outbound_stream_fallback(path.kind);
         }
@@ -5422,6 +5432,56 @@ fn send_dequeued_stream_fallback(
                 .metrics
                 .record_outbound_drop(outbound_drop_reason(&error));
             eprintln!("dropping queued outbound packet: {error:?}");
+        }
+    }
+}
+
+fn send_dequeued_pinned_quic_stream(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    packet: &crate::queue::Packet,
+    peer_mtu: u16,
+    path: crate::path::PathCandidate,
+    context: &mut QueueDrainContext<'_>,
+) {
+    let Some(connection_id) = path.latest_connection_id else {
+        context
+            .metrics
+            .record_outbound_drop(PacketDropReason::NoRoute);
+        eprintln!(
+            "dropping queued outbound QUIC stream packet: selected path has no connection id"
+        );
+        return;
+    };
+    let Some(transport_peer) = forwarder.transport_peer_for_overlay(packet.peer()) else {
+        context
+            .metrics
+            .record_outbound_drop(PacketDropReason::NoRoute);
+        eprintln!("dropping queued outbound QUIC stream packet: missing transport peer");
+        return;
+    };
+
+    match forwarder.queued_packet_frame_with_mtu(packet, peer_mtu) {
+        Ok(frame) => {
+            let request_id = swarm
+                .behaviour_mut()
+                .pinned_packet_stream
+                .send_request_on_connection(transport_peer, connection_id, frame);
+            context.packet_in_flight.record(
+                packet,
+                PacketInFlightId::PinnedPacketStream(request_id),
+                path,
+            );
+            context.metrics.record_outbound_sent();
+            context.metrics.record_outbound_stream_fallback(path.kind);
+        }
+        Err(error) => {
+            maybe_learn_path_mtu(context, packet.peer(), path.kind, path.relay_peer, &error);
+            maybe_write_packet_too_big(context, packet.payload(), &error);
+            context
+                .metrics
+                .record_outbound_drop(outbound_drop_reason(&error));
+            eprintln!("dropping queued outbound QUIC stream packet: {error:?}");
         }
     }
 }
@@ -5526,8 +5586,14 @@ impl QueueRuntimeState {
 #[derive(Debug)]
 struct PacketInFlight {
     limit_per_peer: usize,
-    requests: HashMap<request_response::OutboundRequestId, PacketInFlightRequest>,
+    requests: HashMap<PacketInFlightId, PacketInFlightRequest>,
     peers: HashMap<PeerId, PeerInFlight>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum PacketInFlightId {
+    RequestResponse(request_response::OutboundRequestId),
+    PinnedPacketStream(pinned_packet_stream::RequestId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5570,7 +5636,7 @@ impl PacketInFlight {
     fn record(
         &mut self,
         packet: &crate::queue::Packet,
-        request_id: request_response::OutboundRequestId,
+        request_id: PacketInFlightId,
         path: crate::path::PathCandidate,
     ) {
         self.requests.insert(
@@ -5597,7 +5663,7 @@ impl PacketInFlight {
         relay_peer: Option<PeerId>,
     ) {
         self.requests.insert(
-            request_id,
+            PacketInFlightId::RequestResponse(request_id),
             PacketInFlightRequest {
                 peer,
                 shard: 0,
@@ -5609,10 +5675,7 @@ impl PacketInFlight {
         self.peers.entry(peer).or_default().record(0);
     }
 
-    fn complete(
-        &mut self,
-        request_id: request_response::OutboundRequestId,
-    ) -> Option<PacketInFlightRequest> {
+    fn complete(&mut self, request_id: PacketInFlightId) -> Option<PacketInFlightRequest> {
         let request = self.requests.remove(&request_id)?;
         if let Some(state) = self.peers.get_mut(&request.peer) {
             state.complete(request.shard);
@@ -6035,6 +6098,9 @@ async fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(BehaviourEvent::Packet(event)) => {
             handle_packet_event(swarm, &mut context, event)?;
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(event)) => {
+            handle_pinned_packet_stream_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(BehaviourEvent::Service(event)) => {
             handle_service_event(swarm, &mut context, event)?;
@@ -6760,7 +6826,13 @@ fn handle_packet_event(
                 request, channel, ..
             },
             ..
-        } => handle_packet_request(swarm, context, peer, &request, channel)?,
+        } => handle_packet_request(
+            swarm,
+            context,
+            peer,
+            &request,
+            PacketResponseTarget::RequestResponse(channel),
+        )?,
         request_response::Event::Message {
             peer,
             message:
@@ -6770,32 +6842,10 @@ fn handle_packet_event(
                 },
             ..
         } => {
-            let in_flight = context.packet_in_flight.complete(request_id);
-            match response {
-                PacketResponse::Accepted => {
-                    if let Some(request) = in_flight {
-                        let rtt_ms = request
-                            .sent_at
-                            .elapsed()
-                            .as_millis()
-                            .min(u128::from(u16::MAX)) as u16;
-                        let change = context.paths.record_rtt_for_relay(
-                            request.peer,
-                            request.path,
-                            request.relay_peer,
-                            rtt_ms,
-                        );
-                        record_path_selection_change(context.metrics, change);
-                    }
-                }
-                PacketResponse::Rejected(reason) => {
-                    context.metrics.record_outbound_failure();
-                    context
-                        .metrics
-                        .record_outbound_drop(packet_rejection_drop_reason(reason));
-                    audit_packet_response_rejection(peer, reason);
-                }
-            }
+            let in_flight = context
+                .packet_in_flight
+                .complete(PacketInFlightId::RequestResponse(request_id));
+            handle_packet_response(context, in_flight, Some(peer), response);
         }
         request_response::Event::OutboundFailure {
             peer,
@@ -6803,7 +6853,9 @@ fn handle_packet_event(
             error,
             ..
         } => {
-            let in_flight = context.packet_in_flight.complete(request_id);
+            let in_flight = context
+                .packet_in_flight
+                .complete(PacketInFlightId::RequestResponse(request_id));
             context.metrics.record_outbound_failure();
             if let Some(request) = in_flight {
                 let demoted = maybe_demote_stream_fallback_path(
@@ -6839,12 +6891,131 @@ fn handle_packet_event(
     Ok(())
 }
 
+fn handle_pinned_packet_stream_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    event: pinned_packet_stream::Event,
+) -> Result<(), RunnerError> {
+    match event {
+        pinned_packet_stream::Event::InboundRequest {
+            peer,
+            connection_id,
+            request_id,
+            frame,
+        } => handle_packet_request(
+            swarm,
+            context,
+            peer,
+            &frame,
+            PacketResponseTarget::Pinned(pinned_packet_stream::Behaviour::response_channel(
+                peer,
+                connection_id,
+                request_id,
+            )),
+        )?,
+        pinned_packet_stream::Event::OutboundResponse {
+            request_id,
+            response,
+            ..
+        } => {
+            let in_flight = context
+                .packet_in_flight
+                .complete(PacketInFlightId::PinnedPacketStream(request_id));
+            handle_packet_response(context, in_flight, None, response);
+        }
+        pinned_packet_stream::Event::OutboundFailure {
+            peer,
+            request_id,
+            error,
+            ..
+        } => {
+            let in_flight = context
+                .packet_in_flight
+                .complete(PacketInFlightId::PinnedPacketStream(request_id));
+            context.metrics.record_outbound_failure();
+            if let Some(request) = in_flight {
+                let demoted = maybe_demote_pinned_stream_fallback_path(
+                    context.paths,
+                    context.metrics,
+                    request.peer,
+                    request.path,
+                    &error,
+                );
+                if let Some(peer) = context.forwarder.transport_peer_for_overlay(request.peer) {
+                    if demoted {
+                        dial_ready_relays_for_configured_peer(swarm, context, peer);
+                    }
+                    redial_packet_plane_recovery_addresses(
+                        swarm,
+                        peer,
+                        context.configured_peer_addresses,
+                        context.relay_addresses,
+                        context.discovered_peer_addresses,
+                        context.metrics,
+                    );
+                }
+            }
+            eprintln!("pinned packet stream request to {peer} failed: {error:?}");
+        }
+        pinned_packet_stream::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_inbound_failure();
+            eprintln!("pinned packet stream request from {peer} failed: {error:?}");
+        }
+        pinned_packet_stream::Event::ResponseSent { .. } => {}
+    }
+
+    Ok(())
+}
+
+fn handle_packet_response(
+    context: &mut SwarmEventContext<'_>,
+    in_flight: Option<PacketInFlightRequest>,
+    transport_peer: Option<Libp2pPeerId>,
+    response: PacketResponse,
+) {
+    match response {
+        PacketResponse::Accepted => {
+            if let Some(request) = in_flight {
+                let rtt_ms = request
+                    .sent_at
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u16::MAX)) as u16;
+                let change = context.paths.record_rtt_for_relay(
+                    request.peer,
+                    request.path,
+                    request.relay_peer,
+                    rtt_ms,
+                );
+                record_path_selection_change(context.metrics, change);
+            }
+        }
+        PacketResponse::Rejected(reason) => {
+            context.metrics.record_outbound_failure();
+            context
+                .metrics
+                .record_outbound_drop(packet_rejection_drop_reason(reason));
+            if let Some(peer) = transport_peer.or_else(|| {
+                in_flight
+                    .and_then(|request| context.forwarder.transport_peer_for_overlay(request.peer))
+            }) {
+                audit_packet_response_rejection(peer, reason);
+            }
+        }
+    }
+}
+
+enum PacketResponseTarget {
+    RequestResponse(request_response::ResponseChannel<PacketResponse>),
+    Pinned(pinned_packet_stream::ResponseChannel),
+}
+
 fn handle_packet_request(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
     request: &crate::wire::Frame,
-    channel: request_response::ResponseChannel<PacketResponse>,
+    channel: PacketResponseTarget,
 ) -> Result<(), RunnerError> {
     if !context
         .inbound_packet_rate_limiters
@@ -6922,19 +7093,29 @@ fn send_packet_response_nonfatal(
     swarm: &mut Swarm<Behaviour>,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
-    channel: request_response::ResponseChannel<PacketResponse>,
+    channel: PacketResponseTarget,
     response: PacketResponse,
 ) {
-    if let Err(response) = Forwarder::send_packet_response(swarm, channel, response) {
-        metrics.record_inbound_failure();
-        log_runtime_event(
-            LogLevel::Warn,
-            "packet_response_dropped",
-            &[
-                ("peer", &peer.to_string()),
-                ("response", packet_response_name(&response)),
-            ],
-        );
+    match channel {
+        PacketResponseTarget::RequestResponse(channel) => {
+            if let Err(response) = Forwarder::send_packet_response(swarm, channel, response) {
+                metrics.record_inbound_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "packet_response_dropped",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("response", packet_response_name(&response)),
+                    ],
+                );
+            }
+        }
+        PacketResponseTarget::Pinned(channel) => {
+            swarm
+                .behaviour_mut()
+                .pinned_packet_stream
+                .send_response(channel, response);
+        }
     }
 }
 
@@ -9537,6 +9718,42 @@ fn maybe_demote_stream_fallback_path(
         ],
     );
     true
+}
+
+fn maybe_demote_pinned_stream_fallback_path(
+    paths: &mut PathSet,
+    metrics: &RuntimeMetrics,
+    peer: PeerId,
+    path: PathKind,
+    error: &pinned_packet_stream::Failure,
+) -> bool {
+    if matches!(path, PathKind::CircuitRelay) {
+        return false;
+    }
+
+    let change = paths.mark_unhealthy(peer, path);
+    metrics.record_stream_fallback_path_demotion();
+    record_path_selection_change(metrics, change);
+
+    let peer = peer.to_string();
+    log_runtime_event(
+        LogLevel::Warn,
+        "pinned_stream_fallback_path_demoted",
+        &[
+            ("peer", &peer),
+            ("path", path.wire_name()),
+            ("reason", pinned_stream_failure_name(error)),
+        ],
+    );
+    true
+}
+
+const fn pinned_stream_failure_name(error: &pinned_packet_stream::Failure) -> &'static str {
+    match error {
+        pinned_packet_stream::Failure::StreamUpgrade(_) => "stream_upgrade",
+        pinned_packet_stream::Failure::Io(_) => "io",
+        pinned_packet_stream::Failure::MissingInboundRequest(_) => "missing_inbound_request",
+    }
 }
 
 const fn stream_fallback_failure_demotes_path(
@@ -19220,7 +19437,17 @@ mod tests {
             )
             .expect("queued");
         let mut paths = PathSet::new();
-        paths.record_established(remote_overlay, PathKind::DirectQuicStream);
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectQuicStream,
+            None,
+            Some(1280),
+            crate::path::PathOrigin::Identify,
+            crate::path::PathConnectionRole::Dialer,
+            false,
+            Some(ConnectionId::new_unchecked(9)),
+            Some(123),
+        );
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,

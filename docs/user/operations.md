@@ -34,6 +34,9 @@ sudo p2p-vpn daemon-health \
 
 `daemon-paths` and `daemon-state` include `connection_id` for live paths.
 
+Direct QUIC stream fallback uses that ID to pin packets to the selected
+connection.
+
 Useful packet-path counters:
 
 | Counter | Meaning |

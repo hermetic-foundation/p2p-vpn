@@ -60,9 +60,9 @@ Runtime route advertisements are claims, not dynamic routing authority.
 | --- | --- |
 | Owned UDP packet plane | Implemented. |
 | Owned Quinn QUIC DATAGRAM packet plane | Implemented. |
-| libp2p QUIC stream fallback | Implemented. |
-| libp2p TCP stream fallback | Implemented. |
-| libp2p circuit relay stream fallback | Implemented. |
+| Direct libp2p QUIC stream | Connection-pinned packet stream. |
+| libp2p TCP stream fallback | Compatibility request-response stream. |
+| libp2p circuit relay stream fallback | Compatibility request-response stream. |
 | Native libp2p QUIC DATAGRAM | Blocked by dependency surface. |
 
 ## Queueing
@@ -89,7 +89,7 @@ exists.
 | --- | --- |
 | Direct QUIC datagram | highest when negotiated and healthy |
 | Direct UDP datagram | preferred owned packet-plane fallback |
-| Direct QUIC stream | stream fallback |
+| Direct QUIC stream | connection-pinned stream fallback |
 | Direct TCP stream | lower direct stream fallback |
 | Circuit relay | public reachability fallback |
 
@@ -109,10 +109,10 @@ Stream fallback evidence is split by selected path:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent through selected direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent through selected circuit relay stream fallback. |
 
-Path evidence includes the latest libp2p `connection_id`.
+Direct QUIC stream egress uses the latest libp2p `connection_id`.
 
-That ID is the handle needed for connection-pinned stream sends through
-`NotifyHandler::One(connection_id)`.
+TCP and relay stream egress still use the compatibility request-response
+stream path.
 
 ## Candidate Hygiene
 

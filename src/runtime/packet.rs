@@ -117,22 +117,7 @@ impl request_response::Codec for PacketCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut status = [0];
-        io.read_exact(&mut status).await?;
-        match status[0] {
-            PacketResponse::ACCEPTED_BYTE => Ok(PacketResponse::Accepted),
-            PacketResponse::REJECTED_BYTE => {
-                let mut reason = [0];
-                io.read_exact(&mut reason).await?;
-                Ok(PacketResponse::Rejected(PacketRejectionReason::decode(
-                    reason[0],
-                )?))
-            }
-            other => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unknown packet response {other}"),
-            )),
-        }
+        read_futures_response(io).await
     }
 
     async fn write_request<T>(
@@ -144,7 +129,7 @@ impl request_response::Codec for PacketCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        io.write_all(&request.encode()).await?;
+        write_futures_frame(io, &request).await?;
         io.close().await
     }
 
@@ -157,14 +142,7 @@ impl request_response::Codec for PacketCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        match response {
-            PacketResponse::Accepted => io.write_all(&[PacketResponse::ACCEPTED_BYTE]).await?,
-            PacketResponse::Rejected(reason) => {
-                io.write_all(&[PacketResponse::REJECTED_BYTE, reason.encode()])
-                    .await?;
-            }
-        }
-        io.close().await
+        write_futures_response(io, response).await
     }
 }
 
@@ -221,7 +199,10 @@ pub fn behaviour(
     )
 }
 
-async fn read_futures_frame<R>(reader: &mut R, max_payload_len: usize) -> io::Result<Frame>
+pub(crate) async fn read_futures_frame<R>(
+    reader: &mut R,
+    max_payload_len: usize,
+) -> io::Result<Frame>
 where
     R: AsyncRead + Unpin + Send,
 {
@@ -240,6 +221,53 @@ where
     let mut payload = vec![0; payload_len];
     reader.read_exact(&mut payload).await?;
     Ok(Frame { header, payload })
+}
+
+pub(crate) async fn write_futures_frame<W>(writer: &mut W, frame: &Frame) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    writer.write_all(&frame.encode()).await
+}
+
+pub(crate) async fn read_futures_response<R>(reader: &mut R) -> io::Result<PacketResponse>
+where
+    R: AsyncRead + Unpin + Send,
+{
+    let mut status = [0];
+    reader.read_exact(&mut status).await?;
+    match status[0] {
+        PacketResponse::ACCEPTED_BYTE => Ok(PacketResponse::Accepted),
+        PacketResponse::REJECTED_BYTE => {
+            let mut reason = [0];
+            reader.read_exact(&mut reason).await?;
+            Ok(PacketResponse::Rejected(PacketRejectionReason::decode(
+                reason[0],
+            )?))
+        }
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown packet response {other}"),
+        )),
+    }
+}
+
+pub(crate) async fn write_futures_response<W>(
+    writer: &mut W,
+    response: PacketResponse,
+) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    match response {
+        PacketResponse::Accepted => writer.write_all(&[PacketResponse::ACCEPTED_BYTE]).await?,
+        PacketResponse::Rejected(reason) => {
+            writer
+                .write_all(&[PacketResponse::REJECTED_BYTE, reason.encode()])
+                .await?;
+        }
+    }
+    writer.close().await
 }
 
 fn invalid_data(error: crate::wire::DecodeError) -> io::Error {

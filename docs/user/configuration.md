@@ -214,7 +214,7 @@ Default path preference:
 | --- | --- |
 | QUIC datagram packet plane | Preferred packet path. |
 | UDP datagram packet plane | Default minimal-config packet path. |
-| Direct QUIC stream | First stream fallback. |
+| Direct QUIC stream | First stream fallback, pinned to the selected connection. |
 | Direct TCP stream | Lower direct stream fallback. |
 | Circuit relay stream | Public fallback when direct paths fail. |
 

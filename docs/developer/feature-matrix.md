@@ -24,7 +24,8 @@ Status is conservative.
 | Control protocol | Operational | `cargo test runtime::control`. |
 | Packet protocol | Operational | `cargo test runtime::packet`. |
 | Service protocol | Operational | `cargo test runtime::service`. |
-| Stream fallback | Operational | Flow-sharded stream fallback tests. |
+| Direct QUIC stream fallback | Operational | Connection-pinned QUIC stream test. |
+| TCP and relay stream fallback | Operational | Flow-sharded compatibility stream tests. |
 | Owned UDP packet plane | Operational | Packet-plane unit and namespace tests. |
 | Owned QUIC packet plane | Operational | Quinn packet-plane tests and namespace E2E. |
 | Native libp2p QUIC datagrams | Blocked | Current libp2p swarm API lacks this handle. |
