@@ -4,6 +4,54 @@ const PATH_FAILURE_PENALTY_STEP: u16 = 50;
 const PATH_FAILURE_PENALTY_MAX: u16 = PATH_FAILURE_PENALTY_STEP;
 const PATH_FAILURE_PENALTY_RECOVERY_STEP: u16 = 10;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PathOrigin {
+    #[default]
+    Unknown,
+    Configured,
+    Mdns,
+    Kademlia,
+    Identify,
+    RelayCircuit,
+    Dcutr,
+    PacketPlaneNegotiation,
+}
+
+impl PathOrigin {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Configured => "configured",
+            Self::Mdns => "mdns",
+            Self::Kademlia => "kademlia",
+            Self::Identify => "identify",
+            Self::RelayCircuit => "relay_circuit",
+            Self::Dcutr => "dcutr",
+            Self::PacketPlaneNegotiation => "packet_plane_negotiation",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PathConnectionRole {
+    #[default]
+    Unknown,
+    Dialer,
+    Listener,
+}
+
+impl PathConnectionRole {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Dialer => "dialer",
+            Self::Listener => "listener",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PathCandidate {
     pub peer: PeerId,
@@ -14,6 +62,11 @@ pub struct PathCandidate {
     pub relay: bool,
     pub healthy: bool,
     pub established_connections: u32,
+    pub origin: PathOrigin,
+    pub connection_role: PathConnectionRole,
+    pub established_as_relayed: bool,
+    pub first_seen_unix_seconds: Option<u64>,
+    pub last_established_unix_seconds: Option<u64>,
 }
 
 impl PathCandidate {
@@ -28,12 +81,35 @@ impl PathCandidate {
             relay: matches!(kind, PathKind::CircuitRelay),
             healthy: true,
             established_connections: 0,
+            origin: PathOrigin::Unknown,
+            connection_role: PathConnectionRole::Unknown,
+            established_as_relayed: matches!(kind, PathKind::CircuitRelay),
+            first_seen_unix_seconds: None,
+            last_established_unix_seconds: None,
         }
     }
 
     #[must_use]
     pub const fn with_estimated_mtu(mut self, mtu: u16) -> Self {
         self.estimated_mtu = Some(mtu);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_origin(mut self, origin: PathOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_connection_role(mut self, role: PathConnectionRole) -> Self {
+        self.connection_role = role;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_established_as_relayed(mut self, established_as_relayed: bool) -> Self {
+        self.established_as_relayed = established_as_relayed;
         self
     }
 
@@ -223,6 +299,28 @@ impl PathSet {
         kind: PathKind,
         estimated_mtu: Option<u16>,
     ) -> Option<PathSelectionChange> {
+        self.record_established_with_details(
+            peer,
+            kind,
+            estimated_mtu,
+            PathOrigin::Unknown,
+            PathConnectionRole::Unknown,
+            matches!(kind, PathKind::CircuitRelay),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_established_with_details(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        estimated_mtu: Option<u16>,
+        origin: PathOrigin,
+        connection_role: PathConnectionRole,
+        established_as_relayed: bool,
+        now_unix_seconds: Option<u64>,
+    ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
@@ -233,10 +331,22 @@ impl PathSet {
             if let Some(estimated_mtu) = estimated_mtu {
                 candidate.estimated_mtu = Some(estimated_mtu);
             }
+            candidate.origin = origin;
+            candidate.connection_role = connection_role;
+            candidate.established_as_relayed = established_as_relayed;
+            if candidate.first_seen_unix_seconds.is_none() {
+                candidate.first_seen_unix_seconds = now_unix_seconds;
+            }
+            candidate.last_established_unix_seconds = now_unix_seconds;
             candidate.established_connections = candidate.established_connections.saturating_add(1);
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
             candidate.estimated_mtu = estimated_mtu;
+            candidate.origin = origin;
+            candidate.connection_role = connection_role;
+            candidate.established_as_relayed = established_as_relayed;
+            candidate.first_seen_unix_seconds = now_unix_seconds;
+            candidate.last_established_unix_seconds = now_unix_seconds;
             candidate.established_connections = 1;
             self.candidates.push(candidate);
         }
@@ -249,6 +359,25 @@ impl PathSet {
         kind: PathKind,
         estimated_mtu: Option<u16>,
     ) -> Option<PathSelectionChange> {
+        self.record_unconfirmed_with_details(
+            peer,
+            kind,
+            estimated_mtu,
+            PathOrigin::Unknown,
+            matches!(kind, PathKind::CircuitRelay),
+            None,
+        )
+    }
+
+    pub fn record_unconfirmed_with_details(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        estimated_mtu: Option<u16>,
+        origin: PathOrigin,
+        established_as_relayed: bool,
+        now_unix_seconds: Option<u64>,
+    ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
@@ -259,11 +388,21 @@ impl PathSet {
             if let Some(estimated_mtu) = estimated_mtu {
                 candidate.estimated_mtu = Some(estimated_mtu);
             }
+            candidate.origin = origin;
+            candidate.established_as_relayed = established_as_relayed;
+            if candidate.first_seen_unix_seconds.is_none() {
+                candidate.first_seen_unix_seconds = now_unix_seconds;
+            }
+            candidate.last_established_unix_seconds = now_unix_seconds;
             candidate.established_connections = 1;
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
             candidate.healthy = false;
             candidate.estimated_mtu = estimated_mtu;
+            candidate.origin = origin;
+            candidate.established_as_relayed = established_as_relayed;
+            candidate.first_seen_unix_seconds = now_unix_seconds;
+            candidate.last_established_unix_seconds = now_unix_seconds;
             candidate.established_connections = 1;
             self.candidates.push(candidate);
         }

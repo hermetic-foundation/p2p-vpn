@@ -1730,7 +1730,8 @@ EOF
                 echo "      },"
                 echo "      path_evidence: {"
                 echo "        direct_lines: [\$path_lines[] | select(test(\"direct \"))],"
-                echo "        relay_lines: [\$path_lines[] | select(test(\"circuit relay|relay true\"))]"
+                echo "        relay_lines: [\$path_lines[] | select(test(\"circuit relay|relay true\"))],"
+                echo "        provenance_lines: (([\$path_lines[] | select(test(\" origin \"))]) + ([\$state_lines[] | select(test(\" selected_path_origin \"))]))"
                 echo "      },"
                 echo "      health_lines: \$health_lines,"
                 echo "      result_lines: \$result_lines,"
@@ -2347,7 +2348,8 @@ USAGE
                   },
                   path_evidence: {
                     direct_lines: [$path_lines[] | select(test("direct "))],
-                    relay_lines: [$path_lines[] | select(test("circuit relay|relay true"))]
+                    relay_lines: [$path_lines[] | select(test("circuit relay|relay true"))],
+                    provenance_lines: (([$path_lines[] | select(test(" origin "))]) + ([$state_lines[] | select(test(" selected_path_origin "))]))
                   },
                   health_lines: $health_lines,
                   result_lines: $result_lines,
@@ -2425,6 +2427,7 @@ Usage:
     [--require-direct] \
     [--require-relay] \
     [--require-dcutr] \
+    [--require-path-provenance] \
     [--require-quic-session] \
     [--require-config-match] \
     [--min-packet-sessions N]
@@ -2439,6 +2442,7 @@ EOF
             require_direct=0
             require_relay=0
             require_dcutr=0
+            require_path_provenance=0
             require_quic=0
             require_config_match=0
             min_packet_sessions=1
@@ -2467,6 +2471,10 @@ EOF
                   ;;
                 --require-dcutr)
                   require_dcutr=1
+                  shift
+                  ;;
+                --require-path-provenance)
+                  require_path_provenance=1
                   shift
                   ;;
                 --require-quic-session)
@@ -2516,6 +2524,7 @@ EOF
               --argjson require_direct "$require_direct" \
               --argjson require_relay "$require_relay" \
               --argjson require_dcutr "$require_dcutr" \
+              --argjson require_path_provenance "$require_path_provenance" \
               --argjson require_quic "$require_quic" \
               --argjson require_config_match "$require_config_match" \
               --argjson min_packet_sessions "$min_packet_sessions" \
@@ -2533,6 +2542,12 @@ EOF
                 ((metric($e; "relayed_connections_established") > 0)
                 or (metric($e; "healthy_relay_paths") > 0)
                 or (($e.path_evidence.relay_lines // []) | length > 0));
+              def provenance_lines($e):
+                (($e.path_evidence.provenance_lines // [])
+                + (($e.final_path_lines // []) | map(select(test(" origin "))))
+                + (($e.final_state_lines // []) | map(select(test(" selected_path_origin ")))));
+              def path_provenance_evidence($e):
+                (provenance_lines($e) | map(select(test(" origin (mdns|kademlia|identify|relay_circuit|dcutr|packet_plane_negotiation)| selected_path_origin (mdns|kademlia|identify|relay_circuit|dcutr|packet_plane_negotiation)"))) | length) > 0;
               def has_config_summary($e):
                 (($e.config_summary // null) | type) == "object"
                 and (($e.config_sha256 // "") | length) > 0;
@@ -2598,6 +2613,13 @@ EOF
                   name: ($name + ".dcutr_evidence"),
                   ok: (($require_dcutr == 0) or (metric($e; "dcutr_successes") >= 1)),
                   detail: metric($e; "dcutr_successes")
+                },
+                {
+                  name: ($name + ".path_provenance"),
+                  ok: (($require_path_provenance == 0) or path_provenance_evidence($e)),
+                  detail: {
+                    provenance_lines: (provenance_lines($e) | length)
+                  }
                 }
               ];
               ($host_a[0]) as $a |
@@ -2627,6 +2649,7 @@ EOF
                   require_direct: ($require_direct == 1),
                   require_relay: ($require_relay == 1),
                   require_dcutr: ($require_dcutr == 1),
+                  require_path_provenance: ($require_path_provenance == 1),
                   require_config_match: ($require_config_match == 1)
                 },
                 checks: $checks,
@@ -3896,7 +3919,8 @@ EOF
   },
   "path_evidence": {
     "direct_lines": ["peer b selected_path direct_quic_datagram"],
-    "relay_lines": ["peer b selected_path circuit relay"]
+    "relay_lines": ["peer b selected_path circuit relay"],
+    "provenance_lines": ["peer selected path: peer-b direct_quic_datagram score 100 mtu 1200 origin dcutr connection_role dialer established_as_relayed false first_seen_unix_seconds 1 last_established_unix_seconds 2"]
   }
 }
 EOF
@@ -3938,7 +3962,8 @@ EOF
   },
   "path_evidence": {
     "direct_lines": ["peer a selected_path direct_quic_datagram"],
-    "relay_lines": ["peer a selected_path circuit relay"]
+    "relay_lines": ["peer a selected_path circuit relay"],
+    "provenance_lines": ["peer selected path: peer-a circuit_relay score 30 mtu 1000 origin relay_circuit connection_role listener established_as_relayed true first_seen_unix_seconds 1 last_established_unix_seconds 2"]
   }
 }
 EOF
@@ -3955,6 +3980,7 @@ EOF
               --require-direct \
               --require-relay \
               --require-dcutr \
+              --require-path-provenance \
               --require-quic-session \
               --require-config-match \
               --write-report "$report" \
@@ -3965,9 +3991,10 @@ EOF
               and .requirements.require_direct == true
               and .requirements.require_relay == true
               and .requirements.require_dcutr == true
+              and .requirements.require_path_provenance == true
               and .requirements.require_quic_session == true
               and .requirements.require_config_match == true
-              and (.checks | length) == 17
+              and (.checks | length) == 19
               and (.checks[] | select(.name == "pair.config_match").ok) == true
             ' "$report"
             grep -q '^public VPN evidence check: ok$' "$TMPDIR/pass-output.txt"
@@ -4072,7 +4099,8 @@ EOF
                   },
                   path_evidence: {
                     direct_lines: $direct_lines,
-                    relay_lines: $relay_lines
+                    relay_lines: $relay_lines,
+                    provenance_lines: []
                   }
                 }' > "$output"
             }

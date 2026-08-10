@@ -35,7 +35,7 @@ use crate::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, RuntimeMetrics,
         RuntimeSnapshot,
     },
-    path::{PathSet, PathTransportSupport},
+    path::{PathConnectionRole, PathOrigin, PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
     route::{IpCidr, RouteError},
     runtime::{
@@ -1585,18 +1585,27 @@ fn runtime_path_lines(
         let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer selected path: {peer} {} score {} mtu {}",
+            "peer selected path: {peer} {} score {} mtu {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             selected_path.map_or("none", |path| path.kind.wire_name()),
             selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
             selected_path.map_or_else(
                 || "none".to_owned(),
                 |path| path.effective_mtu(peer_mtu).to_string()
-            )
+            ),
+            selected_path.map_or("unknown", |path| path.origin.wire_name()),
+            selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
+            selected_path.is_some_and(|path| path.established_as_relayed),
+            selected_path
+                .and_then(|path| path.first_seen_unix_seconds)
+                .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string()),
+            selected_path
+                .and_then(|path| path.last_established_unix_seconds)
+                .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
         ));
         lines.push(format!("peer path candidates: {peer} {}", candidates.len()));
         for candidate in candidates {
             lines.push(format!(
-                "peer path: {peer} {} healthy {} relay {} direct {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {}",
+                "peer path: {peer} {} healthy {} relay {} direct {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
                 candidate.kind.wire_name(),
                 candidate.healthy,
                 candidate.relay,
@@ -1607,7 +1616,16 @@ fn runtime_path_lines(
                     .estimated_mtu
                     .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
                 candidate.effective_mtu(peer_mtu),
-                path_rtt_value(candidate)
+                path_rtt_value(candidate),
+                candidate.origin.wire_name(),
+                candidate.connection_role.wire_name(),
+                candidate.established_as_relayed,
+                candidate
+                    .first_seen_unix_seconds
+                    .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string()),
+                candidate
+                    .last_established_unix_seconds
+                    .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
             ));
         }
     }
@@ -2322,7 +2340,7 @@ fn extend_runtime_peer_state_lines(
         .count();
 
     lines.push(format!(
-        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} selected_path_origin {} selected_path_connection_role {} selected_path_established_as_relayed {} selected_path_first_seen_unix_seconds {} selected_path_last_established_unix_seconds {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
         peer_capabilities.contains(peer),
         peer_capabilities.effective_mtu_for(peer, local_mtu),
         support.quic_datagrams,
@@ -2338,6 +2356,15 @@ fn extend_runtime_peer_state_lines(
                 .to_string()
         ),
         selected_path.map_or_else(|| "unknown".to_owned(), path_rtt_value),
+        selected_path.map_or("unknown", |path| path.origin.wire_name()),
+        selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
+        selected_path.is_some_and(|path| path.established_as_relayed),
+        selected_path
+            .and_then(|path| path.first_seen_unix_seconds)
+            .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string()),
+        selected_path
+            .and_then(|path| path.last_established_unix_seconds)
+            .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string()),
     ));
 
     if let Some(capabilities) = peer_capabilities.get(peer) {
@@ -2351,7 +2378,7 @@ fn extend_runtime_peer_state_lines(
     for candidate in candidates {
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {}",
+            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             candidate.kind.wire_name(),
             candidate.healthy,
             candidate.relay,
@@ -2361,7 +2388,16 @@ fn extend_runtime_peer_state_lines(
                 .estimated_mtu
                 .map_or_else(|| "unknown".to_owned(), |mtu| mtu.to_string()),
             candidate.effective_mtu(peer_mtu),
-            path_rtt_value(candidate)
+            path_rtt_value(candidate),
+            candidate.origin.wire_name(),
+            candidate.connection_role.wire_name(),
+            candidate.established_as_relayed,
+            candidate
+                .first_seen_unix_seconds
+                .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string()),
+            candidate
+                .last_established_unix_seconds
+                .map_or_else(|| "unknown".to_owned(), |seconds| seconds.to_string())
         ));
     }
 }
@@ -8698,10 +8734,13 @@ fn record_packet_plane_path_established(
     backend: PacketDatagramBackend,
     mtu: u16,
 ) {
-    let change = paths.record_unconfirmed_with_mtu(
+    let change = paths.record_unconfirmed_with_details(
         peer,
         packet_datagram_backend_path_kind(backend),
         Some(mtu),
+        PathOrigin::PacketPlaneNegotiation,
+        false,
+        Some(current_unix_seconds_lossy()),
     );
     record_path_selection_change(metrics, change);
 }
@@ -9270,13 +9309,17 @@ fn record_path_established(
     }
 
     let kind = path_kind_for_endpoint(endpoint);
-    let change = paths.record_established_with_mtu(
+    let change = paths.record_established_with_details(
         PeerId::from_libp2p(peer),
         kind,
         Some(initial_path_mtu(
             kind,
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
         )),
+        path_origin_for_endpoint(endpoint),
+        path_connection_role_for_endpoint(endpoint),
+        endpoint.is_relayed(),
+        Some(current_unix_seconds_lossy()),
     );
     record_path_selection_change(metrics, change);
     change
@@ -9562,6 +9605,21 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
         PathKind::DirectQuicStream
     } else {
         PathKind::DirectTcpStream
+    }
+}
+
+fn path_origin_for_endpoint(endpoint: &ConnectedPoint) -> PathOrigin {
+    if endpoint.is_relayed() {
+        PathOrigin::RelayCircuit
+    } else {
+        PathOrigin::Identify
+    }
+}
+
+fn path_connection_role_for_endpoint(endpoint: &ConnectedPoint) -> PathConnectionRole {
+    match endpoint {
+        ConnectedPoint::Dialer { .. } => PathConnectionRole::Dialer,
+        ConnectedPoint::Listener { .. } => PathConnectionRole::Listener,
     }
 }
 
@@ -11780,12 +11838,20 @@ mod tests {
             &empty_packet_plane,
             &empty_packet_plane_quic,
         );
-        assert!(path_lines.contains(&format!(
-            "peer selected path: {remote_overlay} direct_tcp_stream score 40 mtu 1180"
-        )));
-        assert!(path_lines.contains(&format!(
-            "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown"
-        )));
+        assert!(path_lines.iter().any(|line| {
+            line.starts_with(&format!(
+                "peer selected path: {remote_overlay} direct_tcp_stream score 40 mtu 1180 "
+            )) && line.contains(" origin unknown ")
+                && line.contains(" connection_role unknown ")
+                && line.contains(" established_as_relayed false ")
+        }));
+        assert!(path_lines.iter().any(|line| {
+            line.starts_with(&format!(
+                "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown "
+            )) && line.contains(" origin unknown ")
+                && line.contains(" connection_role unknown ")
+                && line.contains(" established_as_relayed true ")
+        }));
 
         let mtu_lines = runtime_mtu_lines(
             &forwarder,
@@ -11878,9 +11944,13 @@ mod tests {
             &packet_plane,
             &packet_plane_quic,
         );
-        assert!(path_lines.contains(&format!(
-            "peer selected path: {remote_overlay} direct_udp_datagram score 95 mtu 1200"
-        )));
+        assert!(path_lines.iter().any(|line| {
+            line.starts_with(&format!(
+                "peer selected path: {remote_overlay} direct_udp_datagram score 95 mtu 1200 "
+            )) && line.contains(" origin unknown ")
+                && line.contains(" connection_role unknown ")
+                && line.contains(" established_as_relayed false ")
+        }));
 
         let mtu_lines = runtime_mtu_lines(
             &forwarder,
@@ -12046,10 +12116,13 @@ mod tests {
             fixture.remote_overlay
         )));
         assert!(lines.iter().any(|line| {
-            line == &format!(
-                "peer state: {} transport {} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1200 selected_path_rtt_ms unknown healthy_paths 1 direct_paths 1 relay_paths 0",
+            line.starts_with(&format!(
+                "peer state: {} transport {} validated true effective_mtu 1200 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane false owned_quic_packet_plane false selected_path direct_tcp_stream selected_path_score 40 selected_path_mtu 1200 selected_path_rtt_ms unknown ",
                 fixture.remote_overlay, fixture.remote
-            )
+            )) && line.contains(" selected_path_origin unknown ")
+                && line.contains(" selected_path_connection_role unknown ")
+                && line.contains(" selected_path_established_as_relayed false ")
+                && line.ends_with(" healthy_paths 1 direct_paths 1 relay_paths 0")
         }));
         assert!(lines.iter().any(|line| {
             line == &format!(
@@ -12058,10 +12131,12 @@ mod tests {
             )
         }));
         assert!(lines.iter().any(|line| {
-            line == &format!(
-                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 40 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown",
+            line.starts_with(&format!(
+                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 40 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown ",
                 fixture.remote_overlay
-            )
+            )) && line.contains(" origin unknown ")
+                && line.contains(" connection_role unknown ")
+                && line.contains(" established_as_relayed false ")
         }));
     }
 
