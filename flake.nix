@@ -2698,9 +2698,9 @@ Usage:
 Checks the full public network-move proof.
 
 Required phases:
-  lan-baseline  direct + reciprocal config
-  public-split  relay + reciprocal config
-  lan-return    direct + reciprocal config
+  lan-baseline  direct UDP packet-plane + reciprocal config
+  public-split  relay or DCUtR provenance + reciprocal config
+  lan-return    direct UDP packet-plane + reciprocal config
   all phases    same Host A config and same Host B config
 EOF
             }
@@ -2819,6 +2819,7 @@ EOF
               "$public_split_host_a" \
               "$public_split_host_b" \
               --require-relay \
+              --require-path-provenance \
               --require-config-match
 
             run_phase lan_return \
@@ -2835,17 +2836,41 @@ EOF
               --slurpfile lan_baseline "$tmpdir/lan_baseline.json" \
               --slurpfile public_split "$tmpdir/public_split.json" \
               --slurpfile lan_return "$tmpdir/lan_return.json" \
+              --slurpfile lan_baseline_host_a "$lan_baseline_host_a" \
+              --slurpfile lan_baseline_host_b "$lan_baseline_host_b" \
+              --slurpfile public_split_host_a "$public_split_host_a" \
+              --slurpfile public_split_host_b "$public_split_host_b" \
+              --slurpfile lan_return_host_a "$lan_return_host_a" \
+              --slurpfile lan_return_host_b "$lan_return_host_b" \
               --arg generated_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --argjson lan_baseline_status "$lan_baseline_status" \
               --argjson public_split_status "$public_split_status" \
               --argjson lan_return_status "$lan_return_status" \
-              '{
+              '
+              def metric($e; $name): ($e.metrics[$name] // 0);
+              def all_lines($e):
+                (($e.final_state_lines // [])
+                + ($e.final_path_lines // [])
+                + ($e.path_evidence.provenance_lines // [])
+                + ($e.path_evidence.direct_lines // [])
+                + ($e.path_evidence.relay_lines // []));
+              def selected_direct_udp_packet_plane($e):
+                (all_lines($e) | any(test("selected_path direct_udp_datagram .*selected_path_origin packet_plane_negotiation|peer selected path: .* direct_udp_datagram .* origin packet_plane_negotiation")));
+              def relay_or_dcutr_provenance($e):
+                (metric($e; "dcutr_successes") > 0)
+                or (metric($e; "relayed_connections_established") > 0)
+                or (metric($e; "healthy_relay_paths") > 0)
+                or (all_lines($e) | any(test("selected_path circuit_relay .*selected_path_origin relay_circuit|peer selected path: .* circuit_relay .* origin relay_circuit| origin relay_circuit |relay true")));
+              def ambiguous_identify_only_public($e):
+                (all_lines($e) | any(test("selected_path direct_tcp_stream .*selected_path_origin identify|peer selected path: .* direct_tcp_stream .* origin identify")))
+                and (relay_or_dcutr_provenance($e) | not);
+              {
                 schema_version: 1,
                 generated_utc: $generated_utc,
                 requirements: {
-                  lan_baseline: ["direct", "config_match"],
-                  public_split: ["relay", "config_match"],
-                  lan_return: ["direct", "config_match"],
+                  lan_baseline: ["direct_udp_packet_plane", "config_match"],
+                  public_split: ["relay_or_dcutr_provenance", "config_match", "reject_identify_only"],
+                  lan_return: ["direct_udp_packet_plane", "config_match"],
                   stable_configs: ["same_host_a_config", "same_host_b_config"]
                 },
                 phases: {
@@ -2857,6 +2882,46 @@ EOF
                   {name: "lan_baseline.phase", ok: ($lan_baseline_status == 0 and $lan_baseline[0].ok == true), detail: $lan_baseline_status},
                   {name: "public_split.phase", ok: ($public_split_status == 0 and $public_split[0].ok == true), detail: $public_split_status},
                   {name: "lan_return.phase", ok: ($lan_return_status == 0 and $lan_return[0].ok == true), detail: $lan_return_status},
+                  {
+                    name: "lan_baseline.direct_udp_packet_plane",
+                    ok: (selected_direct_udp_packet_plane($lan_baseline_host_a[0]) and selected_direct_udp_packet_plane($lan_baseline_host_b[0])),
+                    detail: {
+                      host_a: (all_lines($lan_baseline_host_a[0]) | map(select(test("selected_path|peer selected path:"))) | .[0:5]),
+                      host_b: (all_lines($lan_baseline_host_b[0]) | map(select(test("selected_path|peer selected path:"))) | .[0:5])
+                    }
+                  },
+                  {
+                    name: "public_split.relay_or_dcutr_provenance",
+                    ok: (relay_or_dcutr_provenance($public_split_host_a[0]) and relay_or_dcutr_provenance($public_split_host_b[0])),
+                    detail: {
+                      host_a: {
+                        dcutr_successes: metric($public_split_host_a[0]; "dcutr_successes"),
+                        relayed_connections_established: metric($public_split_host_a[0]; "relayed_connections_established"),
+                        healthy_relay_paths: metric($public_split_host_a[0]; "healthy_relay_paths")
+                      },
+                      host_b: {
+                        dcutr_successes: metric($public_split_host_b[0]; "dcutr_successes"),
+                        relayed_connections_established: metric($public_split_host_b[0]; "relayed_connections_established"),
+                        healthy_relay_paths: metric($public_split_host_b[0]; "healthy_relay_paths")
+                      }
+                    }
+                  },
+                  {
+                    name: "public_split.reject_identify_only",
+                    ok: ((ambiguous_identify_only_public($public_split_host_a[0]) or ambiguous_identify_only_public($public_split_host_b[0])) | not),
+                    detail: {
+                      host_a_identify_only: ambiguous_identify_only_public($public_split_host_a[0]),
+                      host_b_identify_only: ambiguous_identify_only_public($public_split_host_b[0])
+                    }
+                  },
+                  {
+                    name: "lan_return.direct_udp_packet_plane",
+                    ok: (selected_direct_udp_packet_plane($lan_return_host_a[0]) and selected_direct_udp_packet_plane($lan_return_host_b[0])),
+                    detail: {
+                      host_a: (all_lines($lan_return_host_a[0]) | map(select(test("selected_path|peer selected path:"))) | .[0:5]),
+                      host_b: (all_lines($lan_return_host_b[0]) | map(select(test("selected_path|peer selected path:"))) | .[0:5])
+                    }
+                  },
                   {
                     name: "host_a.stable_config",
                     ok: (
@@ -4039,6 +4104,8 @@ EOF
               direct="$7"
               relay="$8"
               quic="$9"
+              selected_path="''${10}"
+              selected_origin="''${11}"
 
               if [[ "$direct" -eq 1 ]]; then
                 direct_lines='["peer remote selected_path direct_quic_datagram"]'
@@ -4057,6 +4124,8 @@ EOF
                 --arg peer_route "$peer_route" \
                 --arg ping_target "$ping_target" \
                 --arg config_sha256 "$config_sha256" \
+                --arg selected_path "$selected_path" \
+                --arg selected_origin "$selected_origin" \
                 --argjson direct "$direct" \
                 --argjson relay "$relay" \
                 --argjson quic "$quic" \
@@ -4100,8 +4169,10 @@ EOF
                   path_evidence: {
                     direct_lines: $direct_lines,
                     relay_lines: $relay_lines,
-                    provenance_lines: []
-                  }
+                    provenance_lines: [("peer selected path: remote " + $selected_path + " score 95 mtu 1280 origin " + $selected_origin + " connection_role unknown established_as_relayed " + (if $selected_path == "circuit_relay" then "true" else "false" end) + " first_seen_unix_seconds 1 last_established_unix_seconds 2")]
+                  },
+                  final_state_lines: [("peer state: remote transport remote validated true effective_mtu 1280 quic_datagrams false native_quic_datagrams false owned_udp_packet_plane true owned_quic_packet_plane false selected_path " + $selected_path + " selected_path_score 95 selected_path_mtu 1280 selected_path_rtt_ms 5 selected_path_origin " + $selected_origin + " selected_path_connection_role unknown selected_path_established_as_relayed " + (if $selected_path == "circuit_relay" then "true" else "false" end) + " selected_path_first_seen_unix_seconds 1 selected_path_last_established_unix_seconds 2 healthy_paths 1 direct_paths " + (if $selected_path == "circuit_relay" then "0" else "1" end) + " relay_paths " + (if $selected_path == "circuit_relay" then "1" else "0" end))],
+                  final_path_lines: [("peer selected path: remote " + $selected_path + " score 95 mtu 1280 origin " + $selected_origin + " connection_role unknown established_as_relayed " + (if $selected_path == "circuit_relay" then "true" else "false" end) + " first_seen_unix_seconds 1 last_established_unix_seconds 2")]
                 }' > "$output"
             }
 
@@ -4109,12 +4180,12 @@ EOF
             host_a_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             host_b_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             changed_host_b_sha="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0
-            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0
-            write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 0 1 0
-            write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 1 0
-            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0
-            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0
+            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0 direct_udp_datagram packet_plane_negotiation
+            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0 direct_udp_datagram packet_plane_negotiation
+            write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 0 1 0 circuit_relay relay_circuit
+            write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 1 0 circuit_relay relay_circuit
+            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0 direct_udp_datagram packet_plane_negotiation
+            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0 direct_udp_datagram packet_plane_negotiation
 
             p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
@@ -4128,20 +4199,24 @@ EOF
 
             jq -e '
               .ok == true
-              and .requirements.lan_baseline == ["direct", "config_match"]
-              and .requirements.public_split == ["relay", "config_match"]
-              and .requirements.lan_return == ["direct", "config_match"]
+              and .requirements.lan_baseline == ["direct_udp_packet_plane", "config_match"]
+              and .requirements.public_split == ["relay_or_dcutr_provenance", "config_match", "reject_identify_only"]
+              and .requirements.lan_return == ["direct_udp_packet_plane", "config_match"]
               and .requirements.stable_configs == ["same_host_a_config", "same_host_b_config"]
-              and (.checks | length) == 5
+              and (.checks | length) == 9
               and (.phases.lan_baseline.ok == true)
               and (.phases.public_split.ok == true)
               and (.phases.lan_return.ok == true)
+              and (.checks[] | select(.name == "lan_baseline.direct_udp_packet_plane").ok) == true
+              and (.checks[] | select(.name == "public_split.relay_or_dcutr_provenance").ok) == true
+              and (.checks[] | select(.name == "public_split.reject_identify_only").ok) == true
+              and (.checks[] | select(.name == "lan_return.direct_udp_packet_plane").ok) == true
               and (.checks[] | select(.name == "host_a.stable_config").ok) == true
               and (.checks[] | select(.name == "host_b.stable_config").ok) == true
             ' "$TMPDIR/move-report.json"
             grep -q '^public VPN move evidence check: ok$' "$TMPDIR/move-pass-output.txt"
 
-            write_evidence "$TMPDIR/evidence/split-b-no-relay.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 0 0
+            write_evidence "$TMPDIR/evidence/split-b-no-relay.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 0 0 direct_tcp_stream identify
             if p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
               --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
@@ -4158,7 +4233,7 @@ EOF
             grep -q 'failed: public_split.phase' "$TMPDIR/move-fail-error.txt"
             jq -e '.ok == false and (.phases.public_split.ok == false)' "$TMPDIR/move-fail-report.json"
 
-            write_evidence "$TMPDIR/evidence/split-b-changed-config.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$changed_host_b_sha" 0 1 0
+            write_evidence "$TMPDIR/evidence/split-b-changed-config.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$changed_host_b_sha" 0 1 0 circuit_relay relay_circuit
             if p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
               --lan-baseline-host-b "$TMPDIR/evidence/lan-b.json" \
