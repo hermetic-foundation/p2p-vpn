@@ -56,6 +56,7 @@ impl PathConnectionRole {
 pub struct PathCandidate {
     pub peer: PeerId,
     pub kind: PathKind,
+    pub relay_peer: Option<PeerId>,
     pub observed_rtt_ms: Option<u16>,
     pub estimated_mtu: Option<u16>,
     pub failure_penalty: u16,
@@ -75,6 +76,7 @@ impl PathCandidate {
         Self {
             peer,
             kind,
+            relay_peer: None,
             observed_rtt_ms: None,
             estimated_mtu: None,
             failure_penalty: 0,
@@ -92,6 +94,12 @@ impl PathCandidate {
     #[must_use]
     pub const fn with_estimated_mtu(mut self, mtu: u16) -> Self {
         self.estimated_mtu = Some(mtu);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_relay_peer(mut self, relay_peer: PeerId) -> Self {
+        self.relay_peer = Some(relay_peer);
         self
     }
 
@@ -222,11 +230,14 @@ impl PathSet {
     }
 
     pub fn upsert(&mut self, candidate: PathCandidate) {
-        if let Some(existing) = self
-            .candidates
-            .iter_mut()
-            .find(|existing| existing.peer == candidate.peer && existing.kind == candidate.kind)
-        {
+        if let Some(existing) = self.candidates.iter_mut().find(|existing| {
+            path_candidate_matches(
+                existing,
+                candidate.peer,
+                candidate.kind,
+                candidate.relay_peer,
+            )
+        }) {
             *existing = candidate;
         } else {
             self.candidates.push(candidate);
@@ -269,11 +280,20 @@ impl PathSet {
     }
 
     pub fn mark_unhealthy(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
+        self.mark_unhealthy_for_relay(peer, kind, None)
+    }
+
+    pub fn mark_unhealthy_for_relay(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+    ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
             .iter_mut()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))
         {
             candidate.healthy = false;
             candidate.established_connections = 0;
@@ -302,6 +322,7 @@ impl PathSet {
         self.record_established_with_details(
             peer,
             kind,
+            None,
             estimated_mtu,
             PathOrigin::Unknown,
             PathConnectionRole::Unknown,
@@ -315,6 +336,7 @@ impl PathSet {
         &mut self,
         peer: PeerId,
         kind: PathKind,
+        relay_peer: Option<PeerId>,
         estimated_mtu: Option<u16>,
         origin: PathOrigin,
         connection_role: PathConnectionRole,
@@ -325,9 +347,10 @@ impl PathSet {
         if let Some(candidate) = self
             .candidates
             .iter_mut()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))
         {
             candidate.healthy = true;
+            candidate.relay_peer = relay_peer;
             if let Some(estimated_mtu) = estimated_mtu {
                 candidate.estimated_mtu = Some(estimated_mtu);
             }
@@ -341,6 +364,7 @@ impl PathSet {
             candidate.established_connections = candidate.established_connections.saturating_add(1);
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
+            candidate.relay_peer = relay_peer;
             candidate.estimated_mtu = estimated_mtu;
             candidate.origin = origin;
             candidate.connection_role = connection_role;
@@ -362,6 +386,7 @@ impl PathSet {
         self.record_unconfirmed_with_details(
             peer,
             kind,
+            None,
             estimated_mtu,
             PathOrigin::Unknown,
             matches!(kind, PathKind::CircuitRelay),
@@ -373,6 +398,7 @@ impl PathSet {
         &mut self,
         peer: PeerId,
         kind: PathKind,
+        relay_peer: Option<PeerId>,
         estimated_mtu: Option<u16>,
         origin: PathOrigin,
         established_as_relayed: bool,
@@ -382,9 +408,10 @@ impl PathSet {
         if let Some(candidate) = self
             .candidates
             .iter_mut()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))
         {
             candidate.healthy = false;
+            candidate.relay_peer = relay_peer;
             if let Some(estimated_mtu) = estimated_mtu {
                 candidate.estimated_mtu = Some(estimated_mtu);
             }
@@ -398,6 +425,7 @@ impl PathSet {
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
             candidate.healthy = false;
+            candidate.relay_peer = relay_peer;
             candidate.estimated_mtu = estimated_mtu;
             candidate.origin = origin;
             candidate.established_as_relayed = established_as_relayed;
@@ -410,11 +438,20 @@ impl PathSet {
     }
 
     pub fn record_closed(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
+        self.record_closed_for_relay(peer, kind, None)
+    }
+
+    pub fn record_closed_for_relay(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+    ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         if let Some(candidate) = self
             .candidates
             .iter_mut()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))
         {
             candidate.established_connections = candidate.established_connections.saturating_sub(1);
             if candidate.established_connections == 0 && !candidate.is_relay() {
@@ -425,8 +462,18 @@ impl PathSet {
     }
 
     pub fn lower_path_mtu(&mut self, peer: PeerId, kind: PathKind, mtu: u16) -> bool {
+        self.lower_path_mtu_for_relay(peer, kind, None, mtu)
+    }
+
+    pub fn lower_path_mtu_for_relay(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+        mtu: u16,
+    ) -> bool {
         let Some(candidate) = self.candidates.iter_mut().find(|candidate| {
-            candidate.peer == peer && candidate.kind == kind && candidate.healthy
+            path_candidate_matches(candidate, peer, kind, relay_peer) && candidate.healthy
         }) else {
             return false;
         };
@@ -441,7 +488,7 @@ impl PathSet {
 
     pub fn raise_path_mtu(&mut self, peer: PeerId, kind: PathKind, mtu: u16, ceiling: u16) -> bool {
         let Some(candidate) = self.candidates.iter_mut().find(|candidate| {
-            candidate.peer == peer && candidate.kind == kind && candidate.healthy
+            path_candidate_matches(candidate, peer, kind, None) && candidate.healthy
         }) else {
             return false;
         };
@@ -461,11 +508,21 @@ impl PathSet {
         kind: PathKind,
         rtt_ms: u16,
     ) -> Option<PathSelectionChange> {
+        self.record_rtt_for_relay(peer, kind, None, rtt_ms)
+    }
+
+    pub fn record_rtt_for_relay(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+        rtt_ms: u16,
+    ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
         let candidate = self
             .candidates
             .iter_mut()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)?;
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))?;
         candidate.healthy = true;
         candidate.observed_rtt_ms = Some(rtt_ms);
         candidate.failure_penalty = candidate
@@ -478,7 +535,7 @@ impl PathSet {
     pub fn path_mtu(&self, peer: PeerId, kind: PathKind) -> Option<u16> {
         self.candidates
             .iter()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, None))
             .and_then(|candidate| candidate.estimated_mtu)
     }
 
@@ -486,7 +543,7 @@ impl PathSet {
     pub fn path_rtt(&self, peer: PeerId, kind: PathKind) -> Option<u16> {
         self.candidates
             .iter()
-            .find(|candidate| candidate.peer == peer && candidate.kind == kind)
+            .find(|candidate| path_candidate_matches(candidate, peer, kind, None))
             .and_then(|candidate| candidate.observed_rtt_ms)
     }
 
@@ -496,7 +553,7 @@ impl PathSet {
         previous: Option<PathCandidate>,
     ) -> Option<PathSelectionChange> {
         let current = self.best_for(peer);
-        if previous.map(|path| path.kind) == current.map(|path| path.kind) {
+        if previous.map(path_identity) == current.map(path_identity) {
             None
         } else {
             Some(PathSelectionChange {
@@ -544,6 +601,21 @@ impl PathSet {
 
         stats
     }
+}
+
+fn path_identity(candidate: PathCandidate) -> (PathKind, Option<PeerId>) {
+    (candidate.kind, candidate.relay_peer)
+}
+
+fn path_candidate_matches(
+    candidate: &PathCandidate,
+    peer: PeerId,
+    kind: PathKind,
+    relay_peer: Option<PeerId>,
+) -> bool {
+    candidate.peer == peer
+        && candidate.kind == kind
+        && (!matches!(kind, PathKind::CircuitRelay) || candidate.relay_peer == relay_peer)
 }
 
 #[cfg(test)]
@@ -730,6 +802,178 @@ mod tests {
                 .map(|path| path.kind),
             Some(PathKind::CircuitRelay)
         );
+    }
+
+    #[test]
+    fn tracks_relay_paths_per_relay_peer() {
+        let mut paths = PathSet::new();
+
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(1),
+        );
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(11)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(2),
+        );
+
+        let relay_paths = paths
+            .candidates_for(peer(1))
+            .filter(|candidate| candidate.kind == PathKind::CircuitRelay)
+            .collect::<Vec<_>>();
+
+        assert_eq!(relay_paths.len(), 2);
+        assert!(
+            relay_paths
+                .iter()
+                .any(|candidate| candidate.relay_peer == Some(peer(10)))
+        );
+        assert!(
+            relay_paths
+                .iter()
+                .any(|candidate| candidate.relay_peer == Some(peer(11)))
+        );
+    }
+
+    #[test]
+    fn closing_one_relay_peer_keeps_other_relay_peer_established() {
+        let mut paths = PathSet::new();
+
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(1),
+        );
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(11)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(2),
+        );
+
+        paths.record_closed_for_relay(peer(1), PathKind::CircuitRelay, Some(peer(10)));
+
+        let closed = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(10)))
+            .expect("closed relay candidate");
+        let open = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(11)))
+            .expect("open relay candidate");
+
+        assert_eq!(closed.established_connections, 0);
+        assert_eq!(open.established_connections, 1);
+        assert_eq!(
+            paths.best_for(peer(1)).map(|path| path.relay_peer),
+            Some(Some(peer(11)))
+        );
+    }
+
+    #[test]
+    fn relay_path_rtt_updates_only_matching_relay_peer() {
+        let mut paths = PathSet::new();
+
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(1),
+        );
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(11)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(2),
+        );
+
+        paths.record_rtt_for_relay(peer(1), PathKind::CircuitRelay, Some(peer(10)), 125);
+
+        let first = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(10)))
+            .expect("first relay candidate");
+        let second = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(11)))
+            .expect("second relay candidate");
+
+        assert_eq!(first.observed_rtt_ms, Some(125));
+        assert_eq!(second.observed_rtt_ms, None);
+    }
+
+    #[test]
+    fn relay_path_mtu_updates_only_matching_relay_peer() {
+        let mut paths = PathSet::new();
+
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(1),
+        );
+        paths.record_established_with_details(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(11)),
+            Some(1200),
+            PathOrigin::RelayCircuit,
+            PathConnectionRole::Dialer,
+            true,
+            Some(2),
+        );
+
+        assert!(paths.lower_path_mtu_for_relay(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            1000
+        ));
+
+        let first = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(10)))
+            .expect("first relay candidate");
+        let second = paths
+            .candidates_for(peer(1))
+            .find(|candidate| candidate.relay_peer == Some(peer(11)))
+            .expect("second relay candidate");
+
+        assert_eq!(first.estimated_mtu, Some(1000));
+        assert_eq!(second.estimated_mtu, Some(1200));
     }
 
     #[test]

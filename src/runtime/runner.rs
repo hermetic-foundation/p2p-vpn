@@ -1087,7 +1087,12 @@ async fn send_path_probes(
                 match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD)
                 {
                     Ok(request_id) => {
-                        packet_in_flight.record_path_probe(peer, request_id, path);
+                        packet_in_flight.record_path_probe(
+                            peer,
+                            request_id,
+                            path.kind,
+                            path.relay_peer,
+                        );
                         metrics.record_outbound_path_probe_sent();
                     }
                     Err(error) => {
@@ -1585,13 +1590,14 @@ fn runtime_path_lines(
         let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer selected path: {peer} {} score {} mtu {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+            "peer selected path: {peer} {} score {} mtu {} relay_peer {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             selected_path.map_or("none", |path| path.kind.wire_name()),
             selected_path.map_or_else(|| "none".to_owned(), |path| path.score().to_string()),
             selected_path.map_or_else(
                 || "none".to_owned(),
                 |path| path.effective_mtu(peer_mtu).to_string()
             ),
+            selected_path.map_or_else(|| "none".to_owned(), relay_peer_value),
             selected_path.map_or("unknown", |path| path.origin.wire_name()),
             selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
             selected_path.is_some_and(|path| path.established_as_relayed),
@@ -1605,11 +1611,12 @@ fn runtime_path_lines(
         lines.push(format!("peer path candidates: {peer} {}", candidates.len()));
         for candidate in candidates {
             lines.push(format!(
-                "peer path: {peer} {} healthy {} relay {} direct {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+                "peer path: {peer} {} healthy {} relay {} direct {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
                 candidate.kind.wire_name(),
                 candidate.healthy,
                 candidate.relay,
                 !candidate.relay,
+                relay_peer_value(candidate),
                 candidate.established_connections,
                 candidate.score(),
                 candidate
@@ -1636,6 +1643,11 @@ fn runtime_path_lines(
 fn path_rtt_value(path: crate::path::PathCandidate) -> String {
     path.observed_rtt_ms
         .map_or_else(|| "unknown".to_owned(), |rtt| rtt.to_string())
+}
+
+fn relay_peer_value(path: crate::path::PathCandidate) -> String {
+    path.relay_peer
+        .map_or_else(|| "none".to_owned(), |peer| peer.to_string())
 }
 
 fn runtime_mtu_lines(
@@ -2340,7 +2352,7 @@ fn extend_runtime_peer_state_lines(
         .count();
 
     lines.push(format!(
-        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} selected_path_origin {} selected_path_connection_role {} selected_path_established_as_relayed {} selected_path_first_seen_unix_seconds {} selected_path_last_established_unix_seconds {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
+        "peer state: {peer} transport {transport} validated {} effective_mtu {} quic_datagrams {} native_quic_datagrams {} owned_udp_packet_plane {} owned_quic_packet_plane {} selected_path {} selected_path_score {} selected_path_mtu {} selected_path_rtt_ms {} selected_path_relay_peer {} selected_path_origin {} selected_path_connection_role {} selected_path_established_as_relayed {} selected_path_first_seen_unix_seconds {} selected_path_last_established_unix_seconds {} healthy_paths {healthy_paths} direct_paths {direct_paths} relay_paths {relay_paths}",
         peer_capabilities.contains(peer),
         peer_capabilities.effective_mtu_for(peer, local_mtu),
         support.quic_datagrams,
@@ -2356,6 +2368,7 @@ fn extend_runtime_peer_state_lines(
                 .to_string()
         ),
         selected_path.map_or_else(|| "unknown".to_owned(), path_rtt_value),
+        selected_path.map_or_else(|| "none".to_owned(), relay_peer_value),
         selected_path.map_or("unknown", |path| path.origin.wire_name()),
         selected_path.map_or("unknown", |path| path.connection_role.wire_name()),
         selected_path.is_some_and(|path| path.established_as_relayed),
@@ -2378,10 +2391,11 @@ fn extend_runtime_peer_state_lines(
     for candidate in candidates {
         let peer_mtu = peer_capabilities.effective_mtu_for(peer, local_mtu);
         lines.push(format!(
-            "peer path state: {peer} {} healthy {} relay {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
+            "peer path state: {peer} {} healthy {} relay {} relay_peer {} established_connections {} score {} estimated_mtu {} effective_mtu {} observed_rtt_ms {} origin {} connection_role {} established_as_relayed {} first_seen_unix_seconds {} last_established_unix_seconds {}",
             candidate.kind.wire_name(),
             candidate.healthy,
             candidate.relay,
+            relay_peer_value(candidate),
             candidate.established_connections,
             candidate.score(),
             candidate
@@ -5229,7 +5243,7 @@ async fn send_dequeued_packet_plane_datagram(
             }
         },
         Err(error) => {
-            maybe_learn_path_mtu(context, packet.peer(), path, &error);
+            maybe_learn_path_mtu(context, packet.peer(), path, None, &error);
             maybe_write_packet_too_big(context, packet.payload(), &error);
             context
                 .metrics
@@ -5327,7 +5341,7 @@ async fn send_dequeued_packet_plane_fallback(
             &[
                 ("peer", &attempt.packet.peer().to_string()),
                 ("from", packet_datagram_backend_name(attempt.failed_backend)),
-                ("to", path.wire_name()),
+                ("to", path.kind.wire_name()),
             ],
         );
         send_dequeued_stream_fallback(
@@ -5369,7 +5383,7 @@ fn send_dequeued_stream_fallback(
     forwarder: &Forwarder,
     packet: &crate::queue::Packet,
     peer_mtu: u16,
-    path: PathKind,
+    path: crate::path::PathCandidate,
     context: &mut QueueDrainContext<'_>,
 ) {
     match forwarder.send_queued_packet_with_mtu(swarm, packet, peer_mtu) {
@@ -5379,7 +5393,7 @@ fn send_dequeued_stream_fallback(
             context.metrics.record_outbound_stream_fallback();
         }
         Err(error) => {
-            maybe_learn_path_mtu(context, packet.peer(), path, &error);
+            maybe_learn_path_mtu(context, packet.peer(), path.kind, path.relay_peer, &error);
             maybe_write_packet_too_big(context, packet.payload(), &error);
             context
                 .metrics
@@ -5408,13 +5422,17 @@ fn maybe_learn_path_mtu(
     context: &mut QueueDrainContext<'_>,
     peer: PeerId,
     path: PathKind,
+    relay_peer: Option<PeerId>,
     error: &ForwardError,
 ) {
     let ForwardError::PacketTooLarge { max, .. } = error else {
         return;
     };
     let mtu = u16::try_from(*max).unwrap_or(u16::MAX);
-    if context.paths.lower_path_mtu(peer, path, mtu) {
+    if context
+        .paths
+        .lower_path_mtu_for_relay(peer, path, relay_peer, mtu)
+    {
         context.metrics.record_outbound_path_mtu_update();
         log_runtime_event(
             LogLevel::Info,
@@ -5494,6 +5512,7 @@ struct PacketInFlightRequest {
     peer: PeerId,
     shard: FlowShard,
     path: PathKind,
+    relay_peer: Option<PeerId>,
     sent_at: Instant,
 }
 
@@ -5529,14 +5548,15 @@ impl PacketInFlight {
         &mut self,
         packet: &crate::queue::Packet,
         request_id: request_response::OutboundRequestId,
-        path: PathKind,
+        path: crate::path::PathCandidate,
     ) {
         self.requests.insert(
             request_id,
             PacketInFlightRequest {
                 peer: packet.peer(),
                 shard: packet.flow_shard(),
-                path,
+                path: path.kind,
+                relay_peer: path.relay_peer,
                 sent_at: Instant::now(),
             },
         );
@@ -5551,6 +5571,7 @@ impl PacketInFlight {
         peer: PeerId,
         request_id: request_response::OutboundRequestId,
         path: PathKind,
+        relay_peer: Option<PeerId>,
     ) {
         self.requests.insert(
             request_id,
@@ -5558,6 +5579,7 @@ impl PacketInFlight {
                 peer,
                 shard: 0,
                 path,
+                relay_peer,
                 sent_at: Instant::now(),
             },
         );
@@ -5678,7 +5700,7 @@ enum PacketTransportDecision {
         backend: PacketDatagramBackend,
     },
     StreamFallback {
-        path: PathKind,
+        path: crate::path::PathCandidate,
     },
     Blocked {
         reason: PacketTransportBlockReason,
@@ -5755,7 +5777,7 @@ fn packet_transport_decision(
                 backend: datagram_backend.expect("supported datagram path requires backend"),
             }
         } else {
-            PacketTransportDecision::StreamFallback { path: path.kind }
+            PacketTransportDecision::StreamFallback { path }
         };
     }
 
@@ -5826,13 +5848,13 @@ fn packet_plane_send_stream_fallback_path(
     paths: &PathSet,
     peer_capabilities: &PeerCapabilities,
     peer: PeerId,
-) -> Option<PathKind> {
+) -> Option<crate::path::PathCandidate> {
     paths
         .best_supported_for(
             peer,
             packet_transport_support_for_backend(peer_capabilities, peer, None),
         )
-        .and_then(|path| (!path.kind.requires_quic_datagrams()).then_some(path.kind))
+        .filter(|path| !path.kind.requires_quic_datagrams())
 }
 
 fn packet_transport_support(
@@ -6730,7 +6752,12 @@ fn handle_packet_event(
                             .elapsed()
                             .as_millis()
                             .min(u128::from(u16::MAX)) as u16;
-                        let change = context.paths.record_rtt(request.peer, request.path, rtt_ms);
+                        let change = context.paths.record_rtt_for_relay(
+                            request.peer,
+                            request.path,
+                            request.relay_peer,
+                            rtt_ms,
+                        );
                         record_path_selection_change(context.metrics, change);
                     }
                 }
@@ -8737,6 +8764,7 @@ fn record_packet_plane_path_established(
     let change = paths.record_unconfirmed_with_details(
         peer,
         packet_datagram_backend_path_kind(backend),
+        None,
         Some(mtu),
         PathOrigin::PacketPlaneNegotiation,
         false,
@@ -9309,9 +9337,11 @@ fn record_path_established(
     }
 
     let kind = path_kind_for_endpoint(endpoint);
+    let relay_peer = relay_peer_for_endpoint(endpoint);
     let change = paths.record_established_with_details(
         PeerId::from_libp2p(peer),
         kind,
+        relay_peer,
         Some(initial_path_mtu(
             kind,
             u16::try_from(forwarder.mtu()).unwrap_or(u16::MAX),
@@ -9336,7 +9366,11 @@ fn record_path_closed(
         return;
     }
 
-    let change = paths.record_closed(PeerId::from_libp2p(peer), path_kind_for_endpoint(endpoint));
+    let change = paths.record_closed_for_relay(
+        PeerId::from_libp2p(peer),
+        path_kind_for_endpoint(endpoint),
+        relay_peer_for_endpoint(endpoint),
+    );
     record_path_selection_change(metrics, change);
 }
 
@@ -9608,6 +9642,19 @@ fn path_origin_for_endpoint(endpoint: &ConnectedPoint) -> PathOrigin {
     } else {
         PathOrigin::Identify
     }
+}
+
+fn relay_peer_for_endpoint(endpoint: &ConnectedPoint) -> Option<PeerId> {
+    if !endpoint.is_relayed() {
+        return None;
+    }
+
+    let address = match endpoint {
+        ConnectedPoint::Dialer { address, .. } => address,
+        ConnectedPoint::Listener { local_addr, .. } => local_addr,
+    };
+
+    relayed_address_relay_peer(address).map(PeerId::from_libp2p)
 }
 
 fn path_connection_role_for_endpoint(endpoint: &ConnectedPoint) -> PathConnectionRole {
@@ -11841,7 +11888,7 @@ mod tests {
         }));
         assert!(path_lines.iter().any(|line| {
             line.starts_with(&format!(
-                "peer path: {remote_overlay} circuit_relay healthy true relay true direct false established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown "
+                "peer path: {remote_overlay} circuit_relay healthy true relay true direct false relay_peer none established_connections 1 score 30 estimated_mtu 1000 effective_mtu 1000 observed_rtt_ms unknown "
             )) && line.contains(" origin unknown ")
                 && line.contains(" connection_role unknown ")
                 && line.contains(" established_as_relayed true ")
@@ -12126,7 +12173,7 @@ mod tests {
         }));
         assert!(lines.iter().any(|line| {
             line.starts_with(&format!(
-                "peer path state: {} direct_tcp_stream healthy true relay false established_connections 1 score 40 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown ",
+                "peer path state: {} direct_tcp_stream healthy true relay false relay_peer none established_connections 1 score 40 estimated_mtu unknown effective_mtu 1200 observed_rtt_ms unknown ",
                 fixture.remote_overlay
             )) && line.contains(" origin unknown ")
                 && line.contains(" connection_role unknown ")
@@ -21440,12 +21487,13 @@ mod tests {
             ControlCapabilities::local("lab", None, 1280),
         );
 
-        assert_eq!(
-            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay),
-            PacketTransportDecision::StreamFallback {
-                path: PathKind::DirectQuicStream
-            }
-        );
+        let decision =
+            packet_transport_decision(&paths, &peer_capabilities, None, None, remote_overlay);
+        let PacketTransportDecision::StreamFallback { path } = decision else {
+            panic!("expected stream fallback decision, got {decision:?}");
+        };
+        assert_eq!(path.kind, PathKind::DirectQuicStream);
+        assert_eq!(path.relay_peer, None);
     }
 
     #[test]
