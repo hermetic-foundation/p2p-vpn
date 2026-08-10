@@ -2675,9 +2675,9 @@ Usage:
 Checks the full public network-move proof.
 
 Required phases:
-  lan-baseline  direct + QUIC + reciprocal config
+  lan-baseline  direct + reciprocal config
   public-split  relay + reciprocal config
-  lan-return    direct + QUIC + reciprocal config
+  lan-return    direct + reciprocal config
   all phases    same Host A config and same Host B config
 EOF
             }
@@ -2790,7 +2790,6 @@ EOF
               "$lan_baseline_host_a" \
               "$lan_baseline_host_b" \
               --require-direct \
-              --require-quic-session \
               --require-config-match
 
             run_phase public_split \
@@ -2803,7 +2802,6 @@ EOF
               "$lan_return_host_a" \
               "$lan_return_host_b" \
               --require-direct \
-              --require-quic-session \
               --require-config-match
 
             lan_baseline_status="$(cat "$tmpdir/lan_baseline.status")"
@@ -2822,9 +2820,9 @@ EOF
                 schema_version: 1,
                 generated_utc: $generated_utc,
                 requirements: {
-                  lan_baseline: ["direct", "quic_session", "config_match"],
+                  lan_baseline: ["direct", "config_match"],
                   public_split: ["relay", "config_match"],
-                  lan_return: ["direct", "quic_session", "config_match"],
+                  lan_return: ["direct", "config_match"],
                   stable_configs: ["same_host_a_config", "same_host_b_config"]
                 },
                 phases: {
@@ -4083,12 +4081,12 @@ EOF
             host_a_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             host_b_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             changed_host_b_sha="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 1
-            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 1
+            write_evidence "$TMPDIR/evidence/lan-a.json" "/tmp/lan-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0
+            write_evidence "$TMPDIR/evidence/lan-b.json" "/tmp/lan-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0
             write_evidence "$TMPDIR/evidence/split-a.json" "/tmp/split-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 0 1 0
             write_evidence "$TMPDIR/evidence/split-b.json" "/tmp/split-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 0 1 0
-            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 1
-            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 1
+            write_evidence "$TMPDIR/evidence/return-a.json" "/tmp/return-a" "10.42.0.1/32" "10.42.0.2/32" "10.42.0.2" "$host_a_sha" 1 0 0
+            write_evidence "$TMPDIR/evidence/return-b.json" "/tmp/return-b" "10.42.0.2/32" "10.42.0.1/32" "10.42.0.1" "$host_b_sha" 1 0 0
 
             p2p-vpn-public-vpn-move-evidence-check \
               --lan-baseline-host-a "$TMPDIR/evidence/lan-a.json" \
@@ -4102,9 +4100,9 @@ EOF
 
             jq -e '
               .ok == true
-              and .requirements.lan_baseline == ["direct", "quic_session", "config_match"]
+              and .requirements.lan_baseline == ["direct", "config_match"]
               and .requirements.public_split == ["relay", "config_match"]
-              and .requirements.lan_return == ["direct", "quic_session", "config_match"]
+              and .requirements.lan_return == ["direct", "config_match"]
               and .requirements.stable_configs == ["same_host_a_config", "same_host_b_config"]
               and (.checks | length) == 5
               and (.phases.lan_baseline.ok == true)

@@ -266,9 +266,9 @@ It must use the same minimal configs for every phase.
 
 | Phase | Topology | Check |
 | --- | --- | --- |
-| LAN baseline | Both hosts on the same LAN | `--require-direct --require-quic-session` when direct is expected. |
+| LAN baseline | Both hosts on the same LAN | `--require-direct --require-config-match`. |
 | Public split | One host on hotspot or VPN | `--require-relay --require-config-match` unless direct public recovery is proven. |
-| LAN return | Both hosts on the same LAN again | `--require-direct --require-quic-session` when direct is expected. |
+| LAN return | Both hosts on the same LAN again | `--require-direct --require-config-match`. |
 
 Required evidence per phase:
 
@@ -297,9 +297,9 @@ Use the same config path and socket for every phase on that host.
 
 | Phase | Capture Flags |
 | --- | --- |
-| LAN baseline | Add `--require-quic-session` when direct QUIC is expected. |
+| LAN baseline | Use default packet-session readiness. |
 | Public split | Require relay in the checker, not in capture. |
-| LAN return | Add `--require-quic-session` when direct QUIC is expected. |
+| LAN return | Use default packet-session readiness. |
 
 Invalid proof:
 

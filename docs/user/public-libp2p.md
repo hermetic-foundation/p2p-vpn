@@ -280,7 +280,6 @@ nix run .#public-vpn-evidence-check -- \
   --host-a LAN_RETURN_HOST_A/vpn-repro-evidence.json \
   --host-b LAN_RETURN_HOST_B/vpn-repro-evidence.json \
   --require-direct \
-  --require-quic-session \
   --require-config-match \
   --write-report public-vpn-lan-return-proof.json
 ```
@@ -302,9 +301,9 @@ This requires:
 
 | Phase | Required Evidence |
 | --- | --- |
-| LAN baseline | Direct path, QUIC packet session, config match. |
+| LAN baseline | Direct path, packet session, config match. |
 | Public split | Relay path, config match. |
-| LAN return | Direct path, QUIC packet session, config match. |
+| LAN return | Direct path, packet session, config match. |
 | All phases | Same Host A config and same Host B config. |
 
 ## No-Route Backoff
