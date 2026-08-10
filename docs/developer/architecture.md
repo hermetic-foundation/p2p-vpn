@@ -87,11 +87,19 @@ exists.
 
 | Path Kind | Relative Preference |
 | --- | --- |
-| Direct UDP datagram | highest when healthy |
-| Direct QUIC datagram | highest when healthy |
+| Direct QUIC datagram | highest when negotiated and healthy |
+| Direct UDP datagram | preferred owned packet-plane fallback |
 | Direct QUIC stream | stream fallback |
-| Direct TCP stream | stream fallback |
-| Circuit relay | fallback |
+| Direct TCP stream | lower direct stream fallback |
+| Circuit relay | public reachability fallback |
+
+Capability advertisement follows local support:
+
+| Local Support | Advertised Preferred Path |
+| --- | --- |
+| Owned QUIC packet plane or native QUIC datagrams | Direct QUIC datagram |
+| Owned UDP packet plane only | Direct UDP datagram |
+| Stream-only libp2p | Direct QUIC stream |
 
 ## Candidate Hygiene
 

@@ -74,7 +74,6 @@ pub struct ControlCapabilities {
 impl ControlCapabilities {
     #[must_use]
     pub fn local(network_name: &str, membership_tag: Option<String>, effective_mtu: u16) -> Self {
-        let preferred_path = PathKind::DirectQuicStream;
         Self {
             network_name: network_name.to_owned(),
             membership_tag,
@@ -83,7 +82,7 @@ impl ControlCapabilities {
             packet_protocol: PACKET_PROTOCOL.to_owned(),
             packet_header_len: HEADER_LEN,
             effective_mtu,
-            preferred_path: preferred_path.wire_name().to_owned(),
+            preferred_path: PathKind::DirectQuicStream.wire_name().to_owned(),
             supports_quic_datagrams: false,
             supports_native_quic_datagrams: false,
             supports_owned_udp_packet_plane: false,
@@ -121,11 +120,12 @@ impl ControlCapabilities {
     }
 
     #[must_use]
-    pub const fn with_owned_udp_packet_plane(mut self, supported: bool) -> Self {
+    pub fn with_owned_udp_packet_plane(mut self, supported: bool) -> Self {
         self.supports_owned_udp_packet_plane = supported;
         self.supports_quic_datagrams = self.supports_native_quic_datagrams
             || self.supports_owned_quic_packet_plane
             || supported;
+        self.refresh_preferred_path();
         self
     }
 
@@ -138,6 +138,7 @@ impl ControlCapabilities {
         self.supports_quic_datagrams = self.supports_native_quic_datagrams
             || self.supports_owned_udp_packet_plane
             || supported;
+        self.refresh_preferred_path();
         self
     }
 
@@ -146,6 +147,7 @@ impl ControlCapabilities {
         self.supports_owned_quic_packet_plane = true;
         self.owned_quic_packet_plane_certificate_der = Some(certificate_der);
         self.supports_quic_datagrams = true;
+        self.refresh_preferred_path();
         self
     }
 
@@ -156,11 +158,12 @@ impl ControlCapabilities {
     }
 
     #[must_use]
-    pub const fn with_native_quic_datagrams(mut self, supported: bool) -> Self {
+    pub fn with_native_quic_datagrams(mut self, supported: bool) -> Self {
         self.supports_native_quic_datagrams = supported;
         self.supports_quic_datagrams = supported
             || self.supports_owned_udp_packet_plane
             || self.supports_owned_quic_packet_plane;
+        self.refresh_preferred_path();
         self
     }
 
@@ -170,6 +173,18 @@ impl ControlCapabilities {
             || self.supports_native_quic_datagrams
             || self.supports_owned_udp_packet_plane
             || self.supports_owned_quic_packet_plane
+    }
+
+    fn refresh_preferred_path(&mut self) {
+        let preferred_path =
+            if self.supports_native_quic_datagrams || self.supports_owned_quic_packet_plane {
+                PathKind::DirectQuicDatagram.wire_name()
+            } else if self.supports_owned_udp_packet_plane {
+                PathKind::DirectUdpDatagram.wire_name()
+            } else {
+                PathKind::DirectQuicStream.wire_name()
+            };
+        preferred_path.clone_into(&mut self.preferred_path);
     }
 }
 
@@ -738,6 +753,7 @@ mod tests {
         assert!(!owned.supports_native_quic_datagrams);
         assert!(owned.supports_owned_udp_packet_plane);
         assert!(!owned.supports_owned_quic_packet_plane);
+        assert_eq!(owned.preferred_path, "direct_udp_datagram");
 
         let certificate_der = test_owned_quic_certificate_der();
         let owned_quic = ControlCapabilities::local("lab", None, 1420)
@@ -747,6 +763,7 @@ mod tests {
         assert!(!owned_quic.supports_native_quic_datagrams);
         assert!(!owned_quic.supports_owned_udp_packet_plane);
         assert!(owned_quic.supports_owned_quic_packet_plane);
+        assert_eq!(owned_quic.preferred_path, "direct_quic_datagram");
         assert_eq!(
             owned_quic
                 .owned_quic_packet_plane_certificate_der
@@ -759,6 +776,7 @@ mod tests {
         assert!(native.supports_native_quic_datagrams);
         assert!(!native.supports_owned_udp_packet_plane);
         assert!(!native.supports_owned_quic_packet_plane);
+        assert_eq!(native.preferred_path, "direct_quic_datagram");
     }
 
     #[test]

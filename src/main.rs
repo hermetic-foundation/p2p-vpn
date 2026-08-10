@@ -3158,6 +3158,14 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
     let local_peer_display = config
         .local_peer()
         .map_err(|error| format!("failed to resolve local peer: {error:?}"))?;
+    let packet_endpoint_candidates = config
+        .packet_plane_endpoint_candidates()
+        .map_err(|error| format!("failed to parse packet endpoints: {error:?}"))?;
+    let packet_plane_listeners = config
+        .packet_plane_listen_addrs()
+        .map_err(|error| format!("failed to parse packet-plane listeners: {error:?}"))?;
+    let owned_udp_packet_plane =
+        !packet_endpoint_candidates.is_empty() || !packet_plane_listeners.is_empty();
     let capabilities = p2p_vpn::runtime::control::ControlCapabilities::local(
         &config.network.name,
         config
@@ -3165,11 +3173,7 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
             .map_err(|error| format!("failed to compute membership tag: {error:?}"))?,
         config.effective_packet_mtu(),
     )
-    .with_packet_endpoint_candidates(
-        config
-            .packet_plane_endpoint_candidates()
-            .map_err(|error| format!("failed to parse packet endpoints: {error:?}"))?,
-    )
+    .with_packet_endpoint_candidates(packet_endpoint_candidates)
     .with_owned_quic_packet_endpoint_candidates(
         config
             .packet_plane_quic_endpoint_candidates()
@@ -3182,7 +3186,8 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
                 p2p_vpn::runtime::control::ControlRoute::new(route.prefix.to_string(), route.metric)
             })
             .collect(),
-    );
+    )
+    .with_owned_udp_packet_plane(owned_udp_packet_plane);
     let mut lines = vec![
         format!("local peer: {local_peer_display}"),
         format!("configured peers: {}", config.peers.len()),
@@ -6347,8 +6352,9 @@ mod tests {
             )]);
         let status = RemotePeerStatus {
             peer,
-            capabilities,
+            capabilities: capabilities.clone(),
             service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+                .with_packet_data_plane_capabilities(&capabilities)
                 .with_packet_plane_session_ttl_seconds(321)
                 .with_packet_plane_replay_windows_per_session(654)
                 .with_selected_path(
@@ -6413,7 +6419,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "preferred path: direct QUIC stream")
+                .any(|line| line == "preferred path: direct QUIC datagram")
         );
         assert!(
             lines
@@ -6520,8 +6526,9 @@ mod tests {
             )]);
         let status = RemotePeerStatus {
             peer,
-            capabilities,
+            capabilities: capabilities.clone(),
             service: p2p_vpn::runtime::service::ServiceStatusResponse::local("lab", None, 1, 1200)
+                .with_packet_data_plane_capabilities(&capabilities)
                 .with_selected_path(
                     PathKind::DirectQuicStream.wire_name().to_owned(),
                     59,
@@ -6593,8 +6600,12 @@ mod tests {
         );
         assert!(lines.iter().any(|line| line
             == &format!("peer live packet plane replay windows per session: {peer} unknown")));
-        assert!(lines.iter().any(|line| line
-            == &format!("peer live preferred path: {peer} direct QUIC stream")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line
+                    == &format!("peer live preferred path: {peer} direct QUIC datagram"))
+        );
         assert!(
             lines.iter().any(|line| line
                 == &format!("peer live advertised route: {peer} 10.42.0.0/24 metric 100"))
@@ -6848,7 +6859,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "local capability preferred path: direct QUIC stream")
+                .any(|line| line == "local capability preferred path: direct UDP datagram")
         );
         assert!(
             lines

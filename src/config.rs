@@ -811,18 +811,19 @@ impl ResourceConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeDefaults {
     pub preferred_path: PathKind,
-    pub fallback_paths: [PathKind; 3],
+    pub fallback_paths: [PathKind; 4],
     pub initial_mtu: u16,
 }
 
 impl Default for RuntimeDefaults {
     fn default() -> Self {
         Self {
-            preferred_path: PathKind::DirectQuicStream,
+            preferred_path: PathKind::DirectQuicDatagram,
             fallback_paths: [
+                PathKind::DirectUdpDatagram,
+                PathKind::DirectQuicStream,
                 PathKind::DirectTcpStream,
                 PathKind::CircuitRelay,
-                PathKind::DirectQuicDatagram,
             ],
             initial_mtu: 1_280,
         }
