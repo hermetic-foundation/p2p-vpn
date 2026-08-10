@@ -9473,16 +9473,10 @@ fn maybe_demote_stream_fallback_path(
 
 const fn stream_fallback_failure_demotes_path(
     path: PathKind,
-    error: &request_response::OutboundFailure,
+    _error: &request_response::OutboundFailure,
 ) -> bool {
     if matches!(path, PathKind::CircuitRelay) {
-        return matches!(
-            error,
-            request_response::OutboundFailure::DialFailure
-                | request_response::OutboundFailure::Timeout
-                | request_response::OutboundFailure::ConnectionClosed
-                | request_response::OutboundFailure::UnsupportedProtocols
-        );
+        return false;
     }
 
     true
@@ -16977,14 +16971,14 @@ mod tests {
     }
 
     #[test]
-    fn stream_fallback_failure_demotes_relay_path_for_rotation() {
+    fn stream_fallback_dial_failure_keeps_relay_path_selectable() {
         let peer = PeerId::from_bytes([12; 32]);
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
         paths.record_established(peer, PathKind::CircuitRelay);
 
-        assert!(maybe_demote_stream_fallback_path(
+        assert!(!maybe_demote_stream_fallback_path(
             &mut paths,
             &metrics,
             peer,
@@ -16992,21 +16986,24 @@ mod tests {
             &request_response::OutboundFailure::DialFailure,
         ));
 
-        assert_eq!(paths.best_for(peer).map(|candidate| candidate.kind), None);
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
+        assert_eq!(snapshot.stream_fallback_path_demotions, 0);
         assert_eq!(snapshot.path_fallbacks_to_relay, 0);
     }
 
     #[test]
-    fn stream_fallback_timeout_demotes_relay_path_for_rotation() {
+    fn stream_fallback_timeout_keeps_relay_path_selectable() {
         let peer = PeerId::from_bytes([12; 32]);
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
 
         paths.record_established(peer, PathKind::CircuitRelay);
 
-        assert!(maybe_demote_stream_fallback_path(
+        assert!(!maybe_demote_stream_fallback_path(
             &mut paths,
             &metrics,
             peer,
@@ -17014,13 +17011,16 @@ mod tests {
             &request_response::OutboundFailure::Timeout,
         ));
 
-        assert_eq!(paths.best_for(peer).map(|candidate| candidate.kind), None);
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
+        assert_eq!(snapshot.stream_fallback_path_demotions, 0);
     }
 
     #[test]
-    fn stream_fallback_connection_close_demotes_relay_path_for_rotation() {
+    fn stream_fallback_connection_close_keeps_relay_path_selectable() {
         let peer = PeerId::from_bytes([12; 32]);
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
@@ -17028,7 +17028,7 @@ mod tests {
         paths.record_established(peer, PathKind::CircuitRelay);
         paths.record_rtt(peer, PathKind::CircuitRelay, 500);
 
-        assert!(maybe_demote_stream_fallback_path(
+        assert!(!maybe_demote_stream_fallback_path(
             &mut paths,
             &metrics,
             peer,
@@ -17036,9 +17036,12 @@ mod tests {
             &request_response::OutboundFailure::ConnectionClosed,
         ));
 
-        assert_eq!(paths.best_for(peer).map(|candidate| candidate.kind), None);
+        assert_eq!(
+            paths.best_for(peer).map(|candidate| candidate.kind),
+            Some(PathKind::CircuitRelay)
+        );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
-        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
+        assert_eq!(snapshot.stream_fallback_path_demotions, 0);
     }
 
     #[tokio::test]
