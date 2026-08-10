@@ -62,7 +62,7 @@ Runtime route advertisements are claims, not dynamic routing authority.
 | Owned Quinn QUIC DATAGRAM packet plane | Implemented. |
 | Direct libp2p QUIC stream | Connection-pinned packet stream. |
 | libp2p TCP stream fallback | Compatibility request-response stream. |
-| libp2p circuit relay stream fallback | Compatibility request-response stream. |
+| libp2p circuit relay stream fallback | Connection-pinned packet stream. |
 | Native libp2p QUIC DATAGRAM | Blocked by dependency surface. |
 
 ## Queueing
@@ -91,7 +91,7 @@ exists.
 | Direct UDP datagram | preferred owned packet-plane fallback |
 | Direct QUIC stream | connection-pinned stream fallback |
 | Direct TCP stream | lower direct stream fallback |
-| Circuit relay | public reachability fallback |
+| Circuit relay | connection-pinned public reachability fallback |
 
 Capability advertisement follows local support:
 
@@ -109,10 +109,10 @@ Stream fallback evidence is split by selected path:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent through selected direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent through selected circuit relay stream fallback. |
 
-Direct QUIC stream egress uses the latest libp2p `connection_id`.
+Direct QUIC stream and circuit relay egress use the latest libp2p
+`connection_id`.
 
-TCP and relay stream egress still use the compatibility request-response
-stream path.
+TCP stream egress still uses the compatibility request-response stream path.
 
 ## Candidate Hygiene
 

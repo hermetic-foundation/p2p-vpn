@@ -5410,8 +5410,11 @@ fn send_dequeued_stream_fallback(
     path: crate::path::PathCandidate,
     context: &mut QueueDrainContext<'_>,
 ) {
-    if path.kind == PathKind::DirectQuicStream {
-        send_dequeued_pinned_quic_stream(swarm, forwarder, packet, peer_mtu, path, context);
+    if matches!(
+        path.kind,
+        PathKind::DirectQuicStream | PathKind::CircuitRelay
+    ) {
+        send_dequeued_pinned_stream(swarm, forwarder, packet, peer_mtu, path, context);
         return;
     }
 
@@ -5436,7 +5439,7 @@ fn send_dequeued_stream_fallback(
     }
 }
 
-fn send_dequeued_pinned_quic_stream(
+fn send_dequeued_pinned_stream(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     packet: &crate::queue::Packet,
@@ -5449,7 +5452,7 @@ fn send_dequeued_pinned_quic_stream(
             .metrics
             .record_outbound_drop(PacketDropReason::NoRoute);
         eprintln!(
-            "dropping queued outbound QUIC stream packet: selected path has no connection id"
+            "dropping queued outbound pinned stream packet: selected path has no connection id"
         );
         return;
     };
@@ -5457,7 +5460,7 @@ fn send_dequeued_pinned_quic_stream(
         context
             .metrics
             .record_outbound_drop(PacketDropReason::NoRoute);
-        eprintln!("dropping queued outbound QUIC stream packet: missing transport peer");
+        eprintln!("dropping queued outbound pinned stream packet: missing transport peer");
         return;
     };
 
@@ -5481,7 +5484,7 @@ fn send_dequeued_pinned_quic_stream(
             context
                 .metrics
                 .record_outbound_drop(outbound_drop_reason(&error));
-            eprintln!("dropping queued outbound QUIC stream packet: {error:?}");
+            eprintln!("dropping queued outbound pinned stream packet: {error:?}");
         }
     }
 }
@@ -19470,6 +19473,81 @@ mod tests {
         assert_eq!(snapshot.outbound_direct_quic_stream_fallback_packets, 1);
         assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 0);
         assert_eq!(snapshot.outbound_relay_stream_fallback_packets, 0);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    async fn drain_outbound_queue_records_pinned_relay_stream_fallback() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let relay = PeerId::from_libp2p(peer_id());
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let local_overlay = local_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("local overlay peer");
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut queues = PeerQueues::new(4, 4096);
+        forwarder
+            .enqueue_tun_packet(
+                &mut queues,
+                ipv4_packet(builtin_ipv4(local_overlay), builtin_ipv4(remote_overlay)),
+            )
+            .expect("queued");
+        let mut paths = PathSet::new();
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::CircuitRelay,
+            Some(relay),
+            Some(1280),
+            crate::path::PathOrigin::RelayCircuit,
+            crate::path::PathConnectionRole::Dialer,
+            true,
+            Some(ConnectionId::new_unchecked(11)),
+            Some(123),
+        );
+        let mut peer_capabilities = PeerCapabilities::default();
+        peer_capabilities.record(
+            remote_overlay,
+            ControlCapabilities::local("lab", None, 1280),
+        );
+        let metrics = RuntimeMetrics::default();
+        let mut packet_in_flight = PacketInFlight::new(256);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 1);
+        assert_eq!(snapshot.outbound_direct_quic_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_direct_tcp_stream_fallback_packets, 0);
+        assert_eq!(snapshot.outbound_relay_stream_fallback_packets, 1);
         assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
     }
