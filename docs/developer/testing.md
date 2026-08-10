@@ -241,6 +241,7 @@ Coverage:
 | Scenario | Assertion |
 | --- | --- |
 | Complete evidence | Health, ping, supported path, packet session, relay, direct, DCUtR, and QUIC checks pass. |
+| Path-specific evidence | Direct QUIC datagram, direct QUIC stream, direct TCP stream, and relay stream requirements are checked separately. |
 | Missing relay proof | `--require-relay` fails when Host B has no relay evidence. |
 | Report output | The generated JSON report marks each named check. |
 
@@ -254,6 +255,15 @@ nix run .#public-vpn-evidence-check -- \
   --require-config-match \
   --write-report public-vpn-proof.json
 ```
+
+Add path-specific requirements when the proof must show a transport layer:
+
+| Flag | Evidence |
+| --- | --- |
+| `--require-direct-quic-datagram` | QUIC packet-plane session or direct QUIC datagram path. |
+| `--require-direct-quic-stream` | Healthy direct QUIC stream path or fallback packets. |
+| `--require-direct-tcp-stream` | Healthy direct TCP stream path or fallback packets. |
+| `--require-relay-stream` | Healthy relay path or relay fallback packets. |
 
 Add `--require-direct --require-dcutr --require-quic-session` for strict
 hole-punch evidence.

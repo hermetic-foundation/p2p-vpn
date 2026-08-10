@@ -272,6 +272,15 @@ nix run .#public-vpn-evidence-check -- \
   --write-report public-vpn-hotspot-proof.json
 ```
 
+Require a specific packet path when needed:
+
+| Flag | Proves |
+| --- | --- |
+| `--require-direct-quic-datagram` | Direct QUIC datagram path or session. |
+| `--require-direct-quic-stream` | Direct QUIC stream fallback path. |
+| `--require-direct-tcp-stream` | Direct TCP stream fallback path. |
+| `--require-relay-stream` | Relay stream fallback path. |
+
 Check a strict direct recovery phase when expected:
 
 ```sh

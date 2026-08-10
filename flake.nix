@@ -2431,6 +2431,10 @@ Usage:
     [--require-dcutr] \
     [--require-path-provenance] \
     [--require-quic-session] \
+    [--require-direct-quic-datagram] \
+    [--require-direct-quic-stream] \
+    [--require-direct-tcp-stream] \
+    [--require-relay-stream] \
     [--require-config-match] \
     [--min-packet-sessions N]
 
@@ -2446,6 +2450,10 @@ EOF
             require_dcutr=0
             require_path_provenance=0
             require_quic=0
+            require_direct_quic_datagram=0
+            require_direct_quic_stream=0
+            require_direct_tcp_stream=0
+            require_relay_stream=0
             require_config_match=0
             min_packet_sessions=1
 
@@ -2481,6 +2489,22 @@ EOF
                   ;;
                 --require-quic-session)
                   require_quic=1
+                  shift
+                  ;;
+                --require-direct-quic-datagram)
+                  require_direct_quic_datagram=1
+                  shift
+                  ;;
+                --require-direct-quic-stream)
+                  require_direct_quic_stream=1
+                  shift
+                  ;;
+                --require-direct-tcp-stream)
+                  require_direct_tcp_stream=1
+                  shift
+                  ;;
+                --require-relay-stream)
+                  require_relay_stream=1
                   shift
                   ;;
                 --require-config-match)
@@ -2528,10 +2552,19 @@ EOF
               --argjson require_dcutr "$require_dcutr" \
               --argjson require_path_provenance "$require_path_provenance" \
               --argjson require_quic "$require_quic" \
+              --argjson require_direct_quic_datagram "$require_direct_quic_datagram" \
+              --argjson require_direct_quic_stream "$require_direct_quic_stream" \
+              --argjson require_direct_tcp_stream "$require_direct_tcp_stream" \
+              --argjson require_relay_stream "$require_relay_stream" \
               --argjson require_config_match "$require_config_match" \
               --argjson min_packet_sessions "$min_packet_sessions" \
               '
               def metric($e; $name): ($e.metrics[$name] // 0);
+              def final_lines($e):
+                (($e.final_path_lines // [])
+                + ($e.final_state_lines // [])
+                + ($e.path_evidence.direct_lines // [])
+                + ($e.path_evidence.relay_lines // []));
               def route_set($e; $name): (($e.config_summary[$name] // []) | sort);
               def summary($e; $name): ($e.config_summary[$name] // null);
               def direct_evidence($e):
@@ -2544,6 +2577,22 @@ EOF
                 ((metric($e; "relayed_connections_established") > 0)
                 or (metric($e; "healthy_relay_paths") > 0)
                 or (($e.path_evidence.relay_lines // []) | length > 0));
+              def direct_quic_datagram_evidence($e):
+                (metric($e; "healthy_direct_quic_datagram_paths") > 0)
+                or (metric($e; "packet_plane_quic_sessions") > 0)
+                or ((final_lines($e) | map(select(test("direct_quic_datagram"))) | length) > 0);
+              def direct_quic_stream_evidence($e):
+                (metric($e; "healthy_direct_quic_stream_paths") > 0)
+                or (metric($e; "outbound_direct_quic_stream_fallback_packets") > 0)
+                or ((final_lines($e) | map(select(test("direct_quic_stream"))) | length) > 0);
+              def direct_tcp_stream_evidence($e):
+                (metric($e; "healthy_direct_tcp_stream_paths") > 0)
+                or (metric($e; "outbound_direct_tcp_stream_fallback_packets") > 0)
+                or ((final_lines($e) | map(select(test("direct_tcp_stream"))) | length) > 0);
+              def relay_stream_evidence($e):
+                (metric($e; "healthy_relay_paths") > 0)
+                or (metric($e; "outbound_relay_stream_fallback_packets") > 0)
+                or ((final_lines($e) | map(select(test("circuit_relay"))) | length) > 0);
               def provenance_lines($e):
                 (($e.path_evidence.provenance_lines // [])
                 + (($e.final_path_lines // []) | map(select(test(" origin "))))
@@ -2603,12 +2652,44 @@ EOF
                   }
                 },
                 {
+                  name: ($name + ".direct_quic_datagram_path"),
+                  ok: (($require_direct_quic_datagram == 0) or direct_quic_datagram_evidence($e)),
+                  detail: {
+                    packet_plane_quic_sessions: metric($e; "packet_plane_quic_sessions"),
+                    healthy_direct_quic_datagram_paths: metric($e; "healthy_direct_quic_datagram_paths")
+                  }
+                },
+                {
+                  name: ($name + ".direct_quic_stream_path"),
+                  ok: (($require_direct_quic_stream == 0) or direct_quic_stream_evidence($e)),
+                  detail: {
+                    healthy_direct_quic_stream_paths: metric($e; "healthy_direct_quic_stream_paths"),
+                    outbound_direct_quic_stream_fallback_packets: metric($e; "outbound_direct_quic_stream_fallback_packets")
+                  }
+                },
+                {
+                  name: ($name + ".direct_tcp_stream_path"),
+                  ok: (($require_direct_tcp_stream == 0) or direct_tcp_stream_evidence($e)),
+                  detail: {
+                    healthy_direct_tcp_stream_paths: metric($e; "healthy_direct_tcp_stream_paths"),
+                    outbound_direct_tcp_stream_fallback_packets: metric($e; "outbound_direct_tcp_stream_fallback_packets")
+                  }
+                },
+                {
                   name: ($name + ".relay_evidence"),
                   ok: (($require_relay == 0) or relay_evidence($e)),
                   detail: {
                     relayed_connections_established: metric($e; "relayed_connections_established"),
                     healthy_relay_paths: metric($e; "healthy_relay_paths"),
                     relay_lines: (($e.path_evidence.relay_lines // []) | length)
+                  }
+                },
+                {
+                  name: ($name + ".relay_stream_path"),
+                  ok: (($require_relay_stream == 0) or relay_stream_evidence($e)),
+                  detail: {
+                    healthy_relay_paths: metric($e; "healthy_relay_paths"),
+                    outbound_relay_stream_fallback_packets: metric($e; "outbound_relay_stream_fallback_packets")
                   }
                 },
                 {
@@ -2652,6 +2733,10 @@ EOF
                   require_relay: ($require_relay == 1),
                   require_dcutr: ($require_dcutr == 1),
                   require_path_provenance: ($require_path_provenance == 1),
+                  require_direct_quic_datagram: ($require_direct_quic_datagram == 1),
+                  require_direct_quic_stream: ($require_direct_quic_stream == 1),
+                  require_direct_tcp_stream: ($require_direct_tcp_stream == 1),
+                  require_relay_stream: ($require_relay_stream == 1),
                   require_config_match: ($require_config_match == 1)
                 },
                 checks: $checks,
@@ -3944,9 +4029,13 @@ EOF
           } ''
             host_a="$TMPDIR/host-a-evidence.json"
             host_b="$TMPDIR/host-b-evidence.json"
+            host_a_quic_stream="$TMPDIR/host-a-quic-stream-evidence.json"
+            host_b_quic_stream="$TMPDIR/host-b-quic-stream-evidence.json"
             host_b_no_relay="$TMPDIR/host-b-no-relay-evidence.json"
             host_b_bad_config="$TMPDIR/host-b-bad-config-evidence.json"
+            host_b_no_quic_stream="$TMPDIR/host-b-no-quic-stream-evidence.json"
             report="$TMPDIR/evidence-report.json"
+            quic_stream_report="$TMPDIR/evidence-quic-stream-report.json"
 
             cat > "$host_a" <<'EOF'
 {
@@ -3982,7 +4071,10 @@ EOF
     "healthy_direct_quic_datagram_paths": 1,
     "healthy_direct_quic_stream_paths": 0,
     "healthy_direct_tcp_stream_paths": 0,
-    "healthy_relay_paths": 1
+    "healthy_relay_paths": 1,
+    "outbound_direct_quic_stream_fallback_packets": 0,
+    "outbound_direct_tcp_stream_fallback_packets": 0,
+    "outbound_relay_stream_fallback_packets": 1
   },
   "path_evidence": {
     "direct_lines": ["peer b selected_path direct_quic_datagram"],
@@ -4025,7 +4117,10 @@ EOF
     "healthy_direct_quic_datagram_paths": 1,
     "healthy_direct_quic_stream_paths": 0,
     "healthy_direct_tcp_stream_paths": 0,
-    "healthy_relay_paths": 1
+    "healthy_relay_paths": 1,
+    "outbound_direct_quic_stream_fallback_packets": 0,
+    "outbound_direct_tcp_stream_fallback_packets": 0,
+    "outbound_relay_stream_fallback_packets": 1
   },
   "path_evidence": {
     "direct_lines": ["peer a selected_path direct_quic_datagram"],
@@ -4040,6 +4135,22 @@ EOF
               "$host_b" > "$host_b_no_relay"
             jq '.config_summary.peer_address_count = 1' \
               "$host_b" > "$host_b_bad_config"
+            jq '.metrics.healthy_direct_quic_datagram_paths = 0
+              | .metrics.packet_plane_quic_sessions = 0
+              | .metrics.healthy_direct_quic_stream_paths = 1
+              | .metrics.outbound_direct_quic_stream_fallback_packets = 2
+              | .path_evidence.direct_lines = ["peer b selected_path direct_quic_stream"]' \
+              "$host_a" > "$host_a_quic_stream"
+            jq '.metrics.healthy_direct_quic_datagram_paths = 0
+              | .metrics.packet_plane_quic_sessions = 0
+              | .metrics.healthy_direct_quic_stream_paths = 1
+              | .metrics.outbound_direct_quic_stream_fallback_packets = 2
+              | .path_evidence.direct_lines = ["peer a selected_path direct_quic_stream"]' \
+              "$host_b" > "$host_b_quic_stream"
+            jq '.metrics.healthy_direct_quic_stream_paths = 0
+              | .metrics.outbound_direct_quic_stream_fallback_packets = 0
+              | .path_evidence.direct_lines = []' \
+              "$host_b_quic_stream" > "$host_b_no_quic_stream"
 
             p2p-vpn-public-vpn-evidence-check \
               --host-a "$host_a" \
@@ -4049,6 +4160,8 @@ EOF
               --require-dcutr \
               --require-path-provenance \
               --require-quic-session \
+              --require-direct-quic-datagram \
+              --require-relay-stream \
               --require-config-match \
               --write-report "$report" \
               | tee "$TMPDIR/pass-output.txt"
@@ -4060,11 +4173,30 @@ EOF
               and .requirements.require_dcutr == true
               and .requirements.require_path_provenance == true
               and .requirements.require_quic_session == true
+              and .requirements.require_direct_quic_datagram == true
+              and .requirements.require_relay_stream == true
               and .requirements.require_config_match == true
-              and (.checks | length) == 19
+              and (.checks | length) == 27
               and (.checks[] | select(.name == "pair.config_match").ok) == true
             ' "$report"
             grep -q '^public VPN evidence check: ok$' "$TMPDIR/pass-output.txt"
+
+            p2p-vpn-public-vpn-evidence-check \
+              --host-a "$host_a_quic_stream" \
+              --host-b "$host_b_quic_stream" \
+              --require-direct \
+              --require-direct-quic-stream \
+              --require-config-match \
+              --min-packet-sessions 0 \
+              --write-report "$quic_stream_report" \
+              | tee "$TMPDIR/quic-stream-pass-output.txt"
+            jq -e '
+              .ok == true
+              and .requirements.require_direct_quic_stream == true
+              and (.checks[] | select(.name == "host_a.direct_quic_stream_path").ok) == true
+              and (.checks[] | select(.name == "host_b.direct_quic_stream_path").ok) == true
+            ' "$quic_stream_report"
+            grep -q '^public VPN evidence check: ok$' "$TMPDIR/quic-stream-pass-output.txt"
 
             if p2p-vpn-public-vpn-evidence-check \
               --host-a "$host_a" \
@@ -4076,6 +4208,18 @@ EOF
               exit 1
             fi
             grep -q 'failed: host_b.relay_evidence' "$TMPDIR/fail-error.txt"
+
+            if p2p-vpn-public-vpn-evidence-check \
+              --host-a "$host_a_quic_stream" \
+              --host-b "$host_b_no_quic_stream" \
+              --require-direct-quic-stream \
+              --min-packet-sessions 0 \
+              > "$TMPDIR/quic-stream-fail-output.txt" 2> "$TMPDIR/quic-stream-fail-error.txt"
+            then
+              echo "missing direct QUIC stream evidence was accepted" >&2
+              exit 1
+            fi
+            grep -q 'failed: host_b.direct_quic_stream_path' "$TMPDIR/quic-stream-fail-error.txt"
 
             if p2p-vpn-public-vpn-evidence-check \
               --host-a "$host_a" \
