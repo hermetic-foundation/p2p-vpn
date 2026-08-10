@@ -579,7 +579,9 @@ let
         ProtectHostname = true;
         ProtectKernelLogs = true;
         ProtectKernelModules = true;
-        ProtectKernelTunables = true;
+        # The daemon creates its TUN device and then applies per-interface
+        # net.ipv4.conf.<ifname> sysctls needed for overlay host routing.
+        ProtectKernelTunables = false;
         ProtectSystem = "strict";
         RestrictAddressFamilies = [
           "AF_INET"

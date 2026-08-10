@@ -2985,7 +2985,7 @@ EOF
             test "$protectHostname" = true
             test "$protectKernelLogs" = true
             test "$protectKernelModules" = true
-            test "$protectKernelTunables" = true
+            test "$protectKernelTunables" = false
             test "$protectSystem" = strict
             test "$restrictAddressFamilies" = '["AF_INET","AF_INET6","AF_NETLINK","AF_UNIX"]'
             test "$restrictRealtime" = true
