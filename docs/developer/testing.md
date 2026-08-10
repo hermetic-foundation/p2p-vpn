@@ -80,6 +80,7 @@ Coverage:
 | Release archive | `releaseArchiveSanity` |
 | NixOS service | `nixos-module` |
 | Minimal LAN | `nixos-vm-minimal-lan` |
+| QUIC datagram | `nixos-vm-quic-datagram` |
 | QUIC stream | `nixos-vm-quic-stream` |
 | Forced relay | `nixos-vm-forced-relay` |
 | Network move | `nixos-vm-network-move` |
@@ -133,6 +134,25 @@ Coverage:
 | TUN setup | Both nodes create default `pv0`. |
 | Data plane | Bidirectional ping crosses the overlay. |
 | Packet plane | A direct LAN packet-plane session is negotiated. |
+
+## NixOS VM QUIC Datagram
+
+Run the QUIC datagram preference check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-quic-datagram
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Test config | libp2p QUIC stream and owned QUIC datagram endpoints are explicit. |
+| Packet plane | UDP packet-plane endpoints are disabled. |
+| Data plane | Bidirectional ping crosses `pv0`. |
+| Path proof | Selected path is `direct_quic_datagram`. |
+| Preference | QUIC stream path is healthy but unused for packet fallback. |
+| Metrics | QUIC datagram packets and QUIC sessions are counted. |
 
 ## NixOS VM QUIC Stream
 
@@ -220,6 +240,7 @@ Coverage:
 | Release archive | Archive sanity check passed. |
 | NixOS module | Module evaluation and service assertions passed. |
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
+| QUIC datagram | `nixos-vm-quic-datagram` passed. |
 | QUIC stream | `nixos-vm-quic-stream` passed. |
 | Forced relay | `nixos-vm-forced-relay` passed. |
 | Network move | `nixos-vm-network-move` passed. |

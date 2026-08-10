@@ -131,6 +131,7 @@ USAGE
 
             vm_checks=(
               ".#checks.$system.nixos-vm-minimal-lan"
+              ".#checks.$system.nixos-vm-quic-datagram"
               ".#checks.$system.nixos-vm-quic-stream"
               ".#checks.$system.nixos-vm-forced-relay"
               ".#checks.$system.nixos-vm-network-move"
@@ -3191,6 +3192,9 @@ EOF
         nixosVmMesh = import ./tests/nixos/mesh.nix {
           inherit self pkgs package;
         };
+        nixosVmQuicDatagram = import ./tests/nixos/quic-datagram.nix {
+          inherit self pkgs package;
+        };
         nixosVmQuicStream = import ./tests/nixos/quic-stream.nix {
           inherit self pkgs package;
         };
@@ -3640,6 +3644,7 @@ EOF
           nixos-vm-smoke = nixosVmSmoke;
           nixos-vm-minimal-lan = nixosVmMesh;
           nixos-vm-mesh = nixosVmMesh;
+          nixos-vm-quic-datagram = nixosVmQuicDatagram;
           nixos-vm-quic-stream = nixosVmQuicStream;
           nixos-vm-forced-relay = nixosVmForcedRelay;
           nixos-vm-network-move = nixosVmNetworkMove;

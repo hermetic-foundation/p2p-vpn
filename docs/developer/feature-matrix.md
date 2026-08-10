@@ -27,7 +27,7 @@ Status is conservative.
 | Direct QUIC stream fallback | Operational | Connection-pinned test and `nixos-vm-quic-stream`. |
 | TCP and relay stream fallback | Operational | Flow-sharded compatibility stream tests. |
 | Owned UDP packet plane | Operational | Packet-plane unit and namespace tests. |
-| Owned QUIC packet plane | Operational | Quinn packet-plane tests and namespace E2E. |
+| Owned QUIC packet plane | Operational | Quinn packet-plane tests, namespace E2E, and `nixos-vm-quic-datagram`. |
 | Native libp2p QUIC datagrams | Blocked | Current libp2p swarm API lacks this handle. |
 | Relay-to-direct DCUtR | Operational on supported Linux hosts | Namespace promotion test. |
 | Public IPFS bootstrap | Partial | Rootless bootstrap checks. |
