@@ -2259,6 +2259,9 @@ fn pair_inspect(args: &PairInspectArgs) -> Result<(), String> {
         }
     );
     println!("inviter address hints: {}", inviter_addresses.len());
+    for (_, address) in &inviter_addresses {
+        println!("inviter address: {address}");
+    }
     println!(
         "relay reservation hints: {}",
         offer.payload.relay_reservations.len()
@@ -2595,6 +2598,17 @@ enum PairingDiscoveredAddressSource {
     KademliaPeerRecord,
 }
 
+impl PairingDiscoveredAddressSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Offer => "offer",
+            Self::Mdns => "mdns",
+            Self::KademliaClosestPeer => "kademlia_closest_peer",
+            Self::KademliaPeerRecord => "kademlia_peer_record",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PairingAcceptDiagnostics {
     inviter_address_hints: usize,
@@ -2914,6 +2928,12 @@ fn dial_pairing_inviter_addresses(
             } else {
                 diagnostics.record_dial_error(Some(&inviter_peer), &error);
             }
+            eprintln!(
+                "pairing dial start failed: source={} address={} error={}",
+                source.as_str(),
+                dial_address,
+                short_diagnostic_error(&error)
+            );
         }
     }
 }
