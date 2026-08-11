@@ -15,7 +15,7 @@ use libp2p::{
     swarm::SwarmEvent,
 };
 use p2p_vpn::{
-    OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
+    OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId,
     config::{
         AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate,
         InitPeer, PRIVATE_KADEMLIA_PROTOCOL, PUBLIC_IPFS_BOOTSTRAP_PEERS,
@@ -44,6 +44,7 @@ use p2p_vpn::{
         import_pairing_response_config_at,
     },
     queue::QueueStats,
+    route::builtin_ipv4,
     runtime::{
         bootstrap_check::{
             BootstrapCheckRequirements, BootstrapCheckThreshold, PUBLIC_RELAY_CANDIDATE_LIMIT,
@@ -611,6 +612,8 @@ enum PairCommand {
         mtu: u16,
         #[arg(long = "local-route")]
         local_routes: Vec<LocalRouteArg>,
+        #[arg(long = "vpn-ip")]
+        vpn_ip: Option<String>,
         #[arg(long)]
         peer_name: Option<String>,
         #[arg(long, default_value_t = 30)]
@@ -995,6 +998,7 @@ async fn main() -> Result<(), String> {
                 interface,
                 mtu,
                 local_routes,
+                vpn_ip,
                 peer_name,
                 timeout_seconds,
                 force,
@@ -1007,6 +1011,7 @@ async fn main() -> Result<(), String> {
                     interface,
                     mtu,
                     local_routes,
+                    vpn_ip,
                     peer_name,
                     timeout_seconds,
                     force,
@@ -1293,6 +1298,7 @@ struct PairAcceptArgs {
     interface: String,
     mtu: u16,
     local_routes: Vec<LocalRouteArg>,
+    vpn_ip: Option<String>,
     peer_name: Option<String>,
     timeout_seconds: u64,
     force: bool,
@@ -2044,6 +2050,12 @@ fn compact_generated_config(mut config: Config) -> Config {
     if config.network.private_key.is_some() {
         config.network.local_peer.clear();
     }
+    if config
+        .local_peer_id()
+        .is_ok_and(|peer| config.network.vpn_ip.as_deref() == Some(&builtin_ipv4(peer).to_string()))
+    {
+        config.network.vpn_ip = None;
+    }
 
     config
 }
@@ -2225,9 +2237,16 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         return Ok(());
     }
 
-    let response = live_pair_accept(&offer, identity.clone(), args.mtu, args.timeout_seconds)
-        .await
-        .map_err(|error| format!("live pairing exchange failed: {error}"))?;
+    let requested_vpn_ip = pairing_requested_vpn_ip(&identity, args.vpn_ip.as_deref())?;
+    let response = live_pair_accept(
+        &offer,
+        identity.clone(),
+        args.mtu,
+        args.timeout_seconds,
+        Some(requested_vpn_ip),
+    )
+    .await
+    .map_err(|error| format!("live pairing exchange failed: {error}"))?;
     let config = import_pairing_response_config_at(
         &offer,
         &response,
@@ -2271,12 +2290,31 @@ fn write_pairing_config(config: &Config, output: &Path, inviter_peer: &str) -> R
     Ok(())
 }
 
+fn pairing_requested_vpn_ip(
+    identity: &NodeIdentity,
+    configured: Option<&str>,
+) -> Result<String, String> {
+    if let Some(configured) = configured {
+        configured
+            .parse::<IpAddr>()
+            .map_err(|error| format!("invalid requested VPN IP `{configured}`: {error}"))?;
+        return Ok(configured.to_owned());
+    }
+
+    let peer = identity
+        .peer_id
+        .parse::<Libp2pPeerId>()
+        .map_err(|error| format!("invalid local peer ID: {error:?}"))?;
+    Ok(builtin_ipv4(PeerId::from_libp2p(peer)).to_string())
+}
+
 #[allow(clippy::too_many_lines)]
 async fn live_pair_accept(
     offer: &PairingOffer,
     identity: NodeIdentity,
     mtu: u16,
     timeout_seconds: u64,
+    requested_vpn_ip: Option<String>,
 ) -> Result<PairingResponse, String> {
     let inviter_peer = offer
         .payload
@@ -2322,7 +2360,7 @@ async fn live_pair_accept(
         offer,
         PairingRequestOptions {
             identity,
-            requested_vpn_ip: None,
+            requested_vpn_ip,
             requested_routes: Vec::new(),
         },
         current_unix_seconds_lossy(),
@@ -10422,6 +10460,8 @@ mod tests {
             "1400",
             "--local-route",
             "10.42.0.2/32,100",
+            "--vpn-ip",
+            "10.42.0.2",
             "--peer-name",
             "node-a",
             "--timeout-seconds",
@@ -10439,6 +10479,7 @@ mod tests {
                     interface,
                     mtu,
                     local_routes,
+                    vpn_ip,
                     peer_name,
                     timeout_seconds,
                     force,
@@ -10456,9 +10497,67 @@ mod tests {
         assert_eq!(mtu, 1400);
         assert_eq!(local_routes.len(), 1);
         assert_eq!(local_routes[0].route.prefix, "10.42.0.2/32");
+        assert_eq!(vpn_ip.as_deref(), Some("10.42.0.2"));
         assert_eq!(peer_name.as_deref(), Some("node-a"));
         assert_eq!(timeout_seconds, 7);
         assert!(force);
+    }
+
+    #[test]
+    fn pairing_requested_vpn_ip_uses_explicit_or_generated_address() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let generated =
+            pairing_requested_vpn_ip(&identity, None).expect("generated requested VPN IP");
+
+        assert!(generated.parse::<IpAddr>().is_ok());
+        assert_eq!(
+            pairing_requested_vpn_ip(&identity, Some("10.42.0.2")).expect("explicit VPN IP"),
+            "10.42.0.2"
+        );
+        assert!(
+            pairing_requested_vpn_ip(&identity, Some("not-an-ip"))
+                .expect_err("invalid IP should fail")
+                .contains("invalid requested VPN IP")
+        );
+    }
+
+    #[test]
+    fn compact_generated_config_omits_builtin_local_vpn_ip() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let generated_vpn_ip =
+            pairing_requested_vpn_ip(&identity, None).expect("generated requested VPN IP");
+        let mut config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: identity.peer_id.clone(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some(generated_vpn_ip),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+
+        let compact = compact_generated_config(config.clone());
+        config.network.vpn_ip = Some("10.42.0.2".to_owned());
+        let explicit = compact_generated_config(config);
+
+        assert_eq!(compact.network.vpn_ip, None);
+        assert_eq!(explicit.network.vpn_ip.as_deref(), Some("10.42.0.2"));
     }
 
     #[test]
@@ -10666,9 +10765,15 @@ mod tests {
         let offer =
             export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
 
-        let error = live_pair_accept(&offer, joiner_identity, 1280, 1)
-            .await
-            .expect_err("unreachable inviter should time out");
+        let error = live_pair_accept(
+            &offer,
+            joiner_identity,
+            1280,
+            1,
+            Some("10.42.0.2".to_owned()),
+        )
+        .await
+        .expect_err("unreachable inviter should time out");
 
         assert!(error.contains("timed out after 1 seconds"));
         assert!(error.contains("pairing diagnostics:"));
@@ -10776,8 +10881,8 @@ mod tests {
                                 &inviter_config_for_response,
                                 &offer_for_response,
                                 PairingResponseOptions {
-                                    joiner_peer: request.payload.joiner_peer,
-                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    joiner_peer: request.payload.joiner_peer.clone(),
+                                    assigned_vpn_ip: request.payload.requested_vpn_ip.clone(),
                                     membership_key: Some(membership_key_for_thread.clone()),
                                     member_records: Vec::new(),
                                     expires_in_seconds: 300,
@@ -10807,9 +10912,17 @@ mod tests {
             export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
         offer_tx.send(offer.clone()).expect("send offer");
 
-        let response = live_pair_accept(&offer, joiner_identity.clone(), 1280, 5)
-            .await
-            .expect("live response");
+        let requested_vpn_ip =
+            pairing_requested_vpn_ip(&joiner_identity, None).expect("generated requested VPN IP");
+        let response = live_pair_accept(
+            &offer,
+            joiner_identity.clone(),
+            1280,
+            5,
+            Some(requested_vpn_ip.clone()),
+        )
+        .await
+        .expect("live response");
 
         inviter_thread.join().expect("inviter thread");
         assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
@@ -10817,6 +10930,10 @@ mod tests {
         assert_eq!(
             response.payload.membership_key.as_deref(),
             Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
+        );
+        assert_eq!(
+            response.payload.assigned_vpn_ip.as_deref(),
+            Some(requested_vpn_ip.as_str())
         );
     }
 
@@ -10890,7 +11007,13 @@ mod tests {
         response_config.network.listen_addresses = vec![listener_address.to_string()];
 
         let response = {
-            let mut accept = Box::pin(live_pair_accept(&offer, joiner_identity.clone(), 1280, 5));
+            let mut accept = Box::pin(live_pair_accept(
+                &offer,
+                joiner_identity.clone(),
+                1280,
+                5,
+                Some("10.42.0.2".to_owned()),
+            ));
             loop {
                 tokio::select! {
                     result = &mut accept => break result.expect("live response"),
@@ -10905,8 +11028,8 @@ mod tests {
                                 &response_config,
                                 &offer,
                                 PairingResponseOptions {
-                                    joiner_peer: request.payload.joiner_peer,
-                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    joiner_peer: request.payload.joiner_peer.clone(),
+                                    assigned_vpn_ip: request.payload.requested_vpn_ip.clone(),
                                     membership_key: Some(membership_key.clone()),
                                     member_records: Vec::new(),
                                     expires_in_seconds: 300,
@@ -11045,7 +11168,13 @@ mod tests {
         assert_eq!(offer.payload.relay_reservations.len(), 1);
 
         let response = {
-            let mut accept = Box::pin(live_pair_accept(&offer, joiner_identity.clone(), 1280, 10));
+            let mut accept = Box::pin(live_pair_accept(
+                &offer,
+                joiner_identity.clone(),
+                1280,
+                10,
+                Some("10.42.0.2".to_owned()),
+            ));
             loop {
                 tokio::select! {
                     result = &mut accept => break result.expect("live response"),
@@ -11066,8 +11195,8 @@ mod tests {
                                 &response_config,
                                 &offer,
                                 PairingResponseOptions {
-                                    joiner_peer: request.payload.joiner_peer,
-                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    joiner_peer: request.payload.joiner_peer.clone(),
+                                    assigned_vpn_ip: request.payload.requested_vpn_ip.clone(),
                                     membership_key: Some(membership_key.clone()),
                                     member_records: Vec::new(),
                                     expires_in_seconds: 300,

@@ -121,11 +121,15 @@ Optional fields:
 | `--interface` | Interface name for the generated config. |
 | `--mtu` | Interface MTU. |
 | `--local-route` | Extra local route ownership. |
+| `--vpn-ip` | Requested VPN IP for the new node. |
 | `--peer-name` | Label for the inviter peer. |
 | `--timeout-seconds` | Live pairing exchange timeout. |
 | `--force` | Overwrite output config. |
 
 Without `--private-key`, a new identity is generated.
+
+Without `--vpn-ip`, `pair accept` requests the built-in IP derived from the new
+peer ID.
 
 ## Live Accept
 

@@ -1,4 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    net::IpAddr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use base64::{
     Engine as _,
@@ -563,6 +566,7 @@ fn validate_request_payload(
     }
     payload.joiner_peer.parse::<Libp2pPeerId>()?;
     decode_public_key(&payload.joiner_public_key)?;
+    validate_optional_ip(payload.requested_vpn_ip.as_deref())?;
     validate_rendezvous_token(&payload.rendezvous_token)?;
 
     Ok(())
@@ -611,6 +615,7 @@ fn validate_response_payload(
     validate_multiaddrs(&payload.inviter_addresses)?;
     validate_bootstrap_peers(&payload.bootstrap_peers)?;
     validate_relay_reservations(&payload.relay_reservations)?;
+    validate_optional_ip(payload.assigned_vpn_ip.as_deref())?;
     validate_pairing_reachability(
         &payload.discovery,
         &payload.inviter_addresses,
@@ -627,6 +632,13 @@ fn validate_response_payload(
         return Err(PairingError::MissingMembershipGrant);
     }
 
+    Ok(())
+}
+
+fn validate_optional_ip(value: Option<&str>) -> Result<(), PairingError> {
+    if let Some(value) = value {
+        value.parse::<IpAddr>()?;
+    }
     Ok(())
 }
 
@@ -787,6 +799,7 @@ pub enum PairingError {
     Libp2pIdentity(libp2p::identity::DecodingError),
     Libp2pPeerId(libp2p::identity::ParseError),
     Multiaddr(libp2p::multiaddr::Error),
+    IpAddr(std::net::AddrParseError),
     RoutePrefix(crate::config::RoutePrefixError),
     MembershipRecord(crate::membership::MembershipRecordError),
     UnsupportedVersion(u8),
@@ -852,6 +865,12 @@ impl From<libp2p::identity::ParseError> for PairingError {
 impl From<libp2p::multiaddr::Error> for PairingError {
     fn from(error: libp2p::multiaddr::Error) -> Self {
         Self::Multiaddr(error)
+    }
+}
+
+impl From<std::net::AddrParseError> for PairingError {
+    fn from(error: std::net::AddrParseError) -> Self {
+        Self::IpAddr(error)
     }
 }
 
@@ -1082,6 +1101,26 @@ mod tests {
     }
 
     #[test]
+    fn pairing_request_rejects_invalid_requested_vpn_ip() {
+        let offer = export_pairing_offer_at(&config(), PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+
+        assert!(matches!(
+            build_pairing_request_at(
+                &offer,
+                PairingRequestOptions {
+                    identity: joiner,
+                    requested_vpn_ip: Some("not-an-ip".to_owned()),
+                    requested_routes: Vec::new(),
+                },
+                1_001,
+            ),
+            Err(PairingError::IpAddr(_))
+        ));
+    }
+
+    #[test]
     fn pairing_response_imports_minimal_config_with_shared_key() {
         let inviter_config = config();
         let offer = export_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
@@ -1133,6 +1172,31 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn pairing_response_rejects_invalid_assigned_vpn_ip() {
+        let inviter_config = config();
+        let offer = export_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let membership_key = STANDARD.encode([9_u8; 32]);
+
+        assert!(matches!(
+            build_pairing_response_at(
+                &inviter_config,
+                &offer,
+                PairingResponseOptions {
+                    joiner_peer: joiner.peer_id,
+                    assigned_vpn_ip: Some("not-an-ip".to_owned()),
+                    membership_key: Some(membership_key),
+                    member_records: Vec::new(),
+                    expires_in_seconds: 300,
+                },
+                1_010,
+            ),
+            Err(PairingError::IpAddr(_))
+        ));
     }
 
     #[test]

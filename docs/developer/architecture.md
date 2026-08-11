@@ -79,6 +79,11 @@ Live requests use a compact offer proof.
 | `offer_expires_at_unix_seconds` | Reconstruct inviter offer. |
 | `offer_signature` | Bind request to the signed offer. |
 
+Live requests include a requested VPN IP.
+
+If the accept CLI has no `--vpn-ip`, it requests the built-in IPv4 address
+derived from the joiner peer ID.
+
 Legacy embedded offers are still accepted.
 
 Discovery-only offers omit inviter addresses from the signed payload.
