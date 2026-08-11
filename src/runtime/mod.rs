@@ -5,6 +5,7 @@ pub mod forward;
 pub mod p2p;
 pub mod packet;
 pub mod packet_plane;
+pub mod pairing;
 pub mod pinned_packet_stream;
 pub mod remote;
 pub mod runner;

@@ -16,6 +16,7 @@ use crate::{
     runtime::{
         control::{self, ControlCodec},
         packet::{self, PacketCodec},
+        pairing::{self, PairingCodec},
         pinned_packet_stream,
         service::{self, ServiceCodec},
     },
@@ -36,6 +37,7 @@ pub struct Behaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
+    pub pairing: request_response::Behaviour<PairingCodec>,
     pub pinned_packet_stream: pinned_packet_stream::Behaviour,
     pub service: request_response::Behaviour<ServiceCodec>,
 }
@@ -170,6 +172,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     mdns: mdns.into(),
                     control: control::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
+                    pairing: pairing::behaviour(control_streams),
                     pinned_packet_stream: pinned_packet_stream::Behaviour::new(usize::from(mtu)),
                     service: service::behaviour(control_streams),
                 })
@@ -499,6 +502,7 @@ impl From<libp2p::multiaddr::Error> for P2pBuildError {
 mod tests {
     use std::time::Duration;
 
+    use base64::Engine as _;
     use futures::StreamExt as _;
     use libp2p::{
         multiaddr::Protocol,
@@ -507,6 +511,11 @@ mod tests {
     };
 
     use crate::{
+        config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig},
+        pairing::{
+            PairingOfferOptions, PairingRequest, PairingRequestOptions, PairingResponseOptions,
+            build_pairing_request_at, build_pairing_response_at, export_pairing_offer_at,
+        },
         runtime::control::{ControlCapabilities, ControlRequest, ControlResponse},
         runtime::pinned_packet_stream,
         runtime::service::{
@@ -516,6 +525,34 @@ mod tests {
     };
 
     use super::*;
+
+    fn pairing_config(identity: NodeIdentity) -> Config {
+        Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: identity.peer_id,
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::<PeerConfig>::new(),
+            queue: QueueConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+        }
+    }
 
     #[tokio::test]
     async fn build_node_uses_configured_identity() {
@@ -1252,6 +1289,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_nodes_exchange_pairing_request() {
+        let listener_identity = NodeIdentity::generate_ed25519().expect("listener identity");
+        let inviter_config = pairing_config(listener_identity.clone());
+        let offer = export_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let mut listener = build_node(&HostConfig {
+            identity: listener_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("listener node");
+        let listener_address = next_listen_address(&mut listener.swarm).await;
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+
+        let mut dialer = build_node(&HostConfig {
+            identity: joiner_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener.local_peer_id, listener_address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("dialer node");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner_identity.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let expected_response = build_pairing_response_at(
+            &inviter_config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: joiner_identity.peer_id,
+                assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                membership_key: Some(base64::engine::general_purpose::STANDARD.encode([9_u8; 32])),
+                member_records: Vec::new(),
+                expires_in_seconds: 300,
+            },
+            1_002,
+        )
+        .expect("response");
+        let request_id = dialer
+            .swarm
+            .behaviour_mut()
+            .pairing
+            .send_request(&listener.local_peer_id, request.clone());
+
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            exchange_until_pairing_response(
+                &mut listener.swarm,
+                &mut dialer.swarm,
+                request,
+                expected_response,
+                request_id,
+            ),
+        )
+        .await
+        .expect("pairing exchange timed out");
+    }
+
+    #[tokio::test]
     async fn two_nodes_exchange_service_status() {
         let mut listener = build_node(&HostConfig {
             identity: NodeIdentity::generate_ed25519().expect("listener identity"),
@@ -1825,6 +1950,42 @@ mod tests {
                             response,
                             ControlResponse::CapabilitiesAccepted(ControlCapabilities::local("lab", None, 1280))
                         );
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn exchange_until_pairing_response(
+        listener: &mut Swarm<Behaviour>,
+        dialer: &mut Swarm<Behaviour>,
+        expected_request: PairingRequest,
+        expected_response: crate::pairing::PairingResponse,
+        expected_request_id: request_response::OutboundRequestId,
+    ) {
+        loop {
+            tokio::select! {
+                event = listener.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Pairing(request_response::Event::Message {
+                        message: Message::Request { request, channel, .. },
+                        ..
+                    })) = event {
+                        assert_eq!(request, expected_request);
+                        listener
+                            .behaviour_mut()
+                            .pairing
+                            .send_response(channel, expected_response.clone())
+                            .expect("send response");
+                    }
+                }
+                event = dialer.select_next_some() => {
+                    if let SwarmEvent::Behaviour(BehaviourEvent::Pairing(request_response::Event::Message {
+                        message: Message::Response { request_id, response },
+                        ..
+                    })) = event {
+                        assert_eq!(request_id, expected_request_id);
+                        assert_eq!(response, expected_response);
                         return;
                     }
                 }

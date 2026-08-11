@@ -115,6 +115,16 @@ The URI includes:
 
 Minimal configs include the public IPFS bootstrap defaults in the URI.
 
+## Current Status
+
+| Capability | Status |
+| --- | --- |
+| Offer URI generation | Implemented. |
+| Signed request and response files | Implemented. |
+| Libp2p pairing protocol | Implemented as `/p2p-vpn/pairing/1`. |
+| Live `pair accept` exchange | In progress. |
+| Daemon-side one-time offer handling | In progress. |
+
 ## Secrets
 
 The pairing URI is sensitive.

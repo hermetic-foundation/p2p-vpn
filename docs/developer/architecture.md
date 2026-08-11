@@ -71,6 +71,15 @@ Pairing exchange messages are signed:
 | Request | Joiner | offer network, inviter peer, rendezvous token |
 | Response | Inviter | offer, joiner peer, membership grant |
 
+Pairing transport uses libp2p request-response:
+
+| Field | Value |
+| --- | --- |
+| Protocol | `/p2p-vpn/pairing/1` |
+| Encoding | 2-byte length-prefixed JSON |
+| Limit | 32 KiB per message |
+| Stream class | Control-plane stream |
+
 A response is invalid without either:
 
 | Grant | Meaning |
