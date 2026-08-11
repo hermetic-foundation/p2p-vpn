@@ -128,6 +128,10 @@ pub struct TrustedMembershipIssuers {
 }
 
 impl TrustedMembershipIssuers {
+    pub fn insert(&mut self, issuer_peer: impl Into<String>) {
+        self.issuers.insert(issuer_peer.into());
+    }
+
     #[must_use]
     pub fn contains(&self, issuer_peer: &str) -> bool {
         self.issuers.contains(issuer_peer)

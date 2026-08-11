@@ -411,6 +411,23 @@ nix run .#tun-e2e -- \
   -- --ignored --exact --nocapture
 ```
 
+Run the live pairing smoke case:
+
+```sh
+nix run .#tun-e2e -- \
+  tun_namespace_pair_accept_crosses_live_pairing_overlay \
+  -- --ignored --exact --nocapture
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Offer CLI | Existing node writes a signed pairing URI. |
+| Accept CLI | New node exchanges a live pairing request in its namespace. |
+| Generated config | Config validates with inviter address hints and route grants. |
+| Data plane | The generated config boots and carries overlay ping. |
+
 ## Preserve Artifacts
 
 ```sh
@@ -437,6 +454,7 @@ Coverage:
 - DHT/bootstrap-discovered packet forwarding.
 - Circuit-relay fallback packet forwarding.
 - Signed-invite onboarding over relay.
+- Live pair offer/accept onboarding.
 - Relay-to-direct promotion with DCUtR.
 - Owned QUIC packet-plane forwarding.
 

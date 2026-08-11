@@ -217,11 +217,12 @@ impl Forwarder {
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
         let mut member_records = self.member_records.clone();
-        let trusted_issuers = trusted_membership_issuers_at(
+        let mut trusted_issuers = trusted_membership_issuers_at(
             &self.config.network.member_records,
             &self.config.network.name,
             now_unix_seconds,
         )?;
+        trusted_issuers.insert(self.config.local_peer()?);
         let stats = merge_membership_records_at(
             &mut member_records,
             records,
@@ -1041,6 +1042,49 @@ mod tests {
         assert!(
             !forwarder
                 .authorizes_advertised_routes(remote, &[ControlRoute::new("10.42.1.0/24", 1)])
+        );
+    }
+
+    #[test]
+    fn merge_membership_records_trusts_local_issuer_for_live_pairing_records() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_for(member_peer);
+        config.peers.clear();
+        config.network.local_peer = issuer.peer_id.clone();
+        config.network.private_key = Some(issuer.private_key.clone());
+        let incoming = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.42.0.0/24".to_owned(),
+                    metric: 100,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("live pairing record");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        let stats = forwarder
+            .merge_membership_records(&[incoming], 1_001)
+            .expect("merge locally issued record");
+
+        assert_eq!(stats.accepted, 1);
+        assert!(forwarder.is_configured_transport_peer(member_peer));
+        assert!(
+            forwarder
+                .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
         );
     }
 
