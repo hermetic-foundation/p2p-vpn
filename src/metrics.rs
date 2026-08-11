@@ -49,6 +49,13 @@ pub enum PacketPlaneDropReason {
     TrailingBytes,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairingRejectionReason {
+    InvalidOffer,
+    ReplayedToken,
+    RateLimited,
+}
+
 #[derive(Debug, Default)]
 pub struct RuntimeMetrics {
     tun_read_packets: AtomicU64,
@@ -198,6 +205,15 @@ pub struct RuntimeMetrics {
     service_reject_wrong_network: AtomicU64,
     service_reject_membership_mismatch: AtomicU64,
     service_failures: AtomicU64,
+    pairing_requests_received: AtomicU64,
+    pairing_requests_accepted: AtomicU64,
+    pairing_requests_rejected: AtomicU64,
+    pairing_reject_invalid_offer: AtomicU64,
+    pairing_reject_replayed_token: AtomicU64,
+    pairing_reject_rate_limited: AtomicU64,
+    pairing_responses_received: AtomicU64,
+    pairing_outbound_failures: AtomicU64,
+    pairing_inbound_failures: AtomicU64,
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
@@ -848,6 +864,47 @@ impl RuntimeMetrics {
         self.service_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_pairing_request_received(&self) {
+        self.pairing_requests_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_pairing_request_accepted(&self) {
+        self.pairing_requests_accepted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_pairing_request_rejection(&self, reason: PairingRejectionReason) {
+        self.pairing_requests_rejected
+            .fetch_add(1, Ordering::Relaxed);
+        match reason {
+            PairingRejectionReason::InvalidOffer => self
+                .pairing_reject_invalid_offer
+                .fetch_add(1, Ordering::Relaxed),
+            PairingRejectionReason::ReplayedToken => self
+                .pairing_reject_replayed_token
+                .fetch_add(1, Ordering::Relaxed),
+            PairingRejectionReason::RateLimited => self
+                .pairing_reject_rate_limited
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    pub fn record_pairing_response_received(&self) {
+        self.pairing_responses_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_pairing_outbound_failure(&self) {
+        self.pairing_outbound_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_pairing_inbound_failure(&self) {
+        self.pairing_inbound_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_redial_attempt(&self) {
         self.redial_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -1291,6 +1348,19 @@ impl RuntimeMetrics {
             .service_reject_membership_mismatch
             .load(Ordering::Relaxed);
         snapshot.service_failures = self.service_failures.load(Ordering::Relaxed);
+        snapshot.pairing_requests_received = self.pairing_requests_received.load(Ordering::Relaxed);
+        snapshot.pairing_requests_accepted = self.pairing_requests_accepted.load(Ordering::Relaxed);
+        snapshot.pairing_requests_rejected = self.pairing_requests_rejected.load(Ordering::Relaxed);
+        snapshot.pairing_reject_invalid_offer =
+            self.pairing_reject_invalid_offer.load(Ordering::Relaxed);
+        snapshot.pairing_reject_replayed_token =
+            self.pairing_reject_replayed_token.load(Ordering::Relaxed);
+        snapshot.pairing_reject_rate_limited =
+            self.pairing_reject_rate_limited.load(Ordering::Relaxed);
+        snapshot.pairing_responses_received =
+            self.pairing_responses_received.load(Ordering::Relaxed);
+        snapshot.pairing_outbound_failures = self.pairing_outbound_failures.load(Ordering::Relaxed);
+        snapshot.pairing_inbound_failures = self.pairing_inbound_failures.load(Ordering::Relaxed);
         snapshot.redial_attempts = self.redial_attempts.load(Ordering::Relaxed);
         snapshot.redial_skipped_connected = self.redial_skipped_connected.load(Ordering::Relaxed);
         snapshot.redial_failures = self.redial_failures.load(Ordering::Relaxed);
@@ -1466,6 +1536,15 @@ pub struct RuntimeSnapshot {
     pub service_reject_wrong_network: u64,
     pub service_reject_membership_mismatch: u64,
     pub service_failures: u64,
+    pub pairing_requests_received: u64,
+    pub pairing_requests_accepted: u64,
+    pub pairing_requests_rejected: u64,
+    pub pairing_reject_invalid_offer: u64,
+    pub pairing_reject_replayed_token: u64,
+    pub pairing_reject_rate_limited: u64,
+    pub pairing_responses_received: u64,
+    pub pairing_outbound_failures: u64,
+    pub pairing_inbound_failures: u64,
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
@@ -1872,6 +1951,13 @@ impl RuntimeSnapshot {
                 self.control_reject_invalid_membership_record
             ),
             format!("control_failures {}", self.control_failures),
+        ]);
+        self.extend_service_lines(lines);
+        self.extend_pairing_lines(lines);
+    }
+
+    fn extend_service_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
             format!("service_requests_sent {}", self.service_requests_sent),
             format!(
                 "service_requests_received {}",
@@ -1899,6 +1985,44 @@ impl RuntimeSnapshot {
                 self.service_reject_membership_mismatch
             ),
             format!("service_failures {}", self.service_failures),
+        ]);
+    }
+
+    fn extend_pairing_lines(&self, lines: &mut Vec<String>) {
+        lines.extend([
+            format!(
+                "pairing_requests_received {}",
+                self.pairing_requests_received
+            ),
+            format!(
+                "pairing_requests_accepted {}",
+                self.pairing_requests_accepted
+            ),
+            format!(
+                "pairing_requests_rejected {}",
+                self.pairing_requests_rejected
+            ),
+            format!(
+                "pairing_reject_invalid_offer {}",
+                self.pairing_reject_invalid_offer
+            ),
+            format!(
+                "pairing_reject_replayed_token {}",
+                self.pairing_reject_replayed_token
+            ),
+            format!(
+                "pairing_reject_rate_limited {}",
+                self.pairing_reject_rate_limited
+            ),
+            format!(
+                "pairing_responses_received {}",
+                self.pairing_responses_received
+            ),
+            format!(
+                "pairing_outbound_failures {}",
+                self.pairing_outbound_failures
+            ),
+            format!("pairing_inbound_failures {}", self.pairing_inbound_failures),
         ]);
     }
 
@@ -2332,6 +2456,17 @@ mod tests {
             metrics.record_service_status_rejection(reason);
         }
         metrics.record_service_failure();
+        metrics.record_pairing_request_received();
+        metrics.record_pairing_request_received();
+        metrics.record_pairing_request_received();
+        metrics.record_pairing_request_received();
+        metrics.record_pairing_request_accepted();
+        metrics.record_pairing_request_rejection(PairingRejectionReason::InvalidOffer);
+        metrics.record_pairing_request_rejection(PairingRejectionReason::ReplayedToken);
+        metrics.record_pairing_request_rejection(PairingRejectionReason::RateLimited);
+        metrics.record_pairing_response_received();
+        metrics.record_pairing_outbound_failure();
+        metrics.record_pairing_inbound_failure();
     }
 
     fn populate_runtime_state_metrics(metrics: &RuntimeMetrics) {
@@ -2422,6 +2557,30 @@ mod tests {
         );
         assert_metric_line(snapshot, "kademlia_bootstrap_refreshes 1");
         assert_metric_line(snapshot, "kademlia_bootstrap_failures 1");
+    }
+
+    fn assert_pairing_counters(snapshot: &RuntimeSnapshot) {
+        assert_eq!(snapshot.pairing_requests_received, 4);
+        assert_eq!(snapshot.pairing_requests_accepted, 1);
+        assert_eq!(snapshot.pairing_requests_rejected, 3);
+        assert_eq!(snapshot.pairing_reject_invalid_offer, 1);
+        assert_eq!(snapshot.pairing_reject_replayed_token, 1);
+        assert_eq!(snapshot.pairing_reject_rate_limited, 1);
+        assert_eq!(snapshot.pairing_responses_received, 1);
+        assert_eq!(snapshot.pairing_outbound_failures, 1);
+        assert_eq!(snapshot.pairing_inbound_failures, 1);
+    }
+
+    fn assert_pairing_lines(snapshot: &RuntimeSnapshot) {
+        assert_metric_line(snapshot, "pairing_requests_received 4");
+        assert_metric_line(snapshot, "pairing_requests_accepted 1");
+        assert_metric_line(snapshot, "pairing_requests_rejected 3");
+        assert_metric_line(snapshot, "pairing_reject_invalid_offer 1");
+        assert_metric_line(snapshot, "pairing_reject_replayed_token 1");
+        assert_metric_line(snapshot, "pairing_reject_rate_limited 1");
+        assert_metric_line(snapshot, "pairing_responses_received 1");
+        assert_metric_line(snapshot, "pairing_outbound_failures 1");
+        assert_metric_line(snapshot, "pairing_inbound_failures 1");
     }
 
     #[test]
@@ -2694,6 +2853,7 @@ mod tests {
         assert_eq!(snapshot.service_reject_wrong_network, 1);
         assert_eq!(snapshot.service_reject_membership_mismatch, 1);
         assert_eq!(snapshot.service_failures, 1);
+        assert_pairing_counters(&snapshot);
         assert_eq!(snapshot.redial_attempts, 1);
         assert_eq!(snapshot.redial_skipped_connected, 1);
         assert_eq!(snapshot.redial_failures, 1);
@@ -2839,6 +2999,7 @@ mod tests {
         assert_metric_line(&snapshot, "service_reject_wrong_network 1");
         assert_metric_line(&snapshot, "service_reject_membership_mismatch 1");
         assert_metric_line(&snapshot, "service_failures 1");
+        assert_pairing_lines(&snapshot);
         assert_metric_line(&snapshot, "redial_attempts 1");
         assert_metric_line(&snapshot, "redial_skipped_connected 1");
         assert_metric_line(&snapshot, "redial_failures 1");

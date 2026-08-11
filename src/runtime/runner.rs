@@ -35,8 +35,8 @@ use crate::{
         SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
     },
     metrics::{
-        AutoNatReachability, PacketDropReason, PacketPlaneDropReason, RuntimeMetrics,
-        RuntimeSnapshot,
+        AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
+        RuntimeMetrics, RuntimeSnapshot,
     },
     pairing::{PairingRequest, PairingResponse},
     path::{PathConnectionRole, PathOrigin, PathSet, PathTransportSupport},
@@ -7657,64 +7657,7 @@ fn handle_pairing_event(
             },
             ..
         } => {
-            if !context
-                .pairing_request_rate_limiters
-                .allow(peer, Instant::now())
-            {
-                log_runtime_event(
-                    LogLevel::Warn,
-                    "pairing_request_rejected",
-                    &[
-                        ("peer", &peer.to_string()),
-                        ("joiner", &request.payload.joiner_peer),
-                        ("reason", "rate_limited"),
-                        (
-                            "limit_per_second",
-                            &context
-                                .pairing_request_rate_limiters
-                                .limit_per_second()
-                                .to_string(),
-                        ),
-                    ],
-                );
-                drop(channel);
-                return Ok(());
-            }
-            let now_unix_seconds = current_unix_seconds_lossy();
-            match pairing_response_for_request(
-                context.forwarder.config(),
-                context.identity,
-                context.consumed_pairing_tokens,
-                &request,
-                now_unix_seconds,
-            ) {
-                Ok(response) => {
-                    log_runtime_event(
-                        LogLevel::Info,
-                        "pairing_request_accepted",
-                        &[
-                            ("peer", &peer.to_string()),
-                            ("joiner", &request.payload.joiner_peer),
-                        ],
-                    );
-                    swarm
-                        .behaviour_mut()
-                        .pairing
-                        .send_response(channel, response)
-                        .map_err(|_| RunnerError::PairingResponseDropped)?;
-                }
-                Err(error) => {
-                    log_runtime_event(
-                        LogLevel::Warn,
-                        "pairing_request_rejected",
-                        &[
-                            ("peer", &peer.to_string()),
-                            ("joiner", &request.payload.joiner_peer),
-                            ("reason", &format!("{error:?}")),
-                        ],
-                    );
-                }
-            }
+            handle_pairing_request_event(swarm, context, peer, &request, channel)?;
         }
         request_response::Event::Message {
             peer,
@@ -7725,6 +7668,7 @@ fn handle_pairing_event(
                 },
             ..
         } => {
+            context.metrics.record_pairing_response_received();
             log_runtime_event(
                 LogLevel::Info,
                 "pairing_response_received",
@@ -7736,6 +7680,7 @@ fn handle_pairing_event(
             );
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
+            context.metrics.record_pairing_outbound_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "pairing_outbound_failure",
@@ -7746,6 +7691,7 @@ fn handle_pairing_event(
             );
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_pairing_inbound_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "pairing_inbound_failure",
@@ -7759,6 +7705,88 @@ fn handle_pairing_event(
     }
 
     Ok(())
+}
+
+fn handle_pairing_request_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    request: &PairingRequest,
+    channel: request_response::ResponseChannel<PairingResponse>,
+) -> Result<(), RunnerError> {
+    context.metrics.record_pairing_request_received();
+    if !context
+        .pairing_request_rate_limiters
+        .allow(peer, Instant::now())
+    {
+        context
+            .metrics
+            .record_pairing_request_rejection(PairingRejectionReason::RateLimited);
+        log_pairing_request_rejection(
+            peer,
+            request,
+            &format!(
+                "rate_limited limit_per_second={}",
+                context.pairing_request_rate_limiters.limit_per_second()
+            ),
+        );
+        drop(channel);
+        return Ok(());
+    }
+
+    match pairing_response_for_request(
+        context.forwarder.config(),
+        context.identity,
+        context.consumed_pairing_tokens,
+        request,
+        current_unix_seconds_lossy(),
+    ) {
+        Ok(response) => {
+            context.metrics.record_pairing_request_accepted();
+            log_runtime_event(
+                LogLevel::Info,
+                "pairing_request_accepted",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("joiner", &request.payload.joiner_peer),
+                ],
+            );
+            swarm
+                .behaviour_mut()
+                .pairing
+                .send_response(channel, response)
+                .map_err(|_| RunnerError::PairingResponseDropped)?;
+        }
+        Err(error) => {
+            context
+                .metrics
+                .record_pairing_request_rejection(pairing_rejection_reason(&error));
+            log_pairing_request_rejection(peer, request, &format!("{error:?}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn log_pairing_request_rejection(peer: Libp2pPeerId, request: &PairingRequest, reason: &str) {
+    log_runtime_event(
+        LogLevel::Warn,
+        "pairing_request_rejected",
+        &[
+            ("peer", &peer.to_string()),
+            ("joiner", &request.payload.joiner_peer),
+            ("reason", reason),
+        ],
+    );
+}
+
+fn pairing_rejection_reason(error: &crate::pairing::PairingError) -> PairingRejectionReason {
+    match error {
+        crate::pairing::PairingError::RendezvousTokenMismatch => {
+            PairingRejectionReason::ReplayedToken
+        }
+        _ => PairingRejectionReason::InvalidOffer,
+    }
 }
 
 fn pairing_response_for_request(
@@ -12691,8 +12719,11 @@ mod tests {
             reservations: 2,
             pending_retries: 1,
         };
+        let metrics = RuntimeMetrics::default();
+        metrics.record_pairing_request_received();
+        metrics.record_pairing_request_accepted();
         let lines = runtime_status_lines(RuntimeStatusView {
-            metrics: &RuntimeMetrics::default(),
+            metrics: &metrics,
             queue: crate::queue::QueueStats::default(),
             path_stats: crate::path::PathRuntimeStats::default(),
             auto_relay,
@@ -12710,6 +12741,8 @@ mod tests {
         assert!(lines.contains(&"packet_plane_quic_listeners 1".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_sessions 1".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_certificate_bytes 2".to_owned()));
+        assert!(lines.contains(&"pairing_requests_received 1".to_owned()));
+        assert!(lines.contains(&"pairing_requests_accepted 1".to_owned()));
         assert!(lines.contains(&"packet_plane_quic_listener 127.0.0.1:51821".to_owned()));
         assert!(lines.contains(&format!(
             "packet_plane_quic_session {} endpoint 127.0.0.1:51822 mtu 1180 role initiator local_session 17 remote_session 19",

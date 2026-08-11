@@ -130,9 +130,24 @@ Live accept diagnostics are local to the accepting CLI:
 | `dial_errors` | Swarm connection errors. |
 | `relayed_dial_start_failures` | Synchronous relay dial start errors. |
 
-These diagnostics are not a daemon status API yet.
+The daemon exposes aggregate pairing counters in status and metrics views.
 
-They are intended to make discovery and relay failures reproducible.
+The accept-side timeout diagnostic remains CLI-local.
+
+Together they make discovery, relay, and rejection failures reproducible.
+
+Daemon pairing counters:
+
+| Counter | Meaning |
+| --- | --- |
+| `pairing_requests_received` | Live requests handled by the daemon. |
+| `pairing_requests_accepted` | Requests that produced a response. |
+| `pairing_requests_rejected` | Requests rejected before response. |
+| `pairing_reject_invalid_offer` | Invalid signature, expiry, network, or grant shape. |
+| `pairing_reject_replayed_token` | One-time rendezvous token already consumed. |
+| `pairing_reject_rate_limited` | Per-peer pairing request limit exceeded. |
+| `pairing_outbound_failures` | Local pairing request-response sends failed. |
+| `pairing_inbound_failures` | Remote pairing request-response sends failed. |
 
 Offer-derived dials are retryable during the accept timeout.
 

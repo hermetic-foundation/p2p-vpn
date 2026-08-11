@@ -19,6 +19,7 @@ It is intended to replace manual key and config exchange.
 | Discovery-only relay accept | Implemented with local relay proof |
 | Public discovery-only accept | Implemented path, public proof pending |
 | Timeout diagnostics | Implemented |
+| Daemon pairing counters | Implemented |
 
 ## Offer
 
@@ -165,6 +166,28 @@ The diagnostic is intentionally compact.
 
 It does not print the pairing URI or rendezvous token.
 
+## Daemon Status
+
+The daemon exports pairing counters through normal status and metrics views.
+
+```sh
+p2p-vpn status --config /etc/p2p-vpn/lab.json
+p2p-vpn metrics --config /etc/p2p-vpn/lab.json
+```
+
+Useful counters:
+
+| Counter | Meaning |
+| --- | --- |
+| `pairing_requests_received` | Live pairing requests seen by the daemon. |
+| `pairing_requests_accepted` | Requests that produced a response. |
+| `pairing_requests_rejected` | Requests rejected before response. |
+| `pairing_reject_invalid_offer` | Bad signature, expiry, network, or grant shape. |
+| `pairing_reject_replayed_token` | One-time token already consumed. |
+| `pairing_reject_rate_limited` | Per-peer request limit exceeded. |
+| `pairing_outbound_failures` | Local pairing request-response sends failed. |
+| `pairing_inbound_failures` | Remote pairing request-response sends failed. |
+
 ## Daemon Limits
 
 The inviter daemon rate-limits live pairing requests per libp2p peer.
@@ -215,6 +238,7 @@ It can still include:
 | Daemon request validation | Implemented. |
 | One-time token replay rejection | Implemented per daemon process. |
 | Pairing request rate limit | Implemented per libp2p peer. |
+| Pairing daemon counters | Implemented in status and metrics views. |
 | Daemon response generation | Implemented. |
 | Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |
