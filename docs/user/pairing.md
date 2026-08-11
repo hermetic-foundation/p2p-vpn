@@ -165,6 +165,18 @@ The diagnostic is intentionally compact.
 
 It does not print the pairing URI or rendezvous token.
 
+## Daemon Limits
+
+The inviter daemon rate-limits live pairing requests per libp2p peer.
+
+| Setting | Default |
+| --- | --- |
+| `resources.max_pairing_requests_per_peer_per_second` | `4` |
+
+Rate-limited requests are rejected before response generation.
+
+This limit is separate from packet forwarding limits.
+
 ## URI Contents
 
 The URI includes:
@@ -202,6 +214,7 @@ It can still include:
 | Libp2p pairing protocol | Implemented as `/p2p-vpn/pairing/1`. |
 | Daemon request validation | Implemented. |
 | One-time token replay rejection | Implemented per daemon process. |
+| Pairing request rate limit | Implemented per libp2p peer. |
 | Daemon response generation | Implemented. |
 | Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |

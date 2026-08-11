@@ -250,12 +250,12 @@ struct PacketRateBucket {
 }
 
 #[derive(Debug)]
-struct PeerPacketRateLimiters {
+struct PeerRateLimiters {
     limit_per_second: u32,
     buckets: HashMap<Libp2pPeerId, PacketRateBucket>,
 }
 
-impl PeerPacketRateLimiters {
+impl PeerRateLimiters {
     fn new(limit_per_second: u32) -> Self {
         Self {
             limit_per_second: limit_per_second.max(1),
@@ -517,7 +517,9 @@ where
     let mut infrastructure_peers = InfrastructurePeers::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
-        PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
+        PeerRateLimiters::new(resources.inbound_packet_rate_limit());
+    let mut pairing_request_rate_limiters =
+        PeerRateLimiters::new(resources.pairing_request_rate_limit());
     let mut consumed_pairing_tokens = HashSet::new();
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let kademlia_lookup_keys = kademlia_lookup_keys(
@@ -681,6 +683,7 @@ where
                         discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
+                        pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
                         metrics: &metrics,
                         local_capabilities: &mut local_capabilities,
                         previous_membership_tags: &previous_membership_tags,
@@ -6062,7 +6065,8 @@ struct SwarmEventContext<'a> {
     relay_server_enabled: bool,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
-    inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
+    inbound_packet_rate_limiters: &'a mut PeerRateLimiters,
+    pairing_request_rate_limiters: &'a mut PeerRateLimiters,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
@@ -6306,6 +6310,7 @@ async fn handle_swarm_event(
             );
             if num_established == 0 {
                 context.inbound_packet_rate_limiters.remove(peer_id);
+                context.pairing_request_rate_limiters.remove(peer_id);
                 let overlay_peer = PeerId::from_libp2p(peer_id);
                 if !has_active_packet_plane_session(
                     Some(context.packet_plane),
@@ -7158,7 +7163,7 @@ struct PacketPlaneInboundContext<'a> {
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
-    inbound_packet_rate_limiters: &'a mut PeerPacketRateLimiters,
+    inbound_packet_rate_limiters: &'a mut PeerRateLimiters,
     packet_plane: Option<&'a PacketPlaneRuntime>,
     packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
     backend: PacketDatagramBackend,
@@ -7652,6 +7657,29 @@ fn handle_pairing_event(
             },
             ..
         } => {
+            if !context
+                .pairing_request_rate_limiters
+                .allow(peer, Instant::now())
+            {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "pairing_request_rejected",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("joiner", &request.payload.joiner_peer),
+                        ("reason", "rate_limited"),
+                        (
+                            "limit_per_second",
+                            &context
+                                .pairing_request_rate_limiters
+                                .limit_per_second()
+                                .to_string(),
+                        ),
+                    ],
+                );
+                drop(channel);
+                return Ok(());
+            }
             let now_unix_seconds = current_unix_seconds_lossy();
             match pairing_response_for_request(
                 context.forwarder.config(),
@@ -12868,7 +12896,7 @@ mod tests {
     fn peer_packet_rate_limiter_caps_each_peer_independently() {
         let peer_a = peer_id();
         let peer_b = peer_id();
-        let mut limiters = PeerPacketRateLimiters::new(2);
+        let mut limiters = PeerRateLimiters::new(2);
         let now = Instant::now();
 
         assert!(limiters.allow(peer_a, now));
@@ -12880,7 +12908,7 @@ mod tests {
     #[test]
     fn peer_packet_rate_limiter_refills_over_time_and_can_forget_peers() {
         let peer = peer_id();
-        let mut limiters = PeerPacketRateLimiters::new(1);
+        let mut limiters = PeerRateLimiters::new(1);
         let now = Instant::now();
 
         assert!(limiters.allow(peer, now));
@@ -12890,6 +12918,19 @@ mod tests {
         assert!(!limiters.allow(peer, now + Duration::from_secs(1)));
         limiters.remove(peer);
         assert!(limiters.allow(peer, now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn pairing_request_rate_limiter_is_independent_from_packet_limiter() {
+        let peer = peer_id();
+        let now = Instant::now();
+        let mut packet_limiters = PeerRateLimiters::new(1);
+        let mut pairing_limiters = PeerRateLimiters::new(1);
+
+        assert!(packet_limiters.allow(peer, now));
+        assert!(!packet_limiters.allow(peer, now));
+        assert!(pairing_limiters.allow(peer, now));
+        assert!(!pairing_limiters.allow(peer, now));
     }
 
     #[test]

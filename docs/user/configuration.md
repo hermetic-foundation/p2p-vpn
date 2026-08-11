@@ -192,6 +192,17 @@ Use `--relay-peer` to add relay infrastructure from the CLI:
 
 This also creates a matching reservation address.
 
+## Resource Limits
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `resources.max_inbound_packets_per_peer_per_second` | `4096` | Packet data-plane rate limit. |
+| `resources.max_pairing_requests_per_peer_per_second` | `4` | Live pairing request rate limit. |
+
+The pairing limit is per libp2p peer.
+
+It does not consume packet forwarding allowance.
+
 ## Packet Plane
 
 | Setting | Meaning |

@@ -270,6 +270,11 @@ impl Config {
                 ResourceValidationError::NoInboundPacketsPerPeerPerSecond,
             ));
         }
+        if self.resources.max_pairing_requests_per_peer_per_second == 0 {
+            return Err(ConfigError::Resource(
+                ResourceValidationError::NoPairingRequestsPerPeerPerSecond,
+            ));
+        }
         validate_auto_relay_policy(self.network.relay.auto).map_err(ConfigError::Resource)?;
         if self.network.relay.server {
             validate_relay_server_resources(self.network.relay.resources)
@@ -760,6 +765,8 @@ pub struct ResourceConfig {
     pub max_concurrent_control_streams: usize,
     #[serde(default = "default_max_inbound_packets_per_peer_per_second")]
     pub max_inbound_packets_per_peer_per_second: u32,
+    #[serde(default = "default_max_pairing_requests_per_peer_per_second")]
+    pub max_pairing_requests_per_peer_per_second: u32,
     #[serde(default = "default_max_pending_incoming_connections")]
     pub max_pending_incoming_connections: u32,
     #[serde(default = "default_max_pending_outgoing_connections")]
@@ -794,6 +801,11 @@ impl ResourceConfig {
     #[must_use]
     pub const fn inbound_packet_rate_limit(self) -> u32 {
         self.max_inbound_packets_per_peer_per_second
+    }
+
+    #[must_use]
+    pub const fn pairing_request_rate_limit(self) -> u32 {
+        self.max_pairing_requests_per_peer_per_second
     }
 
     #[must_use]
@@ -1024,6 +1036,7 @@ pub enum ResourceValidationError {
     NoEstablishedConnectionsPerPeer,
     NoEstablishedConnections,
     NoInboundPacketsPerPeerPerSecond,
+    NoPairingRequestsPerPeerPerSecond,
     RelayServerNoReservations,
     RelayServerNoReservationsPerPeer,
     RelayServerNoReservationDuration,
@@ -1073,6 +1086,8 @@ const fn default_resources() -> ResourceConfig {
         max_concurrent_packet_streams: default_max_concurrent_packet_streams(),
         max_concurrent_control_streams: default_max_concurrent_control_streams(),
         max_inbound_packets_per_peer_per_second: default_max_inbound_packets_per_peer_per_second(),
+        max_pairing_requests_per_peer_per_second: default_max_pairing_requests_per_peer_per_second(
+        ),
         max_pending_incoming_connections: default_max_pending_incoming_connections(),
         max_pending_outgoing_connections: default_max_pending_outgoing_connections(),
         max_established_incoming_connections: default_max_established_incoming_connections(),
@@ -1092,6 +1107,10 @@ const fn default_max_concurrent_control_streams() -> usize {
 
 const fn default_max_inbound_packets_per_peer_per_second() -> u32 {
     4096
+}
+
+const fn default_max_pairing_requests_per_peer_per_second() -> u32 {
+    4
 }
 
 fn default_packet_plane_listen() -> Vec<String> {
@@ -3274,6 +3293,15 @@ mod tests {
                 ResourceValidationError::NoInboundPacketsPerPeerPerSecond
             ))
         ));
+
+        config.resources.max_inbound_packets_per_peer_per_second = 4096;
+        config.resources.max_pairing_requests_per_peer_per_second = 0;
+        assert!(matches!(
+            config.validate_runtime(),
+            Err(ConfigError::Resource(
+                ResourceValidationError::NoPairingRequestsPerPeerPerSecond
+            ))
+        ));
     }
 
     #[test]
@@ -3861,6 +3889,7 @@ mod tests {
         assert_eq!(config.resources.max_established_connections_per_peer, 8);
         assert_eq!(config.resources.max_established_connections, 512);
         assert_eq!(config.resources.inbound_packet_rate_limit(), 4096);
+        assert_eq!(config.resources.pairing_request_rate_limit(), 4);
         assert_eq!(config.queue.max_packet_age_millis, 3_000);
 
         let config = serde_json::from_str::<Config>(
@@ -3882,7 +3911,8 @@ mod tests {
                 "max_established_outgoing_connections": 6,
                 "max_established_connections_per_peer": 7,
                 "max_established_connections": 8,
-                "max_inbound_packets_per_peer_per_second": 9
+                "max_inbound_packets_per_peer_per_second": 9,
+                "max_pairing_requests_per_peer_per_second": 3
               },
               "queue": {
                 "max_packets_per_peer": 256,
@@ -3902,6 +3932,7 @@ mod tests {
         assert_eq!(config.resources.max_established_connections_per_peer, 7);
         assert_eq!(config.resources.max_established_connections, 8);
         assert_eq!(config.resources.inbound_packet_rate_limit(), 9);
+        assert_eq!(config.resources.pairing_request_rate_limit(), 3);
         assert_eq!(
             config.queue.max_packet_age(),
             std::time::Duration::from_millis(1)
