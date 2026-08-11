@@ -90,6 +90,22 @@ Pairing transport uses libp2p request-response:
 | Limit | 32 KiB per message |
 | Stream class | Control-plane stream |
 
+Live accept diagnostics are local to the accepting CLI:
+
+| Counter | Source |
+| --- | --- |
+| `inviter_hints` | Offer URI inviter addresses. |
+| `relayed_inviter_hints` | Offer URI `/p2p-circuit` addresses. |
+| `bootstrap_peers` | Offer URI bootstrap peers. |
+| `request_attempts` | Request-response send attempts. |
+| `outbound_failures` | Request-response outbound failures. |
+| `dial_errors` | Swarm connection errors. |
+| `relayed_dial_start_failures` | Synchronous relay dial start errors. |
+
+These diagnostics are not a daemon status API yet.
+
+They are intended to make discovery and relay failures reproducible.
+
 Daemon handling rules:
 
 | Check | Behavior |

@@ -2252,6 +2252,7 @@ fn write_pairing_config(config: &Config, output: &Path, inviter_peer: &str) -> R
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn live_pair_accept(
     offer: &PairingOffer,
     identity: NodeIdentity,
@@ -2265,6 +2266,7 @@ async fn live_pair_accept(
         .map_err(|error| format!("invalid inviter peer in offer: {error:?}"))?;
     let known_peers = pairing_inviter_addresses(offer, inviter_peer)?;
     let bootstrap_peers = pairing_bootstrap_peers(offer)?;
+    let mut diagnostics = PairingAcceptDiagnostics::new(&known_peers, bootstrap_peers.len());
     let mut node = build_node(&HostConfig {
         identity: identity.clone(),
         network_name: offer.payload.network_name.clone(),
@@ -2289,7 +2291,14 @@ async fn live_pair_accept(
             .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
     }) {
         if let Err(error) = node.swarm.dial(address.clone()) {
-            eprintln!("pairing relayed dial failed to start for {address}: {error:?}");
+            diagnostics.record_relayed_dial_start_failure(&error);
+            eprintln!(
+                "pairing relayed dial failed to start: {}",
+                diagnostics
+                    .last_relayed_dial_error
+                    .as_deref()
+                    .unwrap_or("unknown error")
+            );
         }
     }
     let request = build_pairing_request_at(
@@ -2302,6 +2311,7 @@ async fn live_pair_accept(
         current_unix_seconds_lossy(),
     )
     .map_err(|error| format!("failed to build pairing request: {error:?}"))?;
+    diagnostics.record_request_attempt();
     let request_id = node
         .swarm
         .behaviour_mut()
@@ -2330,8 +2340,16 @@ async fn live_pair_accept(
                         ..
                     },
                 )) if failed_request_id == request_id => {
-                    eprintln!("pairing request failed, retrying: {error:?}");
+                    diagnostics.record_outbound_failure(&error);
+                    eprintln!(
+                        "pairing request failed, retrying: {}",
+                        diagnostics
+                            .last_outbound_failure
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    );
                     tokio::time::sleep(Duration::from_millis(250)).await;
+                    diagnostics.record_request_attempt();
                     request_id = node
                         .swarm
                         .behaviour_mut()
@@ -2339,14 +2357,124 @@ async fn live_pair_accept(
                         .send_request(&inviter_peer, request.clone());
                 }
                 SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                    eprintln!("pairing dial error peer {peer_id:?}: {error:?}");
+                    diagnostics.record_dial_error(peer_id.as_ref(), &error);
+                    eprintln!(
+                        "pairing dial error: {}",
+                        diagnostics
+                            .last_dial_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    );
                 }
                 _ => {}
             }
         }
     })
     .await
-    .map_err(|_| format!("timed out after {timeout_seconds} seconds"))?
+    .map_err(|_| diagnostics.timeout_error(timeout_seconds))?
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PairingAcceptDiagnostics {
+    inviter_address_hints: usize,
+    relayed_inviter_address_hints: usize,
+    bootstrap_peers: usize,
+    request_attempts: u64,
+    outbound_failures: u64,
+    dial_errors: u64,
+    relayed_dial_start_failures: u64,
+    last_outbound_failure: Option<String>,
+    last_dial_error: Option<String>,
+    last_relayed_dial_error: Option<String>,
+}
+
+impl PairingAcceptDiagnostics {
+    fn new(known_peers: &[(Libp2pPeerId, Multiaddr)], bootstrap_peers: usize) -> Self {
+        Self {
+            inviter_address_hints: known_peers.len(),
+            relayed_inviter_address_hints: known_peers
+                .iter()
+                .filter(|(_, address)| {
+                    address
+                        .iter()
+                        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+                })
+                .count(),
+            bootstrap_peers,
+            ..Self::default()
+        }
+    }
+
+    fn record_request_attempt(&mut self) {
+        self.request_attempts = self.request_attempts.saturating_add(1);
+    }
+
+    fn record_outbound_failure<E: std::fmt::Debug>(&mut self, error: &E) {
+        self.outbound_failures = self.outbound_failures.saturating_add(1);
+        self.last_outbound_failure = Some(short_diagnostic_error(error));
+    }
+
+    fn record_dial_error<E: std::fmt::Debug>(&mut self, peer_id: Option<&Libp2pPeerId>, error: &E) {
+        self.dial_errors = self.dial_errors.saturating_add(1);
+        let peer = peer_id.map_or_else(|| "unknown peer".to_owned(), ToString::to_string);
+        self.last_dial_error = Some(format!("{peer}: {}", short_diagnostic_error(error)));
+    }
+
+    fn record_relayed_dial_start_failure<E: std::fmt::Debug>(&mut self, error: &E) {
+        self.relayed_dial_start_failures = self.relayed_dial_start_failures.saturating_add(1);
+        self.last_relayed_dial_error = Some(short_diagnostic_error(error));
+    }
+
+    fn timeout_error(&self, timeout_seconds: u64) -> String {
+        format!(
+            "timed out after {timeout_seconds} seconds; pairing diagnostics: {}",
+            self.summary()
+        )
+    }
+
+    fn summary(&self) -> String {
+        let mut parts = vec![
+            format!("inviter_hints={}", self.inviter_address_hints),
+            format!(
+                "relayed_inviter_hints={}",
+                self.relayed_inviter_address_hints
+            ),
+            format!("bootstrap_peers={}", self.bootstrap_peers),
+            format!("request_attempts={}", self.request_attempts),
+            format!("outbound_failures={}", self.outbound_failures),
+            format!("dial_errors={}", self.dial_errors),
+            format!(
+                "relayed_dial_start_failures={}",
+                self.relayed_dial_start_failures
+            ),
+        ];
+        if let Some(error) = &self.last_outbound_failure {
+            parts.push(format!("last_outbound_failure={error}"));
+        }
+        if let Some(error) = &self.last_dial_error {
+            parts.push(format!("last_dial_error={error}"));
+        }
+        if let Some(error) = &self.last_relayed_dial_error {
+            parts.push(format!("last_relayed_dial_error={error}"));
+        }
+
+        parts.join(" ")
+    }
+}
+
+fn short_diagnostic_error<E: std::fmt::Debug>(error: &E) -> String {
+    const MAX_LEN: usize = 240;
+
+    let rendered = format!("{error:?}")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if rendered.len() <= MAX_LEN {
+        return rendered;
+    }
+
+    format!("{}...", rendered.chars().take(MAX_LEN).collect::<String>())
 }
 
 fn pairing_inviter_addresses(
@@ -9884,6 +10012,91 @@ mod tests {
         assert_eq!(peer_name.as_deref(), Some("node-a"));
         assert_eq!(timeout_seconds, 7);
         assert!(force);
+    }
+
+    #[test]
+    fn pairing_accept_diagnostics_summary_includes_route_context() {
+        let inviter = NodeIdentity::generate_ed25519().expect("identity");
+        let inviter_peer = inviter.peer_id.parse().expect("peer id");
+        let direct_address = "/ip4/127.0.0.1/tcp/1".parse().expect("direct address");
+        let relayed_address = "/ip4/127.0.0.1/tcp/1/p2p-circuit"
+            .parse()
+            .expect("relayed address");
+        let mut diagnostics = PairingAcceptDiagnostics::new(
+            &[
+                (inviter_peer, direct_address),
+                (inviter_peer, relayed_address),
+            ],
+            2,
+        );
+
+        diagnostics.record_request_attempt();
+        diagnostics.record_outbound_failure(&"no address available");
+        diagnostics.record_dial_error(None, &"connection refused");
+        diagnostics.record_relayed_dial_start_failure(&"missing relay reservation");
+
+        let summary = diagnostics.summary();
+        assert!(summary.contains("inviter_hints=2"));
+        assert!(summary.contains("relayed_inviter_hints=1"));
+        assert!(summary.contains("bootstrap_peers=2"));
+        assert!(summary.contains("request_attempts=1"));
+        assert!(summary.contains("outbound_failures=1"));
+        assert!(summary.contains("dial_errors=1"));
+        assert!(summary.contains("relayed_dial_start_failures=1"));
+        assert!(summary.contains("last_outbound_failure=\"no address available\""));
+        assert!(summary.contains("last_dial_error=unknown peer: \"connection refused\""));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_pair_accept_reports_diagnostics_on_timeout() {
+        let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let discovery = DiscoveryConfig {
+            mdns: true,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let inviter_config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter_identity.peer_id.clone(),
+                private_key: Some(inviter_identity.private_key),
+                membership_key: Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/9".to_owned()],
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery,
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        let offer =
+            export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
+
+        let error = live_pair_accept(&offer, joiner_identity, 1280, 1)
+            .await
+            .expect_err("unreachable inviter should time out");
+
+        assert!(error.contains("timed out after 1 seconds"));
+        assert!(error.contains("pairing diagnostics:"));
+        assert!(error.contains("inviter_hints=1"));
+        assert!(error.contains("bootstrap_peers=0"));
+        assert!(error.contains("request_attempts="));
+        assert!(error.contains("outbound_failures="));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

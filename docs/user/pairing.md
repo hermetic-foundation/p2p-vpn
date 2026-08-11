@@ -15,6 +15,7 @@ It is intended to replace manual key and config exchange.
 | Live libp2p exchange | Implemented for URI address hints |
 | Signed membership grant return | Contract implemented |
 | Public discovery-only accept | Planned |
+| Timeout diagnostics | Implemented |
 
 ## Offer
 
@@ -121,6 +122,26 @@ p2p-vpn pair accept 'p2pvpn:...' \
 
 Use `--response` for offline response import.
 
+## Live Diagnostics
+
+If live pairing times out, the final error includes route context.
+
+Example fields:
+
+| Field | Meaning |
+| --- | --- |
+| `inviter_hints` | Inviter addresses embedded in the URI. |
+| `relayed_inviter_hints` | URI hints that use `/p2p-circuit`. |
+| `bootstrap_peers` | Bootstrap peers embedded in the URI. |
+| `request_attempts` | Pairing request sends attempted. |
+| `outbound_failures` | libp2p request failures. |
+| `dial_errors` | connection setup errors observed. |
+| `relayed_dial_start_failures` | relay dial attempts rejected locally. |
+
+The diagnostic is intentionally compact.
+
+It does not print the pairing URI or rendezvous token.
+
 ## URI Contents
 
 The URI includes:
@@ -149,6 +170,7 @@ Minimal configs include the public IPFS bootstrap defaults in the URI.
 | One-time token replay rejection | Implemented per daemon process. |
 | Daemon response generation | Implemented. |
 | Live `pair accept` exchange | Implemented for URI address hints. |
+| Live `pair accept` diagnostics | Implemented. |
 | Public discovery-only `pair accept` | Planned. |
 
 ## Secrets
