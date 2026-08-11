@@ -15,7 +15,8 @@ It is intended to replace manual key and config exchange.
 | Live libp2p exchange | Implemented for URI and bootstrap hints |
 | Signed membership grant return | Contract implemented |
 | Bootstrap-only accept | Implemented |
-| Public discovery-only accept | Planned |
+| Discovery-only offer | Implemented |
+| Discovery-only accept path | Implemented, public proof pending |
 | Timeout diagnostics | Implemented |
 
 ## Offer
@@ -29,6 +30,20 @@ p2p-vpn pair offer --config /etc/p2p-vpn/lab.json
 The command prints a `p2pvpn:` URI.
 
 Copy that URI to the new node.
+
+## Discovery-Only Offer
+
+Use this when the URI should not embed current inviter addresses:
+
+```sh
+p2p-vpn pair offer \
+  --config /etc/p2p-vpn/lab.json \
+  --discovery-only
+```
+
+This keeps bootstrap and discovery hints in the URI.
+
+The accept side must discover the inviter over mDNS, Kademlia, or relay hints.
 
 ## Offer File
 
@@ -78,7 +93,7 @@ Current behavior:
 | Contact inviter from URI hints | yes |
 | Contact inviter from bootstrap hints | yes |
 | Write final config from response | yes |
-| Discover inviter from only public DHT | not yet |
+| Discover inviter from only public DHT | implemented path, public proof pending |
 
 ## Accept Response File
 
@@ -161,6 +176,10 @@ The URI includes:
 
 Minimal configs include the public IPFS bootstrap defaults in the URI.
 
+`--discovery-only` omits inviter addresses.
+
+It still includes bootstrap peers and discovery settings.
+
 ## Current Status
 
 | Capability | Status |
@@ -173,7 +192,7 @@ Minimal configs include the public IPFS bootstrap defaults in the URI.
 | Daemon response generation | Implemented. |
 | Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |
-| Public discovery-only `pair accept` | Planned. |
+| Public discovery-only `pair accept` | Implemented path, public proof pending. |
 
 ## Secrets
 

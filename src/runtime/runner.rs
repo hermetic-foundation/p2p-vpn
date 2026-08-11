@@ -11798,7 +11798,7 @@ mod tests {
         membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         pairing::{
             PairingOfferOptions, PairingRequestOptions, build_pairing_request_at,
-            export_pairing_offer_at,
+            export_discovery_only_pairing_offer_at, export_pairing_offer_at,
         },
         route::builtin_ipv4,
         runtime::control::ControlRoute,
@@ -12125,6 +12125,36 @@ mod tests {
     }
 
     #[test]
+    fn pairing_response_for_request_accepts_discovery_only_offer() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer =
+            export_discovery_only_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+                .expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        let response =
+            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
+                .expect("response");
+
+        assert!(offer.payload.inviter_addresses.is_empty());
+        assert_eq!(request.offer, Some(offer.clone()));
+        assert_eq!(response.payload.joiner_peer, joiner.peer_id);
+        assert!(consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
     fn pairing_response_for_request_rejects_replayed_token() {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
@@ -12183,7 +12213,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::pairing::PairingError::InvalidSignature
+            crate::pairing::PairingError::OfferConfigMismatch
         ));
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }

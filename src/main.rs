@@ -40,7 +40,8 @@ use p2p_vpn::{
     pairing::{
         DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingOffer,
         PairingOfferOptions, PairingRequestOptions, PairingResponse, build_pairing_request_at,
-        export_pairing_offer, import_pairing_response_config_at,
+        export_discovery_only_pairing_offer, export_pairing_offer,
+        import_pairing_response_config_at,
     },
     queue::QueueStats,
     runtime::{
@@ -590,6 +591,8 @@ enum PairCommand {
         #[arg(long)]
         rendezvous_token: Option<String>,
         #[arg(long)]
+        discovery_only: bool,
+        #[arg(long)]
         force: bool,
     },
     Accept {
@@ -970,12 +973,14 @@ async fn main() -> Result<(), String> {
                 output,
                 expires_in_seconds,
                 rendezvous_token,
+                discovery_only,
                 force,
             } => pair_offer(PairOfferArgs {
                 config,
                 output,
                 expires_in_seconds,
                 rendezvous_token,
+                discovery_only,
                 force,
             }),
             PairCommand::Accept {
@@ -1271,6 +1276,7 @@ struct PairOfferArgs {
     output: PathBuf,
     expires_in_seconds: u64,
     rendezvous_token: Option<String>,
+    discovery_only: bool,
     force: bool,
 }
 
@@ -2133,7 +2139,12 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     }
     let config =
         Config::load(&args.config).map_err(|error| format!("failed to load config: {error:?}"))?;
-    let offer = export_pairing_offer(
+    let export_offer = if args.discovery_only {
+        export_discovery_only_pairing_offer
+    } else {
+        export_pairing_offer
+    };
+    let offer = export_offer(
         &config,
         PairingOfferOptions {
             expires_in_seconds: args.expires_in_seconds,
@@ -10313,6 +10324,7 @@ mod tests {
             "120",
             "--rendezvous-token",
             "BwcHBwcHBwcHBwcHBwcHBw",
+            "--discovery-only",
             "--force",
         ])
         .expect("cli");
@@ -10324,6 +10336,7 @@ mod tests {
                     output,
                     expires_in_seconds,
                     rendezvous_token,
+                    discovery_only,
                     force,
                 },
         } = cli.command
@@ -10335,6 +10348,7 @@ mod tests {
         assert_eq!(output, PathBuf::from("node-a.pair"));
         assert_eq!(expires_in_seconds, 120);
         assert_eq!(rendezvous_token.as_deref(), Some("BwcHBwcHBwcHBwcHBwcHBw"));
+        assert!(discovery_only);
         assert!(force);
     }
 

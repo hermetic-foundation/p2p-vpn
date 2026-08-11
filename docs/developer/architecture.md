@@ -81,6 +81,12 @@ Live requests use a compact offer proof.
 
 Legacy embedded offers are still accepted.
 
+Discovery-only offers omit inviter addresses from the signed payload.
+
+Requests for those offers carry the full signed offer.
+
+That lets the daemon validate the exact discovery-only payload.
+
 Pairing transport uses libp2p request-response:
 
 | Field | Value |

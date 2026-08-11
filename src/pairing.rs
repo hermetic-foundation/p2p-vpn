@@ -274,6 +274,30 @@ pub fn export_pairing_offer_at(
     options: PairingOfferOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<PairingOffer, PairingError> {
+    export_pairing_offer_at_with_address_policy(config, options, issued_at_unix_seconds, true)
+}
+
+pub fn export_discovery_only_pairing_offer(
+    config: &Config,
+    options: PairingOfferOptions,
+) -> Result<PairingOffer, PairingError> {
+    export_discovery_only_pairing_offer_at(config, options, current_unix_seconds()?)
+}
+
+pub fn export_discovery_only_pairing_offer_at(
+    config: &Config,
+    options: PairingOfferOptions,
+    issued_at_unix_seconds: u64,
+) -> Result<PairingOffer, PairingError> {
+    export_pairing_offer_at_with_address_policy(config, options, issued_at_unix_seconds, false)
+}
+
+fn export_pairing_offer_at_with_address_policy(
+    config: &Config,
+    options: PairingOfferOptions,
+    issued_at_unix_seconds: u64,
+    include_inviter_addresses: bool,
+) -> Result<PairingOffer, PairingError> {
     config.validate_runtime()?;
     if options.expires_in_seconds == 0 {
         return Err(PairingError::InvalidExpiry);
@@ -299,7 +323,11 @@ pub fn export_pairing_offer_at(
         },
         issued_at_unix_seconds,
         expires_at_unix_seconds,
-        inviter_addresses: exported_inviter_addresses(config),
+        inviter_addresses: if include_inviter_addresses {
+            exported_inviter_addresses(config)
+        } else {
+            Vec::new()
+        },
         bootstrap_peers: exported_bootstrap_peers(config),
         discovery: config.network.discovery.clone(),
         protocols: PairingProtocols::default(),
@@ -333,7 +361,11 @@ pub fn build_pairing_request_at(
     };
     let signature = STANDARD.encode(options.identity.sign(&request_signing_message(&payload)?)?);
     let request = PairingRequest {
-        offer: None,
+        offer: offer
+            .payload
+            .inviter_addresses
+            .is_empty()
+            .then(|| offer.clone()),
         payload,
         signature,
     };
@@ -841,6 +873,50 @@ mod tests {
         assert_eq!(parsed.payload.network_name, "lab");
         assert_eq!(parsed.payload.expires_at_unix_seconds, 1_600);
         assert!(!parsed.payload.bootstrap_peers.is_empty());
+    }
+
+    #[test]
+    fn pairing_offer_can_omit_inviter_addresses_for_discovery_only_accept() {
+        let offer = export_discovery_only_pairing_offer_at(
+            &config(),
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([8_u8; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("offer");
+
+        offer.verify_at(1_001).expect("verified");
+        assert!(offer.payload.inviter_addresses.is_empty());
+        assert!(!offer.payload.bootstrap_peers.is_empty());
+    }
+
+    #[test]
+    fn discovery_only_pairing_request_carries_signed_offer() {
+        let identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let offer = export_discovery_only_pairing_offer_at(
+            &config(),
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([9_u8; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("offer");
+
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity,
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+
+        assert_eq!(request.offer, Some(offer));
     }
 
     #[test]
