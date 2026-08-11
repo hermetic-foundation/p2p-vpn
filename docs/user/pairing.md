@@ -12,8 +12,9 @@ It is intended to replace manual key and config exchange.
 | `pair accept` URI validation | Implemented |
 | Signed response validation | Implemented |
 | Config writing from response | Implemented |
-| Live libp2p exchange | Implemented for URI address hints |
+| Live libp2p exchange | Implemented for URI and bootstrap hints |
 | Signed membership grant return | Contract implemented |
+| Bootstrap-only accept | Implemented |
 | Public discovery-only accept | Planned |
 | Timeout diagnostics | Implemented |
 
@@ -75,6 +76,7 @@ Current behavior:
 | Show discovery hints | yes |
 | Import signed response file | yes |
 | Contact inviter from URI hints | yes |
+| Contact inviter from bootstrap hints | yes |
 | Write final config from response | yes |
 | Discover inviter from only public DHT | not yet |
 
@@ -106,7 +108,7 @@ Without `--private-key`, a new identity is generated.
 
 By default, `pair accept` contacts the inviter over libp2p.
 
-It uses direct or relayed inviter addresses from the URI.
+It uses direct, relayed, bootstrap, mDNS, and Kademlia hints from the URI.
 
 ```sh
 p2p-vpn pair accept 'p2pvpn:...' \
@@ -169,7 +171,7 @@ Minimal configs include the public IPFS bootstrap defaults in the URI.
 | Daemon request validation | Implemented. |
 | One-time token replay rejection | Implemented per daemon process. |
 | Daemon response generation | Implemented. |
-| Live `pair accept` exchange | Implemented for URI address hints. |
+| Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |
 | Public discovery-only `pair accept` | Planned. |
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fs,
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
@@ -7,9 +7,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures::StreamExt as _;
-use libp2p::{Multiaddr, PeerId as Libp2pPeerId, request_response::Message, swarm::SwarmEvent};
+use libp2p::{
+    Multiaddr, PeerId as Libp2pPeerId, kad, mdns, multiaddr::Protocol, request_response::Message,
+    swarm::SwarmEvent,
+};
 use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
@@ -2267,6 +2271,7 @@ async fn live_pair_accept(
     let known_peers = pairing_inviter_addresses(offer, inviter_peer)?;
     let bootstrap_peers = pairing_bootstrap_peers(offer)?;
     let mut diagnostics = PairingAcceptDiagnostics::new(&known_peers, bootstrap_peers.len());
+    let mut dialed_inviter_addresses = HashSet::new();
     let mut node = build_node(&HostConfig {
         identity: identity.clone(),
         network_name: offer.payload.network_name.clone(),
@@ -2285,22 +2290,15 @@ async fn live_pair_accept(
         discovery: offer.payload.discovery.clone(),
     })
     .map_err(|error| format!("failed to start pairing libp2p node: {error:?}"))?;
-    for (_, address) in known_peers.iter().filter(|(_, address)| {
-        address
-            .iter()
-            .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
-    }) {
-        if let Err(error) = node.swarm.dial(address.clone()) {
-            diagnostics.record_relayed_dial_start_failure(&error);
-            eprintln!(
-                "pairing relayed dial failed to start: {}",
-                diagnostics
-                    .last_relayed_dial_error
-                    .as_deref()
-                    .unwrap_or("unknown error")
-            );
-        }
-    }
+    start_pairing_discovery_queries(&mut node, offer, inviter_peer, &mut diagnostics);
+    dial_pairing_inviter_addresses(
+        &mut node,
+        inviter_peer,
+        known_peers.iter().map(|(_, address)| address.clone()),
+        &mut dialed_inviter_addresses,
+        &mut diagnostics,
+        PairingDiscoveredAddressSource::Offer,
+    );
     let request = build_pairing_request_at(
         offer,
         PairingRequestOptions {
@@ -2366,6 +2364,34 @@ async fn live_pair_accept(
                             .unwrap_or("unknown error")
                     );
                 }
+                SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(peers)))
+                    if offer.payload.discovery.mdns =>
+                {
+                    for (peer, address) in peers {
+                        if peer == inviter_peer {
+                            dial_pairing_inviter_addresses(
+                                &mut node,
+                                inviter_peer,
+                                std::iter::once(address),
+                                &mut dialed_inviter_addresses,
+                                &mut diagnostics,
+                                PairingDiscoveredAddressSource::Mdns,
+                            );
+                        }
+                    }
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Kad(event))
+                    if offer.payload.discovery.kademlia =>
+                {
+                    handle_pairing_kademlia_event(
+                        &mut node,
+                        offer,
+                        inviter_peer,
+                        event,
+                        &mut dialed_inviter_addresses,
+                        &mut diagnostics,
+                    );
+                }
                 _ => {}
             }
         }
@@ -2374,11 +2400,26 @@ async fn live_pair_accept(
     .map_err(|_| diagnostics.timeout_error(timeout_seconds))?
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PairingDiscoveredAddressSource {
+    Offer,
+    Mdns,
+    KademliaClosestPeer,
+    KademliaPeerRecord,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PairingAcceptDiagnostics {
     inviter_address_hints: usize,
     relayed_inviter_address_hints: usize,
     bootstrap_peers: usize,
+    discovery_queries: u64,
+    discovery_query_failures: u64,
+    discovered_inviter_addresses: u64,
+    mdns_inviter_addresses: u64,
+    kademlia_inviter_addresses: u64,
+    kademlia_provider_results: u64,
+    ignored_kademlia_providers: u64,
     request_attempts: u64,
     outbound_failures: u64,
     dial_errors: u64,
@@ -2386,6 +2427,7 @@ struct PairingAcceptDiagnostics {
     last_outbound_failure: Option<String>,
     last_dial_error: Option<String>,
     last_relayed_dial_error: Option<String>,
+    last_discovery_failure: Option<String>,
 }
 
 impl PairingAcceptDiagnostics {
@@ -2407,6 +2449,39 @@ impl PairingAcceptDiagnostics {
 
     fn record_request_attempt(&mut self) {
         self.request_attempts = self.request_attempts.saturating_add(1);
+    }
+
+    fn record_discovery_query(&mut self) {
+        self.discovery_queries = self.discovery_queries.saturating_add(1);
+    }
+
+    fn record_discovery_query_failure<E: std::fmt::Debug>(&mut self, error: &E) {
+        self.discovery_query_failures = self.discovery_query_failures.saturating_add(1);
+        self.last_discovery_failure = Some(short_diagnostic_error(error));
+    }
+
+    fn record_kademlia_provider_result(&mut self, provider_count: usize) {
+        self.kademlia_provider_results = self
+            .kademlia_provider_results
+            .saturating_add(u64::try_from(provider_count).unwrap_or(u64::MAX));
+    }
+
+    fn record_ignored_kademlia_provider(&mut self) {
+        self.ignored_kademlia_providers = self.ignored_kademlia_providers.saturating_add(1);
+    }
+
+    fn record_discovered_inviter_address(&mut self, source: PairingDiscoveredAddressSource) {
+        self.discovered_inviter_addresses = self.discovered_inviter_addresses.saturating_add(1);
+        match source {
+            PairingDiscoveredAddressSource::Offer => {}
+            PairingDiscoveredAddressSource::Mdns => {
+                self.mdns_inviter_addresses = self.mdns_inviter_addresses.saturating_add(1);
+            }
+            PairingDiscoveredAddressSource::KademliaClosestPeer
+            | PairingDiscoveredAddressSource::KademliaPeerRecord => {
+                self.kademlia_inviter_addresses = self.kademlia_inviter_addresses.saturating_add(1);
+            }
+        }
     }
 
     fn record_outbound_failure<E: std::fmt::Debug>(&mut self, error: &E) {
@@ -2440,6 +2515,25 @@ impl PairingAcceptDiagnostics {
                 self.relayed_inviter_address_hints
             ),
             format!("bootstrap_peers={}", self.bootstrap_peers),
+            format!("discovery_queries={}", self.discovery_queries),
+            format!("discovery_query_failures={}", self.discovery_query_failures),
+            format!(
+                "discovered_inviter_addresses={}",
+                self.discovered_inviter_addresses
+            ),
+            format!("mdns_inviter_addresses={}", self.mdns_inviter_addresses),
+            format!(
+                "kademlia_inviter_addresses={}",
+                self.kademlia_inviter_addresses
+            ),
+            format!(
+                "kademlia_provider_results={}",
+                self.kademlia_provider_results
+            ),
+            format!(
+                "ignored_kademlia_providers={}",
+                self.ignored_kademlia_providers
+            ),
             format!("request_attempts={}", self.request_attempts),
             format!("outbound_failures={}", self.outbound_failures),
             format!("dial_errors={}", self.dial_errors),
@@ -2457,9 +2551,295 @@ impl PairingAcceptDiagnostics {
         if let Some(error) = &self.last_relayed_dial_error {
             parts.push(format!("last_relayed_dial_error={error}"));
         }
+        if let Some(error) = &self.last_discovery_failure {
+            parts.push(format!("last_discovery_failure={error}"));
+        }
 
         parts.join(" ")
     }
+}
+
+fn start_pairing_discovery_queries(
+    node: &mut p2p_vpn::runtime::p2p::P2pNode,
+    offer: &PairingOffer,
+    inviter_peer: Libp2pPeerId,
+    diagnostics: &mut PairingAcceptDiagnostics,
+) {
+    if !offer.payload.discovery.kademlia {
+        return;
+    }
+
+    if let Some(rendezvous_key) = node.kademlia_rendezvous_key.clone() {
+        node.swarm.behaviour_mut().kad.get_providers(rendezvous_key);
+        diagnostics.record_discovery_query();
+    }
+
+    node.swarm
+        .behaviour_mut()
+        .kad
+        .get_record(p2p_vpn::runtime::p2p::kademlia_peer_addresses_key(
+            &offer.payload.network_name,
+            None,
+            inviter_peer,
+        ));
+    diagnostics.record_discovery_query();
+
+    node.swarm
+        .behaviour_mut()
+        .kad
+        .get_closest_peers(inviter_peer);
+    diagnostics.record_discovery_query();
+
+    match node.swarm.behaviour_mut().kad.bootstrap() {
+        Ok(_) => diagnostics.record_discovery_query(),
+        Err(error) => diagnostics.record_discovery_query_failure(&error),
+    }
+}
+
+fn handle_pairing_kademlia_event(
+    node: &mut p2p_vpn::runtime::p2p::P2pNode,
+    offer: &PairingOffer,
+    inviter_peer: Libp2pPeerId,
+    event: kad::Event,
+    dialed_inviter_addresses: &mut HashSet<Multiaddr>,
+    diagnostics: &mut PairingAcceptDiagnostics,
+) {
+    match event {
+        kad::Event::OutboundQueryProgressed { result, .. } => {
+            handle_pairing_kademlia_query_result(
+                node,
+                offer,
+                inviter_peer,
+                result,
+                dialed_inviter_addresses,
+                diagnostics,
+            );
+        }
+        kad::Event::RoutingUpdated {
+            peer, addresses, ..
+        } if peer == inviter_peer => {
+            dial_pairing_inviter_addresses(
+                node,
+                inviter_peer,
+                addresses.into_vec(),
+                dialed_inviter_addresses,
+                diagnostics,
+                PairingDiscoveredAddressSource::KademliaClosestPeer,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn handle_pairing_kademlia_query_result(
+    node: &mut p2p_vpn::runtime::p2p::P2pNode,
+    offer: &PairingOffer,
+    inviter_peer: Libp2pPeerId,
+    result: kad::QueryResult,
+    dialed_inviter_addresses: &mut HashSet<Multiaddr>,
+    diagnostics: &mut PairingAcceptDiagnostics,
+) {
+    match result {
+        kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
+            providers,
+            ..
+        })) => {
+            diagnostics.record_kademlia_provider_result(providers.len());
+            for provider in providers {
+                if provider == inviter_peer {
+                    node.swarm.behaviour_mut().kad.get_closest_peers(provider);
+                    diagnostics.record_discovery_query();
+                } else {
+                    diagnostics.record_ignored_kademlia_provider();
+                }
+            }
+        }
+        kad::QueryResult::GetClosestPeers(
+            Ok(kad::GetClosestPeersOk { peers, .. })
+            | Err(kad::GetClosestPeersError::Timeout { peers, .. }),
+        ) => {
+            for peer in peers {
+                if peer.peer_id == inviter_peer {
+                    dial_pairing_inviter_addresses(
+                        node,
+                        inviter_peer,
+                        peer.addrs,
+                        dialed_inviter_addresses,
+                        diagnostics,
+                        PairingDiscoveredAddressSource::KademliaClosestPeer,
+                    );
+                }
+            }
+        }
+        kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) => {
+            match pairing_inviter_addresses_from_kademlia_record(
+                offer,
+                inviter_peer,
+                peer_record.record.value.as_slice(),
+            ) {
+                Ok(addresses) => {
+                    dial_pairing_inviter_addresses(
+                        node,
+                        inviter_peer,
+                        addresses,
+                        dialed_inviter_addresses,
+                        diagnostics,
+                        PairingDiscoveredAddressSource::KademliaPeerRecord,
+                    );
+                }
+                Err(error) => {
+                    diagnostics.record_discovery_query_failure(&error);
+                }
+            }
+        }
+        kad::QueryResult::GetProviders(Err(error)) => {
+            diagnostics.record_discovery_query_failure(&error);
+        }
+        kad::QueryResult::GetRecord(Err(error)) => {
+            diagnostics.record_discovery_query_failure(&error);
+        }
+        _ => {}
+    }
+}
+
+fn dial_pairing_inviter_addresses(
+    node: &mut p2p_vpn::runtime::p2p::P2pNode,
+    inviter_peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = Multiaddr>,
+    dialed_inviter_addresses: &mut HashSet<Multiaddr>,
+    diagnostics: &mut PairingAcceptDiagnostics,
+    source: PairingDiscoveredAddressSource,
+) {
+    for address in addresses {
+        let Some(dial_address) = pairing_dial_address(inviter_peer, address) else {
+            continue;
+        };
+        if !dialed_inviter_addresses.insert(dial_address.clone()) {
+            continue;
+        }
+        diagnostics.record_discovered_inviter_address(source);
+        if let Err(error) = node.swarm.dial(dial_address.clone()) {
+            if dial_address
+                .iter()
+                .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+            {
+                diagnostics.record_relayed_dial_start_failure(&error);
+            } else {
+                diagnostics.record_dial_error(Some(&inviter_peer), &error);
+            }
+        }
+    }
+}
+
+fn pairing_dial_address(inviter_peer: Libp2pPeerId, address: Multiaddr) -> Option<Multiaddr> {
+    let is_relayed = address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit));
+    if is_relayed {
+        let mut after_circuit = false;
+        let mut target_peer = None;
+        for protocol in &address {
+            match protocol {
+                Protocol::P2pCircuit => after_circuit = true,
+                Protocol::P2p(peer) if after_circuit => target_peer = Some(peer),
+                _ => {}
+            }
+        }
+        return match target_peer {
+            Some(peer) if peer == inviter_peer => Some(address),
+            Some(_) => None,
+            None => address.with_p2p(inviter_peer).ok(),
+        };
+    }
+
+    let mut direct_target_peer = None;
+    for protocol in &address {
+        if let Protocol::P2p(peer) = protocol {
+            if direct_target_peer.is_some() {
+                return None;
+            }
+            direct_target_peer = Some(peer);
+        }
+    }
+
+    if let Some(peer) = direct_target_peer {
+        if peer == inviter_peer {
+            Some(address)
+        } else {
+            None
+        }
+    } else {
+        address.with_p2p(inviter_peer).ok()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PairingKademliaPeerAddressRecord {
+    payload: PairingKademliaPeerAddressRecordPayload,
+    signature: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PairingKademliaPeerAddressRecordPayload {
+    version: u8,
+    network_name: String,
+    #[serde(default)]
+    membership_tag: Option<String>,
+    peer_id: String,
+    public_key_protobuf: Vec<u8>,
+    sequence: u64,
+    expires_at_unix_seconds: u64,
+    addresses: Vec<String>,
+}
+
+fn pairing_inviter_addresses_from_kademlia_record(
+    offer: &PairingOffer,
+    inviter_peer: Libp2pPeerId,
+    value: &[u8],
+) -> Result<Vec<Multiaddr>, String> {
+    let record: PairingKademliaPeerAddressRecord =
+        serde_json::from_slice(value).map_err(|error| format!("decode_failed: {error}"))?;
+    let payload_bytes = serde_json::to_vec(&record.payload)
+        .map_err(|error| format!("payload_encode_failed: {error}"))?;
+    if record.payload.version != 1 {
+        return Err("unsupported_version".to_owned());
+    }
+    if record.payload.network_name != offer.payload.network_name {
+        return Err("wrong_network".to_owned());
+    }
+    if record.payload.membership_tag.is_some() {
+        return Err("wrong_membership_scope".to_owned());
+    }
+    if record.payload.peer_id != offer.payload.inviter_peer {
+        return Err("wrong_peer".to_owned());
+    }
+    if record.payload.expires_at_unix_seconds < current_unix_seconds_lossy() {
+        return Err("expired".to_owned());
+    }
+    let offered_public_key_bytes = STANDARD
+        .decode(&offer.payload.inviter_public_key)
+        .map_err(|error| format!("offer_public_key_decode_failed: {error}"))?;
+    if record.payload.public_key_protobuf != offered_public_key_bytes {
+        return Err("wrong_public_key".to_owned());
+    }
+    let public_key = libp2p::identity::PublicKey::try_decode_protobuf(&offered_public_key_bytes)
+        .map_err(|error| format!("public_key_decode_failed: {error:?}"))?;
+    if !public_key.verify(&payload_bytes, &record.signature) {
+        return Err("invalid_signature".to_owned());
+    }
+
+    let addresses = record
+        .payload
+        .addresses
+        .iter()
+        .filter_map(|address| address.parse::<Multiaddr>().ok())
+        .filter_map(|address| pairing_dial_address(inviter_peer, address))
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("no_addresses".to_owned());
+    }
+
+    Ok(addresses)
 }
 
 fn short_diagnostic_error<E: std::fmt::Debug>(error: &E) -> String {
@@ -10047,6 +10427,108 @@ mod tests {
         assert!(summary.contains("last_dial_error=unknown peer: \"connection refused\""));
     }
 
+    #[test]
+    fn pairing_dial_address_accepts_direct_and_relayed_inviter_targets() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        let other = NodeIdentity::generate_ed25519().expect("other identity");
+        let inviter_peer: Libp2pPeerId = inviter.peer_id.parse().expect("inviter peer");
+        let relay_peer: Libp2pPeerId = relay.peer_id.parse().expect("relay peer");
+        let other_peer: Libp2pPeerId = other.peer_id.parse().expect("other peer");
+
+        let direct = "/ip4/127.0.0.1/tcp/1".parse().expect("direct address");
+        assert_eq!(
+            pairing_dial_address(inviter_peer, direct)
+                .expect("direct target")
+                .to_string(),
+            format!("/ip4/127.0.0.1/tcp/1/p2p/{inviter_peer}")
+        );
+
+        let relayed_base = format!("/ip4/127.0.0.1/tcp/2/p2p/{relay_peer}/p2p-circuit")
+            .parse()
+            .expect("relayed base");
+        assert_eq!(
+            pairing_dial_address(inviter_peer, relayed_base)
+                .expect("relayed target")
+                .to_string(),
+            format!("/ip4/127.0.0.1/tcp/2/p2p/{relay_peer}/p2p-circuit/p2p/{inviter_peer}")
+        );
+
+        let wrong_relayed_target =
+            format!("/ip4/127.0.0.1/tcp/2/p2p/{relay_peer}/p2p-circuit/p2p/{other_peer}")
+                .parse()
+                .expect("wrong target");
+        assert!(pairing_dial_address(inviter_peer, wrong_relayed_target).is_none());
+    }
+
+    #[test]
+    fn pairing_inviter_addresses_from_kademlia_record_verifies_signed_payload() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let inviter_peer: Libp2pPeerId = inviter.peer_id.parse().expect("inviter peer");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter.peer_id.clone(),
+                private_key: Some(inviter.private_key.clone()),
+                membership_key: Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig {
+                    mdns: true,
+                    kademlia: true,
+                    kademlia_provider_advertisement: true,
+                    kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+                    dcutr: true,
+                    autonat: true,
+                },
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        let offer = export_pairing_offer(&config, PairingOfferOptions::default()).expect("offer");
+        let payload = PairingKademliaPeerAddressRecordPayload {
+            version: 1,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            peer_id: inviter.peer_id.clone(),
+            public_key_protobuf: inviter.public_key_protobuf().expect("public key"),
+            sequence: 42,
+            expires_at_unix_seconds: current_unix_seconds_lossy() + 60,
+            addresses: vec!["/ip4/127.0.0.1/tcp/9".to_owned()],
+        };
+        let payload_bytes = serde_json::to_vec(&payload).expect("payload json");
+        let record = PairingKademliaPeerAddressRecord {
+            payload,
+            signature: inviter.sign(&payload_bytes).expect("signature"),
+        };
+        let value = serde_json::to_vec(&record).expect("record json");
+
+        let addresses =
+            pairing_inviter_addresses_from_kademlia_record(&offer, inviter_peer, &value)
+                .expect("signed addresses");
+
+        assert_eq!(
+            addresses,
+            vec![
+                format!("/ip4/127.0.0.1/tcp/9/p2p/{inviter_peer}")
+                    .parse()
+                    .expect("address")
+            ]
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn live_pair_accept_reports_diagnostics_on_timeout() {
         let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
@@ -10226,6 +10708,154 @@ mod tests {
         inviter_config.network.listen_addresses = vec![listener_address];
         let offer =
             export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
+        offer_tx.send(offer.clone()).expect("send offer");
+
+        let response = live_pair_accept(&offer, joiner_identity.clone(), 1280, 5)
+            .await
+            .expect("live response");
+
+        inviter_thread.join().expect("inviter thread");
+        assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
+        assert_eq!(response.payload.joiner_peer, joiner_identity.peer_id);
+        assert_eq!(
+            response.payload.membership_key.as_deref(),
+            Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
+    async fn live_pair_accept_uses_bootstrap_when_offer_has_no_inviter_addresses() {
+        let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let membership_key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned();
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: true,
+            kademlia_provider_advertisement: true,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut inviter_config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter_identity.peer_id.clone(),
+                private_key: Some(inviter_identity.private_key.clone()),
+                membership_key: Some(membership_key.clone()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: discovery.clone(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        let (address_tx, address_rx) = std::sync::mpsc::channel();
+        let (offer_tx, offer_rx) = std::sync::mpsc::channel();
+        let inviter_identity_for_thread = inviter_identity.clone();
+        let inviter_config_for_thread = inviter_config.clone();
+        let membership_key_for_thread = membership_key.clone();
+        let discovery_for_thread = discovery.clone();
+        let inviter_thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("inviter runtime");
+            runtime.block_on(async move {
+                let mut inviter = build_node(&HostConfig {
+                    identity: inviter_identity_for_thread.clone(),
+                    network_name: "lab".to_owned(),
+                    membership_tag: None,
+                    mtu: 1280,
+                    max_concurrent_control_streams: 16,
+                    max_concurrent_packet_streams: 16,
+                    listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+                    external_addresses: Vec::new(),
+                    bootstrap_peers: Vec::new(),
+                    known_peers: Vec::new(),
+                    relay_reservations: Vec::new(),
+                    relay_server: false,
+                    relay_resources: RelayResourceConfig::default(),
+                    resources: ResourceConfig::default(),
+                    discovery: discovery_for_thread,
+                })
+                .expect("inviter node");
+                let listener_address = loop {
+                    if let SwarmEvent::NewListenAddr { address, .. } =
+                        inviter.swarm.select_next_some().await
+                    {
+                        break address;
+                    }
+                };
+                address_tx
+                    .send(listener_address.to_string())
+                    .expect("send listener address");
+                let offer_for_response = offer_rx.recv().expect("receive offer");
+                let mut inviter_config_for_response = inviter_config_for_thread;
+                inviter_config_for_response.network.listen_addresses =
+                    vec![listener_address.to_string()];
+
+                loop {
+                    match inviter.swarm.select_next_some().await {
+                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::Message {
+                                message:
+                                    Message::Request {
+                                        request, channel, ..
+                                    },
+                                ..
+                            },
+                        )) => {
+                            let response = build_pairing_response_at(
+                                &inviter_config_for_response,
+                                &offer_for_response,
+                                PairingResponseOptions {
+                                    joiner_peer: request.payload.joiner_peer,
+                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    membership_key: Some(membership_key_for_thread.clone()),
+                                    member_records: Vec::new(),
+                                    expires_in_seconds: 300,
+                                },
+                                current_unix_seconds_lossy(),
+                            )
+                            .expect("response");
+                            inviter
+                                .swarm
+                                .behaviour_mut()
+                                .pairing
+                                .send_response(channel, response)
+                                .expect("send response");
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::ResponseSent { .. },
+                        )) => return,
+                        _ => {}
+                    }
+                }
+            });
+        });
+
+        let listener_address = address_rx.recv().expect("listener address");
+        inviter_config.network.bootstrap_peers = vec![BootstrapPeerConfig {
+            id: inviter_identity.peer_id.clone(),
+            address: listener_address,
+        }];
+        let offer =
+            export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
+        assert!(offer.payload.inviter_addresses.is_empty());
+        assert_eq!(offer.payload.bootstrap_peers.len(), 1);
         offer_tx.send(offer.clone()).expect("send offer");
 
         let response = live_pair_accept(&offer, joiner_identity.clone(), 1280, 5)

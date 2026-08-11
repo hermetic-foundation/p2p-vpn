@@ -90,6 +90,21 @@ Pairing transport uses libp2p request-response:
 | Limit | 32 KiB per message |
 | Stream class | Control-plane stream |
 
+Live accept starts discovery before sending requests:
+
+| Source | Use |
+| --- | --- |
+| Offer inviter addresses | Dial the signed inviter peer. |
+| Offer bootstrap peers | Seed libp2p routing and request delivery. |
+| mDNS discoveries | Dial only the signed inviter peer. |
+| Kademlia provider results | Retry closest-peer lookup for the inviter. |
+| Kademlia closest peers | Dial only addresses for the signed inviter peer. |
+| Kademlia peer-address record | Verify inviter-signed address hints. |
+
+Discovery records are hints.
+
+The signed offer and libp2p peer identity remain authoritative.
+
 Live accept diagnostics are local to the accepting CLI:
 
 | Counter | Source |
