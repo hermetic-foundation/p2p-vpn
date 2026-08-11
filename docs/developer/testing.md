@@ -218,6 +218,31 @@ The 2026-08-10 VM run passed with minimal NixOS configs.
 
 Observed path events:
 
+## Namespace Live Pairing
+
+Run direct live pairing:
+
+```sh
+nix run .#tun-e2e -- tun_namespace_pair_accept_crosses_live_pairing_overlay -- --ignored --exact --nocapture
+```
+
+Run relay-assisted live pairing:
+
+```sh
+nix run .#tun-e2e -- tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay -- --ignored --exact --nocapture
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Direct offer | `pair accept` writes a config with direct inviter hints. |
+| Relay offer | Discovery-only URI embeds relay reservation hints. |
+| Relay accept | Joiner contacts inviter through `/p2p-circuit`. |
+| Generated config | Relayed inviter address is preserved after accept. |
+| Data plane | Ping crosses the generated overlay config. |
+| Daemon state | Inviter accepts the pairing request live. |
+
 | Event | Evidence |
 | --- | --- |
 | Direct start | Initial `pv0` traffic used a direct LAN path. |

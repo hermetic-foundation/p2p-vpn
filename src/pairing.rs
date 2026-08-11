@@ -747,6 +747,16 @@ fn validate_protocols(protocols: &PairingProtocols) -> Result<(), PairingError> 
 
 fn exported_inviter_addresses(config: &Config) -> Vec<String> {
     let mut addresses = config.network.external_addresses.clone();
+    if let Ok(local_peer) = config.network.local_peer.parse::<Libp2pPeerId>()
+        && let Ok(relay_reservations) = config.relay_reservation_multiaddrs()
+    {
+        for address in relay_reservations {
+            let relayed_address = address.with(Protocol::P2p(local_peer)).to_string();
+            if !addresses.contains(&relayed_address) {
+                addresses.push(relayed_address);
+            }
+        }
+    }
     for address in &config.network.listen_addresses {
         if !addresses.contains(address) {
             addresses.push(address.clone());
@@ -1205,6 +1215,44 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn pairing_response_exports_relayed_inviter_address_from_reservation() {
+        let mut inviter_config = config();
+        let relay = NodeIdentity::generate_ed25519().expect("relay");
+        inviter_config.network.relay.reservations = vec![format!(
+            "/ip4/127.0.0.1/tcp/4001/p2p/{}/p2p-circuit",
+            relay.peer_id
+        )];
+        let offer = export_discovery_only_pairing_offer_at(
+            &inviter_config,
+            PairingOfferOptions::default(),
+            1_000,
+        )
+        .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let response = build_pairing_response_at(
+            &inviter_config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: joiner.peer_id,
+                assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                membership_key: Some(STANDARD.encode([9_u8; 32])),
+                member_records: Vec::new(),
+                expires_in_seconds: 300,
+            },
+            1_010,
+        )
+        .expect("response");
+
+        assert!(response.payload.inviter_addresses.iter().any(|address| {
+            address
+                == &format!(
+                    "/ip4/127.0.0.1/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
+                    relay.peer_id, inviter_config.network.local_peer
+                )
+        }));
     }
 
     #[test]

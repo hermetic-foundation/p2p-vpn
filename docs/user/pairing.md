@@ -17,7 +17,7 @@ It is intended to replace manual key and config exchange.
 | Bootstrap-only accept | Implemented |
 | Discovery-only offer | Implemented |
 | Offer inspection | Implemented |
-| Discovery-only relay accept | Implemented with local relay proof |
+| Discovery-only relay accept | Implemented with namespace relay proof |
 | Public discovery-only accept | Implemented path, public proof pending |
 | Timeout diagnostics | Implemented |
 | Daemon pairing counters | Implemented |
@@ -51,6 +51,8 @@ The accept side must discover the inviter over mDNS, Kademlia, or relay hints.
 Relay reservation hints are signed when present.
 
 They do not expose a direct inviter address.
+
+The generated config preserves the relayed inviter address after accept.
 
 ## Offer File
 
@@ -133,6 +135,7 @@ Current behavior:
 | Contact inviter from bootstrap hints | yes |
 | Contact inviter through signed relay reservation hints | yes |
 | Write final config from response | yes |
+| Preserve relayed inviter address from response | yes |
 | Discover inviter from only public DHT | implemented path, public proof pending |
 | Preserve public bootstrap defaults compactly | yes |
 

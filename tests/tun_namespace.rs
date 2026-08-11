@@ -42,6 +42,8 @@ const MDNS_TEST_NAME: &str = "tun_namespace_ping_crosses_mdns_discovered_overlay
 const RELAY_TEST_NAME: &str = "tun_namespace_ping_crosses_relay_overlay";
 const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_overlay";
 const PAIRING_TEST_NAME: &str = "tun_namespace_pair_accept_crosses_live_pairing_overlay";
+const PAIRING_RELAY_TEST_NAME: &str =
+    "tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay";
 const RELAY_PROMOTION_TEST_NAME: &str = "tun_namespace_relay_overlay_promotes_to_direct_path";
 const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_after_network_move";
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
@@ -105,6 +107,16 @@ fn tun_namespace_pair_accept_crosses_live_pairing_overlay() {
         Ok("orchestrator") => run_pairing_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(PAIRING_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_pairing_relay_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(PAIRING_RELAY_TEST_NAME),
     }
 }
 
@@ -1113,6 +1125,14 @@ fn run_pairing_orchestrator() {
     assert_output_success("pair accept", &pair_accept_output);
     let config_a = read_child_config(&temp_dir, "a");
     assert_live_pairing_config(&config_a, &identity_a, &identity_b);
+    assert!(
+        config_a.peers.first().is_some_and(|peer| peer
+            .addresses
+            .iter()
+            .any(|address| address.contains("10.250.0.2"))),
+        "generated pairing config did not preserve direct inviter address hints: {:?}",
+        config_a.peers
+    );
 
     let replay_config_path = temp_dir.join("config-a-replay.json");
     let replay_config_path_arg = replay_config_path.to_string_lossy().into_owned();
@@ -1177,6 +1197,160 @@ fn run_pairing_orchestrator() {
     cleanup_temp_dir(temp_dir);
 }
 
+fn run_pairing_relay_orchestrator() {
+    let identity_relay = NodeIdentity::generate_ed25519().expect("relay identity");
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-pairing-relay-tun-e2e-{}",
+        std::process::id()
+    ));
+    init_namespace_temp_dir(&temp_dir, PAIRING_RELAY_TEST_NAME);
+    let start_relay = temp_dir.join("start-relay");
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+    let offer_path = temp_dir.join("pairing-offer.txt");
+
+    let mut config_b = relay_overlay_config("b", &identity_b, &identity_a, &identity_relay);
+    config_b.peers.clear();
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+    write_child_config(&temp_dir, "b", &config_b);
+    let offer_path_arg = offer_path.to_string_lossy().into_owned();
+    let inviter_config_path_arg = child_config_path(&temp_dir, "b")
+        .to_string_lossy()
+        .into_owned();
+    let offer_output = command_output(
+        current_test_binary(),
+        &[
+            "pair",
+            "offer",
+            "--config",
+            &inviter_config_path_arg,
+            "--output",
+            &offer_path_arg,
+            "--discovery-only",
+            "--force",
+        ],
+        &[],
+        scaled_wait_timeout(Duration::from_secs(10)),
+    )
+    .expect("run relay pair offer");
+    assert_output_success("relay pair offer", &offer_output);
+
+    let mut relay = spawn_node(
+        PAIRING_RELAY_TEST_NAME,
+        "relay",
+        &identity_relay,
+        None,
+        None,
+        &temp_dir,
+        &start_relay,
+    );
+    let mut node_b = spawn_node(
+        PAIRING_RELAY_TEST_NAME,
+        "b",
+        &identity_b,
+        None,
+        Some(&identity_relay),
+        &temp_dir,
+        &start_b,
+    );
+    let mut node_a = spawn_node(
+        PAIRING_RELAY_TEST_NAME,
+        "a",
+        &identity_a,
+        None,
+        Some(&identity_relay),
+        &temp_dir,
+        &start_a,
+    );
+    wait_for_child_namespace(relay.id());
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_relay_underlay(relay.id(), node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.251.0.254"]);
+
+    fs::write(&start_relay, b"start").expect("write relay start file");
+    wait_for_file(&temp_dir.join("ready-relay"));
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file_with_timeout(&temp_dir.join("ready-b"), Duration::from_secs(30));
+    wait_for_daemon_running(&temp_dir, "b");
+
+    let config_a_path = child_config_path(&temp_dir, "a");
+    let joiner_config_path_arg = config_a_path.to_string_lossy().into_owned();
+    let pair_accept_output = ns_command_output(
+        node_a.id(),
+        current_test_binary(),
+        &[
+            "pair",
+            "accept",
+            &offer_path_arg,
+            "--output",
+            &joiner_config_path_arg,
+            "--private-key",
+            &identity_a.private_key,
+            "--interface",
+            "hse2ea",
+            "--local-route",
+            "10.41.0.0/24,100",
+            "--timeout-seconds",
+            "15",
+            "--force",
+        ],
+    );
+    assert_output_success("relay pair accept", &pair_accept_output);
+    let config_a = read_child_config(&temp_dir, "a");
+    assert_live_pairing_config(&config_a, &identity_a, &identity_b);
+    assert!(
+        config_a.peers.first().is_some_and(|peer| peer
+            .addresses
+            .iter()
+            .any(|address| address.contains("/p2p-circuit/"))),
+        "generated relay pairing config did not preserve relayed inviter address hints: {:?}",
+        config_a.peers
+    );
+
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    wait_for_peer_ready(&temp_dir, "a");
+    wait_for_peer_ready(&temp_dir, "b");
+
+    let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let initiator_addresses = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let initiator_routes = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let responder_addresses = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let responder_routes = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    stop_child(&mut relay);
+    assert_ping_success(
+        "relayed live pairing overlay host ping",
+        &host_ping,
+        &temp_dir,
+        &initiator_addresses,
+        &initiator_routes,
+        &responder_addresses,
+        &responder_routes,
+    );
+    let relay_log = read_log(&temp_dir.join("node-relay.log"));
+    let inviter_log = read_log(&temp_dir.join("node-b.log"));
+    assert!(
+        relay_log.contains("CircuitReqAccepted"),
+        "relay did not accept a pairing/data circuit\nrelay log:\n{relay_log}\nnode-a log:\n{}\nnode-b log:\n{inviter_log}",
+        read_log(&temp_dir.join("node-a.log")),
+    );
+    assert!(
+        inviter_log.contains("pairing_request_accepted"),
+        "node B did not log an accepted relayed live pairing request\nnode-b log:\n{inviter_log}",
+    );
+    cleanup_temp_dir(temp_dir);
+}
+
 fn assert_live_pairing_config(config: &Config, joiner: &NodeIdentity, inviter: &NodeIdentity) {
     assert_eq!(
         config.local_peer().expect("resolved local peer"),
@@ -1189,14 +1363,6 @@ fn assert_live_pairing_config(config: &Config, joiner: &NodeIdentity, inviter: &
     assert_eq!(config.interface.name, "hse2ea");
     assert_eq!(config.peers.len(), 1);
     assert_eq!(config.peers[0].id, inviter.peer_id);
-    assert!(
-        config.peers.first().is_some_and(|peer| peer
-            .addresses
-            .iter()
-            .any(|address| address.contains("10.250.0.2"))),
-        "generated pairing config did not preserve inviter address hints: {:?}",
-        config.peers
-    );
     assert!(
         config
             .network
@@ -2130,41 +2296,43 @@ fn run_node_child() {
         return;
     }
 
-    let config = if is_invite_relay_test_child() || is_pairing_test_child() {
-        read_child_config(&temp_dir, &role)
-    } else {
-        let remote = NodeIdentity {
-            peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
-            private_key: String::new(),
-        };
-        let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
-            .ok()
-            .map(|peer_id| NodeIdentity {
-                peer_id,
-                private_key: String::new(),
-            });
-        if let Some(infra) = relay.as_ref() {
-            match role.as_str() {
-                "a" | "b" if is_dht_test_child() => {
-                    dht_overlay_config(&role, &local, &remote, infra)
-                }
-                "a" | "b" if is_relay_promotion_test_child() => {
-                    relay_promotion_overlay_config(&role, &local, &remote, infra)
-                }
-                "a" | "b" if is_network_move_test_child() => {
-                    network_move_overlay_config(&role, &local, &remote, infra)
-                }
-                "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
-                other => panic!("unknown node role {other}"),
-            }
-        } else if is_direct_quic_test_child() {
-            direct_quic_overlay_config(&role, &local, &remote)
-        } else if is_mdns_test_child() {
-            mdns_overlay_config(&role, &local, &remote)
+    let config =
+        if is_invite_relay_test_child() || is_pairing_test_child() || is_pairing_relay_test_child()
+        {
+            read_child_config(&temp_dir, &role)
         } else {
-            direct_overlay_config(&role, &local, &remote)
-        }
-    };
+            let remote = NodeIdentity {
+                peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
+                private_key: String::new(),
+            };
+            let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
+                .ok()
+                .map(|peer_id| NodeIdentity {
+                    peer_id,
+                    private_key: String::new(),
+                });
+            if let Some(infra) = relay.as_ref() {
+                match role.as_str() {
+                    "a" | "b" if is_dht_test_child() => {
+                        dht_overlay_config(&role, &local, &remote, infra)
+                    }
+                    "a" | "b" if is_relay_promotion_test_child() => {
+                        relay_promotion_overlay_config(&role, &local, &remote, infra)
+                    }
+                    "a" | "b" if is_network_move_test_child() => {
+                        network_move_overlay_config(&role, &local, &remote, infra)
+                    }
+                    "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
+                    other => panic!("unknown node role {other}"),
+                }
+            } else if is_direct_quic_test_child() {
+                direct_quic_overlay_config(&role, &local, &remote)
+            } else if is_mdns_test_child() {
+                mdns_overlay_config(&role, &local, &remote)
+            } else {
+                direct_overlay_config(&role, &local, &remote)
+            }
+        };
     let interface = config.interface.name.clone();
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
     let effective_mtu = runtime.mtu;
@@ -2753,7 +2921,7 @@ fn wait_for_file_with_timeout(path: &Path, timeout: Duration) {
 }
 
 fn node_start_wait_timeout(role: &str) -> Duration {
-    if is_pairing_test_child() && role == "a" {
+    if (is_pairing_test_child() || is_pairing_relay_test_child()) && role == "a" {
         Duration::from_secs(45)
     } else {
         Duration::from_secs(10)
@@ -2946,6 +3114,10 @@ fn is_invite_relay_test_child() -> bool {
 
 fn is_pairing_test_child() -> bool {
     env::args().any(|argument| argument == PAIRING_TEST_NAME)
+}
+
+fn is_pairing_relay_test_child() -> bool {
+    env::args().any(|argument| argument == PAIRING_RELAY_TEST_NAME)
 }
 
 fn peer_config(
