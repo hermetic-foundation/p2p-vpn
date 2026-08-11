@@ -1089,6 +1089,50 @@ mod tests {
     }
 
     #[test]
+    fn merge_membership_records_routes_packets_to_requested_vpn_ip() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_for(member_peer);
+        config.peers.clear();
+        config.network.local_peer.clear();
+        config.network.private_key = Some(issuer.private_key.clone());
+        config.network.vpn_ip = Some("10.47.0.1".to_owned());
+        let incoming = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.47.0.2/32".to_owned(),
+                    metric: 0,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("live pairing record");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        let stats = forwarder
+            .merge_membership_records(&[incoming], 1_001)
+            .expect("merge locally issued record");
+        let packet = ipv4_packet(Ipv4Addr::new(10, 47, 0, 1), Ipv4Addr::new(10, 47, 0, 2));
+        let prepared = forwarder
+            .prepare_tun_packet(packet)
+            .expect("packet routes to member requested VPN IP");
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(prepared.peer(), PeerId::from_libp2p(member_peer));
+    }
+
+    #[test]
     fn inbound_packet_accepts_member_record_peer_with_builtin_source() {
         let member = NodeIdentity::generate_ed25519().expect("member");
         let remote = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");

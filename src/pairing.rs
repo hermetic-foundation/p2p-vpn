@@ -314,13 +314,14 @@ fn export_pairing_offer_at_with_address_policy(
             .as_deref()
             .ok_or(PairingError::MissingPrivateKey)?,
     )?;
+    let inviter_peer = config.local_peer()?;
     let expires_at_unix_seconds = issued_at_unix_seconds
         .checked_add(options.expires_in_seconds)
         .ok_or(PairingError::ExpiryOverflow)?;
     let payload = PairingOfferPayload {
         version: PAIRING_OFFER_VERSION,
         network_name: config.network.name.clone(),
-        inviter_peer: config.network.local_peer.clone(),
+        inviter_peer,
         inviter_public_key: STANDARD.encode(identity.public_key_protobuf()?),
         rendezvous_token: match options.rendezvous_token {
             Some(token) => validate_rendezvous_token(&token)?,
@@ -391,8 +392,9 @@ pub fn build_pairing_response_at(
     if options.expires_in_seconds == 0 {
         return Err(PairingError::InvalidExpiry);
     }
+    let inviter_peer = config.local_peer()?;
     if config.network.name != offer.payload.network_name
-        || config.network.local_peer != offer.payload.inviter_peer
+        || inviter_peer != offer.payload.inviter_peer
     {
         return Err(PairingError::OfferConfigMismatch);
     }
@@ -409,7 +411,7 @@ pub fn build_pairing_response_at(
     let payload = PairingResponsePayload {
         version: PAIRING_OFFER_VERSION,
         network_name: config.network.name.clone(),
-        inviter_peer: config.network.local_peer.clone(),
+        inviter_peer,
         inviter_public_key: STANDARD.encode(identity.public_key_protobuf()?),
         joiner_peer: options.joiner_peer,
         rendezvous_token: offer.payload.rendezvous_token.clone(),
@@ -419,7 +421,7 @@ pub fn build_pairing_response_at(
         membership_key: options.membership_key,
         member_records: options.member_records,
         inviter_addresses: exported_inviter_addresses(config),
-        inviter_routes: config.network.routes.clone(),
+        inviter_routes: exported_inviter_routes(config)?,
         bootstrap_peers: exported_bootstrap_peers(config),
         relay_reservations: config.network.relay.reservations.clone(),
         discovery: config.network.discovery.clone(),
@@ -747,7 +749,8 @@ fn validate_protocols(protocols: &PairingProtocols) -> Result<(), PairingError> 
 
 fn exported_inviter_addresses(config: &Config) -> Vec<String> {
     let mut addresses = config.network.external_addresses.clone();
-    if let Ok(local_peer) = config.network.local_peer.parse::<Libp2pPeerId>()
+    if let Ok(local_peer_string) = config.local_peer()
+        && let Ok(local_peer) = local_peer_string.parse::<Libp2pPeerId>()
         && let Ok(relay_reservations) = config.relay_reservation_multiaddrs()
     {
         for address in relay_reservations {
@@ -771,6 +774,25 @@ fn exported_bootstrap_peers(config: &Config) -> Vec<BootstrapPeerConfig> {
     } else {
         config.network.bootstrap_peers.clone()
     }
+}
+
+fn exported_inviter_routes(config: &Config) -> Result<Vec<RouteConfig>, PairingError> {
+    let mut routes = config.network.routes.clone();
+    if let Some(vpn_ip) = config.network.vpn_ip.as_deref() {
+        let address = vpn_ip.parse::<IpAddr>()?;
+        let prefix_len = match address {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        let route = RouteConfig {
+            prefix: format!("{address}/{prefix_len}"),
+            metric: 0,
+        };
+        if !routes.contains(&route) {
+            routes.push(route);
+        }
+    }
+    Ok(routes)
 }
 
 fn generate_rendezvous_token() -> String {
@@ -969,6 +991,26 @@ mod tests {
         assert_eq!(parsed.payload.expires_at_unix_seconds, 1_600);
         assert!(parsed.payload.bootstrap_peers.is_empty());
         assert!(parsed.payload.discovery.kademlia);
+    }
+
+    #[test]
+    fn pairing_offer_derives_inviter_peer_from_compact_private_key_config() {
+        let mut config = config();
+        let expected_peer = config.local_peer().expect("derived local peer");
+        config.network.local_peer.clear();
+
+        let offer = export_pairing_offer_at(
+            &config,
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([14_u8; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("offer");
+
+        offer.verify_at(1_001).expect("verified");
+        assert_eq!(offer.payload.inviter_peer, expected_peer);
     }
 
     #[test]
@@ -1208,6 +1250,10 @@ mod tests {
         assert_eq!(imported.interface.name, "pv-pair");
         assert_eq!(imported.peers.len(), 1);
         assert_eq!(imported.peers[0].id, offer.payload.inviter_peer);
+        assert!(imported.peers[0].routes.contains(&RouteConfig {
+            prefix: "10.42.0.1/32".to_owned(),
+            metric: 0,
+        }));
         assert!(imported.network.bootstrap_peers.is_empty());
         assert!(imported.uses_public_ipfs_bootstrap_defaults());
         assert!(
