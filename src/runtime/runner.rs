@@ -522,6 +522,8 @@ where
     let mut pairing_request_rate_limiters =
         PeerRateLimiters::new(resources.pairing_request_rate_limit());
     let mut consumed_pairing_tokens = HashSet::new();
+    let mut active_connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint> =
+        HashMap::new();
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let kademlia_lookup_keys = kademlia_lookup_keys(
         &node.network_name,
@@ -697,6 +699,7 @@ where
                         packet_plane_session_ttl,
                         packet_plane_replay_windows_per_session,
                         consumed_pairing_tokens: &mut consumed_pairing_tokens,
+                        active_connections: &mut active_connections,
                     },
                     event,
                 ).await?;
@@ -3122,7 +3125,24 @@ fn kademlia_peer_address_is_confirmed_for_publication(
     address: &Multiaddr,
     confirmed_external_addresses: &HashSet<Multiaddr>,
 ) -> bool {
-    relayed_address_relay_peer(address).is_some() || confirmed_external_addresses.contains(address)
+    relayed_address_relay_peer(address).is_some()
+        || confirmed_external_addresses.contains(address)
+        || kademlia_peer_address_is_private_direct_listener(address)
+}
+
+fn kademlia_peer_address_is_private_direct_listener(address: &Multiaddr) -> bool {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2pCircuit))
+    {
+        return false;
+    }
+
+    address.iter().any(|protocol| match protocol {
+        Protocol::Ip4(address) => ipv4_address_is_private_lan(address),
+        Protocol::Ip6(address) => ipv6_address_is_private_lan(address),
+        _ => false,
+    })
 }
 
 fn kademlia_peer_address_is_advertisable(address: &Multiaddr) -> bool {
@@ -3154,6 +3174,13 @@ fn ipv4_address_is_advertisable(address: Ipv4Addr) -> bool {
         || (first == 100 && (64..=127).contains(&second)))
 }
 
+fn ipv4_address_is_private_lan(address: Ipv4Addr) -> bool {
+    let [first, second, _, _] = address.octets();
+    (first == 10)
+        || (first == 172 && (16..=31).contains(&second))
+        || (first == 192 && second == 168)
+}
+
 fn ipv6_address_is_advertisable(address: Ipv6Addr) -> bool {
     let segments = address.segments();
     let first = segments[0];
@@ -3163,6 +3190,10 @@ fn ipv6_address_is_advertisable(address: Ipv6Addr) -> bool {
         || (first & 0xfe00) == 0xfc00
         || (first & 0xffc0) == 0xfe80
         || (first == 0x2001 && segments[1] == 0x0db8))
+}
+
+fn ipv6_address_is_private_lan(address: Ipv6Addr) -> bool {
+    (address.segments()[0] & 0xfe00) == 0xfc00
 }
 
 fn encode_kademlia_peer_address_record(
@@ -3881,6 +3912,23 @@ fn admit_connected_auto_relay_infrastructure_probe(
         ],
     );
     attempt_auto_relay_reservations(swarm, auto_relay, metrics);
+}
+
+fn remove_overlay_peer_from_infrastructure(
+    infrastructure_peers: &mut InfrastructurePeers,
+    auto_relay: &mut AutoRelayState,
+    peer: Libp2pPeerId,
+    reason: &str,
+) {
+    let removed_infrastructure = infrastructure_peers.remove(peer);
+    let removed_candidate = auto_relay.remove_candidate(peer);
+    if removed_infrastructure || removed_candidate {
+        log_runtime_event(
+            LogLevel::Info,
+            "overlay_peer_infrastructure_state_removed",
+            &[("peer", &peer.to_string()), ("reason", reason)],
+        );
+    }
 }
 
 fn connected_auto_relay_candidate_address(
@@ -6080,6 +6128,7 @@ struct SwarmEventContext<'a> {
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
     consumed_pairing_tokens: &'a mut HashSet<String>,
+    active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
 }
 
 #[derive(Clone, Copy)]
@@ -6159,6 +6208,17 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            context
+                .active_connections
+                .insert((peer_id, connection_id), endpoint.clone());
+            if context.membership.allows(peer_id) {
+                remove_overlay_peer_from_infrastructure(
+                    context.infrastructure_peers,
+                    context.auto_relay,
+                    peer_id,
+                    "overlay_connection_established",
+                );
+            }
             context
                 .public_discovery_backoff
                 .record_connection_established(peer_id);
@@ -6289,6 +6349,7 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            context.active_connections.remove(&(peer_id, connection_id));
             if context.forwarder.is_configured_transport_peer(peer_id) {
                 context.relay_readiness.record_peer_connection_lost(peer_id);
             }
@@ -6509,6 +6570,7 @@ async fn handle_swarm_event(
             );
         }
         SwarmEvent::NewListenAddr { address, .. } => {
+            let mut publish_peer_address_record = kademlia_peer_address_is_advertisable(&address);
             if let Some(relay) = relayed_address_relay_peer(&address) {
                 if let Some(relay_base_address) =
                     relay_base_address_from_relayed_listen_address(&address)
@@ -6536,6 +6598,9 @@ async fn handle_swarm_event(
                         ("address", &address.to_string()),
                     ],
                 );
+                publish_peer_address_record = true;
+            }
+            if publish_peer_address_record {
                 publish_kademlia_peer_address_record_for_capabilities(
                     swarm,
                     context.discovery,
@@ -7653,12 +7718,13 @@ fn handle_pairing_event(
     match event {
         request_response::Event::Message {
             peer,
+            connection_id,
             message: Message::Request {
                 request, channel, ..
             },
             ..
         } => {
-            handle_pairing_request_event(swarm, context, peer, &request, channel)?;
+            handle_pairing_request_event(swarm, context, peer, connection_id, &request, channel)?;
         }
         request_response::Event::Message {
             peer,
@@ -7712,6 +7778,7 @@ fn handle_pairing_request_event(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
+    connection_id: ConnectionId,
     request: &PairingRequest,
     channel: request_response::ResponseChannel<PairingResponse>,
 ) -> Result<(), RunnerError> {
@@ -7765,8 +7832,22 @@ fn handle_pairing_request_event(
             install_pairing_response_membership(
                 context.forwarder,
                 context.membership,
+                context.local_capabilities,
                 &response_for_membership,
             )?;
+            remove_overlay_peer_from_infrastructure(
+                context.infrastructure_peers,
+                context.auto_relay,
+                peer,
+                "pairing_membership_installed",
+            );
+            bootstrap_accepted_pairing_peer(
+                swarm,
+                context,
+                peer,
+                connection_id,
+                &response_for_membership,
+            );
             context
                 .consumed_pairing_tokens
                 .insert(request.payload.rendezvous_token.clone());
@@ -7794,6 +7875,7 @@ fn handle_pairing_request_event(
 fn install_pairing_response_membership(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    local_capabilities: &mut ControlCapabilities,
     response: &PairingResponse,
 ) -> Result<(), RunnerError> {
     if response.payload.member_records.is_empty() {
@@ -7812,6 +7894,9 @@ fn install_pairing_response_membership(
         forwarder.member_records(),
         now_unix_seconds,
     )?;
+    *local_capabilities = local_capabilities
+        .clone()
+        .with_member_records(advertised_member_records(forwarder));
     sync_live_tun_routes(forwarder)?;
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
@@ -7827,6 +7912,67 @@ fn install_pairing_response_membership(
     );
 
     Ok(())
+}
+
+fn bootstrap_accepted_pairing_peer(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    connection_id: ConnectionId,
+    response: &PairingResponse,
+) {
+    let Ok(joiner_peer) = response.payload.joiner_peer.parse::<Libp2pPeerId>() else {
+        return;
+    };
+    if joiner_peer != peer || !context.forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    let endpoint = context
+        .active_connections
+        .get(&(peer, connection_id))
+        .cloned();
+    if let Some(endpoint) = endpoint.as_ref() {
+        record_path_established_and_maybe_send_packet_plane_hello(
+            swarm,
+            context.paths,
+            context.forwarder,
+            context.peer_capabilities,
+            context.metrics,
+            context.local_capabilities,
+            context.identity,
+            context.packet_plane,
+            context.packet_plane_quic.as_deref(),
+            context.packet_plane_negotiator,
+            peer,
+            connection_id,
+            endpoint,
+        );
+    }
+
+    send_control_capabilities(
+        swarm,
+        context.forwarder,
+        peer,
+        context.local_capabilities,
+        context.metrics,
+    );
+    send_service_status_request(
+        swarm,
+        context.forwarder,
+        peer,
+        context.local_capabilities,
+        context.metrics,
+    );
+    log_runtime_event(
+        LogLevel::Info,
+        "pairing_joiner_connection_bootstrapped",
+        &[
+            ("peer", &peer.to_string()),
+            ("connection_id", &connection_id.to_string()),
+            ("had_endpoint", &endpoint.is_some().to_string()),
+        ],
+    );
 }
 
 fn sync_live_tun_routes(forwarder: &Forwarder) -> Result<(), RunnerError> {
@@ -7905,7 +8051,7 @@ fn pairing_response_for_request(
     };
     request.verify_for_offer_at(offer, now_unix_seconds)?;
     if offer.payload.network_name != config.network.name
-        || offer.payload.inviter_peer != config.network.local_peer
+        || offer.payload.inviter_peer != config.local_peer()?
     {
         return Err(crate::pairing::PairingError::OfferConfigMismatch);
     }
@@ -14375,25 +14521,34 @@ mod tests {
     }
 
     #[test]
-    fn kademlia_peer_address_publication_requires_confirmed_direct_or_relay_address() {
+    fn kademlia_peer_address_publication_allows_private_lan_direct_or_confirmed_public_address() {
         let relay = peer_id();
         let relayed: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
             .parse()
             .expect("relayed address");
-        let direct: Multiaddr = "/ip4/192.168.0.10/tcp/4001"
+        let private_direct: Multiaddr = "/ip4/192.168.0.10/tcp/4001"
             .parse()
-            .expect("direct address");
+            .expect("private direct address");
+        let public_direct: Multiaddr = "/ip4/8.8.8.8/tcp/4001"
+            .parse()
+            .expect("public direct address");
         let empty = HashSet::new();
-        let confirmed = HashSet::from([direct.clone()]);
+        let confirmed = HashSet::from([public_direct.clone()]);
 
+        assert!(kademlia_peer_address_is_confirmed_for_publication(
+            &private_direct,
+            &empty
+        ));
         assert!(!kademlia_peer_address_is_confirmed_for_publication(
-            &direct, &empty
+            &public_direct,
+            &empty
         ));
         assert!(kademlia_peer_address_is_confirmed_for_publication(
             &relayed, &empty
         ));
         assert!(kademlia_peer_address_is_confirmed_for_publication(
-            &direct, &confirmed
+            &public_direct,
+            &confirmed
         ));
     }
 
