@@ -84,6 +84,12 @@ Live requests include a requested VPN IP.
 If the accept CLI has no `--vpn-ip`, it requests the built-in IPv4 address
 derived from the joiner peer ID.
 
+Live requests also include any `--local-route` entries.
+
+The daemon validates those route prefixes before issuing grants.
+
+Record-based membership responses copy requested routes into the joiner grant.
+
 Legacy embedded offers are still accepted.
 
 Discovery-only offers omit inviter addresses from the signed payload.

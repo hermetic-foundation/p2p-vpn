@@ -12150,12 +12150,16 @@ mod tests {
         let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
         let offer =
             export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let requested_routes = vec![RouteConfig {
+            prefix: "10.42.0.2/32".to_owned(),
+            metric: 100,
+        }];
         let request = build_pairing_request_at(
             &offer,
             PairingRequestOptions {
                 identity: joiner.clone(),
                 requested_vpn_ip: Some("10.42.0.2".to_owned()),
-                requested_routes: Vec::new(),
+                requested_routes: requested_routes.clone(),
             },
             1_001,
         )
@@ -12176,6 +12180,10 @@ mod tests {
         assert_eq!(
             response.payload.member_records[0].payload.member_peer,
             joiner.peer_id
+        );
+        assert_eq!(
+            response.payload.member_records[0].payload.route_grants,
+            requested_routes
         );
         assert!(consumed_tokens.contains(&offer.payload.rendezvous_token));
     }

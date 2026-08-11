@@ -2349,6 +2349,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         args.mtu,
         args.timeout_seconds,
         Some(requested_vpn_ip),
+        local_routes.clone(),
     )
     .await
     .map_err(|error| format!("live pairing exchange failed: {error}"))?;
@@ -2420,6 +2421,7 @@ async fn live_pair_accept(
     mtu: u16,
     timeout_seconds: u64,
     requested_vpn_ip: Option<String>,
+    requested_routes: Vec<RouteConfig>,
 ) -> Result<PairingResponse, String> {
     let inviter_peer = offer
         .payload
@@ -2466,7 +2468,7 @@ async fn live_pair_accept(
         PairingRequestOptions {
             identity,
             requested_vpn_ip,
-            requested_routes: Vec::new(),
+            requested_routes,
         },
         current_unix_seconds_lossy(),
     )
@@ -10909,6 +10911,7 @@ mod tests {
             1280,
             1,
             Some("10.42.0.2".to_owned()),
+            Vec::new(),
         )
         .await
         .expect_err("unreachable inviter should time out");
@@ -10962,6 +10965,7 @@ mod tests {
         };
         let (address_tx, address_rx) = std::sync::mpsc::channel();
         let (offer_tx, offer_rx) = std::sync::mpsc::channel();
+        let (requested_routes_tx, requested_routes_rx) = std::sync::mpsc::channel();
         let inviter_identity_for_thread = inviter_identity.clone();
         let inviter_config_for_thread = inviter_config.clone();
         let membership_key_for_thread = membership_key.clone();
@@ -11015,6 +11019,9 @@ mod tests {
                                 ..
                             },
                         )) => {
+                            requested_routes_tx
+                                .send(request.payload.requested_routes.clone())
+                                .expect("send requested routes");
                             let response = build_pairing_response_at(
                                 &inviter_config_for_response,
                                 &offer_for_response,
@@ -11058,11 +11065,22 @@ mod tests {
             1280,
             5,
             Some(requested_vpn_ip.clone()),
+            vec![RouteConfig {
+                prefix: "10.42.0.2/32".to_owned(),
+                metric: 100,
+            }],
         )
         .await
         .expect("live response");
 
         inviter_thread.join().expect("inviter thread");
+        assert_eq!(
+            requested_routes_rx.recv().expect("requested routes"),
+            vec![RouteConfig {
+                prefix: "10.42.0.2/32".to_owned(),
+                metric: 100,
+            }]
+        );
         assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
         assert_eq!(response.payload.joiner_peer, joiner_identity.peer_id);
         assert_eq!(
@@ -11151,6 +11169,7 @@ mod tests {
                 1280,
                 5,
                 Some("10.42.0.2".to_owned()),
+                Vec::new(),
             ));
             loop {
                 tokio::select! {
@@ -11312,6 +11331,7 @@ mod tests {
                 1280,
                 10,
                 Some("10.42.0.2".to_owned()),
+                Vec::new(),
             ));
             loop {
                 tokio::select! {

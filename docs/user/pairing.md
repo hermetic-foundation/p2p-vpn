@@ -153,7 +153,7 @@ Optional fields:
 | `--private-key` | Use an existing local identity. |
 | `--interface` | Interface name for the generated config. |
 | `--mtu` | Interface MTU. |
-| `--local-route` | Extra local route ownership. |
+| `--local-route` | Extra route to request and write locally. |
 | `--vpn-ip` | Requested VPN IP for the new node. |
 | `--peer-name` | Label for the inviter peer. |
 | `--timeout-seconds` | Live pairing exchange timeout. |
@@ -163,6 +163,10 @@ Without `--private-key`, a new identity is generated.
 
 Without `--vpn-ip`, `pair accept` requests the built-in IP derived from the new
 peer ID.
+
+With live pairing, each `--local-route` is included in the signed request.
+
+Record-based inviters return those routes as signed membership grants.
 
 ## Live Accept
 

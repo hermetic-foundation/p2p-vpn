@@ -567,6 +567,7 @@ fn validate_request_payload(
     payload.joiner_peer.parse::<Libp2pPeerId>()?;
     decode_public_key(&payload.joiner_public_key)?;
     validate_optional_ip(payload.requested_vpn_ip.as_deref())?;
+    validate_routes(&payload.requested_routes)?;
     validate_rendezvous_token(&payload.rendezvous_token)?;
 
     Ok(())
@@ -638,6 +639,13 @@ fn validate_response_payload(
 fn validate_optional_ip(value: Option<&str>) -> Result<(), PairingError> {
     if let Some(value) = value {
         value.parse::<IpAddr>()?;
+    }
+    Ok(())
+}
+
+fn validate_routes(routes: &[RouteConfig]) -> Result<(), PairingError> {
+    for route in routes {
+        route.prefix()?;
     }
     Ok(())
 }
@@ -1117,6 +1125,31 @@ mod tests {
                 1_001,
             ),
             Err(PairingError::IpAddr(_))
+        ));
+    }
+
+    #[test]
+    fn pairing_request_rejects_invalid_requested_route() {
+        let offer = export_pairing_offer_at(&config(), PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+
+        assert!(matches!(
+            build_pairing_request_at(
+                &offer,
+                PairingRequestOptions {
+                    identity: joiner,
+                    requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                    requested_routes: vec![RouteConfig {
+                        prefix: "not-a-route".to_owned(),
+                        metric: 100,
+                    }],
+                },
+                1_001,
+            ),
+            Err(PairingError::Config(
+                crate::config::ConfigError::RoutePrefix(_)
+            ))
         ));
     }
 
