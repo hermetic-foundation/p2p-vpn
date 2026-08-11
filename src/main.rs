@@ -31,6 +31,9 @@ use p2p_vpn::{
         validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
+    pairing::{
+        DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingOffer, PairingOfferOptions, export_pairing_offer,
+    },
     queue::QueueStats,
     runtime::{
         bootstrap_check::{
@@ -389,6 +392,10 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    Pair {
+        #[command(subcommand)]
+        command: PairCommand,
+    },
     MembershipRecordIssue {
         #[arg(long = "issuer-config", default_value = "p2p-vpn.json")]
         issuer_config: PathBuf,
@@ -559,6 +566,25 @@ enum Command {
         metrics_interval_seconds: Option<u64>,
         #[arg(long)]
         control_socket: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PairCommand {
+    Offer {
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        config: PathBuf,
+        #[arg(short, long, default_value = "-")]
+        output: PathBuf,
+        #[arg(long, default_value_t = DEFAULT_PAIRING_EXPIRES_IN_SECONDS)]
+        expires_in_seconds: u64,
+        #[arg(long)]
+        rendezvous_token: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
+    Accept {
+        offer: String,
     },
 }
 
@@ -911,6 +937,22 @@ async fn main() -> Result<(), String> {
             peer_name,
             force,
         }),
+        Command::Pair { command } => match command {
+            PairCommand::Offer {
+                config,
+                output,
+                expires_in_seconds,
+                rendezvous_token,
+                force,
+            } => pair_offer(PairOfferArgs {
+                config,
+                output,
+                expires_in_seconds,
+                rendezvous_token,
+                force,
+            }),
+            PairCommand::Accept { offer } => pair_accept(&offer),
+        },
         Command::MembershipRecordIssue {
             issuer_config,
             member_identity,
@@ -1168,6 +1210,15 @@ struct InviteImportArgs {
     mtu: u16,
     local_routes: Vec<LocalRouteArg>,
     peer_name: Option<String>,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PairOfferArgs {
+    config: PathBuf,
+    output: PathBuf,
+    expires_in_seconds: u64,
+    rendezvous_token: Option<String>,
     force: bool,
 }
 
@@ -2003,6 +2054,62 @@ fn invite_import(args: InviteImportArgs) -> Result<(), String> {
         );
         println!("invited by: {}", invite.payload.inviter_peer);
     }
+
+    Ok(())
+}
+
+fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
+    if !args.force && args.output.to_string_lossy() != "-" && args.output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            args.output.display()
+        ));
+    }
+    let config =
+        Config::load(&args.config).map_err(|error| format!("failed to load config: {error:?}"))?;
+    let offer = export_pairing_offer(
+        &config,
+        PairingOfferOptions {
+            expires_in_seconds: args.expires_in_seconds,
+            rendezvous_token: args.rendezvous_token,
+        },
+    )
+    .map_err(|error| format!("failed to export pairing offer: {error:?}"))?;
+    let uri = offer
+        .to_uri()
+        .map_err(|error| format!("failed to render pairing URI: {error:?}"))?;
+
+    if args.output.to_string_lossy() == "-" {
+        println!("{uri}");
+    } else {
+        fs::write(&args.output, format!("{uri}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
+        println!("wrote {}", args.output.display());
+        println!("pairing network: {}", offer.payload.network_name);
+        println!("inviter peer: {}", offer.payload.inviter_peer);
+        println!("expires at: {}", offer.payload.expires_at_unix_seconds);
+    }
+
+    Ok(())
+}
+
+fn pair_accept(offer_uri: &str) -> Result<(), String> {
+    let offer = PairingOffer::from_uri(offer_uri)
+        .map_err(|error| format!("failed to parse pairing offer: {error:?}"))?;
+    offer
+        .verify_at(current_unix_seconds_lossy())
+        .map_err(|error| format!("failed to verify pairing offer: {error:?}"))?;
+
+    println!("pairing offer: valid");
+    println!("network: {}", offer.payload.network_name);
+    println!("inviter peer: {}", offer.payload.inviter_peer);
+    println!("expires at: {}", offer.payload.expires_at_unix_seconds);
+    println!("bootstrap peers: {}", offer.payload.bootstrap_peers.len());
+    println!(
+        "inviter addresses: {}",
+        offer.payload.inviter_addresses.len()
+    );
+    println!("live pairing exchange: not implemented yet");
 
     Ok(())
 }
@@ -9416,6 +9523,59 @@ mod tests {
         assert_eq!(local_routes[0].route.prefix, "10.42.0.0/24");
         assert_eq!(peer_name.as_deref(), Some("node-a"));
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_pair_offer_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "offer",
+            "--config",
+            "node-a.json",
+            "--output",
+            "node-a.pair",
+            "--expires-in-seconds",
+            "120",
+            "--rendezvous-token",
+            "BwcHBwcHBwcHBwcHBwcHBw",
+            "--force",
+        ])
+        .expect("cli");
+
+        let Command::Pair {
+            command:
+                PairCommand::Offer {
+                    config,
+                    output,
+                    expires_in_seconds,
+                    rendezvous_token,
+                    force,
+                },
+        } = cli.command
+        else {
+            panic!("expected pair offer command");
+        };
+
+        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(output, PathBuf::from("node-a.pair"));
+        assert_eq!(expires_in_seconds, 120);
+        assert_eq!(rendezvous_token.as_deref(), Some("BwcHBwcHBwcHBwcHBwcHBw"));
+        assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_pair_accept_command() {
+        let cli = Cli::try_parse_from(["p2p-vpn", "pair", "accept", "p2pvpn:abc"]).expect("cli");
+
+        let Command::Pair {
+            command: PairCommand::Accept { offer },
+        } = cli.command
+        else {
+            panic!("expected pair accept command");
+        };
+
+        assert_eq!(offer, "p2pvpn:abc");
     }
 
     #[test]

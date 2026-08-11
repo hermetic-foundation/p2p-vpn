@@ -41,6 +41,28 @@ Membership sources are explicit:
 | Public bootstrap peers | Reachability only. |
 | Relay peers | Reachability only. |
 
+## Pairing
+
+Pairing is the interactive onboarding flow.
+
+It must not replace explicit membership checks.
+
+| Piece | Rule |
+| --- | --- |
+| Pairing URI | Short-lived `p2pvpn:` offer. |
+| Rendezvous token | One-time pairing secret. |
+| Inviter identity | Signed by inviter private key. |
+| Public bootstrap | Discovery hint only. |
+| Relay paths | Discovery and reachability only. |
+| Membership result | Signed record preferred over shared key. |
+
+The URI format is JSON encoded with base64url under `p2pvpn:`.
+
+The URI must not include the local private key.
+
+It should not include the membership key unless an explicit future mode requests
+shared-secret onboarding.
+
 ## Routing
 
 Routes are statically authorized.

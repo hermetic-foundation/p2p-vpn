@@ -8,6 +8,7 @@ Use these docs when you want to run `p2p-vpn`.
 | --- | --- |
 | [Quick Start](quick-start.md) | Build two configs and start a small overlay. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
+| [Pairing](pairing.md) | Generate and validate short-lived onboarding URIs. |
 | [NixOS Module](nixos.md) | Run p2p-vpn as managed NixOS services. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
