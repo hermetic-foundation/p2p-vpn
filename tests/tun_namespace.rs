@@ -1112,6 +1112,39 @@ fn run_pairing_orchestrator() {
     let config_a = read_child_config(&temp_dir, "a");
     assert_live_pairing_config(&config_a, &identity_a, &identity_b);
 
+    let replay_config_path = temp_dir.join("config-a-replay.json");
+    let replay_config_path_arg = replay_config_path.to_string_lossy().into_owned();
+    let replay_output = ns_command_output(
+        node_a.id(),
+        current_test_binary(),
+        &[
+            "pair",
+            "accept",
+            &offer_path_arg,
+            "--output",
+            &replay_config_path_arg,
+            "--private-key",
+            &identity_a.private_key,
+            "--interface",
+            "hse2ea",
+            "--timeout-seconds",
+            "2",
+            "--force",
+        ],
+    );
+    assert_output_failure("replayed pair accept", &replay_output);
+    let replay_error = format!(
+        "{}{}",
+        String::from_utf8_lossy(&replay_output.stdout),
+        String::from_utf8_lossy(&replay_output.stderr)
+    );
+    assert!(
+        replay_error.contains("live pairing exchange failed")
+            && replay_error.contains("pairing diagnostics:"),
+        "replayed pair accept did not report live pairing diagnostics\n{replay_error}",
+    );
+    wait_for_pairing_replay_rejection(&temp_dir, "b");
+
     fs::write(&start_a, b"start").expect("write node A start file");
     wait_for_file(&temp_dir.join("ready-a"));
     wait_for_peer_ready(&temp_dir, "a");
@@ -1514,6 +1547,16 @@ fn wait_for_peer_ready(temp_dir: &Path, role: &str) {
     );
 }
 
+fn wait_for_pairing_replay_rejection(temp_dir: &Path, role: &str) {
+    wait_for_daemon_status_metric(
+        temp_dir,
+        role,
+        scaled_wait_timeout(Duration::from_secs(5)),
+        "pairing_reject_replayed_token",
+        1,
+    );
+}
+
 fn wait_for_packet_plane_sessions(temp_dir: &Path, role: &str) {
     wait_for_daemon_state(
         temp_dir,
@@ -1611,6 +1654,62 @@ where
                 socket.display(),
                 last_error.unwrap_or_else(|| "none".to_owned()),
                 last_lines.join("\n"),
+                daemon_snapshot_summary(temp_dir, &[role]),
+                log_tail(&log, 100),
+            );
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn wait_for_daemon_status_metric(
+    temp_dir: &Path,
+    role: &str,
+    timeout: Duration,
+    metric: &str,
+    minimum: usize,
+) {
+    let socket = node_control_socket(temp_dir, role);
+    let socket_arg = socket.to_string_lossy().into_owned();
+    let deadline = Instant::now() + timeout;
+    let mut last_output = String::new();
+    let mut last_error = None;
+
+    loop {
+        match command_output(
+            current_test_binary(),
+            &[
+                "daemon-status",
+                "--socket",
+                &socket_arg,
+                "--timeout-seconds",
+                "1",
+            ],
+            &[],
+            scaled_wait_timeout(Duration::from_secs(3)),
+        ) {
+            Ok(output) if output.status.success() => {
+                last_output = String::from_utf8_lossy(&output.stdout).into_owned();
+                let lines = last_output.lines().map(str::to_owned).collect::<Vec<_>>();
+                if state_metric_count(&lines, metric).is_some_and(|count| count >= minimum) {
+                    return;
+                }
+            }
+            Ok(output) => {
+                last_error = Some(format_snapshot_output(&output));
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+            }
+        }
+        if Instant::now() >= deadline {
+            capture_daemon_snapshots(temp_dir, &[role]);
+            let log = read_log(&temp_dir.join(format!("node-{role}.log")));
+            panic!(
+                "timed out waiting for daemon status metric {metric}>={minimum} on node {role} via {}\nlast_error: {}\nlast_status:\n{}\ndaemon snapshots:\n{}\nnode log tail:\n{}",
+                socket.display(),
+                last_error.unwrap_or_else(|| "none".to_owned()),
+                last_output,
                 daemon_snapshot_summary(temp_dir, &[role]),
                 log_tail(&log, 100),
             );
@@ -2946,6 +3045,15 @@ fn assert_output_success(context: &str, output: &Output) {
         output.status.success(),
         "`{context}` exited with {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_output_failure(context: &str, output: &Output) {
+    assert!(
+        !output.status.success(),
+        "`{context}` unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

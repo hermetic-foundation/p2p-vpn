@@ -426,6 +426,7 @@ Coverage:
 | Offer CLI | Existing node writes a signed pairing URI. |
 | Accept CLI | New node exchanges a live pairing request in its namespace. |
 | Generated config | Config validates with inviter address hints and route grants. |
+| Replay rejection | Reusing the same offer fails and increments replay metrics. |
 | Data plane | The generated config boots and carries overlay ping. |
 
 ## Preserve Artifacts
