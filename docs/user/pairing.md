@@ -4,24 +4,19 @@ Pairing is the interactive onboarding path.
 
 It is intended to replace manual key and config exchange.
 
-## Status
+## Requirements
 
-| Piece | Status |
+You need one trusted node already running.
+
+The trusted node needs:
+
+| Required | Purpose |
 | --- | --- |
-| `pair offer` URI format | Implemented |
-| `pair accept` URI validation | Implemented |
-| Signed response validation | Implemented |
-| Config writing from response | Implemented |
-| Live libp2p exchange | Implemented for URI and bootstrap hints |
-| Signed membership grant return | Contract implemented |
-| Bootstrap-only accept | Implemented |
-| Discovery-only offer | Implemented |
-| Offer inspection | Implemented |
-| Discovery-only relay accept | Implemented with namespace relay proof |
-| Public relay discovery-only accept | Proven with 2026-08-11 live public relay smoke |
-| Timeout diagnostics | Implemented |
-| Daemon pairing counters | Implemented |
-| Minimal config VM proof | Passing NixOS VM pairing check |
+| `network.name` | Selects the overlay. |
+| `network.private_key` | Signs the offer and response. |
+| `network.vpn_ip` | Advertises the inviter route. |
+
+The new node needs either a generated identity or `--private-key`.
 
 ## Offer
 
@@ -123,22 +118,13 @@ You can also pass an offer file:
 p2p-vpn pair accept lab.pair
 ```
 
-Current behavior:
+`pair accept` will:
 
-| Step | Behavior |
-| --- | --- |
-| Parse URI | yes |
-| Verify inviter signature | yes |
-| Check expiry | yes |
-| Show discovery hints | yes |
-| Import signed response file | yes |
-| Contact inviter from URI hints | yes |
-| Contact inviter from bootstrap hints | yes |
-| Contact inviter through signed relay reservation hints | yes |
-| Write final config from response | yes |
-| Preserve relayed inviter address from response | yes |
-| Discover inviter from only public DHT | Implemented path, public DHT proof pending |
-| Preserve public bootstrap defaults compactly | yes |
+1. Verify the signed offer.
+2. Contact the inviter over libp2p.
+3. Request the chosen VPN IP and local routes.
+4. Receive a signed membership grant.
+5. Write the new local config.
 
 ## Accept Response File
 
@@ -284,24 +270,6 @@ It can still include:
 | Bootstrap peers | `network.bootstrap_peers` or public IPFS defaults. |
 | Relay reservations | `network.relay.reservations`. |
 | Discovery settings | `network.discovery`. |
-
-## Current Status
-
-| Capability | Status |
-| --- | --- |
-| Offer URI generation | Implemented. |
-| Signed request and response files | Implemented. |
-| Libp2p pairing protocol | Implemented as `/p2p-vpn/pairing/1`. |
-| Daemon request validation | Implemented. |
-| One-time token replay rejection | Implemented per daemon process. |
-| Pairing request rate limit | Implemented per libp2p peer. |
-| Pairing daemon counters | Implemented in status and metrics views. |
-| Daemon response generation | Implemented. |
-| Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
-| Live `pair accept` diagnostics | Implemented. |
-| Relay-assisted discovery-only `pair accept` | Implemented with local relay proof. |
-| Public relay discovery-only `pair accept` | Proven with 2026-08-11 live smoke. |
-| Compact public bootstrap defaults | Implemented for offers and accepted configs. |
 
 ## Secrets
 

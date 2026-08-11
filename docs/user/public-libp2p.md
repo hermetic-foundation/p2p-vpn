@@ -11,8 +11,8 @@ It must not be treated as VPN membership or route authority.
 | Bootstrap into public routing | yes |
 | Discover relay-hop candidates | partial |
 | Reserve usable public relays | depends on relay policy |
-| Carry relayed fallback traffic | proven with selected relays |
-| Prove DCUtR hole punching | topology-dependent |
+| Carry relayed fallback traffic | yes, when relay policy allows it |
+| Attempt DCUtR hole punching | topology-dependent |
 | Authorize VPN routes | no |
 | Authorize VPN membership | no |
 
@@ -78,9 +78,9 @@ nix run .# -- relay-check \
 
 Use this before discovery-only public pairing.
 
-It proves the inviter can reserve the relay.
+It checks whether the inviter can reserve the relay.
 
-Add DCUtR proof requirements:
+Validate DCUtR when the topology should allow hole punching:
 
 ```sh
 nix run .# -- relay-check \
@@ -89,54 +89,6 @@ nix run .# -- relay-check \
   --max-validation-candidates 4 \
   --write-report public-relay-dcutr.json \
   --timeout-seconds 45
-```
-
-## Faster Relay Repro
-
-Validate relay discovery and generated configs:
-
-```sh
-nix run .#public-relay-repro
-```
-
-This records scan, public relay reservation, relayed-circuit, and generated
-config artifacts.
-
-The public reservation artifact is:
-
-```text
-public-relay-reservation-check-report.json
-```
-
-## Local Reservation Check
-
-Generated Host A and Host B configs are written by default.
-
-Single-machine reservation checks are opt-in:
-
-```sh
-P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1 \
-nix run .#public-relay-repro
-```
-
-Use this with controlled relays or known relay policy.
-
-Public relays may cap reservations per source address.
-
-## Strict Public Checks
-
-Require public DHT membership propagation:
-
-```sh
-P2P_VPN_REPRO_MEMBERSHIP_DHT=1 \
-nix run .#public-relay-repro
-```
-
-Require DCUtR hole-punch evidence:
-
-```sh
-P2P_VPN_REPRO_REQUIRE_DCUTR=1 \
-nix run .#public-relay-repro
 ```
 
 ## Use A Validated Relay
@@ -188,51 +140,7 @@ It is not written into the host configs.
 
 To force relay-only testing, disable direct listeners and mDNS in a copy.
 
-## Prove Two-Host Operation
-
-Create host-run scripts from matched configs:
-
-```sh
-P2P_VPN_VPN_REPRO_PUBLIC_RELAY_DIR=/tmp/p2p-vpn-public-relay \
-nix run .#public-vpn-repro
-```
-
-Run the generated Host A script on Host A.
-
-Run the generated Host B script on Host B.
-
-Each host writes:
-
-| File | Purpose |
-| --- | --- |
-| `vpn-repro-evidence.json` | Machine-readable proof summary. |
-| `daemon-health.txt` | Readiness checks. |
-| `daemon-paths-final.json` | Final selected paths. |
-| `daemon-status-prometheus-final.txt` | Metrics used by the checker. |
-| `ping.txt` | Overlay data-plane ping result. |
-
-Check both evidence files:
-
-```sh
-nix run .#public-vpn-evidence-check -- \
-  --host-a /tmp/host-a/vpn-repro-evidence.json \
-  --host-b /tmp/host-b/vpn-repro-evidence.json \
-  --require-relay \
-  --require-config-match \
-  --write-report /tmp/p2p-vpn-public-proof.json
-```
-
-For strict hole-punch proof, add:
-
-```text
---require-direct --require-dcutr --require-quic-session
-```
-
-Use strict mode only when both hosts should have direct recovery evidence.
-
-Relay-only fallback proof should require `--require-relay`.
-
-## Prove Network Movement
+## Move Between Networks
 
 Use the same generated configs for every phase.
 
@@ -244,94 +152,23 @@ Do not add peer addresses, relay routes, or manual OS routes between phases.
 | Split | One host on hotspot or VPN | Overlay ping recovers through relay or direct public path. |
 | Return | Both hosts back on LAN | Overlay ping succeeds again. |
 
-For each phase:
+For each move:
 
 1. Start the Host A and Host B scripts once on LAN.
 2. Keep both daemons running.
 3. Move one host between LAN, hotspot, and LAN return.
-4. Run `public-vpn-capture` for each phase.
-5. Run `public-vpn-evidence-check` against each phase pair.
+4. Check overlay ping after each move.
 
-Capture a phase from an existing daemon:
+Expected result:
 
-```sh
-nix run .#public-vpn-capture -- \
-  --artifact-dir /tmp/p2p-vpn-lan-a \
-  --config /tmp/public-vpn-host-a.json \
-  --socket /tmp/p2p-vpn-repro/control.sock \
-  --daemon-log /tmp/p2p-vpn-repro/p2p-vpn-daemon.log \
-  --ping-target 10.42.0.2 \
-  --phase lan-baseline \
-  --require-quic-session
-```
-
-For the hotspot phase, omit `--require-quic-session` unless direct QUIC is
-expected.
-
-Expected proof:
-
-| Requirement | Evidence |
+| Phase | Expected Result |
 | --- | --- |
-| Minimal config | Config files contain peer IDs and `vpn_ip` route shortcuts. |
-| Automatic discovery | No peer underlay addresses are added between phases. |
-| Data plane | `ping_succeeded` is true on both hosts. |
-| Supported path | `peers_with_supported_path` is at least 1. |
-| Packet plane | `packet_plane_sessions` is at least 1. |
-| Fallback | Relay evidence appears during the split phase when direct fails. |
-| Recovery | Direct evidence may reappear after returning to LAN. |
+| LAN baseline | Overlay ping succeeds. |
+| Public split | Overlay ping recovers through relay or direct public path. |
+| LAN return | Overlay ping succeeds again. |
 
-Check a fallback phase:
-
-```sh
-nix run .#public-vpn-evidence-check -- \
-  --host-a HOTSPOT_HOST_A/vpn-repro-evidence.json \
-  --host-b HOTSPOT_HOST_B/vpn-repro-evidence.json \
-  --require-relay \
-  --require-config-match \
-  --write-report public-vpn-hotspot-proof.json
-```
-
-Require a specific packet path when needed:
-
-| Flag | Proves |
-| --- | --- |
-| `--require-direct-quic-datagram` | Direct QUIC datagram path or session. |
-| `--require-direct-quic-stream` | Direct QUIC stream fallback path. |
-| `--require-direct-tcp-stream` | Direct TCP stream fallback path. |
-| `--require-relay-stream` | Relay stream fallback path. |
-
-Check a strict direct recovery phase when expected:
-
-```sh
-nix run .#public-vpn-evidence-check -- \
-  --host-a LAN_RETURN_HOST_A/vpn-repro-evidence.json \
-  --host-b LAN_RETURN_HOST_B/vpn-repro-evidence.json \
-  --require-direct \
-  --require-config-match \
-  --write-report public-vpn-lan-return-proof.json
-```
-
-Check the full movement proof:
-
-```sh
-nix run .#public-vpn-move-evidence-check -- \
-  --lan-baseline-host-a LAN_A/vpn-repro-evidence.json \
-  --lan-baseline-host-b LAN_B/vpn-repro-evidence.json \
-  --public-split-host-a SPLIT_A/vpn-repro-evidence.json \
-  --public-split-host-b SPLIT_B/vpn-repro-evidence.json \
-  --lan-return-host-a RETURN_A/vpn-repro-evidence.json \
-  --lan-return-host-b RETURN_B/vpn-repro-evidence.json \
-  --write-report public-vpn-move-proof.json
-```
-
-This requires:
-
-| Phase | Required Evidence |
-| --- | --- |
-| LAN baseline | Direct path, packet session, config match. |
-| Public split | Relay path, config match. |
-| LAN return | Direct path, packet session, config match. |
-| All phases | Same Host A config and same Host B config. |
+For reproducible proof capture, use
+[developer testing](../developer/testing.md).
 
 ## No-Route Backoff
 
@@ -355,23 +192,15 @@ lookups continue during the backoff window.
 | --- | --- |
 | `relay_reservation` | Reservation setup failed or timed out. |
 | `relayed_peer_circuit` | Relay path did not connect to target. |
-| `dcutr_success` | Hole-punch proof did not complete. |
+| `dcutr_success` | Hole punching did not complete. |
 | `none` | Candidate passed requested checks. |
 
-## Current Evidence
+## More References
 
-Public bootstrap and relay candidate discovery have been observed.
+Strict checks and deeper debugging guides live in:
 
-The latest public relay repro found a usable relayed-peer circuit.
-
-The 2026-08-11 live pairing smoke completed through a public relay.
-
-| Evidence | Status |
+| Document | Contents |
 | --- | --- |
-| Public relay scan | 13 candidates found on 2026-08-11. |
-| Public relay reservation | 1 probed relay accepted a reservation. |
-| Public discovery-only pairing | Passed through the selected public relay. |
-| Relayed peer circuit | Proven through a selected public relay. |
-| Generated two-host configs | Written by the repro. |
-| Two-host public VPN ping | Still requires two separated hosts. |
-| Public non-LAN DCUtR | Still needs host evidence. |
+| [Developer Testing](../developer/testing.md) | VM, namespace, relay, and two-host proof commands. |
+| [Public Bootstrap Smoke](../developer/public-bootstrap-smoke.md) | Public reachability notes. |
+| [Feature Matrix](../developer/feature-matrix.md) | Current implementation status. |

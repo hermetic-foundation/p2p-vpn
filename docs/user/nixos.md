@@ -91,25 +91,6 @@ Add a direct LAN IP only as an override:
 
 Use explicit `addresses` only for custom ports, DNS, or relayed paths.
 
-## Minimal LAN Proof
-
-Run the minimal LAN VM check:
-
-```sh
-nix build .#checks.x86_64-linux.nixos-vm-minimal-lan
-```
-
-This check verifies:
-
-| Requirement | Evidence |
-| --- | --- |
-| No peer addresses | Generated JSON has no `addresses`. |
-| No relay config | Generated JSON has no `network.relay`. |
-| No discovery override | Generated JSON omits `network.discovery`. |
-| Default interface | Both nodes create `pv0`. |
-| Automatic routing | `ping -I pv0` succeeds both ways. |
-| Direct LAN path | State reports `selected_path direct_*`. |
-
 ## Network Moves
 
 The daemon keeps using the same generated config when a host changes networks.
@@ -123,15 +104,8 @@ Expected recovery order:
 | Relay available | Automatically discovered relay paths keep traffic moving. |
 | LAN returns | Direct paths are promoted again. |
 
-The VM move test covers this flow:
-
-```sh
-nix build .#checks.x86_64-linux.nixos-vm-network-move
-```
-
-The test uses the minimal peer shape.
-
-It does not hardcode relay routes in either VPN node config.
+Developer VM checks for this flow are listed in
+[developer testing](../developer/testing.md).
 
 ## Discovery Options
 
