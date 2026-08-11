@@ -211,13 +211,58 @@ Limits:
 | Strict DCUtR success | Disabled for this run. |
 | Two-host public VPN ping | Not part of this run. |
 
+## 2026-08-11 Public Relay Reservation Check
+
+Command:
+
+```sh
+P2P_VPN_REPRO_RELAY_CANDIDATE=/ip4/154.12.236.71/udp/4001/quic-v1/p2p/12D3KooWGLJopATxExmqvNfFPRv4frkEoX63j2yudJJftAaacH9a \
+P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1 \
+P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=45 \
+P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES=1 \
+nix run .#public-relay-repro
+```
+
+Artifact directory:
+
+```text
+/tmp/p2p-vpn-public-relay-repro.fClV3A3f
+```
+
+Result:
+
+```text
+public relay probe: ok
+public relay probe mode: relayed_peer_circuit
+public relay candidates: 1 succeeded 1
+generated two-host VPN relay reservations: failed
+```
+
+Evidence:
+
+| Item | Result |
+| --- | --- |
+| Supplied relay candidate | Relayed peer circuit succeeded. |
+| Generated Host A/B configs | Relay bootstrap and reservation were preserved. |
+| Host A relay reservation | Configured `1`, accepted `0`. |
+| Host B relay reservation | Configured `1`, accepted `0`. |
+| Failure diagnosis | `missing_relay_reservation`. |
+
+Limits:
+
+| Gap | Status |
+| --- | --- |
+| Public relay reservation | Current candidate connected but did not accept. |
+| Public pairing through relay | Still requires a reservable public relay. |
+| Two-host public VPN ping | Not part of this run. |
+
 ## Current Conclusion
 
 | Capability | Evidence |
 | --- | --- |
 | Public bootstrap reachability | Proven. |
 | Public relay candidate discovery | Proven. |
-| Public relay reservation | Proven for at least one run. |
+| Public relay reservation | Previously proven; current candidate did not accept. |
 | Public relayed circuit | Proven for at least one run. |
 | Generated-host relay reservation | Not consistently proven. |
 | Public membership DHT propagation | Not proven yet. |

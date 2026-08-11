@@ -249,6 +249,8 @@ Accepted relay inputs:
 | `P2P_VPN_LIVE_RELAY_MULTIADDRS` | Comma- or newline-separated relay multiaddrs. |
 | `P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS` | Optional timeout. Default is `45`. |
 
+The timeout covers relay reservation and live pairing exchange.
+
 Relay multiaddrs must include `/p2p/RELAY`.
 
 They must not include `/p2p-circuit`.
