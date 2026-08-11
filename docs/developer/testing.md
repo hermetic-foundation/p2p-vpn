@@ -232,6 +232,33 @@ Run relay-assisted live pairing:
 nix run .#tun-e2e -- tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay -- --ignored --exact --nocapture
 ```
 
+Run the live public relay pairing smoke:
+
+```sh
+P2P_VPN_LIVE_RELAY_MULTIADDR=/ip4/203.0.113.10/udp/4001/quic-v1/p2p/12D3... \
+nix develop -c cargo test \
+  live_pair_accept_uses_public_relay_for_discovery_only_offer \
+  -- --ignored --nocapture
+```
+
+Accepted relay inputs:
+
+| Variable | Shape |
+| --- | --- |
+| `P2P_VPN_LIVE_RELAY_MULTIADDR` | One direct relay multiaddr. |
+| `P2P_VPN_LIVE_RELAY_MULTIADDRS` | Comma- or newline-separated relay multiaddrs. |
+| `P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS` | Optional timeout. Default is `45`. |
+
+Relay multiaddrs must include `/p2p/RELAY`.
+
+They must not include `/p2p-circuit`.
+
+The smoke test returns `ok` without env vars.
+
+That skip only proves the harness compiles.
+
+A real public proof requires at least one reachable relay candidate.
+
 Coverage:
 
 | Scenario | Assertion |
@@ -242,6 +269,7 @@ Coverage:
 | Generated config | Relayed inviter address is preserved after accept. |
 | Data plane | Ping crosses the generated overlay config. |
 | Daemon state | Inviter accepts the pairing request live. |
+| Public relay smoke | Optional ignored test exercises discovery-only accept through a real relay. |
 
 | Event | Evidence |
 | --- | --- |

@@ -18,7 +18,7 @@ It is intended to replace manual key and config exchange.
 | Discovery-only offer | Implemented |
 | Offer inspection | Implemented |
 | Discovery-only relay accept | Implemented with namespace relay proof |
-| Public discovery-only accept | Implemented path, public proof pending |
+| Public discovery-only accept | Implemented path, live smoke harness available |
 | Timeout diagnostics | Implemented |
 | Daemon pairing counters | Implemented |
 
@@ -299,7 +299,7 @@ It can still include:
 | Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |
 | Relay-assisted discovery-only `pair accept` | Implemented with local relay proof. |
-| Public discovery-only `pair accept` | Implemented path, public proof pending. |
+| Public discovery-only `pair accept` | Implemented path, live smoke harness available. |
 | Compact public bootstrap defaults | Implemented for offers and accepted configs. |
 
 ## Secrets

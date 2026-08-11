@@ -6960,6 +6960,10 @@ mod tests {
 
     use p2p_vpn::pairing::{PairingResponseOptions, build_pairing_response_at};
 
+    const LIVE_PAIRING_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
+    const LIVE_PAIRING_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
+    const LIVE_PAIRING_RELAY_TIMEOUT_SECONDS_ENV: &str = "P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS";
+
     fn relay_check_args_for_test() -> RelayCheckArgs {
         RelayCheckArgs {
             config_path: None,
@@ -11384,6 +11388,194 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires P2P_VPN_LIVE_RELAY_MULTIADDRS or P2P_VPN_LIVE_RELAY_MULTIADDR for a reachable public libp2p relay"]
+    #[allow(clippy::too_many_lines)]
+    async fn live_pair_accept_uses_public_relay_for_discovery_only_offer() {
+        let relay_candidates = live_pairing_relay_addresses();
+        if relay_candidates.is_empty() {
+            eprintln!(
+                "skipping live public pairing relay smoke: P2P_VPN_LIVE_RELAY_MULTIADDRS and P2P_VPN_LIVE_RELAY_MULTIADDR are not set"
+            );
+            return;
+        }
+
+        let mut failures = Vec::new();
+        for relay_candidate in relay_candidates {
+            match try_live_public_relay_pairing(relay_candidate.clone()).await {
+                Ok(()) => {
+                    eprintln!("live public pairing relay smoke passed through {relay_candidate}");
+                    return;
+                }
+                Err(error) => failures.push(format!("{relay_candidate}: {error}")),
+            }
+        }
+
+        panic!(
+            "no live public relay candidate completed discovery-only live pairing:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn try_live_public_relay_pairing(relay_address: Multiaddr) -> Result<(), String> {
+        let relay_peer = relay_address
+            .iter()
+            .find_map(|protocol| match protocol {
+                Protocol::P2p(peer) => Some(peer),
+                _ => None,
+            })
+            .ok_or_else(|| "relay candidate missing /p2p/RELAY".to_owned())?;
+        let relay_reservation = relay_address.clone().with(Protocol::P2pCircuit);
+        let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let membership_key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned();
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: true,
+            autonat: true,
+        };
+        let mut inviter = build_node(&HostConfig {
+            identity: inviter_identity.clone(),
+            network_name: "live-public-pairing".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 16,
+            max_concurrent_packet_streams: 16,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: vec![(relay_peer, relay_address.clone())],
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation.clone()],
+            relay_server: false,
+            relay_resources: RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .map_err(|error| format!("build inviter node failed: {error:?}"))?;
+        let relayed_inviter_multiaddr =
+            relay_reservation.with(Protocol::P2p(inviter.local_peer_id));
+        wait_for_pairing_test_relay_reservation(
+            &mut NoopRelayDriver,
+            &mut inviter.swarm,
+            relayed_inviter_multiaddr.clone(),
+            relay_peer,
+        )
+        .await;
+
+        let mut inviter_config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "live-public-pairing".to_owned(),
+                local_peer: inviter_identity.peer_id.clone(),
+                private_key: Some(inviter_identity.private_key.clone()),
+                membership_key: Some(membership_key.clone()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: vec![BootstrapPeerConfig {
+                    id: relay_peer.to_string(),
+                    address: relay_address.to_string(),
+                }],
+                discovery,
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        inviter_config.network.relay.reservations = vec![
+            relayed_inviter_multiaddr
+                .clone()
+                .without_p2p_target()
+                .to_string(),
+        ];
+        let offer =
+            export_discovery_only_pairing_offer(&inviter_config, PairingOfferOptions::default())
+                .map_err(|error| format!("export offer failed: {error:?}"))?;
+        let relayed_inviter_address = relayed_inviter_multiaddr.to_string();
+        let response_config = {
+            let mut config = inviter_config.clone();
+            config.network.external_addresses = vec![relayed_inviter_address.clone()];
+            config
+        };
+        let timeout_seconds = live_pairing_relay_timeout().as_secs().max(1);
+
+        let response = tokio::time::timeout(live_pairing_relay_timeout(), async {
+            let mut accept = Box::pin(live_pair_accept(
+                &offer,
+                joiner_identity.clone(),
+                1280,
+                timeout_seconds,
+                Some("10.42.0.2".to_owned()),
+                Vec::new(),
+            ));
+            loop {
+                tokio::select! {
+                    result = &mut accept => break result,
+                    event = inviter.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::Message {
+                                message: Message::Request { request, channel, .. },
+                                ..
+                            },
+                        )) = event {
+                            let response = build_pairing_response_at(
+                                &response_config,
+                                &offer,
+                                PairingResponseOptions {
+                                    joiner_peer: request.payload.joiner_peer.clone(),
+                                    assigned_vpn_ip: request.payload.requested_vpn_ip.clone(),
+                                    membership_key: Some(membership_key.clone()),
+                                    member_records: Vec::new(),
+                                    expires_in_seconds: 300,
+                                },
+                                current_unix_seconds_lossy(),
+                            )
+                            .expect("response");
+                            inviter
+                                .swarm
+                                .behaviour_mut()
+                                .pairing
+                                .send_response(channel, response)
+                                .expect("send response");
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| "live pairing timed out".to_owned())?
+        .map_err(|error| format!("live accept failed: {error}"))?;
+
+        if response.payload.inviter_peer != inviter_identity.peer_id {
+            return Err("response inviter peer mismatch".to_owned());
+        }
+        if response.payload.joiner_peer != joiner_identity.peer_id {
+            return Err("response joiner peer mismatch".to_owned());
+        }
+        if !response
+            .payload
+            .inviter_addresses
+            .iter()
+            .any(|address| address == &relayed_inviter_address)
+        {
+            return Err("response missing relayed inviter address".to_owned());
+        }
+
+        Ok(())
+    }
+
     async fn next_pairing_test_listen_address(
         swarm: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
     ) -> Multiaddr {
@@ -11394,8 +11586,21 @@ mod tests {
         }
     }
 
+    struct NoopRelayDriver;
+
+    impl futures::Stream for NoopRelayDriver {
+        type Item = SwarmEvent<BehaviourEvent>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Pending
+        }
+    }
+
     async fn wait_for_pairing_test_relay_reservation(
-        relay: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
+        relay: &mut (impl futures::Stream<Item = SwarmEvent<BehaviourEvent>> + Unpin),
         listener: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
         relayed_address: Multiaddr,
         relay_peer: Libp2pPeerId,
@@ -11405,8 +11610,8 @@ mod tests {
 
         loop {
             tokio::select! {
-                event = relay.select_next_some() => {
-                    let _ = event;
+                event = relay.next() => {
+                    assert!(event.is_some(), "relay event stream ended before reservation completed");
                 }
                 event = listener.select_next_some() => {
                     match event {
@@ -11431,6 +11636,49 @@ mod tests {
                 return;
             }
         }
+    }
+
+    fn live_pairing_relay_addresses() -> Vec<Multiaddr> {
+        let raw = std::env::var(LIVE_PAIRING_RELAY_MULTIADDRS_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| std::env::var(LIVE_PAIRING_RELAY_MULTIADDR_ENV).ok());
+        let Some(raw) = raw else {
+            return Vec::new();
+        };
+
+        raw.split([',', '\n'])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .parse::<Multiaddr>()
+                    .expect("live relay candidate must parse")
+            })
+            .inspect(|address| {
+                assert!(
+                    address
+                        .iter()
+                        .any(|protocol| matches!(protocol, Protocol::P2p(_))),
+                    "live relay candidate must include /p2p/RELAY: {address}"
+                );
+                assert!(
+                    !address
+                        .iter()
+                        .any(|protocol| matches!(protocol, Protocol::P2pCircuit)),
+                    "live relay candidate must be a direct relay address without /p2p-circuit: {address}"
+                );
+            })
+            .collect()
+    }
+
+    fn live_pairing_relay_timeout() -> Duration {
+        let seconds = std::env::var(LIVE_PAIRING_RELAY_TIMEOUT_SECONDS_ENV)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(45)
+            .max(1);
+        Duration::from_secs(seconds)
     }
 
     trait PairingTestRelayAddressExt {
