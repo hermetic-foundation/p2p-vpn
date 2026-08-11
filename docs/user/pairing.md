@@ -18,9 +18,10 @@ It is intended to replace manual key and config exchange.
 | Discovery-only offer | Implemented |
 | Offer inspection | Implemented |
 | Discovery-only relay accept | Implemented with namespace relay proof |
-| Public discovery-only accept | Implemented path, live smoke harness available |
+| Public discovery-only accept | Implemented path, public DHT proof pending |
 | Timeout diagnostics | Implemented |
 | Daemon pairing counters | Implemented |
+| Minimal config VM proof | Passing NixOS VM pairing check |
 
 ## Offer
 
@@ -136,7 +137,7 @@ Current behavior:
 | Contact inviter through signed relay reservation hints | yes |
 | Write final config from response | yes |
 | Preserve relayed inviter address from response | yes |
-| Discover inviter from only public DHT | implemented path, public DHT proof pending |
+| Discover inviter from only public DHT | Implemented path, public DHT proof pending |
 | Preserve public bootstrap defaults compactly | yes |
 
 ## Accept Response File
