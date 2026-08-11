@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::{
         BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, PeerConfig, QueueConfig,
-        RelayConfig, ResourceConfig, RouteConfig, public_ipfs_bootstrap_peer_configs,
+        RelayConfig, ResourceConfig, RouteConfig,
     },
     identity::NodeIdentity,
     membership::{MembershipRole, SignedMembershipRecord, validate_membership_records_at},
@@ -737,7 +737,7 @@ fn exported_inviter_addresses(config: &Config) -> Vec<String> {
 
 fn exported_bootstrap_peers(config: &Config) -> Vec<BootstrapPeerConfig> {
     if config.uses_public_ipfs_bootstrap_defaults() {
-        public_ipfs_bootstrap_peer_configs()
+        Vec::new()
     } else {
         config.network.bootstrap_peers.clone()
     }
@@ -929,7 +929,8 @@ mod tests {
         parsed.verify_at(1_001).expect("verified");
         assert_eq!(parsed.payload.network_name, "lab");
         assert_eq!(parsed.payload.expires_at_unix_seconds, 1_600);
-        assert!(!parsed.payload.bootstrap_peers.is_empty());
+        assert!(parsed.payload.bootstrap_peers.is_empty());
+        assert!(parsed.payload.discovery.kademlia);
     }
 
     #[test]
@@ -946,7 +947,8 @@ mod tests {
 
         offer.verify_at(1_001).expect("verified");
         assert!(offer.payload.inviter_addresses.is_empty());
-        assert!(!offer.payload.bootstrap_peers.is_empty());
+        assert!(offer.payload.bootstrap_peers.is_empty());
+        assert!(offer.payload.discovery.kademlia);
     }
 
     #[test]
@@ -1123,6 +1125,14 @@ mod tests {
         assert_eq!(imported.interface.name, "pv-pair");
         assert_eq!(imported.peers.len(), 1);
         assert_eq!(imported.peers[0].id, offer.payload.inviter_peer);
+        assert!(imported.network.bootstrap_peers.is_empty());
+        assert!(imported.uses_public_ipfs_bootstrap_defaults());
+        assert!(
+            !imported
+                .effective_bootstrap_multiaddrs()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -108,6 +108,7 @@ Live accept starts discovery before sending requests:
 | --- | --- |
 | Offer inviter addresses | Dial the signed inviter peer. |
 | Offer bootstrap peers | Seed libp2p routing and request delivery. |
+| Empty bootstrap peers with public Kademlia | Expand built-in public IPFS bootstrap peers locally. |
 | Offer relay reservations | Append the signed inviter peer and dial through relay. |
 | mDNS discoveries | Dial only the signed inviter peer. |
 | Kademlia provider results | Retry closest-peer lookup for the inviter. |

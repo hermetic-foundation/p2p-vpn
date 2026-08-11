@@ -101,6 +101,7 @@ Current behavior:
 | Contact inviter through signed relay reservation hints | yes |
 | Write final config from response | yes |
 | Discover inviter from only public DHT | implemented path, public proof pending |
+| Preserve public bootstrap defaults compactly | yes |
 
 ## Accept Response File
 
@@ -216,7 +217,12 @@ The URI includes:
 | Relay reservations | Relay paths for dialing the inviter. |
 | Discovery settings | mDNS, Kademlia, DCUtR, AutoNAT. |
 
-Minimal configs include the public IPFS bootstrap defaults in the URI.
+Minimal configs use public IPFS bootstrap peers by default.
+
+Pairing does not write the built-in public bootstrap list into the URI or
+generated config.
+
+Explicit bootstrap peers are still included.
 
 `--discovery-only` omits inviter addresses.
 
@@ -244,6 +250,7 @@ It can still include:
 | Live `pair accept` diagnostics | Implemented. |
 | Relay-assisted discovery-only `pair accept` | Implemented with local relay proof. |
 | Public discovery-only `pair accept` | Implemented path, public proof pending. |
+| Compact public bootstrap defaults | Implemented for offers and accepted configs. |
 
 ## Secrets
 

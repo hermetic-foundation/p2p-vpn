@@ -2928,9 +2928,16 @@ fn pairing_inviter_addresses(
 }
 
 fn pairing_bootstrap_peers(offer: &PairingOffer) -> Result<Vec<(Libp2pPeerId, Multiaddr)>, String> {
-    offer
-        .payload
-        .bootstrap_peers
+    let bootstrap_peers = if offer.payload.bootstrap_peers.is_empty()
+        && offer.payload.discovery.kademlia
+        && offer.payload.discovery.kademlia_protocol == PUBLIC_IPFS_KADEMLIA_PROTOCOL
+    {
+        p2p_vpn::config::public_ipfs_bootstrap_peer_configs()
+    } else {
+        offer.payload.bootstrap_peers.clone()
+    };
+
+    bootstrap_peers
         .iter()
         .map(|peer| {
             peer.peer_address()
@@ -10485,6 +10492,36 @@ mod tests {
         assert!(summary.contains("relayed_dial_start_failures=1"));
         assert!(summary.contains("last_outbound_failure=\"no address available\""));
         assert!(summary.contains("last_dial_error=unknown peer: \"connection refused\""));
+    }
+
+    #[test]
+    fn pairing_bootstrap_peers_expands_public_ipfs_defaults_for_compact_offer() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let offer = PairingOffer {
+            payload: p2p_vpn::pairing::PairingOfferPayload {
+                version: 1,
+                network_name: "lab".to_owned(),
+                inviter_public_key: STANDARD
+                    .encode(inviter.public_key_protobuf().expect("public key")),
+                inviter_peer: inviter.peer_id,
+                rendezvous_token: "BwcHBwcHBwcHBwcHBwcHBw".to_owned(),
+                issued_at_unix_seconds: 1_000,
+                expires_at_unix_seconds: 1_600,
+                inviter_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                protocols: p2p_vpn::pairing::PairingProtocols::default(),
+            },
+            signature: String::new(),
+        };
+
+        let peers = pairing_bootstrap_peers(&offer).expect("bootstrap peers");
+
+        assert_eq!(
+            peers.len(),
+            p2p_vpn::config::PUBLIC_IPFS_BOOTSTRAP_PEERS.len()
+        );
     }
 
     #[test]
