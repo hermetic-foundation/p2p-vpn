@@ -2280,6 +2280,10 @@ async fn live_pair_accept(
         .parse::<Libp2pPeerId>()
         .map_err(|error| format!("invalid inviter peer in offer: {error:?}"))?;
     let known_peers = pairing_inviter_addresses(offer, inviter_peer)?;
+    let offer_dial_addresses = known_peers
+        .iter()
+        .filter_map(|(_, address)| pairing_dial_address(inviter_peer, address.clone()))
+        .collect::<Vec<_>>();
     let bootstrap_peers = pairing_bootstrap_peers(offer)?;
     let mut diagnostics = PairingAcceptDiagnostics::new(&known_peers, bootstrap_peers.len());
     let mut dialed_inviter_addresses = HashSet::new();
@@ -2358,6 +2362,13 @@ async fn live_pair_accept(
                             .unwrap_or("unknown error")
                     );
                     tokio::time::sleep(Duration::from_millis(250)).await;
+                    redial_pairing_offer_addresses(
+                        &mut node,
+                        inviter_peer,
+                        &offer_dial_addresses,
+                        &mut dialed_inviter_addresses,
+                        &mut diagnostics,
+                    );
                     diagnostics.record_request_attempt();
                     request_id = node
                         .swarm
@@ -2742,6 +2753,26 @@ fn dial_pairing_inviter_addresses(
     }
 }
 
+fn redial_pairing_offer_addresses(
+    node: &mut p2p_vpn::runtime::p2p::P2pNode,
+    inviter_peer: Libp2pPeerId,
+    addresses: &[Multiaddr],
+    dialed_inviter_addresses: &mut HashSet<Multiaddr>,
+    diagnostics: &mut PairingAcceptDiagnostics,
+) {
+    for address in addresses {
+        dialed_inviter_addresses.remove(address);
+    }
+    dial_pairing_inviter_addresses(
+        node,
+        inviter_peer,
+        addresses.iter().cloned(),
+        dialed_inviter_addresses,
+        diagnostics,
+        PairingDiscoveredAddressSource::Offer,
+    );
+}
+
 fn pairing_dial_address(inviter_peer: Libp2pPeerId, address: Multiaddr) -> Option<Multiaddr> {
     let is_relayed = address
         .iter()
@@ -2872,17 +2903,24 @@ fn pairing_inviter_addresses(
     offer: &PairingOffer,
     inviter_peer: Libp2pPeerId,
 ) -> Result<Vec<(Libp2pPeerId, Multiaddr)>, String> {
-    offer
-        .payload
-        .inviter_addresses
-        .iter()
-        .map(|address| {
+    let mut addresses = Vec::new();
+    for address in &offer.payload.inviter_addresses {
+        addresses.push((
+            inviter_peer,
             address
                 .parse::<Multiaddr>()
-                .map(|address| (inviter_peer, address))
-                .map_err(|error| format!("invalid inviter address `{address}`: {error}"))
-        })
-        .collect()
+                .map_err(|error| format!("invalid inviter address `{address}`: {error}"))?,
+        ));
+    }
+    for address in &offer.payload.relay_reservations {
+        let reservation = address
+            .parse::<Multiaddr>()
+            .map_err(|error| format!("invalid relay reservation `{address}`: {error}"))?;
+        let dial_address = pairing_dial_address(inviter_peer, reservation)
+            .ok_or_else(|| format!("invalid relay reservation target `{address}`"))?;
+        addresses.push((inviter_peer, dial_address));
+    }
+    Ok(addresses)
 }
 
 fn pairing_bootstrap_peers(offer: &PairingOffer) -> Result<Vec<(Libp2pPeerId, Multiaddr)>, String> {
@@ -10776,69 +10814,55 @@ mod tests {
             queue: QueueConfig::default(),
             resources: ResourceConfig::default(),
         };
-        let (address_tx, address_rx) = std::sync::mpsc::channel();
-        let (offer_tx, offer_rx) = std::sync::mpsc::channel();
-        let inviter_identity_for_thread = inviter_identity.clone();
-        let inviter_config_for_thread = inviter_config.clone();
-        let membership_key_for_thread = membership_key.clone();
-        let discovery_for_thread = discovery.clone();
-        let inviter_thread = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("inviter runtime");
-            runtime.block_on(async move {
-                let mut inviter = build_node(&HostConfig {
-                    identity: inviter_identity_for_thread.clone(),
-                    network_name: "lab".to_owned(),
-                    membership_tag: None,
-                    mtu: 1280,
-                    max_concurrent_control_streams: 16,
-                    max_concurrent_packet_streams: 16,
-                    listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
-                    external_addresses: Vec::new(),
-                    bootstrap_peers: Vec::new(),
-                    known_peers: Vec::new(),
-                    relay_reservations: Vec::new(),
-                    relay_server: false,
-                    relay_resources: RelayResourceConfig::default(),
-                    resources: ResourceConfig::default(),
-                    discovery: discovery_for_thread,
-                })
-                .expect("inviter node");
-                let listener_address = loop {
-                    if let SwarmEvent::NewListenAddr { address, .. } =
-                        inviter.swarm.select_next_some().await
-                    {
-                        break address;
-                    }
-                };
-                address_tx
-                    .send(listener_address.to_string())
-                    .expect("send listener address");
-                let offer_for_response = offer_rx.recv().expect("receive offer");
-                let mut inviter_config_for_response = inviter_config_for_thread;
-                inviter_config_for_response.network.listen_addresses =
-                    vec![listener_address.to_string()];
+        let mut inviter = build_node(&HostConfig {
+            identity: inviter_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 16,
+            max_concurrent_packet_streams: 16,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("inviter node");
+        let listener_address = next_pairing_test_listen_address(&mut inviter.swarm).await;
+        inviter_config.network.bootstrap_peers = vec![BootstrapPeerConfig {
+            id: inviter_identity.peer_id.clone(),
+            address: listener_address.to_string(),
+        }];
+        let offer =
+            export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
+        assert!(offer.payload.inviter_addresses.is_empty());
+        assert_eq!(offer.payload.bootstrap_peers.len(), 1);
+        let mut response_config = inviter_config.clone();
+        response_config.network.listen_addresses = vec![listener_address.to_string()];
 
-                loop {
-                    match inviter.swarm.select_next_some().await {
-                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+        let response = {
+            let mut accept = Box::pin(live_pair_accept(&offer, joiner_identity.clone(), 1280, 5));
+            loop {
+                tokio::select! {
+                    result = &mut accept => break result.expect("live response"),
+                    event = inviter.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Pairing(
                             libp2p::request_response::Event::Message {
-                                message:
-                                    Message::Request {
-                                        request, channel, ..
-                                    },
+                                message: Message::Request { request, channel, .. },
                                 ..
                             },
-                        )) => {
+                        )) = event {
                             let response = build_pairing_response_at(
-                                &inviter_config_for_response,
-                                &offer_for_response,
+                                &response_config,
+                                &offer,
                                 PairingResponseOptions {
                                     joiner_peer: request.payload.joiner_peer,
                                     assigned_vpn_ip: Some("10.42.0.2".to_owned()),
-                                    membership_key: Some(membership_key_for_thread.clone()),
+                                    membership_key: Some(membership_key.clone()),
                                     member_records: Vec::new(),
                                     expires_in_seconds: 300,
                                 },
@@ -10852,37 +10876,248 @@ mod tests {
                                 .send_response(channel, response)
                                 .expect("send response");
                         }
-                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
-                            libp2p::request_response::Event::ResponseSent { .. },
-                        )) => return,
-                        _ => {}
                     }
                 }
-            });
-        });
+            }
+        };
 
-        let listener_address = address_rx.recv().expect("listener address");
-        inviter_config.network.bootstrap_peers = vec![BootstrapPeerConfig {
-            id: inviter_identity.peer_id.clone(),
-            address: listener_address,
-        }];
-        let offer =
-            export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
-        assert!(offer.payload.inviter_addresses.is_empty());
-        assert_eq!(offer.payload.bootstrap_peers.len(), 1);
-        offer_tx.send(offer.clone()).expect("send offer");
-
-        let response = live_pair_accept(&offer, joiner_identity.clone(), 1280, 5)
-            .await
-            .expect("live response");
-
-        inviter_thread.join().expect("inviter thread");
         assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
         assert_eq!(response.payload.joiner_peer, joiner_identity.peer_id);
         assert_eq!(
             response.payload.membership_key.as_deref(),
             Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
+    async fn live_pair_accept_uses_relay_for_discovery_only_offer() {
+        let relay_identity = NodeIdentity::generate_ed25519().expect("relay identity");
+        let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let membership_key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned();
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut relay = build_node(&HostConfig {
+            identity: relay_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 16,
+            max_concurrent_packet_streams: 16,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("relay listen")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            relay_resources: RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("relay node");
+        let relay_address = next_pairing_test_listen_address(&mut relay.swarm).await;
+        relay.swarm.add_external_address(relay_address.clone());
+        let relay_peer = relay.local_peer_id;
+        let relay_reservation = relay_address
+            .clone()
+            .with_p2p(relay_peer)
+            .expect("relay p2p address")
+            .with(Protocol::P2pCircuit);
+        let mut inviter = build_node(&HostConfig {
+            identity: inviter_identity.clone(),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 16,
+            max_concurrent_packet_streams: 16,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: vec![relay_reservation.clone()],
+            relay_server: false,
+            relay_resources: RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("inviter node");
+        let inviter_peer = inviter.local_peer_id;
+        let relayed_inviter_multiaddr = relay_reservation.with(Protocol::P2p(inviter_peer));
+        let relayed_inviter_address = relayed_inviter_multiaddr.to_string();
+        wait_for_pairing_test_relay_reservation(
+            &mut relay.swarm,
+            &mut inviter.swarm,
+            relayed_inviter_multiaddr.clone(),
+            relay_peer,
+        )
+        .await;
+        let mut inviter_config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter_identity.peer_id.clone(),
+                private_key: Some(inviter_identity.private_key.clone()),
+                membership_key: Some(membership_key.clone()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: vec![BootstrapPeerConfig {
+                    id: relay_identity.peer_id.clone(),
+                    address: relay_address.to_string(),
+                }],
+                discovery,
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        inviter_config.network.relay.reservations = vec![
+            relayed_inviter_multiaddr
+                .clone()
+                .without_p2p_target()
+                .to_string(),
+        ];
+        let offer =
+            export_discovery_only_pairing_offer(&inviter_config, PairingOfferOptions::default())
+                .expect("offer");
+        assert!(offer.payload.inviter_addresses.is_empty());
+        assert_eq!(offer.payload.bootstrap_peers.len(), 1);
+        assert_eq!(offer.payload.relay_reservations.len(), 1);
+
+        let response = {
+            let mut accept = Box::pin(live_pair_accept(&offer, joiner_identity.clone(), 1280, 10));
+            loop {
+                tokio::select! {
+                    result = &mut accept => break result.expect("live response"),
+                    event = relay.swarm.select_next_some() => {
+                        let _ = event;
+                    }
+                    event = inviter.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::Message {
+                                message: Message::Request { request, channel, .. },
+                                ..
+                            },
+                        )) = event {
+                            let mut response_config = inviter_config.clone();
+                            response_config.network.external_addresses =
+                                vec![relayed_inviter_address.clone()];
+                            let response = build_pairing_response_at(
+                                &response_config,
+                                &offer,
+                                PairingResponseOptions {
+                                    joiner_peer: request.payload.joiner_peer,
+                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    membership_key: Some(membership_key.clone()),
+                                    member_records: Vec::new(),
+                                    expires_in_seconds: 300,
+                                },
+                                current_unix_seconds_lossy(),
+                            )
+                            .expect("response");
+                            inviter
+                                .swarm
+                                .behaviour_mut()
+                                .pairing
+                                .send_response(channel, response)
+                                .expect("send response");
+                        }
+                    }
+                }
+            }
+        };
+        assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
+        assert_eq!(response.payload.joiner_peer, joiner_identity.peer_id);
+        assert!(
+            response
+                .payload
+                .inviter_addresses
+                .iter()
+                .any(|address| address == &relayed_inviter_address)
+        );
+    }
+
+    async fn next_pairing_test_listen_address(
+        swarm: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
+    ) -> Multiaddr {
+        loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
+                return address;
+            }
+        }
+    }
+
+    async fn wait_for_pairing_test_relay_reservation(
+        relay: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
+        listener: &mut libp2p::Swarm<p2p_vpn::runtime::p2p::Behaviour>,
+        relayed_address: Multiaddr,
+        relay_peer: Libp2pPeerId,
+    ) {
+        let mut listen_addr_reported = false;
+        let mut reservation_accepted = false;
+
+        loop {
+            tokio::select! {
+                event = relay.select_next_some() => {
+                    let _ = event;
+                }
+                event = listener.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(BehaviourEvent::Relay(
+                            libp2p::relay::client::Event::ReservationReqAccepted {
+                                relay_peer_id,
+                                renewal,
+                                ..
+                            },
+                        )) if relay_peer_id == relay_peer && !renewal => {
+                            reservation_accepted = true;
+                        }
+                        SwarmEvent::NewListenAddr { address, .. } if address == relayed_address => {
+                            listen_addr_reported = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if listen_addr_reported && reservation_accepted {
+                return;
+            }
+        }
+    }
+
+    trait PairingTestRelayAddressExt {
+        fn without_p2p_target(self) -> Self;
+    }
+
+    impl PairingTestRelayAddressExt for Multiaddr {
+        fn without_p2p_target(self) -> Self {
+            let mut address = Multiaddr::empty();
+            let mut after_circuit = false;
+            for protocol in &self {
+                if after_circuit {
+                    continue;
+                }
+                after_circuit = matches!(protocol, Protocol::P2pCircuit);
+                address.push(protocol);
+            }
+            address
+        }
     }
 
     #[test]

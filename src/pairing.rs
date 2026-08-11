@@ -4,7 +4,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use libp2p::{Multiaddr, PeerId as Libp2pPeerId, identity::PublicKey};
+use libp2p::{Multiaddr, PeerId as Libp2pPeerId, identity::PublicKey, multiaddr::Protocol};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,8 @@ pub struct PairingOfferPayload {
     pub inviter_addresses: Vec<String>,
     #[serde(default)]
     pub bootstrap_peers: Vec<BootstrapPeerConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_reservations: Vec<String>,
     pub discovery: DiscoveryConfig,
     pub protocols: PairingProtocols,
 }
@@ -329,6 +331,7 @@ fn export_pairing_offer_at_with_address_policy(
             Vec::new()
         },
         bootstrap_peers: exported_bootstrap_peers(config),
+        relay_reservations: config.network.relay.reservations.clone(),
         discovery: config.network.discovery.clone(),
         protocols: PairingProtocols::default(),
     };
@@ -504,7 +507,13 @@ fn validate_payload(
     validate_rendezvous_token(&payload.rendezvous_token)?;
     validate_multiaddrs(&payload.inviter_addresses)?;
     validate_bootstrap_peers(&payload.bootstrap_peers)?;
-    validate_discovery(&payload.discovery)?;
+    validate_relay_reservations(&payload.relay_reservations)?;
+    validate_pairing_reachability(
+        &payload.discovery,
+        &payload.inviter_addresses,
+        &payload.bootstrap_peers,
+        &payload.relay_reservations,
+    )?;
     validate_protocols(&payload.protocols)?;
 
     Ok(())
@@ -601,8 +610,13 @@ fn validate_response_payload(
     validate_rendezvous_token(&payload.rendezvous_token)?;
     validate_multiaddrs(&payload.inviter_addresses)?;
     validate_bootstrap_peers(&payload.bootstrap_peers)?;
-    validate_multiaddrs(&payload.relay_reservations)?;
-    validate_discovery(&payload.discovery)?;
+    validate_relay_reservations(&payload.relay_reservations)?;
+    validate_pairing_reachability(
+        &payload.discovery,
+        &payload.inviter_addresses,
+        &payload.bootstrap_peers,
+        &payload.relay_reservations,
+    )?;
     validate_protocols(&payload.protocols)?;
     validate_membership_records_at(
         &payload.member_records,
@@ -645,6 +659,36 @@ fn validate_multiaddrs(addresses: &[String]) -> Result<(), PairingError> {
     Ok(())
 }
 
+fn validate_relay_reservations(addresses: &[String]) -> Result<(), PairingError> {
+    for address in addresses {
+        validate_relay_reservation(address)?;
+    }
+    Ok(())
+}
+
+fn validate_relay_reservation(address: &str) -> Result<(), PairingError> {
+    let address = address.parse::<Multiaddr>()?;
+    let mut relay_peer = None;
+    let mut saw_circuit = false;
+    for protocol in &address {
+        match protocol {
+            Protocol::P2p(_) if saw_circuit => {
+                return Err(PairingError::UnexpectedRelayTarget);
+            }
+            Protocol::P2p(peer) => relay_peer = Some(peer),
+            Protocol::P2pCircuit if relay_peer.is_some() => saw_circuit = true,
+            Protocol::P2pCircuit => return Err(PairingError::MissingRelayPeer),
+            _ => {}
+        }
+    }
+
+    if saw_circuit {
+        Ok(())
+    } else {
+        Err(PairingError::MissingRelayCircuit)
+    }
+}
+
 fn validate_bootstrap_peers(peers: &[BootstrapPeerConfig]) -> Result<(), PairingError> {
     for peer in peers {
         peer.peer_address()?;
@@ -652,8 +696,18 @@ fn validate_bootstrap_peers(peers: &[BootstrapPeerConfig]) -> Result<(), Pairing
     Ok(())
 }
 
-fn validate_discovery(discovery: &DiscoveryConfig) -> Result<(), PairingError> {
-    if !discovery.mdns && !discovery.kademlia {
+fn validate_pairing_reachability(
+    discovery: &DiscoveryConfig,
+    inviter_addresses: &[String],
+    bootstrap_peers: &[BootstrapPeerConfig],
+    relay_reservations: &[String],
+) -> Result<(), PairingError> {
+    if !discovery.mdns
+        && !discovery.kademlia
+        && inviter_addresses.is_empty()
+        && bootstrap_peers.is_empty()
+        && relay_reservations.is_empty()
+    {
         return Err(PairingError::NoDiscoveryPath);
     }
     Ok(())
@@ -749,6 +803,9 @@ pub enum PairingError {
     InvalidRendezvousTokenLength { actual: usize, expected: usize },
     NoDiscoveryPath,
     IncompatibleProtocols,
+    MissingRelayPeer,
+    MissingRelayCircuit,
+    UnexpectedRelayTarget,
     PublicKeyPeerMismatch { expected: String, actual: String },
     InvalidSignature,
     InvalidUriScheme,
@@ -890,6 +947,34 @@ mod tests {
         offer.verify_at(1_001).expect("verified");
         assert!(offer.payload.inviter_addresses.is_empty());
         assert!(!offer.payload.bootstrap_peers.is_empty());
+    }
+
+    #[test]
+    fn discovery_only_pairing_offer_keeps_relay_reservation_hints() {
+        let mut config = config();
+        let relay = NodeIdentity::generate_ed25519().expect("relay identity");
+        config.network.relay.reservations = vec![format!(
+            "/ip4/127.0.0.1/tcp/4001/p2p/{}/p2p-circuit",
+            relay.peer_id
+        )];
+        let offer = export_discovery_only_pairing_offer_at(
+            &config,
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([10_u8; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("offer");
+
+        let parsed = PairingOffer::from_uri(&offer.to_uri().expect("uri")).expect("parsed");
+
+        parsed.verify_at(1_001).expect("verified");
+        assert!(parsed.payload.inviter_addresses.is_empty());
+        assert_eq!(
+            parsed.payload.relay_reservations,
+            config.network.relay.reservations
+        );
     }
 
     #[test]

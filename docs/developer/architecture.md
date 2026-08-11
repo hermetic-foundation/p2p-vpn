@@ -87,6 +87,12 @@ Requests for those offers carry the full signed offer.
 
 That lets the daemon validate the exact discovery-only payload.
 
+Discovery-only offers may still include relay reservation hints.
+
+Those hints are signed and skipped in JSON when empty.
+
+Older offers without the field keep the same signature shape.
+
 Pairing transport uses libp2p request-response:
 
 | Field | Value |
@@ -102,6 +108,7 @@ Live accept starts discovery before sending requests:
 | --- | --- |
 | Offer inviter addresses | Dial the signed inviter peer. |
 | Offer bootstrap peers | Seed libp2p routing and request delivery. |
+| Offer relay reservations | Append the signed inviter peer and dial through relay. |
 | mDNS discoveries | Dial only the signed inviter peer. |
 | Kademlia provider results | Retry closest-peer lookup for the inviter. |
 | Kademlia closest peers | Dial only addresses for the signed inviter peer. |
@@ -126,6 +133,10 @@ Live accept diagnostics are local to the accepting CLI:
 These diagnostics are not a daemon status API yet.
 
 They are intended to make discovery and relay failures reproducible.
+
+Offer-derived dials are retryable during the accept timeout.
+
+A transient failed circuit dial does not permanently discard the hint.
 
 Daemon handling rules:
 

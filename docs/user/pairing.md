@@ -16,7 +16,8 @@ It is intended to replace manual key and config exchange.
 | Signed membership grant return | Contract implemented |
 | Bootstrap-only accept | Implemented |
 | Discovery-only offer | Implemented |
-| Discovery-only accept path | Implemented, public proof pending |
+| Discovery-only relay accept | Implemented with local relay proof |
+| Public discovery-only accept | Implemented path, public proof pending |
 | Timeout diagnostics | Implemented |
 
 ## Offer
@@ -44,6 +45,10 @@ p2p-vpn pair offer \
 This keeps bootstrap and discovery hints in the URI.
 
 The accept side must discover the inviter over mDNS, Kademlia, or relay hints.
+
+Relay reservation hints are signed when present.
+
+They do not expose a direct inviter address.
 
 ## Offer File
 
@@ -92,6 +97,7 @@ Current behavior:
 | Import signed response file | yes |
 | Contact inviter from URI hints | yes |
 | Contact inviter from bootstrap hints | yes |
+| Contact inviter through signed relay reservation hints | yes |
 | Write final config from response | yes |
 | Discover inviter from only public DHT | implemented path, public proof pending |
 
@@ -172,13 +178,20 @@ The URI includes:
 | Expiry | Rejects stale offers. |
 | Inviter addresses | Direct or relayed hints. |
 | Bootstrap peers | Discovery hints. |
+| Relay reservations | Relay paths for dialing the inviter. |
 | Discovery settings | mDNS, Kademlia, DCUtR, AutoNAT. |
 
 Minimal configs include the public IPFS bootstrap defaults in the URI.
 
 `--discovery-only` omits inviter addresses.
 
-It still includes bootstrap peers and discovery settings.
+It can still include:
+
+| Hint | Source |
+| --- | --- |
+| Bootstrap peers | `network.bootstrap_peers` or public IPFS defaults. |
+| Relay reservations | `network.relay.reservations`. |
+| Discovery settings | `network.discovery`. |
 
 ## Current Status
 
@@ -192,6 +205,7 @@ It still includes bootstrap peers and discovery settings.
 | Daemon response generation | Implemented. |
 | Live `pair accept` exchange | Implemented for URI and bootstrap hints. |
 | Live `pair accept` diagnostics | Implemented. |
+| Relay-assisted discovery-only `pair accept` | Implemented with local relay proof. |
 | Public discovery-only `pair accept` | Implemented path, public proof pending. |
 
 ## Secrets
