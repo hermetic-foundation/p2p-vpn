@@ -31,7 +31,8 @@ Status is conservative.
 | Native libp2p QUIC datagrams | Blocked | Current libp2p swarm API lacks this handle. |
 | Relay-to-direct DCUtR | Operational on supported Linux hosts | Namespace promotion test. |
 | Public IPFS bootstrap | Partial | Rootless bootstrap checks. |
-| Public relay discovery | Partial | `relay-scan` and `relay-check`. |
+| Public relay discovery | Operational | Public reservation scan and live pairing smoke. |
+| Public discovery-only pairing | Operational | `live_pair_accept_uses_public_relay_for_discovery_only_offer`. |
 | Public DCUtR proof | Partial | Needs non-LAN topology evidence. |
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
@@ -51,6 +52,8 @@ Status is conservative.
 | 2026-08-09 | NixOS network-move VM test | Minimal config recovered LAN to discovered relay to LAN. |
 | 2026-08-09 | Relay-ready dialing regression | Stale direct connections no longer suppress relay fallback dials. |
 | 2026-08-09 | Public relay repro refresh | Public relay scan found 12 candidates; one relayed peer circuit passed. |
+| 2026-08-11 | Public relay reservation scan | One public relay accepted a reservation. |
+| 2026-08-11 | Public discovery-only pairing smoke | Pairing completed through the public relay. |
 
 ## Main Remaining Gap
 

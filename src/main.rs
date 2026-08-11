@@ -11396,6 +11396,8 @@ mod tests {
             max_concurrent_packet_streams: 16,
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
+            // The inviter only needs to reserve the relay here. The offer still carries
+            // relay bootstrap hints for the joiner.
             bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation.clone()],
@@ -11575,7 +11577,9 @@ mod tests {
             max_concurrent_packet_streams: 16,
             listen_addresses: Vec::new(),
             external_addresses: Vec::new(),
-            bootstrap_peers: vec![(relay_peer, relay_address.clone())],
+            // Avoid a duplicate direct bootstrap dial from the inviter to the relay while
+            // the relay reservation listener is being established.
+            bootstrap_peers: Vec::new(),
             known_peers: Vec::new(),
             relay_reservations: vec![relay_reservation.clone()],
             relay_server: false,

@@ -360,10 +360,13 @@ Public bootstrap and relay candidate discovery have been observed.
 
 The latest public relay repro found a usable relayed-peer circuit.
 
+The 2026-08-11 live pairing smoke completed through a public relay.
+
 | Evidence | Status |
 | --- | --- |
-| Public relay scan | 8 candidates found on 2026-08-10. |
-| Public relay validation | 1 of 2 probed candidates passed. |
+| Public relay scan | 13 candidates found on 2026-08-11. |
+| Public relay reservation | 1 probed relay accepted a reservation. |
+| Public discovery-only pairing | Passed through the selected public relay. |
 | Relayed peer circuit | Proven through a selected public relay. |
 | Generated two-host configs | Written by the repro. |
 | Two-host public VPN ping | Still requires two separated hosts. |

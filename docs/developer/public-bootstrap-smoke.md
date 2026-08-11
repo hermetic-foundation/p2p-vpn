@@ -252,8 +252,8 @@ Limits:
 
 | Gap | Status |
 | --- | --- |
-| Public relay reservation | Current candidate connected but did not accept. |
-| Public pairing through relay | Still requires a reservable public relay. |
+| Public relay reservation | Superseded by the 2026-08-11 reservation proof below. |
+| Public pairing through relay | Superseded by the 2026-08-11 live pairing proof below. |
 | Two-host public VPN ping | Not part of this run. |
 
 ## Reservation Candidate Search
@@ -282,13 +282,55 @@ This proves reservation acceptance only.
 
 Use normal relayed-peer validation for generated Host A/B configs.
 
+## 2026-08-11 Public Pairing Proof
+
+Reservation scan:
+
+```sh
+nix run .# -- relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --require-relay-reservation \
+  --timeout-seconds 45 \
+  --candidate-timeout-seconds 45 \
+  --max-candidates 16 \
+  --max-validation-candidates 8
+```
+
+Selected relay:
+
+```text
+/ip4/84.200.154.199/udp/4001/quic-v1/p2p/12D3KooWRpbRYnbLvKjW2LMt4cUaiZyJ2tPNpRoRHXx9YSngLWie
+```
+
+Live pairing smoke:
+
+```sh
+P2P_VPN_LIVE_RELAY_MULTIADDR=/ip4/84.200.154.199/udp/4001/quic-v1/p2p/12D3KooWRpbRYnbLvKjW2LMt4cUaiZyJ2tPNpRoRHXx9YSngLWie \
+P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS=90 \
+nix develop -c cargo test \
+  live_pair_accept_uses_public_relay_for_discovery_only_offer \
+  -- --ignored --nocapture
+```
+
+Result:
+
+| Item | Result |
+| --- | --- |
+| Public relay reservation | Passed. |
+| Discovery-only pairing offer | Passed. |
+| Joiner relay dial | Retried after one dial failure and passed. |
+| Pairing response | Returned through the public relay. |
+| Two-host public VPN ping | Not part of this run. |
+
 ## Current Conclusion
 
 | Capability | Evidence |
 | --- | --- |
 | Public bootstrap reachability | Proven. |
 | Public relay candidate discovery | Proven. |
-| Public relay reservation | Previously proven; current candidate did not accept. |
+| Public relay reservation | Proven on 2026-08-11. |
+| Public discovery-only pairing | Proven on 2026-08-11. |
 | Public relayed circuit | Proven for at least one run. |
 | Generated-host relay reservation | Not consistently proven. |
 | Public membership DHT propagation | Not proven yet. |
