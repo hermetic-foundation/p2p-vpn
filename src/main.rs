@@ -38,7 +38,7 @@ use p2p_vpn::{
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
-        DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingOffer,
+        DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingError, PairingOffer,
         PairingOfferOptions, PairingRequestOptions, PairingResponse, build_pairing_request_at,
         export_discovery_only_pairing_offer, export_pairing_offer,
         import_pairing_response_config_at,
@@ -598,6 +598,11 @@ enum PairCommand {
         #[arg(long)]
         force: bool,
     },
+    Inspect {
+        offer: String,
+        #[arg(long)]
+        show_secret: bool,
+    },
     Accept {
         offer: String,
         #[arg(long)]
@@ -990,6 +995,9 @@ async fn main() -> Result<(), String> {
                 discovery_only,
                 force,
             }),
+            PairCommand::Inspect { offer, show_secret } => {
+                pair_inspect(&PairInspectArgs { offer, show_secret })
+            }
             PairCommand::Accept {
                 offer,
                 response,
@@ -1287,6 +1295,12 @@ struct PairOfferArgs {
     rendezvous_token: Option<String>,
     discovery_only: bool,
     force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PairInspectArgs {
+    offer: String,
+    show_secret: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2186,8 +2200,99 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn pair_inspect(args: &PairInspectArgs) -> Result<(), String> {
+    let input = read_pairing_offer_input(&args.offer)?;
+    let offer = PairingOffer::from_uri(&input)
+        .map_err(|error| format!("failed to parse pairing offer: {error:?}"))?;
+    let now = current_unix_seconds_lossy();
+    let verification = match offer.verify_at(now) {
+        Ok(()) => "valid",
+        Err(PairingError::Expired { .. }) => {
+            offer
+                .verify_at(offer.payload.issued_at_unix_seconds)
+                .map_err(|error| format!("failed to verify expired pairing offer: {error:?}"))?;
+            "expired"
+        }
+        Err(error) => return Err(format!("failed to verify pairing offer: {error:?}")),
+    };
+    let inviter_peer = offer
+        .payload
+        .inviter_peer
+        .parse::<Libp2pPeerId>()
+        .map_err(|error| format!("invalid inviter peer in offer: {error:?}"))?;
+    let inviter_addresses = pairing_inviter_addresses(&offer, inviter_peer)?;
+    let bootstrap_peers = pairing_bootstrap_peers(&offer)?;
+    let seconds_remaining = offer
+        .payload
+        .expires_at_unix_seconds
+        .saturating_sub(now)
+        .to_string();
+
+    println!("pairing offer: {verification}");
+    println!("network: {}", offer.payload.network_name);
+    println!("inviter peer: {}", offer.payload.inviter_peer);
+    println!("issued at: {}", offer.payload.issued_at_unix_seconds);
+    println!("expires at: {}", offer.payload.expires_at_unix_seconds);
+    println!("seconds remaining: {seconds_remaining}");
+    println!(
+        "discovery only: {}",
+        if offer.payload.inviter_addresses.is_empty() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!("inviter address hints: {}", inviter_addresses.len());
+    println!(
+        "relay reservation hints: {}",
+        offer.payload.relay_reservations.len()
+    );
+    println!("bootstrap peers: {}", bootstrap_peers.len());
+    println!("mdns: {}", enabled_label(offer.payload.discovery.mdns));
+    println!(
+        "kademlia: {}",
+        enabled_label(offer.payload.discovery.kademlia)
+    );
+    println!(
+        "kademlia protocol: {}",
+        offer.payload.discovery.kademlia_protocol
+    );
+    println!("dcutr: {}", enabled_label(offer.payload.discovery.dcutr));
+    println!("control protocol: {}", offer.payload.protocols.control);
+    println!("packet protocol: {}", offer.payload.protocols.packet);
+    println!("service protocol: {}", offer.payload.protocols.service);
+    if args.show_secret {
+        println!("rendezvous token: {}", offer.payload.rendezvous_token);
+    } else {
+        println!("rendezvous token: hidden");
+    }
+
+    Ok(())
+}
+
+fn read_pairing_offer_input(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.starts_with("p2pvpn:") {
+        return Ok(trimmed.to_owned());
+    }
+
+    let path = Path::new(trimmed);
+    if path.exists() {
+        return fs::read_to_string(path)
+            .map(|contents| contents.trim().to_owned())
+            .map_err(|error| format!("failed to read {}: {error}", path.display()));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn enabled_label(enabled: bool) -> &'static str {
+    if enabled { "enabled" } else { "disabled" }
+}
+
 async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
-    let offer = PairingOffer::from_uri(&args.offer)
+    let input = read_pairing_offer_input(&args.offer)?;
+    let offer = PairingOffer::from_uri(&input)
         .map_err(|error| format!("failed to parse pairing offer: {error:?}"))?;
     offer
         .verify_at(current_unix_seconds_lossy())
@@ -10441,6 +10546,39 @@ mod tests {
         assert_eq!(rendezvous_token.as_deref(), Some("BwcHBwcHBwcHBwcHBwcHBw"));
         assert!(discovery_only);
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_pair_inspect_command() {
+        let cli =
+            Cli::try_parse_from(["p2p-vpn", "pair", "inspect", "node-a.pair", "--show-secret"])
+                .expect("cli");
+
+        let Command::Pair {
+            command: PairCommand::Inspect { offer, show_secret },
+        } = cli.command
+        else {
+            panic!("expected pair inspect command");
+        };
+
+        assert_eq!(offer, "node-a.pair");
+        assert!(show_secret);
+    }
+
+    #[test]
+    fn read_pairing_offer_input_accepts_uri_or_file() {
+        let path = temp_config_path("p2p-vpn-pair-inspect");
+        fs::write(&path, "p2pvpn:file-offer\n").expect("write offer");
+
+        assert_eq!(
+            read_pairing_offer_input(" p2pvpn:inline-offer ").expect("inline offer"),
+            "p2pvpn:inline-offer"
+        );
+        assert_eq!(
+            read_pairing_offer_input(path.to_str().expect("path")).expect("file offer"),
+            "p2pvpn:file-offer"
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]

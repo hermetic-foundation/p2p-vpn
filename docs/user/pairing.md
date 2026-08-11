@@ -16,6 +16,7 @@ It is intended to replace manual key and config exchange.
 | Signed membership grant return | Contract implemented |
 | Bootstrap-only accept | Implemented |
 | Discovery-only offer | Implemented |
+| Offer inspection | Implemented |
 | Discovery-only relay accept | Implemented with local relay proof |
 | Public discovery-only accept | Implemented path, public proof pending |
 | Timeout diagnostics | Implemented |
@@ -65,6 +66,32 @@ The file contains one line.
 
 It is easier to inspect and rotate than a full config.
 
+## Inspect
+
+Inspect a URI or offer file:
+
+```sh
+p2p-vpn pair inspect lab.pair
+```
+
+The output hides the rendezvous token by default.
+
+Use this only on trusted terminals:
+
+```sh
+p2p-vpn pair inspect lab.pair --show-secret
+```
+
+Useful fields:
+
+| Field | Meaning |
+| --- | --- |
+| `pairing offer` | `valid` or `expired`. |
+| `discovery only` | Whether direct inviter hints are omitted. |
+| `inviter address hints` | Direct plus relayed dial hints. |
+| `bootstrap peers` | Peers the accept path can seed from. |
+| `rendezvous token` | Hidden unless `--show-secret` is set. |
+
 ## Expiry
 
 Default expiry:
@@ -85,6 +112,12 @@ Run this on the new node:
 
 ```sh
 p2p-vpn pair accept 'p2pvpn:...'
+```
+
+You can also pass an offer file:
+
+```sh
+p2p-vpn pair accept lab.pair
 ```
 
 Current behavior:

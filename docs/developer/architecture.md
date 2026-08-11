@@ -142,6 +142,12 @@ The accept-side timeout diagnostic remains CLI-local.
 
 Together they make discovery, relay, and rejection failures reproducible.
 
+`pair inspect` decodes a URI or offer file before accept.
+
+It reports signed reachability hints and protocol versions.
+
+It hides the rendezvous token unless `--show-secret` is set.
+
 Daemon pairing counters:
 
 | Counter | Meaning |
