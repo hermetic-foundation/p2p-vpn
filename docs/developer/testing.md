@@ -232,6 +232,18 @@ Run relay-assisted live pairing:
 nix run .#tun-e2e -- tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay -- --ignored --exact --nocapture
 ```
 
+Preflight a public relay reservation candidate:
+
+```sh
+nix run .# -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --require-relay-reservation \
+  --max-validation-candidates 4 \
+  --timeout-seconds 45
+```
+
+Discovery-only public pairing needs this to pass.
+
 Run the live public relay pairing smoke:
 
 ```sh

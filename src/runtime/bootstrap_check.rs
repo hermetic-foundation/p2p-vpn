@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{
-        Config, ConfigError, DiscoveryConfig, InterfaceConfig, NetworkConfig, PacketPlaneConfig,
-        PeerConfig, QueueConfig, RelayConfig, ResourceConfig,
+        Config, ConfigError, DiscoveryConfig, InterfaceConfig, NetworkConfig,
+        PRIVATE_KADEMLIA_PROTOCOL, PacketPlaneConfig, PeerConfig, QueueConfig, RelayConfig,
+        ResourceConfig,
     },
     identity::{IdentityError, NodeIdentity},
     membership::{
@@ -473,6 +474,7 @@ pub struct RelayedPeerCircuitCheck {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicRelayProbeMode {
+    RelayReservation,
     RelayedPeerCircuit,
     DcutrSuccess,
 }
@@ -1029,6 +1031,7 @@ impl PublicRelayScanReport {
 impl PublicRelayProbeMode {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::RelayReservation => "relay_reservation",
             Self::RelayedPeerCircuit => "relayed_peer_circuit",
             Self::DcutrSuccess => "dcutr_success",
         }
@@ -1234,6 +1237,9 @@ pub async fn check_public_relay_candidates(
     for relay_address in relay_addresses {
         let started = Instant::now();
         let result = match mode {
+            PublicRelayProbeMode::RelayReservation => {
+                Box::pin(live_public_relay_reservation(relay_address, timeout)).await
+            }
             PublicRelayProbeMode::RelayedPeerCircuit => {
                 Box::pin(live_public_relayed_peer_circuit(relay_address, timeout)).await
             }
@@ -1272,6 +1278,89 @@ pub async fn check_public_relay_candidates(
 
 fn elapsed_millis_since(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn live_public_relay_reservation(
+    relay_address: &Multiaddr,
+    timeout: Duration,
+) -> Result<BootstrapCheckReport, PublicRelayProbeFailure> {
+    let relay_peer = address_peer(relay_address).ok_or_else(|| {
+        PublicRelayProbeFailure::without_bootstrap("live relay multiaddr must include /p2p/RELAY")
+    })?;
+    let relay_reservation = relay_address.to_owned().with(Protocol::P2pCircuit);
+    let discovery = relay_probe_discovery();
+    let mut listener_node = build_node(&HostConfig {
+        identity: NodeIdentity::generate_ed25519()
+            .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?,
+        network_name: "lab".to_owned(),
+        membership_tag: None,
+        mtu: 1280,
+        max_concurrent_control_streams: 64,
+        max_concurrent_packet_streams: 256,
+        listen_addresses: Vec::new(),
+        external_addresses: Vec::new(),
+        bootstrap_peers: Vec::new(),
+        known_peers: Vec::new(),
+        relay_reservations: vec![relay_reservation.clone()],
+        relay_server: false,
+        relay_resources: crate::config::RelayResourceConfig::default(),
+        resources: ResourceConfig::default(),
+        discovery,
+    })
+    .map_err(|error| PublicRelayProbeFailure::without_bootstrap(format!("{error:?}")))?;
+    let listener_peer = listener_node.local_peer_id;
+    let relayed_target_address = relay_reservation.with(Protocol::P2p(listener_peer));
+
+    wait_for_external_relay_reservation(
+        &mut listener_node,
+        relayed_target_address,
+        relay_peer,
+        timeout,
+    )
+    .await
+    .map_err(|error| {
+        PublicRelayProbeFailure::at_stage(
+            PublicRelayCandidateFailureStage::RelayReservation,
+            error.error_message(),
+        )
+    })?;
+
+    Ok(BootstrapCheckReport {
+        threshold: BootstrapCheckThreshold::Any,
+        requirements: BootstrapCheckRequirements::default(),
+        kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+        ipfs_compatible: false,
+        dcutr: BootstrapDcutrCheck {
+            enabled: false,
+            ready: false,
+            successes: 0,
+            direct_connections: 0,
+            failures: 0,
+            last_error: None,
+        },
+        configured_bootstrap_peers: 0,
+        connected_bootstrap_peers: 0,
+        dial_failures: 0,
+        configured_relay_reservations: 1,
+        accepted_relay_reservations: 1,
+        relayed_listen_addresses: 1,
+        configured_relayed_peer_circuits: 0,
+        connected_relayed_peer_circuits: 0,
+        relayed_connection_addresses: Vec::new(),
+        direct_connection_addresses: Vec::new(),
+        autonat_probe_servers_registered: 0,
+        autonat_status: BootstrapAutoNatStatus::Unknown,
+        kademlia: BootstrapKademliaCheck::default(),
+        membership_records: BootstrapMembershipRecordDhtCheck::default(),
+        peer_results: Vec::new(),
+        relay_results: vec![RelayReservationCheck {
+            relay_peer_id: relay_peer,
+            address: relay_address.to_string(),
+            accepted: true,
+            relayed_listen_address: true,
+        }],
+        relayed_peer_results: Vec::new(),
+    })
 }
 
 fn bootstrap_peer_results(
@@ -3111,6 +3200,65 @@ mod tests {
             report
                 .lines()
                 .contains(&"public relay probe: ok".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn public_relay_probe_can_validate_local_relay_reservation_candidate() {
+        let mut relay_node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("relay identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: true,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: relay_test_discovery(),
+        })
+        .expect("relay node");
+        let relay_peer = relay_node.local_peer_id;
+        let relay_address = next_listen_address(&mut relay_node)
+            .await
+            .with_p2p(relay_peer)
+            .expect("relay address");
+        relay_node.swarm.add_external_address(relay_address.clone());
+        let _relay_task = tokio::spawn(async move {
+            loop {
+                let _ = relay_node.swarm.select_next_some().await;
+            }
+        });
+
+        let report = check_public_relay_candidates(
+            &[relay_address],
+            PublicRelayProbeMode::RelayReservation,
+            Duration::from_secs(10),
+        )
+        .await;
+
+        assert!(report.succeeded(), "{report:?}");
+        assert_eq!(report.mode, PublicRelayProbeMode::RelayReservation);
+        assert_eq!(report.candidates.len(), 1);
+        assert!(report.candidates[0].succeeded);
+        let bootstrap = report.candidates[0]
+            .bootstrap
+            .as_ref()
+            .expect("bootstrap report");
+        assert_eq!(bootstrap.configured_relay_reservations, 1);
+        assert_eq!(bootstrap.accepted_relay_reservations, 1);
+        assert_eq!(bootstrap.relayed_listen_addresses, 1);
+        assert_eq!(bootstrap.relay_results.len(), 1);
+        assert!(bootstrap.relay_results[0].accepted);
+        assert!(
+            report
+                .lines()
+                .contains(&"public relay probe mode: relay_reservation".to_owned())
         );
     }
 

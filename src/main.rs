@@ -289,6 +289,8 @@ enum Command {
         relay_candidates: Vec<String>,
         #[arg(long = "relay-candidates-file")]
         relay_candidates_file: Option<PathBuf>,
+        #[arg(long = "require-relay-reservation")]
+        require_relay_reservation: bool,
         #[arg(long)]
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
@@ -358,6 +360,8 @@ enum Command {
         max_candidates: usize,
         #[arg(long)]
         check_candidates: bool,
+        #[arg(long = "require-relay-reservation")]
+        require_relay_reservation: bool,
         #[arg(long)]
         require_dcutr_success: bool,
         #[arg(long, default_value_t = 45)]
@@ -838,6 +842,7 @@ async fn main() -> Result<(), String> {
             config,
             relay_candidates,
             relay_candidates_file,
+            require_relay_reservation,
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
@@ -853,7 +858,15 @@ async fn main() -> Result<(), String> {
             two_host_mtu,
             force,
         } => {
-            let mode = if require_dcutr_success {
+            if require_relay_reservation && require_dcutr_success {
+                return Err(
+                    "--require-relay-reservation and --require-dcutr-success cannot be used together"
+                        .to_owned(),
+                );
+            }
+            let mode = if require_relay_reservation {
+                PublicRelayProbeMode::RelayReservation
+            } else if require_dcutr_success {
                 PublicRelayProbeMode::DcutrSuccess
             } else {
                 PublicRelayProbeMode::RelayedPeerCircuit
@@ -918,6 +931,7 @@ async fn main() -> Result<(), String> {
             timeout_seconds,
             max_candidates,
             check_candidates,
+            require_relay_reservation,
             require_dcutr_success,
             candidate_timeout_seconds,
             max_validation_candidates,
@@ -933,6 +947,7 @@ async fn main() -> Result<(), String> {
                 timeout_seconds,
                 max_candidates,
                 check_candidates,
+                require_relay_reservation,
                 require_dcutr_success,
                 candidate_timeout_seconds,
                 max_validation_candidates,
@@ -1357,6 +1372,7 @@ struct RelayScanArgs {
     timeout_seconds: u64,
     max_candidates: usize,
     check_candidates: bool,
+    require_relay_reservation: bool,
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
     max_validation_candidates: Option<usize>,
@@ -4565,6 +4581,12 @@ fn validate_relay_check_args(args: &RelayCheckArgs) -> Result<(), String> {
             "--write-host-a-config and --write-host-b-config must be supplied together".to_owned(),
         );
     }
+    if args.mode == PublicRelayProbeMode::RelayReservation && args.write_host_a_config.is_some() {
+        return Err(
+            "--write-host-a-config and --write-host-b-config require relayed peer circuit validation"
+                .to_owned(),
+        );
+    }
     if args.two_host_mtu == 0 {
         return Err("--two-host-mtu must be greater than zero".to_owned());
     }
@@ -5168,6 +5190,7 @@ fn bootstrap_check_report_json(
 
 const fn public_relay_probe_mode_name(mode: PublicRelayProbeMode) -> &'static str {
     match mode {
+        PublicRelayProbeMode::RelayReservation => "relay_reservation",
         PublicRelayProbeMode::RelayedPeerCircuit => "relayed_peer_circuit",
         PublicRelayProbeMode::DcutrSuccess => "dcutr_success",
     }
@@ -5547,7 +5570,9 @@ async fn relay_scan(args: RelayScanArgs) -> Result<(), String> {
             "public relay scan did not have a host-reachable candidate to validate".to_owned(),
         );
     }
-    let mode = if args.require_dcutr_success {
+    let mode = if args.require_relay_reservation {
+        PublicRelayProbeMode::RelayReservation
+    } else if args.require_dcutr_success {
         PublicRelayProbeMode::DcutrSuccess
     } else {
         PublicRelayProbeMode::RelayedPeerCircuit
@@ -5587,6 +5612,15 @@ fn validate_relay_scan_args(args: &RelayScanArgs) -> Result<(), String> {
     }
     if args.write_config.is_some() && !args.check_candidates {
         return Err("--write-config requires --check-candidates".to_owned());
+    }
+    if args.require_relay_reservation && !args.check_candidates {
+        return Err("--require-relay-reservation requires --check-candidates".to_owned());
+    }
+    if args.require_relay_reservation && args.require_dcutr_success {
+        return Err(
+            "--require-relay-reservation and --require-dcutr-success cannot be used together"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -5652,6 +5686,7 @@ struct PublicRelayScanReportJson<'a> {
     timeout_seconds: u64,
     max_candidates: usize,
     check_candidates: bool,
+    require_relay_reservation: bool,
     require_dcutr_success: bool,
     candidate_timeout_seconds: u64,
     max_validation_candidates: Option<usize>,
@@ -5699,6 +5734,7 @@ fn public_relay_scan_report_json<'a>(
         timeout_seconds: args.timeout_seconds.max(1),
         max_candidates: args.max_candidates,
         check_candidates: args.check_candidates,
+        require_relay_reservation: args.require_relay_reservation,
         require_dcutr_success: args.require_dcutr_success,
         candidate_timeout_seconds: args.candidate_timeout_seconds.max(1),
         max_validation_candidates: args.max_validation_candidates,
@@ -9194,6 +9230,7 @@ mod tests {
             config,
             relay_candidates,
             relay_candidates_file,
+            require_relay_reservation,
             require_dcutr_success,
             timeout_seconds,
             max_validation_candidates,
@@ -9220,6 +9257,7 @@ mod tests {
             relay_candidates_file,
             Some(PathBuf::from("relay-candidates.txt"))
         );
+        assert!(!require_relay_reservation);
         assert!(require_dcutr_success);
         assert_eq!(timeout_seconds, 60);
         assert_eq!(max_validation_candidates, Some(3));
@@ -9234,6 +9272,30 @@ mod tests {
         assert_eq!(host_b_route, "10.44.0.2/32");
         assert_eq!(two_host_mtu, 1420);
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_relay_check_reservation_mode() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-check",
+            "--relay-candidate",
+            "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "--require-relay-reservation",
+        ])
+        .expect("cli");
+
+        let Command::RelayCheck {
+            require_relay_reservation,
+            require_dcutr_success,
+            ..
+        } = cli.command
+        else {
+            panic!("expected relay-check command");
+        };
+
+        assert!(require_relay_reservation);
+        assert!(!require_dcutr_success);
     }
 
     #[test]
@@ -9343,6 +9405,7 @@ mod tests {
             timeout_seconds,
             max_candidates,
             check_candidates,
+            require_relay_reservation,
             require_dcutr_success,
             candidate_timeout_seconds,
             max_validation_candidates,
@@ -9361,6 +9424,7 @@ mod tests {
         assert_eq!(timeout_seconds, 60);
         assert_eq!(max_candidates, 4);
         assert!(check_candidates);
+        assert!(!require_relay_reservation);
         assert!(require_dcutr_success);
         assert_eq!(candidate_timeout_seconds, 15);
         assert_eq!(max_validation_candidates, Some(3));
@@ -9371,6 +9435,32 @@ mod tests {
         assert_eq!(write_report, Some(PathBuf::from("relay-scan-report.json")));
         assert_eq!(write_config, Some(PathBuf::from("relay-scan-config.json")));
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_relay_scan_reservation_mode() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "relay-scan",
+            "--ipfs-bootstrap-peers",
+            "--check-candidates",
+            "--require-relay-reservation",
+        ])
+        .expect("cli");
+
+        let Command::RelayScan {
+            check_candidates,
+            require_relay_reservation,
+            require_dcutr_success,
+            ..
+        } = cli.command
+        else {
+            panic!("expected relay-scan command");
+        };
+
+        assert!(check_candidates);
+        assert!(require_relay_reservation);
+        assert!(!require_dcutr_success);
     }
 
     #[test]
@@ -9689,6 +9779,7 @@ mod tests {
             timeout_seconds: 60,
             max_candidates: 4,
             check_candidates: true,
+            require_relay_reservation: false,
             require_dcutr_success: true,
             candidate_timeout_seconds: 15,
             max_validation_candidates: Some(1),
@@ -9707,6 +9798,7 @@ mod tests {
         assert_eq!(value["timeout_seconds"], 60);
         assert_eq!(value["max_candidates"], 4);
         assert_eq!(value["check_candidates"], true);
+        assert_eq!(value["require_relay_reservation"], false);
         assert_eq!(value["require_dcutr_success"], true);
         assert_eq!(value["candidate_timeout_seconds"], 15);
         assert_eq!(value["max_validation_candidates"], 1);
@@ -9976,6 +10068,25 @@ mod tests {
     }
 
     #[test]
+    fn relay_check_reservation_mode_rejects_two_host_config_generation() {
+        let args = RelayCheckArgs {
+            relay_candidates: vec![
+                "/dns4/relay.example.net/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                    .to_owned(),
+            ],
+            mode: PublicRelayProbeMode::RelayReservation,
+            write_host_a_config: Some(PathBuf::from("host-a.json")),
+            write_host_b_config: Some(PathBuf::from("host-b.json")),
+            ..relay_check_args_for_test()
+        };
+
+        assert_eq!(
+            validate_relay_check_args(&args).expect_err("validation should fail"),
+            "--write-host-a-config and --write-host-b-config require relayed peer circuit validation"
+        );
+    }
+
+    #[test]
     fn relay_check_requires_candidate_or_candidate_file() {
         let args = RelayCheckArgs {
             ..relay_check_args_for_test()
@@ -9996,6 +10107,7 @@ mod tests {
             timeout_seconds: 30,
             max_candidates: 8,
             check_candidates: false,
+            require_relay_reservation: false,
             require_dcutr_success: false,
             candidate_timeout_seconds: 45,
             max_validation_candidates: None,
@@ -10012,6 +10124,21 @@ mod tests {
 
         args.check_candidates = true;
         validate_relay_scan_args(&args).expect("validation should pass");
+
+        args.check_candidates = false;
+        args.write_config = None;
+        args.require_relay_reservation = true;
+        assert_eq!(
+            validate_relay_scan_args(&args).expect_err("validation should fail"),
+            "--require-relay-reservation requires --check-candidates"
+        );
+
+        args.check_candidates = true;
+        args.require_dcutr_success = true;
+        assert_eq!(
+            validate_relay_scan_args(&args).expect_err("validation should fail"),
+            "--require-relay-reservation and --require-dcutr-success cannot be used together"
+        );
     }
 
     #[test]
@@ -10023,6 +10150,7 @@ mod tests {
             timeout_seconds: 30,
             max_candidates: 8,
             check_candidates: true,
+            require_relay_reservation: false,
             require_dcutr_success: true,
             candidate_timeout_seconds: 45,
             max_validation_candidates: Some(0),

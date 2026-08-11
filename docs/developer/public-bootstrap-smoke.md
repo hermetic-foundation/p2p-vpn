@@ -256,6 +256,32 @@ Limits:
 | Public pairing through relay | Still requires a reservable public relay. |
 | Two-host public VPN ping | Not part of this run. |
 
+## Reservation Candidate Search
+
+Use reservation mode before public pairing:
+
+```sh
+nix run .# -- relay-scan \
+  --ipfs-bootstrap-peers \
+  --check-candidates \
+  --require-relay-reservation \
+  --candidate-timeout-seconds 45 \
+  --max-validation-candidates 4
+```
+
+Or validate a known candidate list:
+
+```sh
+nix run .# -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --require-relay-reservation \
+  --timeout-seconds 45
+```
+
+This proves reservation acceptance only.
+
+Use normal relayed-peer validation for generated Host A/B configs.
+
 ## Current Conclusion
 
 | Capability | Evidence |

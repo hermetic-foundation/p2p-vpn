@@ -65,6 +65,21 @@ nix run .# -- relay-check \
   --timeout-seconds 45
 ```
 
+Validate reservation acceptance:
+
+```sh
+nix run .# -- relay-check \
+  --relay-candidates-file public-relay-candidates.txt \
+  --require-relay-reservation \
+  --max-validation-candidates 4 \
+  --write-report public-relay-reservation.json \
+  --timeout-seconds 45
+```
+
+Use this before discovery-only public pairing.
+
+It proves the inviter can reserve the relay.
+
 Add DCUtR proof requirements:
 
 ```sh
