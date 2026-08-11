@@ -245,6 +245,10 @@ Rate-limited requests are rejected before response generation.
 
 This limit is separate from packet forwarding limits.
 
+The daemon also checks the authenticated libp2p peer.
+
+It must match the signed joiner peer in the pairing request.
+
 ## URI Contents
 
 The URI includes:

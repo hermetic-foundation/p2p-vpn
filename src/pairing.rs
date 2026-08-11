@@ -827,6 +827,7 @@ pub enum PairingError {
     NetworkMismatch { expected: String, actual: String },
     InviterMismatch { expected: String, actual: String },
     JoinerMismatch { expected: String, actual: String },
+    TransportPeerMismatch { expected: String, actual: String },
     RendezvousTokenMismatch,
     MissingMembershipGrant,
     InvalidExpiry,

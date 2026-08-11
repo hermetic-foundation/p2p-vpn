@@ -178,6 +178,7 @@ Daemon handling rules:
 | Offer proof | Compact proof or legacy embedded offer. |
 | Offer signer | Must match the local daemon identity. |
 | Offer network | Must match the local daemon network. |
+| Transport peer | Must match the signed joiner peer. |
 | Rendezvous token | Consumed after the first accepted response. |
 | Rate limit | Per libp2p peer before response generation. |
 | Membership key | Returned when the network uses shared-key membership. |

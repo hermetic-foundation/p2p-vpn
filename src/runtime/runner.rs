@@ -7739,6 +7739,7 @@ fn handle_pairing_request_event(
         context.forwarder.config(),
         context.identity,
         context.consumed_pairing_tokens,
+        peer,
         request,
         current_unix_seconds_lossy(),
     ) {
@@ -7871,6 +7872,7 @@ fn pairing_response_for_request(
     config: &Config,
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
+    transport_peer: Libp2pPeerId,
     request: &PairingRequest,
     now_unix_seconds: u64,
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
@@ -7906,6 +7908,12 @@ fn pairing_response_for_request(
         || offer.payload.inviter_peer != config.network.local_peer
     {
         return Err(crate::pairing::PairingError::OfferConfigMismatch);
+    }
+    if request.payload.joiner_peer != transport_peer.to_string() {
+        return Err(crate::pairing::PairingError::TransportPeerMismatch {
+            expected: request.payload.joiner_peer.clone(),
+            actual: transport_peer.to_string(),
+        });
     }
     if consumed_tokens.contains(&request.payload.rendezvous_token) {
         return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
@@ -12247,10 +12255,17 @@ mod tests {
         )
         .expect("request");
         let mut consumed_tokens = HashSet::new();
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
 
-        let response =
-            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
-                .expect("response");
+        let response = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect("response");
 
         assert_eq!(response.payload.joiner_peer, joiner.peer_id);
         assert_eq!(
@@ -12296,10 +12311,17 @@ mod tests {
         )
         .expect("request");
         let mut consumed_tokens = HashSet::new();
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
 
-        let response =
-            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
-                .expect("response");
+        let response = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect("response");
 
         assert!(offer.payload.inviter_addresses.is_empty());
         assert_eq!(request.offer, Some(offer.clone()));
@@ -12325,13 +12347,27 @@ mod tests {
         )
         .expect("request");
         let mut consumed_tokens = HashSet::new();
+        let joiner_peer = request.payload.joiner_peer.parse().expect("joiner peer");
 
-        pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
-            .expect("first response");
+        pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect("first response");
         consumed_tokens.insert(offer.payload.rendezvous_token.clone());
-        let error =
-            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_003)
-                .expect_err("replay rejected");
+        let error = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner_peer,
+            &request,
+            1_003,
+        )
+        .expect_err("replay rejected");
 
         assert!(matches!(
             error,
@@ -12360,14 +12396,61 @@ mod tests {
         )
         .expect("request");
         let mut consumed_tokens = HashSet::new();
+        let joiner_peer = request.payload.joiner_peer.parse().expect("joiner peer");
 
-        let error =
-            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
-                .expect_err("wrong inviter rejected");
+        let error = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect_err("wrong inviter rejected");
 
         assert!(matches!(
             error,
             crate::pairing::PairingError::OfferConfigMismatch
+        ));
+        assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn pairing_response_for_request_rejects_forwarded_joiner_request() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let forwarding_peer = NodeIdentity::generate_ed25519().expect("forwarding identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        let error = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            forwarding_peer.peer_id.parse().expect("forwarding peer"),
+            &request,
+            1_002,
+        )
+        .expect_err("forwarded request rejected");
+
+        assert!(matches!(
+            error,
+            crate::pairing::PairingError::TransportPeerMismatch {
+                expected,
+                actual,
+            } if expected == joiner.peer_id && actual == forwarding_peer.peer_id
         ));
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }
