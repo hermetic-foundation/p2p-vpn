@@ -28,7 +28,7 @@ use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
     config::{
         AutoRelayConfig, Config, ConfigError, DiscoveryConfig, PUBLIC_IPFS_KADEMLIA_PROTOCOL,
-        QueueConfig, ResourceConfig, public_ipfs_bootstrap_peer_configs,
+        QueueConfig, ResourceConfig, RouteConfig, public_ipfs_bootstrap_peer_configs,
     },
     identity::NodeIdentity,
     membership::{
@@ -7920,8 +7920,9 @@ fn pairing_response_for_request(
     }
 
     let member_records = if config.network.membership_key.is_none() {
+        let route_grants = pairing_route_grants_for_request(request)?;
         let mut roles = vec![MembershipRole::OverlayMember];
-        if !request.payload.requested_routes.is_empty() {
+        if !route_grants.is_empty() {
             roles.push(MembershipRole::RouteAuthority);
         }
         vec![issue_membership_record_for_subject_at(
@@ -7936,7 +7937,7 @@ fn pairing_response_for_request(
                 sequence: now_unix_seconds,
                 revoked: false,
                 roles,
-                route_grants: request.payload.requested_routes.clone(),
+                route_grants,
                 expires_at_unix_seconds: None,
             },
             now_unix_seconds,
@@ -7959,6 +7960,35 @@ fn pairing_response_for_request(
     )?;
 
     Ok(response)
+}
+
+fn pairing_route_grants_for_request(
+    request: &PairingRequest,
+) -> Result<Vec<RouteConfig>, crate::pairing::PairingError> {
+    let mut route_grants = request.payload.requested_routes.clone();
+    let Some(requested_vpn_ip) = request.payload.requested_vpn_ip.as_deref() else {
+        return Ok(route_grants);
+    };
+    let joiner_peer = request.payload.joiner_peer.parse::<Libp2pPeerId>()?;
+    let joiner_overlay = PeerId::from_libp2p(joiner_peer);
+    let requested_ip = requested_vpn_ip.parse::<IpAddr>()?;
+    if requested_ip == IpAddr::V4(crate::route::builtin_ipv4(joiner_overlay)) {
+        return Ok(route_grants);
+    }
+
+    let prefix_len = match requested_ip {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    let grant = RouteConfig {
+        prefix: format!("{requested_ip}/{prefix_len}"),
+        metric: 0,
+    };
+    if !route_grants.contains(&grant) {
+        route_grants.push(grant);
+    }
+
+    Ok(route_grants)
 }
 
 fn handle_service_response(
@@ -12240,6 +12270,8 @@ mod tests {
         let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
         let offer =
             export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let joiner_overlay = PeerId::from_libp2p(joiner.peer_id.parse().expect("joiner peer"));
+        let requested_vpn_ip = builtin_ipv4(joiner_overlay).to_string();
         let requested_routes = vec![RouteConfig {
             prefix: "10.42.0.2/32".to_owned(),
             metric: 100,
@@ -12248,7 +12280,7 @@ mod tests {
             &offer,
             PairingRequestOptions {
                 identity: joiner.clone(),
-                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_vpn_ip: Some(requested_vpn_ip.clone()),
                 requested_routes: requested_routes.clone(),
             },
             1_001,
@@ -12270,7 +12302,7 @@ mod tests {
         assert_eq!(response.payload.joiner_peer, joiner.peer_id);
         assert_eq!(
             response.payload.assigned_vpn_ip.as_deref(),
-            Some("10.42.0.2")
+            Some(requested_vpn_ip.as_str())
         );
         assert!(response.payload.membership_key.is_none());
         assert_eq!(response.payload.member_records.len(), 1);
@@ -12413,6 +12445,51 @@ mod tests {
             crate::pairing::PairingError::OfferConfigMismatch
         ));
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn pairing_response_for_request_grants_custom_requested_vpn_ip_route() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: Some("10.42.0.77".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        let response = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut consumed_tokens,
+            joiner.peer_id.parse().expect("joiner peer"),
+            &request,
+            1_002,
+        )
+        .expect("response");
+
+        assert_eq!(
+            response.payload.member_records[0].payload.roles,
+            vec![
+                MembershipRole::OverlayMember,
+                MembershipRole::RouteAuthority
+            ]
+        );
+        assert_eq!(
+            response.payload.member_records[0].payload.route_grants,
+            vec![RouteConfig {
+                prefix: "10.42.0.77/32".to_owned(),
+                metric: 0,
+            }]
+        );
     }
 
     #[test]

@@ -167,6 +167,8 @@ Without `--private-key`, a new identity is generated.
 Without `--vpn-ip`, `pair accept` requests the built-in IP derived from the new
 peer ID.
 
+With `--vpn-ip`, record-based inviters grant that host route automatically.
+
 With live pairing, each `--local-route` is included in the signed request.
 
 Record-based inviters return those routes as signed membership grants.

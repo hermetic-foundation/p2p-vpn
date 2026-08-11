@@ -183,6 +183,7 @@ Daemon handling rules:
 | Rate limit | Per libp2p peer before response generation. |
 | Membership key | Returned when the network uses shared-key membership. |
 | Member record | Issued when the network uses record-based membership. |
+| Custom VPN IP | Added as a host route grant when it is not the built-in peer IP. |
 
 A response is invalid without either:
 
