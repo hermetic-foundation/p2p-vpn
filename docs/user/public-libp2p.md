@@ -99,10 +99,14 @@ Validate relay discovery and generated configs:
 nix run .#public-relay-repro
 ```
 
-This still records scan, relay, and generated config artifacts.
+This records scan, public relay reservation, relayed-circuit, and generated
+config artifacts.
 
-Relay-reservation artifacts are recorded when the local reservation check is
-enabled.
+The public reservation artifact is:
+
+```text
+public-relay-reservation-check-report.json
+```
 
 ## Local Reservation Check
 

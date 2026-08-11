@@ -139,6 +139,7 @@ Useful knobs:
 | `P2P_VPN_REPRO_PHASE_TIMEOUT_SECONDS` | Wall-clock cap for each repro phase. |
 | `P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS` | Per-candidate protocol timeout. |
 | `P2P_VPN_RELAY_MAX_VALIDATION_CANDIDATES` | Number of relay candidates to probe. |
+| `P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION=0` | Skip the default public relay reservation proof. |
 | `P2P_VPN_REPRO_MEMBERSHIP_DHT=1` | Require public DHT membership-record propagation. |
 | `P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=1` | Require generated local host configs to reserve on the selected relay. |
 | `P2P_VPN_REPRO_REQUIRE_DCUTR=1` | Require strict DCUtR proof after relay probing. |
@@ -146,3 +147,5 @@ Useful knobs:
 Each phase writes separate stdout and stderr logs.
 
 The manifest is `repro-phase-logs.tsv`.
+
+The reservation proof report is `public-relay-reservation-check-report.json`.

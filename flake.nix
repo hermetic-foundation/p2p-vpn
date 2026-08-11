@@ -283,6 +283,7 @@ USAGE
 
             candidates="$artifact_dir/public-relay-candidates.txt"
             scan_report="$artifact_dir/public-relay-scan-report.json"
+            reservation_report="$artifact_dir/public-relay-reservation-check-report.json"
             relay_report="$artifact_dir/public-relay-check-report.json"
             relay_config="$artifact_dir/public-relay-config.json"
             vpn_host_a_config="$artifact_dir/public-vpn-host-a.json"
@@ -324,6 +325,7 @@ USAGE
             vpn_host_a_route="''${P2P_VPN_REPRO_VPN_HOST_A_ROUTE:-10.42.0.1/32}"
             vpn_host_b_route="''${P2P_VPN_REPRO_VPN_HOST_B_ROUTE:-10.42.0.2/32}"
             vpn_network="''${P2P_VPN_REPRO_VPN_NETWORK:-public-vpn-repro}"
+            require_public_relay_reservation="''${P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION:-1}"
             require_vpn_relay_reservations="''${P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS:-0}"
             require_dcutr="''${P2P_VPN_REPRO_REQUIRE_DCUTR:-0}"
             relay_check_base_args=()
@@ -357,6 +359,7 @@ USAGE
                 echo "P2P_VPN_REPRO_VPN_HOST_A_ROUTE=$vpn_host_a_route"
                 echo "P2P_VPN_REPRO_VPN_HOST_B_ROUTE=$vpn_host_b_route"
                 echo "P2P_VPN_REPRO_VPN_NETWORK=$vpn_network"
+                echo "P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION=$require_public_relay_reservation"
                 echo "P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=$require_vpn_relay_reservations"
                 echo "P2P_VPN_REPRO_REQUIRE_DCUTR=$require_dcutr"
                 echo "P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=$scan_timeout"
@@ -442,6 +445,7 @@ USAGE
                 printf "export P2P_VPN_REPRO_VPN_HOST_A_ROUTE=%q\n" "$vpn_host_a_route"
                 printf "export P2P_VPN_REPRO_VPN_HOST_B_ROUTE=%q\n" "$vpn_host_b_route"
                 printf "export P2P_VPN_REPRO_VPN_NETWORK=%q\n" "$vpn_network"
+                printf "export P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION=%q\n" "$require_public_relay_reservation"
                 printf "export P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=%q\n" "$require_vpn_relay_reservations"
                 printf "export P2P_VPN_REPRO_REQUIRE_DCUTR=%q\n" "$require_dcutr"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
@@ -466,6 +470,17 @@ USAGE
                   echo "  --force"
                   echo
                 fi
+                echo "p2p-vpn relay-check \\"
+                if [[ -n "$base_config" ]]; then
+                  printf "  --config %q \\\\\n" "$base_config"
+                fi
+                printf "  --relay-candidates-file %q \\\\\n" "$candidates"
+                printf "  --timeout-seconds %q \\\\\n" "$candidate_timeout"
+                printf "  --max-validation-candidates %q \\\\\n" "$max_validation"
+                echo "  --require-relay-reservation \\"
+                printf "  --write-report %q \\\\\n" "$reservation_report"
+                echo "  --force"
+                echo
                 echo "p2p-vpn relay-check \\"
                 if [[ -n "$base_config" ]]; then
                   printf "  --config %q \\\\\n" "$base_config"
@@ -549,6 +564,14 @@ USAGE
                 return
               fi
 
+              if [[ -s "$reservation_report" ]]; then
+                relay_candidate="$(jq -r '[.candidates[]? | select(.succeeded == true) | .address][0] // empty' "$reservation_report")"
+                if [[ -n "$relay_candidate" ]]; then
+                  printf "%s\n" "$relay_candidate"
+                  return
+                fi
+              fi
+
               if [[ -s "$relay_report" ]]; then
                 relay_candidate="$(jq -r '[.candidates[]? | select(.succeeded == true) | .address][0] // empty' "$relay_report")"
                 if [[ -n "$relay_candidate" ]]; then
@@ -610,6 +633,7 @@ USAGE
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT=%q\n" "$membership_dht"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_NETWORK=%q\n" "$membership_network"
                 printf "export P2P_VPN_REPRO_MEMBERSHIP_DHT_TIMEOUT_SECONDS=%q\n" "$membership_dht_timeout"
+                printf "export P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION=%q\n" "$require_public_relay_reservation"
                 printf "export P2P_VPN_REPRO_REQUIRE_VPN_RELAY_RESERVATIONS=%q\n" "$require_vpn_relay_reservations"
                 printf "export P2P_VPN_RELAY_SCAN_TIMEOUT_SECONDS=%q\n" "$scan_timeout"
                 printf "export P2P_VPN_RELAY_CANDIDATE_TIMEOUT_SECONDS=%q\n" "$candidate_timeout"
@@ -893,6 +917,7 @@ USAGE
             write_machine_summary() {
               selected_relay_candidate="$(selected_public_dcutr_candidate)"
               scan_summary="$artifact_dir/.repro-scan-summary.json"
+              reservation_summary="$artifact_dir/.repro-reservation-check-summary.json"
               relay_summary="$artifact_dir/.repro-relay-check-summary.json"
               dcutr_summary="$artifact_dir/.repro-dcutr-summary.json"
               vpn_host_a_relay_reservation_summary="$artifact_dir/.repro-vpn-host-a-relay-reservation-summary.json"
@@ -901,6 +926,7 @@ USAGE
               phase_summary="$artifact_dir/.repro-phase-results.json"
 
               write_report_summary_json "scan" "$scan_report" "$scan_summary"
+              write_report_summary_json "reservation-check" "$reservation_report" "$reservation_summary"
               write_report_summary_json "relay-check" "$relay_report" "$relay_summary"
               write_report_summary_json "dcutr" "$dcutr_report" "$dcutr_summary"
               write_bootstrap_summary_json "vpn-host-a-relay-reservation" "$vpn_host_a_relay_reservation_report" "$vpn_host_a_relay_reservation_summary"
@@ -942,6 +968,7 @@ USAGE
                 --arg phase_logs_dir "$phase_logs_dir" \
                 --arg phase_logs_manifest "$phase_logs_manifest" \
                 --arg candidate_file "$candidates" \
+                --arg reservation_report "$reservation_report" \
                 --arg relay_assisted_config "$relay_config" \
                 --arg vpn_host_a_config "$vpn_host_a_config" \
                 --arg vpn_host_b_config "$vpn_host_b_config" \
@@ -962,6 +989,7 @@ USAGE
                 --arg ipv6_route_to_2606_4700_4700_1111 "$(route_available -6 2606:4700:4700::1111)" \
                 --slurpfile phases "$phase_summary" \
                 --slurpfile scan "$scan_summary" \
+                --slurpfile reservation "$reservation_summary" \
                 --slurpfile relay "$relay_summary" \
                 --slurpfile dcutr "$dcutr_summary" \
                 --slurpfile vpn_host_a_relay_reservation "$vpn_host_a_relay_reservation_summary" \
@@ -979,6 +1007,7 @@ USAGE
                     phase_logs_dir: $phase_logs_dir,
                     phase_logs_manifest: $phase_logs_manifest,
                     candidate_file: $candidate_file,
+                    reservation_report: $reservation_report,
                     relay_assisted_config: $relay_assisted_config,
                     vpn_host_a_config: $vpn_host_a_config,
                     vpn_host_b_config: $vpn_host_b_config,
@@ -996,6 +1025,7 @@ USAGE
                   phase_results: $phases[0],
                   reports: {
                     scan: $scan[0],
+                    reservation_check: $reservation[0],
                     relay_check: $relay[0],
                     dcutr: $dcutr[0],
                     vpn_host_a_relay_reservation: $vpn_host_a_relay_reservation[0],
@@ -1015,6 +1045,7 @@ USAGE
 
               rm -f \
                 "$scan_summary" \
+                "$reservation_summary" \
                 "$relay_summary" \
                 "$dcutr_summary" \
                 "$vpn_host_a_relay_reservation_summary" \
@@ -1088,6 +1119,7 @@ USAGE
                 echo
               } > "$summary"
               append_report_summary "scan" "$scan_report"
+              append_report_summary "reservation-check" "$reservation_report"
               append_report_summary "relay-check" "$relay_report"
               append_report_summary "dcutr" "$dcutr_report"
               append_membership_dht_summary
@@ -1194,6 +1226,21 @@ USAGE
             fi
 
             if [[ -s "$candidates" ]]; then
+              if [[ "$require_public_relay_reservation" == 1 ]]; then
+                run_phase "probing candidates for public relay reservation evidence" \
+                  p2p-vpn relay-check \
+                  "''${relay_check_base_args[@]}" \
+                  --relay-candidates-file "$candidates" \
+                  --timeout-seconds "$candidate_timeout" \
+                  --max-validation-candidates "$max_validation" \
+                  --require-relay-reservation \
+                  --write-report "$reservation_report" \
+                  --force
+              else
+                phase_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                record_phase_result "public relay reservation evidence check disabled" 0 "$phase_utc" "$phase_utc" 0 "" ""
+              fi
+
               run_phase "probing candidates for relay reservation and relayed-circuit evidence" \
                 p2p-vpn relay-check \
                 "''${relay_check_base_args[@]}" \
@@ -3672,6 +3719,11 @@ EOF
             grep -q 'using supplied public relay candidate' "$script"
             grep -q 'P2P_VPN_REPRO_RELAY_CANDIDATE' "$script"
             grep -q 'repro-summary.json' "$script"
+            grep -q 'public-relay-reservation-check-report.json' "$script"
+            grep -q 'P2P_VPN_REPRO_REQUIRE_PUBLIC_RELAY_RESERVATION' "$script"
+            grep -q -- '--require-relay-reservation' "$script"
+            grep -q 'reservation_check' "$script"
+            grep -q 'public relay reservation evidence check disabled' "$script"
             grep -Fq 'printf "jq . %q\n" "$summary_json"' "$script"
             grep -q 'write_machine_summary' "$script"
             grep -q 'relay_diagnostics' "$script"
