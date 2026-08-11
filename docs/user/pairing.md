@@ -136,7 +136,7 @@ Current behavior:
 | Contact inviter through signed relay reservation hints | yes |
 | Write final config from response | yes |
 | Preserve relayed inviter address from response | yes |
-| Discover inviter from only public DHT | implemented path, public proof pending |
+| Discover inviter from only public DHT | implemented path, public DHT proof pending |
 | Preserve public bootstrap defaults compactly | yes |
 
 ## Accept Response File
