@@ -39,10 +39,17 @@ pub struct TunRuntimeConfig {
 
 impl TunRuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
+        Self::from_config_with_member_records(config, &config.network.member_records)
+    }
+
+    pub fn from_config_with_member_records(
+        config: &Config,
+        member_records: &[crate::membership::SignedMembershipRecord],
+    ) -> Result<Self, TunRuntimeError> {
         let local_peer = config.local_peer_id()?;
         let additional_addresses = local_tun_addresses(config)?;
         let routes = config
-            .compile_routes()?
+            .compile_routes_with_member_records(member_records)?
             .routes()
             .iter()
             .copied()
@@ -446,6 +453,11 @@ mod tests {
             Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig,
             RouteConfig,
         },
+        identity::NodeIdentity,
+        membership::{
+            MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+            issue_membership_record_for_subject_at,
+        },
         route::builtin_ipv4,
     };
 
@@ -804,6 +816,82 @@ mod tests {
         );
         assert!(commands.iter().any(|command| command
             == "ip route replace 10.44.0.2/32 dev pv0 src 10.44.0.1 metric 3000 mtu 1280 advmss 1240"));
+    }
+
+    #[test]
+    fn runtime_config_installs_live_member_record_routes() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = Config {
+            network: NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter.peer_id.clone(),
+                private_key: None,
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: crate::config::DiscoveryConfig::default(),
+                relay: crate::config::RelayConfig::default(),
+                packet_plane: crate::config::PacketPlaneConfig::default(),
+            },
+            interface: InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig {
+                max_packets_per_peer: 8,
+                max_bytes_per_peer: 4096,
+                max_packet_age_millis: 1_000,
+            },
+            resources: ResourceConfig::default(),
+        };
+        let member_record = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&joiner).expect("joiner subject"),
+                membership_epoch: 1,
+                sequence: 100,
+                revoked: false,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.77.0.0/24".to_owned(),
+                    metric: 50,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            100,
+        )
+        .expect("member record");
+
+        let runtime = TunRuntimeConfig::from_config_with_member_records(&config, &[member_record])
+            .expect("runtime config");
+        let commands = runtime
+            .route_commands()
+            .into_iter()
+            .map(|command| command.to_string())
+            .collect::<Vec<_>>();
+        let joiner_builtin = builtin_ipv4(joiner.peer_id.parse().expect("joiner peer"));
+
+        assert!(commands.iter().any(|command| command
+            == &format!(
+                "ip route replace {joiner_builtin}/32 dev pv0 src {} metric 3000 mtu 1280 advmss 1240",
+                runtime.addresses.ipv4
+            )));
+        assert!(commands.iter().any(|command| command
+            == &format!(
+                "ip route replace 10.77.0.0/24 dev pv0 src {} metric 3000 mtu 1280 advmss 1240",
+                runtime.addresses.ipv4
+            )));
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket},
     path::PathBuf,
+    process::ExitStatus,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -66,7 +67,7 @@ use crate::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
         },
-        tun::{TunDevice, TunReader, TunRuntimeError, TunWriter, packet_too_big},
+        tun::{TunDevice, TunReader, TunRuntimeConfig, TunRuntimeError, TunWriter, packet_too_big},
     },
     wire::{Frame, PayloadType},
 };
@@ -7742,6 +7743,32 @@ fn handle_pairing_request_event(
         current_unix_seconds_lossy(),
     ) {
         Ok(response) => {
+            let response_for_membership = response.clone();
+            if swarm
+                .behaviour_mut()
+                .pairing
+                .send_response(channel, response)
+                .is_err()
+            {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "pairing_response_dropped",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("joiner", &request.payload.joiner_peer),
+                    ],
+                );
+                return Ok(());
+            }
+
+            install_pairing_response_membership(
+                context.forwarder,
+                context.membership,
+                &response_for_membership,
+            )?;
+            context
+                .consumed_pairing_tokens
+                .insert(request.payload.rendezvous_token.clone());
             context.metrics.record_pairing_request_accepted();
             log_runtime_event(
                 LogLevel::Info,
@@ -7751,17 +7778,68 @@ fn handle_pairing_request_event(
                     ("joiner", &request.payload.joiner_peer),
                 ],
             );
-            swarm
-                .behaviour_mut()
-                .pairing
-                .send_response(channel, response)
-                .map_err(|_| RunnerError::PairingResponseDropped)?;
         }
         Err(error) => {
             context
                 .metrics
                 .record_pairing_request_rejection(pairing_rejection_reason(&error));
             log_pairing_request_rejection(peer, request, &format!("{error:?}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn install_pairing_response_membership(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    response: &PairingResponse,
+) -> Result<(), RunnerError> {
+    if response.payload.member_records.is_empty() {
+        return Ok(());
+    }
+
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats =
+        forwarder.merge_membership_records(&response.payload.member_records, now_unix_seconds)?;
+    if stats.accepted == 0 && stats.removed_expired == 0 {
+        return Ok(());
+    }
+
+    membership.replace_record_members(
+        forwarder.config(),
+        forwarder.member_records(),
+        now_unix_seconds,
+    )?;
+    sync_live_tun_routes(forwarder)?;
+    let accepted = stats.accepted.to_string();
+    let ignored = stats.ignored_stale_or_equal.to_string();
+    let removed_expired = stats.removed_expired.to_string();
+    log_runtime_event(
+        LogLevel::Info,
+        "pairing_membership_records_installed",
+        &[
+            ("accepted", &accepted),
+            ("ignored_stale_or_equal", &ignored),
+            ("removed_expired", &removed_expired),
+        ],
+    );
+
+    Ok(())
+}
+
+fn sync_live_tun_routes(forwarder: &Forwarder) -> Result<(), RunnerError> {
+    let runtime = TunRuntimeConfig::from_config_with_member_records(
+        forwarder.config(),
+        forwarder.member_records(),
+    )?;
+    for command in runtime.route_commands() {
+        let status = command.execute().map_err(TunRuntimeError::Io)?;
+        if !status.success() {
+            return Err(RunnerError::TunRouteCommand {
+                command: command.to_string(),
+                status,
+            });
         }
     }
 
@@ -7834,6 +7912,10 @@ fn pairing_response_for_request(
     }
 
     let member_records = if config.network.membership_key.is_none() {
+        let mut roles = vec![MembershipRole::OverlayMember];
+        if !request.payload.requested_routes.is_empty() {
+            roles.push(MembershipRole::RouteAuthority);
+        }
         vec![issue_membership_record_for_subject_at(
             identity,
             MembershipRecordIssueOptions {
@@ -7845,7 +7927,7 @@ fn pairing_response_for_request(
                 membership_epoch: 1,
                 sequence: now_unix_seconds,
                 revoked: false,
-                roles: vec![MembershipRole::OverlayMember],
+                roles,
                 route_grants: request.payload.requested_routes.clone(),
                 expires_at_unix_seconds: None,
             },
@@ -7867,7 +7949,6 @@ fn pairing_response_for_request(
         },
         now_unix_seconds,
     )?;
-    consumed_tokens.insert(request.payload.rendezvous_token.clone());
 
     Ok(response)
 }
@@ -11796,6 +11877,7 @@ pub enum RunnerError {
     ControlSocket(io::Error),
     PacketPlane(io::Error),
     PacketPlaneQuic(PacketPlaneQuicError),
+    TunRouteCommand { command: String, status: ExitStatus },
     PacketResponseDropped,
     ControlResponseDropped,
     PairingResponseDropped,
@@ -12185,7 +12267,14 @@ mod tests {
             response.payload.member_records[0].payload.route_grants,
             requested_routes
         );
-        assert!(consumed_tokens.contains(&offer.payload.rendezvous_token));
+        assert_eq!(
+            response.payload.member_records[0].payload.roles,
+            vec![
+                MembershipRole::OverlayMember,
+                MembershipRole::RouteAuthority
+            ]
+        );
+        assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }
 
     #[test]
@@ -12215,7 +12304,7 @@ mod tests {
         assert!(offer.payload.inviter_addresses.is_empty());
         assert_eq!(request.offer, Some(offer.clone()));
         assert_eq!(response.payload.joiner_peer, joiner.peer_id);
-        assert!(consumed_tokens.contains(&offer.payload.rendezvous_token));
+        assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }
 
     #[test]
@@ -12239,6 +12328,7 @@ mod tests {
 
         pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
             .expect("first response");
+        consumed_tokens.insert(offer.payload.rendezvous_token.clone());
         let error =
             pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_003)
                 .expect_err("replay rejected");

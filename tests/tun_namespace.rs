@@ -1032,7 +1032,9 @@ fn run_pairing_orchestrator() {
     let start_b = temp_dir.join("start-b");
     let offer_path = temp_dir.join("pairing-offer.txt");
 
-    let config_b = direct_overlay_config("b", &identity_b, &identity_a);
+    let mut config_b = direct_overlay_config("b", &identity_b, &identity_a);
+    config_b.peers.clear();
+    config_b.network.discovery = relay_test_discovery();
     let address_b = TunRuntimeConfig::from_config(&config_b)
         .expect("node B TUN config")
         .addresses
@@ -2107,7 +2109,7 @@ fn run_node_child() {
     };
     let start_file = PathBuf::from(required_env("P2P_VPN_TUN_E2E_START"));
     let temp_dir = PathBuf::from(required_env("P2P_VPN_TUN_E2E_TEMP"));
-    wait_for_file(&start_file);
+    wait_for_file_with_timeout(&start_file, node_start_wait_timeout(&role));
 
     if role == "relay" {
         tokio::runtime::Builder::new_multi_thread()
@@ -2736,7 +2738,11 @@ async fn wait_for_listen_address(node: &mut p2p_vpn::runtime::p2p::P2pNode) {
 }
 
 fn wait_for_file(path: &Path) {
-    let deadline = Instant::now() + scaled_wait_timeout(Duration::from_secs(10));
+    wait_for_file_with_timeout(path, Duration::from_secs(10));
+}
+
+fn wait_for_file_with_timeout(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + scaled_wait_timeout(timeout);
     while Instant::now() < deadline {
         if path.exists() {
             return;
@@ -2744,6 +2750,14 @@ fn wait_for_file(path: &Path) {
         thread::sleep(Duration::from_millis(50));
     }
     panic!("start file {} did not appear", path.display());
+}
+
+fn node_start_wait_timeout(role: &str) -> Duration {
+    if is_pairing_test_child() && role == "a" {
+        Duration::from_secs(45)
+    } else {
+        Duration::from_secs(10)
+    }
 }
 
 fn node_config(
