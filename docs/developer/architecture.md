@@ -71,6 +71,16 @@ Pairing exchange messages are signed:
 | Request | Joiner | offer network, inviter peer, rendezvous token |
 | Response | Inviter | offer, joiner peer, membership grant |
 
+Live requests use a compact offer proof.
+
+| Field | Purpose |
+| --- | --- |
+| `offer_issued_at_unix_seconds` | Reconstruct inviter offer. |
+| `offer_expires_at_unix_seconds` | Reconstruct inviter offer. |
+| `offer_signature` | Bind request to the signed offer. |
+
+Legacy embedded offers are still accepted.
+
 Pairing transport uses libp2p request-response:
 
 | Field | Value |
@@ -84,7 +94,7 @@ Daemon handling rules:
 
 | Check | Behavior |
 | --- | --- |
-| Embedded offer | Required for live requests. |
+| Offer proof | Compact proof or legacy embedded offer. |
 | Offer signer | Must match the local daemon identity. |
 | Offer network | Must match the local daemon network. |
 | Rendezvous token | Consumed after the first accepted response. |

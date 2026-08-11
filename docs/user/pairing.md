@@ -12,8 +12,9 @@ It is intended to replace manual key and config exchange.
 | `pair accept` URI validation | Implemented |
 | Signed response validation | Implemented |
 | Config writing from response | Implemented |
-| Live libp2p exchange | Not implemented yet |
+| Live libp2p exchange | Implemented for URI address hints |
 | Signed membership grant return | Contract implemented |
+| Public discovery-only accept | Planned |
 
 ## Offer
 
@@ -72,8 +73,9 @@ Current behavior:
 | Check expiry | yes |
 | Show discovery hints | yes |
 | Import signed response file | yes |
+| Contact inviter from URI hints | yes |
 | Write final config from response | yes |
-| Contact inviter live | not yet |
+| Discover inviter from only public DHT | not yet |
 
 ## Accept Response File
 
@@ -94,9 +96,30 @@ Optional fields:
 | `--mtu` | Interface MTU. |
 | `--local-route` | Extra local route ownership. |
 | `--peer-name` | Label for the inviter peer. |
+| `--timeout-seconds` | Live pairing exchange timeout. |
 | `--force` | Overwrite output config. |
 
 Without `--private-key`, a new identity is generated.
+
+## Live Accept
+
+By default, `pair accept` contacts the inviter over libp2p.
+
+It uses direct or relayed inviter addresses from the URI.
+
+```sh
+p2p-vpn pair accept 'p2pvpn:...' \
+  --output /etc/p2p-vpn/lab.json
+```
+
+Use `--timeout-seconds` when the path may need relay setup:
+
+```sh
+p2p-vpn pair accept 'p2pvpn:...' \
+  --timeout-seconds 60
+```
+
+Use `--response` for offline response import.
 
 ## URI Contents
 
@@ -125,7 +148,8 @@ Minimal configs include the public IPFS bootstrap defaults in the URI.
 | Daemon request validation | Implemented. |
 | One-time token replay rejection | Implemented per daemon process. |
 | Daemon response generation | Implemented. |
-| Live `pair accept` exchange | In progress. |
+| Live `pair accept` exchange | Implemented for URI address hints. |
+| Public discovery-only `pair accept` | Planned. |
 
 ## Secrets
 
@@ -135,9 +159,9 @@ Anyone with the URI can attempt pairing until it expires.
 
 Do not post it publicly.
 
-## Planned Exchange
+## Exchange
 
-Future `pair accept` will:
+Live `pair accept`:
 
 1. Discover the inviter through the URI hints.
 2. Open an encrypted libp2p control exchange.

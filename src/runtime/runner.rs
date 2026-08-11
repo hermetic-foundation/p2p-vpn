@@ -7740,10 +7740,33 @@ fn pairing_response_for_request(
     request: &PairingRequest,
     now_unix_seconds: u64,
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
-    let offer = request
-        .offer
-        .as_ref()
-        .ok_or(crate::pairing::PairingError::InvalidSignature)?;
+    let reconstructed_offer;
+    let offer = if let Some(offer) = request.offer.as_ref() {
+        offer
+    } else {
+        if request.payload.offer_issued_at_unix_seconds == 0
+            || request.payload.offer_expires_at_unix_seconds
+                <= request.payload.offer_issued_at_unix_seconds
+            || request.payload.offer_signature.is_empty()
+        {
+            return Err(crate::pairing::PairingError::InvalidSignature);
+        }
+        reconstructed_offer = crate::pairing::export_pairing_offer_at(
+            config,
+            crate::pairing::PairingOfferOptions {
+                expires_in_seconds: request
+                    .payload
+                    .offer_expires_at_unix_seconds
+                    .saturating_sub(request.payload.offer_issued_at_unix_seconds),
+                rendezvous_token: Some(request.payload.rendezvous_token.clone()),
+            },
+            request.payload.offer_issued_at_unix_seconds,
+        )?;
+        if reconstructed_offer.signature != request.payload.offer_signature {
+            return Err(crate::pairing::PairingError::InvalidSignature);
+        }
+        &reconstructed_offer
+    };
     request.verify_for_offer_at(offer, now_unix_seconds)?;
     if offer.payload.network_name != config.network.name
         || offer.payload.inviter_peer != config.network.local_peer
@@ -12160,7 +12183,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::pairing::PairingError::OfferConfigMismatch
+            crate::pairing::PairingError::InvalidSignature
         ));
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }

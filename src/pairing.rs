@@ -149,6 +149,12 @@ pub struct PairingRequestPayload {
     pub joiner_peer: String,
     pub joiner_public_key: String,
     pub rendezvous_token: String,
+    #[serde(default)]
+    pub offer_issued_at_unix_seconds: u64,
+    #[serde(default)]
+    pub offer_expires_at_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub offer_signature: String,
     pub issued_at_unix_seconds: u64,
     #[serde(default)]
     pub requested_vpn_ip: Option<String>,
@@ -318,13 +324,16 @@ pub fn build_pairing_request_at(
         joiner_peer: options.identity.peer_id.clone(),
         joiner_public_key: STANDARD.encode(options.identity.public_key_protobuf()?),
         rendezvous_token: offer.payload.rendezvous_token.clone(),
+        offer_issued_at_unix_seconds: offer.payload.issued_at_unix_seconds,
+        offer_expires_at_unix_seconds: offer.payload.expires_at_unix_seconds,
+        offer_signature: offer.signature.clone(),
         issued_at_unix_seconds,
         requested_vpn_ip: options.requested_vpn_ip,
         requested_routes: options.requested_routes,
     };
     let signature = STANDARD.encode(options.identity.sign(&request_signing_message(&payload)?)?);
     let request = PairingRequest {
-        offer: Some(offer.clone()),
+        offer: None,
         payload,
         signature,
     };
@@ -491,6 +500,19 @@ fn validate_request_payload(
     }
     if payload.rendezvous_token != offer.payload.rendezvous_token {
         return Err(PairingError::RendezvousTokenMismatch);
+    }
+    if payload.offer_issued_at_unix_seconds != 0
+        && payload.offer_issued_at_unix_seconds != offer.payload.issued_at_unix_seconds
+    {
+        return Err(PairingError::InvalidSignature);
+    }
+    if payload.offer_expires_at_unix_seconds != 0
+        && payload.offer_expires_at_unix_seconds != offer.payload.expires_at_unix_seconds
+    {
+        return Err(PairingError::InvalidSignature);
+    }
+    if !payload.offer_signature.is_empty() && payload.offer_signature != offer.signature {
+        return Err(PairingError::InvalidSignature);
     }
     if now_unix_seconds > offer.payload.expires_at_unix_seconds {
         return Err(PairingError::Expired {

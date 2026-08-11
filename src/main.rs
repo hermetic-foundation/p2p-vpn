@@ -8,6 +8,8 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
+use futures::StreamExt as _;
+use libp2p::{Multiaddr, PeerId as Libp2pPeerId, request_response::Message, swarm::SwarmEvent};
 use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind,
     config::{
@@ -33,8 +35,8 @@ use p2p_vpn::{
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
         DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingOffer,
-        PairingOfferOptions, PairingResponse, export_pairing_offer,
-        import_pairing_response_config_at,
+        PairingOfferOptions, PairingRequestOptions, PairingResponse, build_pairing_request_at,
+        export_pairing_offer, import_pairing_response_config_at,
     },
     queue::QueueStats,
     runtime::{
@@ -46,6 +48,7 @@ use p2p_vpn::{
             scan_public_relay_candidates, start_public_dcutr_listener,
         },
         forward::session_id_for_peer,
+        p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
         remote::{RemotePeerStatus, query_peer_status},
         runner::{self, ShutdownReason},
@@ -601,6 +604,8 @@ enum PairCommand {
         local_routes: Vec<LocalRouteArg>,
         #[arg(long)]
         peer_name: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        timeout_seconds: u64,
         #[arg(long)]
         force: bool,
     },
@@ -978,18 +983,23 @@ async fn main() -> Result<(), String> {
                 mtu,
                 local_routes,
                 peer_name,
+                timeout_seconds,
                 force,
-            } => pair_accept(PairAcceptArgs {
-                offer,
-                response,
-                output,
-                private_key,
-                interface,
-                mtu,
-                local_routes,
-                peer_name,
-                force,
-            }),
+            } => {
+                pair_accept(PairAcceptArgs {
+                    offer,
+                    response,
+                    output,
+                    private_key,
+                    interface,
+                    mtu,
+                    local_routes,
+                    peer_name,
+                    timeout_seconds,
+                    force,
+                })
+                .await
+            }
         },
         Command::MembershipRecordIssue {
             issuer_config,
@@ -1270,6 +1280,7 @@ struct PairAcceptArgs {
     mtu: u16,
     local_routes: Vec<LocalRouteArg>,
     peer_name: Option<String>,
+    timeout_seconds: u64,
     force: bool,
 }
 
@@ -2144,30 +2155,35 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
+async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
     let offer = PairingOffer::from_uri(&args.offer)
         .map_err(|error| format!("failed to parse pairing offer: {error:?}"))?;
     offer
         .verify_at(current_unix_seconds_lossy())
         .map_err(|error| format!("failed to verify pairing offer: {error:?}"))?;
+    if !args.force && args.output.to_string_lossy() != "-" && args.output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            args.output.display()
+        ));
+    }
+    let identity = match args.private_key {
+        Some(private_key) => NodeIdentity::from_private_key(&private_key)
+            .map_err(|error| format!("failed to decode private key: {error:?}"))?,
+        None => NodeIdentity::generate_ed25519()
+            .map_err(|error| format!("failed to generate identity: {error:?}"))?,
+    };
+    let local_routes = args
+        .local_routes
+        .into_iter()
+        .map(|route| route.route)
+        .collect::<Vec<_>>();
 
     if let Some(response_path) = args.response {
-        if !args.force && args.output.to_string_lossy() != "-" && args.output.exists() {
-            return Err(format!(
-                "{} already exists; pass --force to overwrite it",
-                args.output.display()
-            ));
-        }
         let bytes = fs::read(&response_path)
             .map_err(|error| format!("failed to read {}: {error}", response_path.display()))?;
         let response: PairingResponse = serde_json::from_slice(&bytes)
             .map_err(|error| format!("failed to parse pairing response: {error}"))?;
-        let identity = match args.private_key {
-            Some(private_key) => NodeIdentity::from_private_key(&private_key)
-                .map_err(|error| format!("failed to decode private key: {error:?}"))?,
-            None => NodeIdentity::generate_ed25519()
-                .map_err(|error| format!("failed to generate identity: {error:?}"))?,
-        };
         let config = import_pairing_response_config_at(
             &offer,
             &response,
@@ -2175,50 +2191,191 @@ fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
                 identity,
                 interface_name: args.interface,
                 mtu: args.mtu,
-                local_routes: args
-                    .local_routes
-                    .into_iter()
-                    .map(|route| route.route)
-                    .collect(),
+                local_routes,
                 peer_name: args.peer_name,
             },
             current_unix_seconds_lossy(),
         )
         .map_err(|error| format!("failed to import pairing response: {error:?}"))?;
-        let rendered = serde_json::to_string_pretty(&config)
-            .map_err(|error| format!("failed to render config: {error}"))?;
-
-        if args.output.to_string_lossy() == "-" {
-            println!("{rendered}");
-        } else {
-            fs::write(&args.output, format!("{rendered}\n"))
-                .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
-            println!("wrote {}", args.output.display());
-            println!(
-                "local peer: {}",
-                config
-                    .local_peer()
-                    .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
-            );
-            println!("paired with: {}", response.payload.inviter_peer);
-        }
+        write_pairing_config(
+            &config,
+            &args.output,
+            response.payload.inviter_peer.as_str(),
+        )?;
 
         return Ok(());
     }
 
-    println!("pairing offer: valid");
-    println!("network: {}", offer.payload.network_name);
-    println!("inviter peer: {}", offer.payload.inviter_peer);
-    println!("expires at: {}", offer.payload.expires_at_unix_seconds);
-    println!("bootstrap peers: {}", offer.payload.bootstrap_peers.len());
-    println!(
-        "inviter addresses: {}",
-        offer.payload.inviter_addresses.len()
-    );
-    println!("response file: not provided");
-    println!("live pairing exchange: not implemented yet");
+    let response = live_pair_accept(&offer, identity.clone(), args.mtu, args.timeout_seconds)
+        .await
+        .map_err(|error| format!("live pairing exchange failed: {error}"))?;
+    let config = import_pairing_response_config_at(
+        &offer,
+        &response,
+        PairingConfigOptions {
+            identity,
+            interface_name: args.interface,
+            mtu: args.mtu,
+            local_routes,
+            peer_name: args.peer_name,
+        },
+        current_unix_seconds_lossy(),
+    )
+    .map_err(|error| format!("failed to import pairing response: {error:?}"))?;
+    write_pairing_config(
+        &config,
+        &args.output,
+        response.payload.inviter_peer.as_str(),
+    )
+}
+
+fn write_pairing_config(config: &Config, output: &Path, inviter_peer: &str) -> Result<(), String> {
+    let rendered_config = compact_generated_config(config.clone());
+    let rendered = serde_json::to_string_pretty(&rendered_config)
+        .map_err(|error| format!("failed to render config: {error}"))?;
+
+    if output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+        println!(
+            "local peer: {}",
+            config
+                .local_peer()
+                .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+        );
+        println!("paired with: {inviter_peer}");
+    }
 
     Ok(())
+}
+
+async fn live_pair_accept(
+    offer: &PairingOffer,
+    identity: NodeIdentity,
+    mtu: u16,
+    timeout_seconds: u64,
+) -> Result<PairingResponse, String> {
+    let inviter_peer = offer
+        .payload
+        .inviter_peer
+        .parse::<Libp2pPeerId>()
+        .map_err(|error| format!("invalid inviter peer in offer: {error:?}"))?;
+    let known_peers = pairing_inviter_addresses(offer, inviter_peer)?;
+    let bootstrap_peers = pairing_bootstrap_peers(offer)?;
+    let mut node = build_node(&HostConfig {
+        identity: identity.clone(),
+        network_name: offer.payload.network_name.clone(),
+        membership_tag: None,
+        mtu,
+        max_concurrent_control_streams: 16,
+        max_concurrent_packet_streams: 16,
+        listen_addresses: Vec::new(),
+        external_addresses: Vec::new(),
+        bootstrap_peers,
+        known_peers: known_peers.clone(),
+        relay_reservations: Vec::new(),
+        relay_server: false,
+        relay_resources: RelayResourceConfig::default(),
+        resources: ResourceConfig::default(),
+        discovery: offer.payload.discovery.clone(),
+    })
+    .map_err(|error| format!("failed to start pairing libp2p node: {error:?}"))?;
+    for (_, address) in known_peers.iter().filter(|(_, address)| {
+        address
+            .iter()
+            .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    }) {
+        if let Err(error) = node.swarm.dial(address.clone()) {
+            eprintln!("pairing relayed dial failed to start for {address}: {error:?}");
+        }
+    }
+    let request = build_pairing_request_at(
+        offer,
+        PairingRequestOptions {
+            identity,
+            requested_vpn_ip: None,
+            requested_routes: Vec::new(),
+        },
+        current_unix_seconds_lossy(),
+    )
+    .map_err(|error| format!("failed to build pairing request: {error:?}"))?;
+    let request_id = node
+        .swarm
+        .behaviour_mut()
+        .pairing
+        .send_request(&inviter_peer, request.clone());
+    let timeout = Duration::from_secs(timeout_seconds.max(1));
+
+    tokio::time::timeout(timeout, async {
+        let mut request_id = request_id;
+        loop {
+            match node.swarm.select_next_some().await {
+                SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                    libp2p::request_response::Event::Message {
+                        message:
+                            Message::Response {
+                                request_id: received_request_id,
+                                response,
+                            },
+                        ..
+                    },
+                )) if received_request_id == request_id => return Ok(response),
+                SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                    libp2p::request_response::Event::OutboundFailure {
+                        request_id: failed_request_id,
+                        error,
+                        ..
+                    },
+                )) if failed_request_id == request_id => {
+                    eprintln!("pairing request failed, retrying: {error:?}");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    request_id = node
+                        .swarm
+                        .behaviour_mut()
+                        .pairing
+                        .send_request(&inviter_peer, request.clone());
+                }
+                SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                    eprintln!("pairing dial error peer {peer_id:?}: {error:?}");
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| format!("timed out after {timeout_seconds} seconds"))?
+}
+
+fn pairing_inviter_addresses(
+    offer: &PairingOffer,
+    inviter_peer: Libp2pPeerId,
+) -> Result<Vec<(Libp2pPeerId, Multiaddr)>, String> {
+    offer
+        .payload
+        .inviter_addresses
+        .iter()
+        .map(|address| {
+            address
+                .parse::<Multiaddr>()
+                .map(|address| (inviter_peer, address))
+                .map_err(|error| format!("invalid inviter address `{address}`: {error}"))
+        })
+        .collect()
+}
+
+fn pairing_bootstrap_peers(offer: &PairingOffer) -> Result<Vec<(Libp2pPeerId, Multiaddr)>, String> {
+    offer
+        .payload
+        .bootstrap_peers
+        .iter()
+        .map(|peer| {
+            peer.peer_address()
+                .map_err(|error| format!("invalid bootstrap peer in offer: {error:?}"))
+        })
+        .collect()
 }
 
 impl From<EndpointArg> for InitPeer {
@@ -6088,6 +6245,8 @@ fn path_name(path: PathKind) -> &'static str {
 mod tests {
     use super::*;
 
+    use p2p_vpn::pairing::{PairingResponseOptions, build_pairing_response_at};
+
     fn relay_check_args_for_test() -> RelayCheckArgs {
         RelayCheckArgs {
             config_path: None,
@@ -9690,6 +9849,8 @@ mod tests {
             "10.42.0.2/32,100",
             "--peer-name",
             "node-a",
+            "--timeout-seconds",
+            "7",
             "--force",
         ])
         .expect("cli");
@@ -9704,6 +9865,7 @@ mod tests {
                     mtu,
                     local_routes,
                     peer_name,
+                    timeout_seconds,
                     force,
                     ..
                 },
@@ -9720,7 +9882,150 @@ mod tests {
         assert_eq!(local_routes.len(), 1);
         assert_eq!(local_routes[0].route.prefix, "10.42.0.2/32");
         assert_eq!(peer_name.as_deref(), Some("node-a"));
+        assert_eq!(timeout_seconds, 7);
         assert!(force);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
+    async fn live_pair_accept_exchanges_with_inviter_over_libp2p() {
+        let inviter_identity = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner_identity = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let membership_key = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned();
+        let local_discovery = DiscoveryConfig {
+            mdns: true,
+            kademlia: false,
+            kademlia_provider_advertisement: false,
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            dcutr: false,
+            autonat: false,
+        };
+        let mut inviter_config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: inviter_identity.peer_id.clone(),
+                private_key: Some(inviter_identity.private_key.clone()),
+                membership_key: Some(membership_key.clone()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.1".to_owned()),
+                routes: Vec::new(),
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".to_owned()],
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: local_discovery.clone(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        let (address_tx, address_rx) = std::sync::mpsc::channel();
+        let (offer_tx, offer_rx) = std::sync::mpsc::channel();
+        let inviter_identity_for_thread = inviter_identity.clone();
+        let inviter_config_for_thread = inviter_config.clone();
+        let membership_key_for_thread = membership_key.clone();
+        let inviter_thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("inviter runtime");
+            runtime.block_on(async move {
+                let mut inviter = build_node(&HostConfig {
+                    identity: inviter_identity_for_thread.clone(),
+                    network_name: "lab".to_owned(),
+                    membership_tag: None,
+                    mtu: 1280,
+                    max_concurrent_control_streams: 16,
+                    max_concurrent_packet_streams: 16,
+                    listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+                    external_addresses: Vec::new(),
+                    bootstrap_peers: Vec::new(),
+                    known_peers: Vec::new(),
+                    relay_reservations: Vec::new(),
+                    relay_server: false,
+                    relay_resources: RelayResourceConfig::default(),
+                    resources: ResourceConfig::default(),
+                    discovery: local_discovery,
+                })
+                .expect("inviter node");
+                let listener_address = loop {
+                    if let SwarmEvent::NewListenAddr { address, .. } =
+                        inviter.swarm.select_next_some().await
+                    {
+                        break address;
+                    }
+                };
+                address_tx
+                    .send(listener_address.to_string())
+                    .expect("send listener address");
+                let offer_for_response = offer_rx.recv().expect("receive offer");
+                let mut inviter_config_for_response = inviter_config_for_thread;
+                inviter_config_for_response.network.listen_addresses =
+                    vec![listener_address.to_string()];
+
+                loop {
+                    match inviter.swarm.select_next_some().await {
+                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::Message {
+                                message:
+                                    Message::Request {
+                                        request, channel, ..
+                                    },
+                                ..
+                            },
+                        )) => {
+                            let response = build_pairing_response_at(
+                                &inviter_config_for_response,
+                                &offer_for_response,
+                                PairingResponseOptions {
+                                    joiner_peer: request.payload.joiner_peer,
+                                    assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                                    membership_key: Some(membership_key_for_thread.clone()),
+                                    member_records: Vec::new(),
+                                    expires_in_seconds: 300,
+                                },
+                                current_unix_seconds_lossy(),
+                            )
+                            .expect("response");
+                            inviter
+                                .swarm
+                                .behaviour_mut()
+                                .pairing
+                                .send_response(channel, response)
+                                .expect("send response");
+                        }
+                        SwarmEvent::Behaviour(BehaviourEvent::Pairing(
+                            libp2p::request_response::Event::ResponseSent { .. },
+                        )) => return,
+                        _ => {}
+                    }
+                }
+            });
+        });
+
+        let listener_address = address_rx.recv().expect("listener address");
+        inviter_config.network.listen_addresses = vec![listener_address];
+        let offer =
+            export_pairing_offer(&inviter_config, PairingOfferOptions::default()).expect("offer");
+        offer_tx.send(offer.clone()).expect("send offer");
+
+        let response = live_pair_accept(&offer, joiner_identity.clone(), 1280, 5)
+            .await
+            .expect("live response");
+
+        inviter_thread.join().expect("inviter thread");
+        assert_eq!(response.payload.inviter_peer, inviter_identity.peer_id);
+        assert_eq!(response.payload.joiner_peer, joiner_identity.peer_id);
+        assert_eq!(
+            response.payload.membership_key.as_deref(),
+            Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
+        );
     }
 
     #[test]
