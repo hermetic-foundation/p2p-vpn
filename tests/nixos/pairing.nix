@@ -153,6 +153,8 @@ pkgs.testers.nixosTest {
         node_b.succeed(
             "p2p-vpn pair accept /tmp/node-a.pair "
             "--output /tmp/node-b.json "
+            "--nixos-output /tmp/node-b.nix "
+            "--nixos-instance nixos-vm-pairing "
             "--private-key '${nodeB.privateKey}' "
             "--interface pv0 "
             "--vpn-ip ${nodeB.vpnIp} "
@@ -161,8 +163,12 @@ pkgs.testers.nixosTest {
             "| tee /tmp/node-b-pair-accept"
         )
         node_b.succeed("test -s /tmp/node-b.json")
+        node_b.succeed("test -s /tmp/node-b.nix")
         node_b.succeed("grep -q '^wrote /tmp/node-b.json$' /tmp/node-b-pair-accept")
+        node_b.succeed("grep -q '^wrote /tmp/node-b.nix$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q '^paired with: ${nodeA.peerId}$' /tmp/node-b-pair-accept")
+        node_b.succeed("grep -q 'services.p2p-vpn.instances.\"nixos-vm-pairing\"' /tmp/node-b.nix")
+        node_b.succeed("grep -q 'configFile = \"/tmp/node-b.json\";' /tmp/node-b.nix")
         node_b.succeed("jq -e '.network.name == \"nixos-vm-pairing\"' /tmp/node-b.json")
         node_b.succeed("jq -e '.network.vpn_ip == \"${nodeB.vpnIp}\"' /tmp/node-b.json")
         node_b.succeed("jq -e '(.interface | has(\"name\") | not)' /tmp/node-b.json")

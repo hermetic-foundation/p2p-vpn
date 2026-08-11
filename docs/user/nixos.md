@@ -284,6 +284,56 @@ Use `configFile` when another tool writes the complete JSON:
 
 Do not combine `configFile` with generated config options.
 
+## Pairing Output
+
+Use pairing to create both files for a NixOS host:
+
+```sh
+sudo install -d -m 0700 /var/lib/p2p-vpn
+sudo p2p-vpn pair accept lab.pair \
+  --output /var/lib/p2p-vpn/lab.json \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab
+```
+
+Generated JSON:
+
+| File | Purpose |
+| --- | --- |
+| `/var/lib/p2p-vpn/lab.json` | Complete paired runtime config. |
+| `/etc/nixos/p2p-vpn-lab.nix` | NixOS module snippet. |
+
+The generated Nix uses this shape:
+
+```nix
+{
+  services.p2p-vpn.instances."lab" = {
+    enable = true;
+    configFile = "/var/lib/p2p-vpn/lab.json";
+  };
+}
+```
+
+Import it from your system config:
+
+```nix
+{
+  imports = [ ./p2p-vpn-lab.nix ];
+}
+```
+
+This is the recommended pairing path.
+
+It does not require hand translation into typed Nix options.
+
+Keep the paired JSON root-owned and private:
+
+```sh
+sudo chmod 0600 /var/lib/p2p-vpn/lab.json
+```
+
+Use typed options later only if you deliberately want fully declarative state.
+
 ## Firewall
 
 Open default service ports:

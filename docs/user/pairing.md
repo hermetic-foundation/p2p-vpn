@@ -146,6 +146,8 @@ Optional fields:
 | `--local-route` | Extra route to request and write locally. |
 | `--vpn-ip` | Requested VPN IP for the new node. |
 | `--peer-name` | Label for the inviter peer. |
+| `--nixos-output` | Also write a NixOS module snippet. |
+| `--nixos-instance` | Instance name for the generated NixOS snippet. |
 | `--timeout-seconds` | Live pairing exchange timeout. |
 | `--force` | Overwrite output config. |
 
@@ -179,6 +181,33 @@ p2p-vpn pair accept 'p2pvpn:...' \
 ```
 
 Use `--response` for offline response import.
+
+## NixOS Output
+
+Use `--nixos-output` when the new node will run through the NixOS module:
+
+```sh
+sudo p2p-vpn pair accept lab.pair \
+  --output /var/lib/p2p-vpn/lab.json \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab
+```
+
+The generated Nix file uses `configFile`.
+
+It points at the paired JSON config.
+
+This keeps private keys and membership data out of the Nix store.
+
+`--output` must be an absolute path when `--nixos-output` is used.
+
+Import the generated file from your NixOS configuration:
+
+```nix
+{
+  imports = [ ./p2p-vpn-lab.nix ];
+}
+```
 
 ## Live Diagnostics
 
