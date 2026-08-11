@@ -63,6 +63,21 @@ The URI must not include the local private key.
 It should not include the membership key unless an explicit future mode requests
 shared-secret onboarding.
 
+Pairing exchange messages are signed:
+
+| Message | Signed By | Required Binding |
+| --- | --- | --- |
+| Offer | Inviter | network, inviter peer, rendezvous token, expiry |
+| Request | Joiner | offer network, inviter peer, rendezvous token |
+| Response | Inviter | offer, joiner peer, membership grant |
+
+A response is invalid without either:
+
+| Grant | Meaning |
+| --- | --- |
+| `membership_key` | Shared-secret onboarding. |
+| `member_records[]` | Signed membership grant for the joiner. |
+
 ## Routing
 
 Routes are statically authorized.

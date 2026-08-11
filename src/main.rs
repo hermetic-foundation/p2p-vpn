@@ -32,7 +32,9 @@ use p2p_vpn::{
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
-        DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingOffer, PairingOfferOptions, export_pairing_offer,
+        DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingOffer,
+        PairingOfferOptions, PairingResponse, export_pairing_offer,
+        import_pairing_response_config_at,
     },
     queue::QueueStats,
     runtime::{
@@ -585,6 +587,22 @@ enum PairCommand {
     },
     Accept {
         offer: String,
+        #[arg(long)]
+        response: Option<PathBuf>,
+        #[arg(short, long, default_value = "p2p-vpn.json")]
+        output: PathBuf,
+        #[arg(long)]
+        private_key: Option<String>,
+        #[arg(long, default_value = "pv0")]
+        interface: String,
+        #[arg(long, default_value_t = 1_280)]
+        mtu: u16,
+        #[arg(long = "local-route")]
+        local_routes: Vec<LocalRouteArg>,
+        #[arg(long)]
+        peer_name: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -951,7 +969,27 @@ async fn main() -> Result<(), String> {
                 rendezvous_token,
                 force,
             }),
-            PairCommand::Accept { offer } => pair_accept(&offer),
+            PairCommand::Accept {
+                offer,
+                response,
+                output,
+                private_key,
+                interface,
+                mtu,
+                local_routes,
+                peer_name,
+                force,
+            } => pair_accept(PairAcceptArgs {
+                offer,
+                response,
+                output,
+                private_key,
+                interface,
+                mtu,
+                local_routes,
+                peer_name,
+                force,
+            }),
         },
         Command::MembershipRecordIssue {
             issuer_config,
@@ -1219,6 +1257,19 @@ struct PairOfferArgs {
     output: PathBuf,
     expires_in_seconds: u64,
     rendezvous_token: Option<String>,
+    force: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PairAcceptArgs {
+    offer: String,
+    response: Option<PathBuf>,
+    output: PathBuf,
+    private_key: Option<String>,
+    interface: String,
+    mtu: u16,
+    local_routes: Vec<LocalRouteArg>,
+    peer_name: Option<String>,
     force: bool,
 }
 
@@ -2093,12 +2144,67 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn pair_accept(offer_uri: &str) -> Result<(), String> {
-    let offer = PairingOffer::from_uri(offer_uri)
+fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
+    let offer = PairingOffer::from_uri(&args.offer)
         .map_err(|error| format!("failed to parse pairing offer: {error:?}"))?;
     offer
         .verify_at(current_unix_seconds_lossy())
         .map_err(|error| format!("failed to verify pairing offer: {error:?}"))?;
+
+    if let Some(response_path) = args.response {
+        if !args.force && args.output.to_string_lossy() != "-" && args.output.exists() {
+            return Err(format!(
+                "{} already exists; pass --force to overwrite it",
+                args.output.display()
+            ));
+        }
+        let bytes = fs::read(&response_path)
+            .map_err(|error| format!("failed to read {}: {error}", response_path.display()))?;
+        let response: PairingResponse = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("failed to parse pairing response: {error}"))?;
+        let identity = match args.private_key {
+            Some(private_key) => NodeIdentity::from_private_key(&private_key)
+                .map_err(|error| format!("failed to decode private key: {error:?}"))?,
+            None => NodeIdentity::generate_ed25519()
+                .map_err(|error| format!("failed to generate identity: {error:?}"))?,
+        };
+        let config = import_pairing_response_config_at(
+            &offer,
+            &response,
+            PairingConfigOptions {
+                identity,
+                interface_name: args.interface,
+                mtu: args.mtu,
+                local_routes: args
+                    .local_routes
+                    .into_iter()
+                    .map(|route| route.route)
+                    .collect(),
+                peer_name: args.peer_name,
+            },
+            current_unix_seconds_lossy(),
+        )
+        .map_err(|error| format!("failed to import pairing response: {error:?}"))?;
+        let rendered = serde_json::to_string_pretty(&config)
+            .map_err(|error| format!("failed to render config: {error}"))?;
+
+        if args.output.to_string_lossy() == "-" {
+            println!("{rendered}");
+        } else {
+            fs::write(&args.output, format!("{rendered}\n"))
+                .map_err(|error| format!("failed to write {}: {error}", args.output.display()))?;
+            println!("wrote {}", args.output.display());
+            println!(
+                "local peer: {}",
+                config
+                    .local_peer()
+                    .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+            );
+            println!("paired with: {}", response.payload.inviter_peer);
+        }
+
+        return Ok(());
+    }
 
     println!("pairing offer: valid");
     println!("network: {}", offer.payload.network_name);
@@ -2109,6 +2215,7 @@ fn pair_accept(offer_uri: &str) -> Result<(), String> {
         "inviter addresses: {}",
         offer.payload.inviter_addresses.len()
     );
+    println!("response file: not provided");
     println!("live pairing exchange: not implemented yet");
 
     Ok(())
@@ -9566,16 +9673,54 @@ mod tests {
 
     #[test]
     fn cli_parses_pair_accept_command() {
-        let cli = Cli::try_parse_from(["p2p-vpn", "pair", "accept", "p2pvpn:abc"]).expect("cli");
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "accept",
+            "p2pvpn:abc",
+            "--response",
+            "pairing-response.json",
+            "--output",
+            "node-b.json",
+            "--interface",
+            "pv-pair",
+            "--mtu",
+            "1400",
+            "--local-route",
+            "10.42.0.2/32,100",
+            "--peer-name",
+            "node-a",
+            "--force",
+        ])
+        .expect("cli");
 
         let Command::Pair {
-            command: PairCommand::Accept { offer },
+            command:
+                PairCommand::Accept {
+                    offer,
+                    response,
+                    output,
+                    interface,
+                    mtu,
+                    local_routes,
+                    peer_name,
+                    force,
+                    ..
+                },
         } = cli.command
         else {
             panic!("expected pair accept command");
         };
 
         assert_eq!(offer, "p2pvpn:abc");
+        assert_eq!(response, Some(PathBuf::from("pairing-response.json")));
+        assert_eq!(output, PathBuf::from("node-b.json"));
+        assert_eq!(interface, "pv-pair");
+        assert_eq!(mtu, 1400);
+        assert_eq!(local_routes.len(), 1);
+        assert_eq!(local_routes[0].route.prefix, "10.42.0.2/32");
+        assert_eq!(peer_name.as_deref(), Some("node-a"));
+        assert!(force);
     }
 
     #[test]

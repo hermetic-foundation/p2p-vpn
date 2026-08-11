@@ -10,9 +10,10 @@ It is intended to replace manual key and config exchange.
 | --- | --- |
 | `pair offer` URI format | Implemented |
 | `pair accept` URI validation | Implemented |
+| Signed response validation | Implemented |
+| Config writing from response | Implemented |
 | Live libp2p exchange | Not implemented yet |
-| Minimal config writing | Not implemented yet |
-| Signed membership grant return | Not implemented yet |
+| Signed membership grant return | Contract implemented |
 
 ## Offer
 
@@ -70,8 +71,32 @@ Current behavior:
 | Verify inviter signature | yes |
 | Check expiry | yes |
 | Show discovery hints | yes |
-| Contact inviter | not yet |
-| Write final config | not yet |
+| Import signed response file | yes |
+| Write final config from response | yes |
+| Contact inviter live | not yet |
+
+## Accept Response File
+
+Use this when a signed response was produced out of band:
+
+```sh
+p2p-vpn pair accept 'p2pvpn:...' \
+  --response pairing-response.json \
+  --output p2p-vpn.json
+```
+
+Optional fields:
+
+| Option | Meaning |
+| --- | --- |
+| `--private-key` | Use an existing local identity. |
+| `--interface` | Interface name for the generated config. |
+| `--mtu` | Interface MTU. |
+| `--local-route` | Extra local route ownership. |
+| `--peer-name` | Label for the inviter peer. |
+| `--force` | Overwrite output config. |
+
+Without `--private-key`, a new identity is generated.
 
 ## URI Contents
 
@@ -102,11 +127,10 @@ Do not post it publicly.
 
 Future `pair accept` will:
 
-1. Generate or load a local node identity.
-2. Discover the inviter through the URI hints.
-3. Open an encrypted libp2p control exchange.
-4. Send the new peer ID and requested VPN IP.
-5. Receive a minimal local config.
-6. Prefer a signed membership record over sharing a network key.
+1. Discover the inviter through the URI hints.
+2. Open an encrypted libp2p control exchange.
+3. Send the new peer ID and requested VPN IP.
+4. Receive the signed response automatically.
+5. Write the minimal local config.
 
 Manual invite files remain useful for offline exchange.
