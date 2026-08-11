@@ -110,6 +110,8 @@ impl Default for PairingProtocols {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PairingRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<PairingOffer>,
     pub payload: PairingRequestPayload,
     pub signature: String,
 }
@@ -321,7 +323,11 @@ pub fn build_pairing_request_at(
         requested_routes: options.requested_routes,
     };
     let signature = STANDARD.encode(options.identity.sign(&request_signing_message(&payload)?)?);
-    let request = PairingRequest { payload, signature };
+    let request = PairingRequest {
+        offer: Some(offer.clone()),
+        payload,
+        signature,
+    };
     request.verify_for_offer_at(offer, issued_at_unix_seconds)?;
 
     Ok(request)

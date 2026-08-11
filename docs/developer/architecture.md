@@ -80,6 +80,17 @@ Pairing transport uses libp2p request-response:
 | Limit | 32 KiB per message |
 | Stream class | Control-plane stream |
 
+Daemon handling rules:
+
+| Check | Behavior |
+| --- | --- |
+| Embedded offer | Required for live requests. |
+| Offer signer | Must match the local daemon identity. |
+| Offer network | Must match the local daemon network. |
+| Rendezvous token | Consumed after the first accepted response. |
+| Membership key | Returned when the network uses shared-key membership. |
+| Member record | Issued when the network uses record-based membership. |
+
 A response is invalid without either:
 
 | Grant | Meaning |

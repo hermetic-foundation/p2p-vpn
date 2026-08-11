@@ -30,11 +30,15 @@ use crate::{
         QueueConfig, ResourceConfig, public_ipfs_bootstrap_peer_configs,
     },
     identity::NodeIdentity,
-    membership::{SignedMembershipRecord, effective_membership_at},
+    membership::{
+        MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+        SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
+    },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, RuntimeMetrics,
         RuntimeSnapshot,
     },
+    pairing::{PairingRequest, PairingResponse},
     path::{PathConnectionRole, PathOrigin, PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
     route::{IpCidr, RouteError},
@@ -88,6 +92,7 @@ const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
 const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+const PAIRING_RESPONSE_EXPIRES_IN_SECONDS: u64 = 600;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -513,6 +518,7 @@ where
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerPacketRateLimiters::new(resources.inbound_packet_rate_limit());
+    let mut consumed_pairing_tokens = HashSet::new();
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let kademlia_lookup_keys = kademlia_lookup_keys(
         &node.network_name,
@@ -686,6 +692,7 @@ where
                         path_probe_tracker: &mut path_probe_tracker,
                         packet_plane_session_ttl,
                         packet_plane_replay_windows_per_session,
+                        consumed_pairing_tokens: &mut consumed_pairing_tokens,
                     },
                     event,
                 ).await?;
@@ -6067,6 +6074,7 @@ struct SwarmEventContext<'a> {
     path_probe_tracker: &'a mut PathProbeTracker,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
+    consumed_pairing_tokens: &'a mut HashSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -6101,6 +6109,9 @@ async fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(BehaviourEvent::Packet(event)) => {
             handle_packet_event(swarm, &mut context, event)?;
+        }
+        SwarmEvent::Behaviour(BehaviourEvent::Pairing(event)) => {
+            handle_pairing_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(event)) => {
             handle_pinned_packet_stream_event(swarm, &mut context, event)?;
@@ -7626,6 +7637,160 @@ fn handle_service_request(
     }
 
     Ok(())
+}
+
+fn handle_pairing_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    event: request_response::Event<PairingRequest, PairingResponse>,
+) -> Result<(), RunnerError> {
+    match event {
+        request_response::Event::Message {
+            peer,
+            message: Message::Request {
+                request, channel, ..
+            },
+            ..
+        } => {
+            let now_unix_seconds = current_unix_seconds_lossy();
+            match pairing_response_for_request(
+                context.forwarder.config(),
+                context.identity,
+                context.consumed_pairing_tokens,
+                &request,
+                now_unix_seconds,
+            ) {
+                Ok(response) => {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "pairing_request_accepted",
+                        &[
+                            ("peer", &peer.to_string()),
+                            ("joiner", &request.payload.joiner_peer),
+                        ],
+                    );
+                    swarm
+                        .behaviour_mut()
+                        .pairing
+                        .send_response(channel, response)
+                        .map_err(|_| RunnerError::PairingResponseDropped)?;
+                }
+                Err(error) => {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "pairing_request_rejected",
+                        &[
+                            ("peer", &peer.to_string()),
+                            ("joiner", &request.payload.joiner_peer),
+                            ("reason", &format!("{error:?}")),
+                        ],
+                    );
+                }
+            }
+        }
+        request_response::Event::Message {
+            peer,
+            message:
+                Message::Response {
+                    request_id,
+                    response,
+                },
+            ..
+        } => {
+            log_runtime_event(
+                LogLevel::Info,
+                "pairing_response_received",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("request_id", &format!("{request_id:?}")),
+                    ("inviter", &response.payload.inviter_peer),
+                ],
+            );
+        }
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_outbound_failure",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("error", &format!("{error:?}")),
+                ],
+            );
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_inbound_failure",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("error", &format!("{error:?}")),
+                ],
+            );
+        }
+        request_response::Event::ResponseSent { .. } => {}
+    }
+
+    Ok(())
+}
+
+fn pairing_response_for_request(
+    config: &Config,
+    identity: &NodeIdentity,
+    consumed_tokens: &mut HashSet<String>,
+    request: &PairingRequest,
+    now_unix_seconds: u64,
+) -> Result<PairingResponse, crate::pairing::PairingError> {
+    let offer = request
+        .offer
+        .as_ref()
+        .ok_or(crate::pairing::PairingError::InvalidSignature)?;
+    request.verify_for_offer_at(offer, now_unix_seconds)?;
+    if offer.payload.network_name != config.network.name
+        || offer.payload.inviter_peer != config.network.local_peer
+    {
+        return Err(crate::pairing::PairingError::OfferConfigMismatch);
+    }
+    if consumed_tokens.contains(&request.payload.rendezvous_token) {
+        return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
+    }
+
+    let member_records = if config.network.membership_key.is_none() {
+        vec![issue_membership_record_for_subject_at(
+            identity,
+            MembershipRecordIssueOptions {
+                network_name: config.network.name.clone(),
+                member: MembershipRecordSubject {
+                    peer_id: request.payload.joiner_peer.clone(),
+                    public_key: request.payload.joiner_public_key.clone(),
+                },
+                membership_epoch: 1,
+                sequence: now_unix_seconds,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: request.payload.requested_routes.clone(),
+                expires_at_unix_seconds: None,
+            },
+            now_unix_seconds,
+        )?]
+    } else {
+        Vec::new()
+    };
+
+    let response = crate::pairing::build_pairing_response_at(
+        config,
+        offer,
+        crate::pairing::PairingResponseOptions {
+            joiner_peer: request.payload.joiner_peer.clone(),
+            assigned_vpn_ip: request.payload.requested_vpn_ip.clone(),
+            membership_key: config.network.membership_key.clone(),
+            member_records,
+            expires_in_seconds: PAIRING_RESPONSE_EXPIRES_IN_SECONDS,
+        },
+        now_unix_seconds,
+    )?;
+    consumed_tokens.insert(request.payload.rendezvous_token.clone());
+
+    Ok(response)
 }
 
 fn handle_service_response(
@@ -11554,6 +11719,7 @@ pub enum RunnerError {
     PacketPlaneQuic(PacketPlaneQuicError),
     PacketResponseDropped,
     ControlResponseDropped,
+    PairingResponseDropped,
     ServiceResponseDropped,
 }
 
@@ -11607,6 +11773,10 @@ mod tests {
         },
         identity::NodeIdentity,
         membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
+        pairing::{
+            PairingOfferOptions, PairingRequestOptions, build_pairing_request_at,
+            export_pairing_offer_at,
+        },
         route::builtin_ipv4,
         runtime::control::ControlRoute,
         runtime::packet_plane::{
@@ -11892,6 +12062,107 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    #[test]
+    fn pairing_response_for_request_issues_joiner_membership_record() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        let response =
+            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
+                .expect("response");
+
+        assert_eq!(response.payload.joiner_peer, joiner.peer_id);
+        assert_eq!(
+            response.payload.assigned_vpn_ip.as_deref(),
+            Some("10.42.0.2")
+        );
+        assert!(response.payload.membership_key.is_none());
+        assert_eq!(response.payload.member_records.len(), 1);
+        assert_eq!(
+            response.payload.member_records[0].payload.member_peer,
+            joiner.peer_id
+        );
+        assert!(consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn pairing_response_for_request_rejects_replayed_token() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
+            .expect("first response");
+        let error =
+            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_003)
+                .expect_err("replay rejected");
+
+        assert!(matches!(
+            error,
+            crate::pairing::PairingError::RendezvousTokenMismatch
+        ));
+    }
+
+    #[test]
+    fn pairing_response_for_request_rejects_offer_for_other_inviter() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let other_inviter = NodeIdentity::generate_ed25519().expect("other inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let other_config =
+            config_with_peer(&other_inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let offer = export_pairing_offer_at(&other_config, PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+        let mut consumed_tokens = HashSet::new();
+
+        let error =
+            pairing_response_for_request(&config, &inviter, &mut consumed_tokens, &request, 1_002)
+                .expect_err("wrong inviter rejected");
+
+        assert!(matches!(
+            error,
+            crate::pairing::PairingError::OfferConfigMismatch
+        ));
+        assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
     }
 
     fn establish_test_packet_plane_sessions(
