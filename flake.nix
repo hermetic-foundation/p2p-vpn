@@ -3167,6 +3167,7 @@ EOF
                   privateKey = "BASE64_PRIVATE_KEY";
                   peers."5555555555555555555555555555555555555555555555555555555555555555" = { };
                 };
+                services.p2p-vpn.instances.node-f.enable = true;
               }
             )
           ];
@@ -3568,6 +3569,9 @@ EOF
             execStartSettings = moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStart;
             execStartSecret = moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStart;
             execStartMinimal = moduleEval.config.systemd.services.p2p-vpn-node-e.serviceConfig.ExecStart;
+            execStartStateBacked = moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStart;
+            stateBackedCondition =
+              moduleEval.config.systemd.services.p2p-vpn-node-f.unitConfig.ConditionPathExists;
             execStartPreSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre;
             execStartPreSecretScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre
@@ -3601,6 +3605,7 @@ EOF
             tcpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedTCPPorts;
             udpPorts = builtins.toJSON moduleEval.config.networking.firewall.allowedUDPPorts;
             kernelModules = builtins.toJSON moduleEval.config.boot.kernelModules;
+            tmpfilesRules = builtins.toJSON moduleEval.config.systemd.tmpfiles.rules;
           } ''
             case "$execStart" in
               *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
@@ -3623,6 +3628,11 @@ EOF
               *"p2p-vpn up --config /etc/p2p-vpn/node-e.json --control-socket /run/p2p-vpn-node-e/control.sock"*) ;;
               *) echo "unexpected minimal ExecStart: $execStartMinimal" >&2; exit 1 ;;
             esac
+            case "$execStartStateBacked" in
+              *"p2p-vpn up --config /var/lib/p2p-vpn/node-f.json --control-socket /run/p2p-vpn-node-f/control.sock"*) ;;
+              *) echo "unexpected state-backed ExecStart: $execStartStateBacked" >&2; exit 1 ;;
+            esac
+            test "$stateBackedCondition" = /var/lib/p2p-vpn/node-f.json
             case "$execStartPreSecret" in
               *"p2p-vpn-node-d-write-config"*) ;;
               *) echo "unexpected secret ExecStartPre: $execStartPreSecret" >&2; exit 1 ;;
@@ -3689,6 +3699,10 @@ EOF
             case "$kernelModules" in
               *tun*) ;;
               *) echo "tun kernel module not requested: $kernelModules" >&2; exit 1 ;;
+            esac
+            case "$tmpfilesRules" in
+              *'"d /var/lib/p2p-vpn 0700 root root -"'*) ;;
+              *) echo "state-backed tmpfiles rule missing: $tmpfilesRules" >&2; exit 1 ;;
             esac
             touch $out
           '';

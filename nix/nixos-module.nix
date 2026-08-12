@@ -35,14 +35,27 @@ let
   settingsInstances = filterAttrs (
     _: instance: instance.enable && instance.settings != null
   ) cfg.instances;
+  stateBackedInstances = filterAttrs (
+    _: instance:
+    instance.enable
+    && instance.configFile == null
+    && instance.settings == null
+    && instance.privateKey == null
+    && instance.privateKeyFile == null
+    && instance.stateConfigFile != null
+  ) cfg.instances;
   storeGeneratedInstances = filterAttrs (
     _: instance:
     instance.enable
     && instance.configFile == null
     && instance.settings == null
+    && instance.privateKey != null
     && instance.privateKeyFile == null
     && instance.membershipKeyFile == null
   ) cfg.instances;
+  stateDirectories = unique (
+    mapAttrsToList (_: instance: instance.stateDirectory) stateBackedInstances
+  );
 
   generatedConfigFile = name: "/etc/p2p-vpn/${name}.json";
   runtimeGeneratedConfigFile = name: "/run/p2p-vpn-${name}/config.json";
@@ -50,6 +63,13 @@ let
     name: instance:
     if instance.configFile != null then
       instance.configFile
+    else if
+      instance.settings == null
+      && instance.privateKey == null
+      && instance.privateKeyFile == null
+      && instance.stateConfigFile != null
+    then
+      instance.stateConfigFile
     else if
       instance.settings != null || (instance.privateKeyFile == null && instance.membershipKeyFile == null)
     then
@@ -186,7 +206,7 @@ let
     );
 
   instanceOptions =
-    { name, ... }:
+    { name, config, ... }:
     {
       options = {
         enable = mkEnableOption "the ${name} p2p-vpn instance";
@@ -200,6 +220,34 @@ let
 
             Use this instead of settings when the config contains private keys,
             membership keys, or other secret material.
+          '';
+        };
+
+        stateDirectory = mkOption {
+          type = types.str;
+          default = "/var/lib/p2p-vpn";
+          example = "/var/lib/p2p-vpn";
+          description = ''
+            Persistent directory for paired runtime configs.
+
+            The module creates this directory when an enabled instance uses
+            stateConfigFile.
+          '';
+        };
+
+        stateConfigFile = mkOption {
+          type = types.nullOr types.str;
+          default = "${config.stateDirectory}/${name}.json";
+          example = "/var/lib/p2p-vpn/${name}.json";
+          description = ''
+            Persistent paired JSON config path used when no config source is
+            declared.
+
+            This lets consumers enable an instance before pairing. The systemd
+            unit waits until the file exists.
+
+            Set this to null to require configFile, settings, privateKey, or
+            privateKeyFile.
           '';
         };
 
@@ -680,6 +728,18 @@ let
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       path = [ pkgs.iproute2 ];
+      unitConfig =
+        optionalAttrs
+          (
+            instance.configFile == null
+            && instance.settings == null
+            && instance.privateKey == null
+            && instance.privateKeyFile == null
+            && instance.stateConfigFile != null
+          )
+          {
+            ConditionPathExists = effectiveConfigFile name instance;
+          };
 
       serviceConfig = {
         Type = "simple";
@@ -798,8 +858,9 @@ in
             instance.configFile != null
             || instance.settings != null
             || instance.privateKey != null
-            || instance.privateKeyFile != null;
-          message = "services.p2p-vpn.instances.${name} requires configFile, settings, privateKey, or privateKeyFile.";
+            || instance.privateKeyFile != null
+            || instance.stateConfigFile != null;
+          message = "services.p2p-vpn.instances.${name} requires configFile, settings, privateKey, privateKeyFile, or stateConfigFile.";
         }
         {
           assertion = instance.configFile == null || instance.settings == null;
@@ -816,6 +877,26 @@ in
         {
           assertion =
             (instance.configFile == null && instance.settings == null)
+            && (
+              instance.privateKey != null
+              || instance.privateKeyFile != null
+              || (
+                instance.localPeer == null
+                && instance.membershipKey == null
+                && instance.membershipKeyFile == null
+                && instance.memberRecords == [ ]
+                && instance.bootstrapPeers == [ ]
+                && instance.vpnIp == null
+                && instance.routes == [ ]
+                && instance.interfaceName == "pv0"
+                && instance.mtu == 1280
+                && !instance.relayServer
+                && instance.relayReservations == [ ]
+                && instance.autoRelay == null
+                && instance.discovery == null
+                && instance.peers == { }
+              )
+            )
             || (
               instance.localPeer == null
               && instance.privateKey == null
@@ -830,13 +911,16 @@ in
               && instance.mtu == 1280
               && !instance.relayServer
               && instance.relayReservations == [ ]
+              && instance.autoRelay == null
               && instance.discovery == null
               && instance.peers == { }
             );
-          message = "services.p2p-vpn.instances.${name} generated config fields cannot be combined with configFile or settings.";
+          message = "services.p2p-vpn.instances.${name} generated config fields require privateKey/privateKeyFile and cannot be combined with configFile or settings.";
         }
       ]
     ) (builtins.attrNames enabledInstances);
+
+    environment.systemPackages = [ cfg.package ];
 
     environment.etc =
       concatMapAttrs (name: instance: {
@@ -851,6 +935,8 @@ in
       }) storeGeneratedInstances;
 
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
+
+    systemd.tmpfiles.rules = map (directory: "d ${directory} 0700 root root -") stateDirectories;
 
     networking.firewall.allowedTCPPorts = unique (
       concatMap (instance: instance.tcpPorts) firewallInstances

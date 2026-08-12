@@ -19,7 +19,52 @@ Use the flake module to run one or more `p2p-vpn` daemons as systemd services.
 
 ## Minimal Service
 
-Use typed module options for ordinary NixOS hosts:
+Declare the instance first:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.enable = true;
+}
+```
+
+That is enough Nix to reserve the service.
+
+The module uses these defaults:
+
+| Item | Default |
+| --- | --- |
+| Runtime config | `/var/lib/p2p-vpn/lab.json` |
+| Unit gate | Waits until the config exists |
+| State directory | `/var/lib/p2p-vpn` |
+| Interface | `pv0` |
+| Control socket | `/run/p2p-vpn-lab/control.sock` |
+
+Then pair into the expected state path:
+
+```sh
+sudo p2p-vpn pair accept lab.pair \
+  --output /var/lib/p2p-vpn/lab.json \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab \
+  --nixos-config-file-mode
+```
+
+The generated Nix file contains only the same service declaration:
+
+```nix
+{
+  services.p2p-vpn.instances."lab" = {
+    enable = true;
+    configFile = "/var/lib/p2p-vpn/lab.json";
+  };
+}
+```
+
+Import it if you do not already declare the instance.
+
+## Typed Service
+
+Use typed module options when you manage peer state in Nix:
 
 ```nix
 {
@@ -271,7 +316,7 @@ Do not put private keys or membership keys in `settings` on real hosts.
 
 ## Secret Config
 
-Use `configFile` when another tool writes the complete JSON:
+Use `configFile` when another tool writes complete JSON:
 
 ```nix
 {
@@ -286,7 +331,7 @@ Do not combine `configFile` with generated config options.
 
 ## Pairing Output
 
-Use pairing to create a Nix-native module snippet:
+Use pairing to create a typed Nix-native module snippet:
 
 ```sh
 sudo install -d -m 0700 /var/lib/p2p-vpn
