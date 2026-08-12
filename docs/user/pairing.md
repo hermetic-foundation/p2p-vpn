@@ -184,22 +184,32 @@ Use `--response` for offline response import.
 
 ## NixOS Output
 
-Use `--nixos-output` when the new node will run through the NixOS module:
+Use `--nixos-output` for a Nix-native paired instance:
 
 ```sh
 sudo p2p-vpn pair accept lab.pair \
-  --output /var/lib/p2p-vpn/lab.json \
   --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab
+  --nixos-instance lab \
+  --nixos-only
 ```
 
-The generated Nix file uses `configFile`.
+The generated Nix file uses typed module options.
 
-It points at the paired JSON config.
+It does not point the service at a paired JSON config.
 
-This keeps private keys and membership data out of the Nix store.
+Private key material is written under:
 
-`--output` must be an absolute path when `--nixos-output` is used.
+```text
+/var/lib/p2p-vpn/lab/private.key
+```
+
+If a shared membership key is present, it is written under:
+
+```text
+/var/lib/p2p-vpn/lab/membership.key
+```
+
+Both files are mode `0600`.
 
 Import the generated file from your NixOS configuration:
 
@@ -208,6 +218,35 @@ Import the generated file from your NixOS configuration:
   imports = [ ./p2p-vpn-lab.nix ];
 }
 ```
+
+Then switch and start the service:
+
+```sh
+sudo nixos-rebuild switch
+sudo systemctl restart p2p-vpn-lab.service
+```
+
+Use a custom state directory when needed:
+
+```sh
+sudo p2p-vpn pair accept lab.pair \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab \
+  --nixos-state-dir /var/lib/p2p-vpn/lab \
+  --nixos-only
+```
+
+Use JSON-backed Nix only when you need full raw config state:
+
+```sh
+sudo p2p-vpn pair accept lab.pair \
+  --output /var/lib/p2p-vpn/lab.json \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab \
+  --nixos-config-file-mode
+```
+
+In JSON-backed mode, `--output` must be an absolute path.
 
 ## Live Diagnostics
 

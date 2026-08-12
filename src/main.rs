@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashSet},
     fs,
     net::{IpAddr, UdpSocket},
+    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
@@ -618,6 +619,12 @@ enum PairCommand {
         #[arg(long)]
         nixos_instance: Option<String>,
         #[arg(long)]
+        nixos_config_file_mode: bool,
+        #[arg(long)]
+        nixos_only: bool,
+        #[arg(long)]
+        nixos_state_dir: Option<PathBuf>,
+        #[arg(long)]
         private_key: Option<String>,
         #[arg(long, default_value = "pv0")]
         interface: String,
@@ -1023,6 +1030,9 @@ async fn main() -> Result<(), String> {
                 output,
                 nixos_output,
                 nixos_instance,
+                nixos_config_file_mode,
+                nixos_only,
+                nixos_state_dir,
                 private_key,
                 interface,
                 mtu,
@@ -1038,6 +1048,9 @@ async fn main() -> Result<(), String> {
                     output,
                     nixos_output,
                     nixos_instance,
+                    nixos_config_file_mode,
+                    nixos_only,
+                    nixos_state_dir,
                     private_key,
                     interface,
                     mtu,
@@ -1333,6 +1346,9 @@ struct PairAcceptArgs {
     output: PathBuf,
     nixos_output: Option<PathBuf>,
     nixos_instance: Option<String>,
+    nixos_config_file_mode: bool,
+    nixos_only: bool,
+    nixos_state_dir: Option<PathBuf>,
     private_key: Option<String>,
     interface: String,
     mtu: u16,
@@ -2330,6 +2346,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         &args.output,
         args.nixos_output.as_deref(),
         args.nixos_instance.as_deref(),
+        args.nixos_only,
         args.force,
     )?;
     let identity = match args.private_key {
@@ -2365,8 +2382,13 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         write_pairing_config(
             &config,
             &args.output,
-            args.nixos_output.as_deref(),
-            args.nixos_instance.as_deref(),
+            PairingNixosOutputOptions {
+                output: args.nixos_output.as_deref(),
+                instance: args.nixos_instance.as_deref(),
+                config_file_mode: args.nixos_config_file_mode,
+                nixos_only: args.nixos_only,
+                state_dir: args.nixos_state_dir.as_deref(),
+            },
             response.payload.inviter_peer.as_str(),
         )?;
 
@@ -2400,8 +2422,13 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
     write_pairing_config(
         &config,
         &args.output,
-        args.nixos_output.as_deref(),
-        args.nixos_instance.as_deref(),
+        PairingNixosOutputOptions {
+            output: args.nixos_output.as_deref(),
+            instance: args.nixos_instance.as_deref(),
+            config_file_mode: args.nixos_config_file_mode,
+            nixos_only: args.nixos_only,
+            state_dir: args.nixos_state_dir.as_deref(),
+        },
         response.payload.inviter_peer.as_str(),
     )
 }
@@ -2410,24 +2437,28 @@ fn validate_pair_accept_outputs(
     output: &Path,
     nixos_output: Option<&Path>,
     nixos_instance: Option<&str>,
+    nixos_only: bool,
     force: bool,
 ) -> Result<(), String> {
-    if !force && output.to_string_lossy() != "-" && output.exists() {
+    if !nixos_only && !force && output.to_string_lossy() != "-" && output.exists() {
         return Err(format!(
             "{} already exists; pass --force to overwrite it",
             output.display()
         ));
     }
     let Some(nixos_output) = nixos_output else {
+        if nixos_only {
+            return Err("--nixos-only requires --nixos-output".to_owned());
+        }
         return Ok(());
     };
-    if output.to_string_lossy() == "-" {
+    if !nixos_only && output.to_string_lossy() == "-" {
         return Err("--nixos-output requires --output to be a filesystem path".to_owned());
     }
-    if !output.is_absolute() {
+    if !nixos_only && !output.is_absolute() {
         return Err("--nixos-output requires --output to be an absolute config path".to_owned());
     }
-    if output == nixos_output {
+    if !nixos_only && output == nixos_output {
         return Err("--output and --nixos-output must be different paths".to_owned());
     }
     if nixos_instance.is_some_and(str::is_empty) {
@@ -2445,15 +2476,22 @@ fn validate_pair_accept_outputs(
 fn write_pairing_config(
     config: &Config,
     output: &Path,
-    nixos_output: Option<&Path>,
-    nixos_instance: Option<&str>,
+    nixos: PairingNixosOutputOptions<'_>,
     inviter_peer: &str,
 ) -> Result<(), String> {
     let rendered_config = compact_generated_config(config.clone());
     let rendered = serde_json::to_string_pretty(&rendered_config)
         .map_err(|error| format!("failed to render config: {error}"))?;
 
-    if output.to_string_lossy() == "-" {
+    if nixos.nixos_only {
+        println!(
+            "local peer: {}",
+            config
+                .local_peer()
+                .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+        );
+        println!("paired with: {inviter_peer}");
+    } else if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
         fs::write(output, format!("{rendered}\n"))
@@ -2468,23 +2506,53 @@ fn write_pairing_config(
         println!("paired with: {inviter_peer}");
     }
 
-    if let Some(nixos_output) = nixos_output {
-        let instance = nixos_instance.unwrap_or(&config.network.name);
-        write_pairing_nixos_module(instance, output, nixos_output)?;
+    if let Some(nixos_output) = nixos.output {
+        let instance = nixos.instance.unwrap_or(&config.network.name);
+        write_pairing_nixos_module(
+            instance,
+            &rendered_config,
+            output,
+            nixos_output,
+            nixos.config_file_mode,
+            nixos.nixos_only,
+            nixos.state_dir,
+        )?;
     }
 
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PairingNixosOutputOptions<'a> {
+    output: Option<&'a Path>,
+    instance: Option<&'a str>,
+    config_file_mode: bool,
+    nixos_only: bool,
+    state_dir: Option<&'a Path>,
+}
+
 fn write_pairing_nixos_module(
     instance: &str,
+    config: &Config,
     config_path: &Path,
     output: &Path,
+    config_file_mode: bool,
+    nixos_only: bool,
+    nixos_state_dir: Option<&Path>,
 ) -> Result<(), String> {
     let config_path = config_path
         .to_str()
         .ok_or_else(|| "paired config path is not valid UTF-8".to_owned())?;
-    let rendered = render_pairing_nixos_module(instance, config_path)?;
+    let rendered = if config_file_mode {
+        if nixos_only {
+            return Err("--nixos-config-file-mode cannot be combined with --nixos-only".to_owned());
+        }
+        render_pairing_nixos_config_file_module(instance, config_path)?
+    } else {
+        let secret_paths =
+            write_pairing_nixos_secret_files(config, instance, config_path, nixos_state_dir)?;
+        render_pairing_nixos_module(instance, config, &secret_paths)?
+    };
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
@@ -2495,7 +2563,74 @@ fn write_pairing_nixos_module(
     Ok(())
 }
 
-fn render_pairing_nixos_module(instance: &str, config_path: &str) -> Result<String, String> {
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PairingNixosSecretPaths {
+    private_key_file: Option<String>,
+    membership_key_file: Option<String>,
+}
+
+fn write_pairing_nixos_secret_files(
+    config: &Config,
+    instance: &str,
+    _config_path: &str,
+    nixos_state_dir: Option<&Path>,
+) -> Result<PairingNixosSecretPaths, String> {
+    let state_dir = nixos_state_dir.map_or_else(
+        || PathBuf::from("/var/lib/p2p-vpn").join(instance),
+        Path::to_path_buf,
+    );
+    fs::create_dir_all(&state_dir)
+        .map_err(|error| format!("failed to create {}: {error}", state_dir.display()))?;
+    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to chmod {}: {error}", state_dir.display()))?;
+
+    let private_key_file = config
+        .network
+        .private_key
+        .as_ref()
+        .map(|private_key| {
+            let path = state_dir.join("private.key");
+            write_secret_file(&path, private_key)?;
+            path_to_string(&path)
+        })
+        .transpose()?;
+
+    let membership_key_file = config
+        .network
+        .membership_key
+        .as_ref()
+        .map(|membership_key| {
+            let path = state_dir.join("membership.key");
+            write_secret_file(&path, membership_key)?;
+            path_to_string(&path)
+        })
+        .transpose()?;
+
+    Ok(PairingNixosSecretPaths {
+        private_key_file,
+        membership_key_file,
+    })
+}
+
+fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
+    fs::write(path, format!("{value}\n"))
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to chmod {}: {error}", path.display()))?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
+fn path_to_string(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
+}
+
+fn render_pairing_nixos_config_file_module(
+    instance: &str,
+    config_path: &str,
+) -> Result<String, String> {
     if instance.is_empty() {
         return Err("--nixos-instance cannot be empty".to_owned());
     }
@@ -2507,6 +2642,237 @@ fn render_pairing_nixos_module(instance: &str, config_path: &str) -> Result<Stri
     Ok(format!(
         "{{\n  services.p2p-vpn.instances.{instance} = {{\n    enable = true;\n    configFile = {config_path};\n  }};\n}}"
     ))
+}
+
+fn render_pairing_nixos_module(
+    instance: &str,
+    config: &Config,
+    secret_paths: &PairingNixosSecretPaths,
+) -> Result<String, String> {
+    if instance.is_empty() {
+        return Err("--nixos-instance cannot be empty".to_owned());
+    }
+
+    let mut lines = vec![
+        "{".to_owned(),
+        format!(
+            "  services.p2p-vpn.instances.{} = {{",
+            nix_string_literal(instance)?
+        ),
+        "    enable = true;".to_owned(),
+        format!(
+            "    networkName = {};",
+            nix_string_literal(&config.network.name)?
+        ),
+    ];
+
+    if config.network.local_peer.is_empty() {
+        let local_peer = config
+            .local_peer()
+            .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
+            .clone();
+        lines.push(format!(
+            "    localPeer = {};",
+            nix_string_literal(&local_peer)?
+        ));
+    } else {
+        lines.push(format!(
+            "    localPeer = {};",
+            nix_string_literal(&config.network.local_peer)?
+        ));
+    }
+    if let Some(path) = &secret_paths.private_key_file {
+        lines.push(format!(
+            "    privateKeyFile = {};",
+            nix_string_literal(path)?
+        ));
+    }
+    if let Some(path) = &secret_paths.membership_key_file {
+        lines.push(format!(
+            "    membershipKeyFile = {};",
+            nix_string_literal(path)?
+        ));
+    }
+    if let Some(vpn_ip) = &config.network.vpn_ip {
+        lines.push(format!("    vpnIp = {};", nix_string_literal(vpn_ip)?));
+    }
+    if !config.network.routes.is_empty() {
+        push_nixos_routes(&mut lines, "    routes", &config.network.routes)?;
+    }
+    if config.interface.name != "pv0" {
+        lines.push(format!(
+            "    interfaceName = {};",
+            nix_string_literal(&config.interface.name)?
+        ));
+    }
+    if config.interface.mtu != 1280 {
+        lines.push(format!("    mtu = {};", config.interface.mtu));
+    }
+    if !config.network.bootstrap_peers.is_empty() {
+        push_nixos_bootstrap_peers(&mut lines, &config.network.bootstrap_peers)?;
+    }
+    if config.network.discovery != DiscoveryConfig::default() {
+        push_nixos_discovery(&mut lines, &config.network.discovery)?;
+    }
+    if !config.network.relay.reservations.is_empty() {
+        push_nixos_string_list(
+            &mut lines,
+            "    relayReservations",
+            &config.network.relay.reservations,
+        )?;
+    }
+    if !config.network.member_records.is_empty() {
+        push_nixos_json_attrs_list(
+            &mut lines,
+            "    memberRecords",
+            &config.network.member_records,
+        )?;
+    }
+    push_nixos_peers(&mut lines, &config.peers)?;
+
+    lines.push("  };".to_owned());
+    lines.push("}".to_owned());
+    Ok(lines.join("\n"))
+}
+
+fn push_nixos_peers(
+    lines: &mut Vec<String>,
+    peers: &[p2p_vpn::config::PeerConfig],
+) -> Result<(), String> {
+    if peers.is_empty() {
+        return Ok(());
+    }
+    lines.push("    peers = {".to_owned());
+    for peer in peers {
+        lines.push(format!("      {} = {{", nix_string_literal(&peer.id)?));
+        if let Some(name) = &peer.name {
+            lines.push(format!("        name = {};", nix_string_literal(name)?));
+        }
+        if let Some(ip) = &peer.ip {
+            lines.push(format!("        ip = {};", nix_string_literal(ip)?));
+        }
+        if let Some(vpn_ip) = &peer.vpn_ip {
+            lines.push(format!("        vpnIp = {};", nix_string_literal(vpn_ip)?));
+        }
+        if !peer.addresses.is_empty() {
+            push_nixos_string_list(lines, "        addresses", &peer.addresses)?;
+        }
+        if !peer.routes.is_empty() {
+            push_nixos_routes(lines, "        routes", &peer.routes)?;
+        }
+        lines.push("      };".to_owned());
+    }
+    lines.push("    };".to_owned());
+    Ok(())
+}
+
+fn push_nixos_bootstrap_peers(
+    lines: &mut Vec<String>,
+    peers: &[BootstrapPeerConfig],
+) -> Result<(), String> {
+    lines.push("    bootstrapPeers = [".to_owned());
+    for peer in peers {
+        lines.push("      {".to_owned());
+        lines.push(format!("        id = {};", nix_string_literal(&peer.id)?));
+        lines.push(format!(
+            "        address = {};",
+            nix_string_literal(&peer.address)?
+        ));
+        lines.push("      }".to_owned());
+    }
+    lines.push("    ];".to_owned());
+    Ok(())
+}
+
+fn push_nixos_discovery(
+    lines: &mut Vec<String>,
+    discovery: &DiscoveryConfig,
+) -> Result<(), String> {
+    lines.push("    discovery = {".to_owned());
+    lines.push(format!("      mdns = {};", nix_bool(discovery.mdns)));
+    lines.push(format!(
+        "      kademlia = {};",
+        nix_bool(discovery.kademlia)
+    ));
+    lines.push(format!(
+        "      kademliaProviderAdvertisement = {};",
+        nix_bool(discovery.kademlia_provider_advertisement)
+    ));
+    lines.push(format!(
+        "      kademliaProtocol = {};",
+        nix_string_literal(&discovery.kademlia_protocol)?
+    ));
+    lines.push(format!("      dcutr = {};", nix_bool(discovery.dcutr)));
+    lines.push(format!("      autonat = {};", nix_bool(discovery.autonat)));
+    lines.push("    };".to_owned());
+    Ok(())
+}
+
+fn push_nixos_routes(
+    lines: &mut Vec<String>,
+    attr: &str,
+    routes: &[RouteConfig],
+) -> Result<(), String> {
+    lines.push(format!("{attr} = ["));
+    for route in routes {
+        if route.metric == 0 {
+            lines.push(format!("      {}", nix_string_literal(&route.prefix)?));
+        } else {
+            lines.push("      {".to_owned());
+            lines.push(format!(
+                "        prefix = {};",
+                nix_string_literal(&route.prefix)?
+            ));
+            lines.push(format!("        metric = {};", route.metric));
+            lines.push("      }".to_owned());
+        }
+    }
+    lines.push("    ];".to_owned());
+    Ok(())
+}
+
+fn push_nixos_string_list(
+    lines: &mut Vec<String>,
+    attr: &str,
+    values: &[String],
+) -> Result<(), String> {
+    lines.push(format!("{attr} = ["));
+    for value in values {
+        lines.push(format!("      {}", nix_string_literal(value)?));
+    }
+    lines.push("    ];".to_owned());
+    Ok(())
+}
+
+fn push_nixos_json_attrs_list<T: Serialize>(
+    lines: &mut Vec<String>,
+    attr: &str,
+    values: &[T],
+) -> Result<(), String> {
+    lines.push(format!("{attr} = ["));
+    for value in values {
+        let rendered = serde_json::to_string_pretty(value)
+            .map_err(|error| format!("failed to render JSON: {error}"))?;
+        lines.push(format!("      {}", json_to_nix_expression(&rendered)));
+    }
+    lines.push("    ];".to_owned());
+    Ok(())
+}
+
+fn json_to_nix_expression(rendered_json: &str) -> String {
+    format!(
+        "builtins.fromJSON {}",
+        nix_multiline_string_literal(rendered_json)
+    )
+}
+
+fn nix_multiline_string_literal(value: &str) -> String {
+    let escaped = value.replace("''", "'''");
+    format!("''\n{escaped}\n      ''")
+}
+
+const fn nix_bool(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 fn nix_string_literal(value: &str) -> Result<String, String> {
@@ -10848,6 +11214,9 @@ mod tests {
             "node-b.nix",
             "--nixos-instance",
             "mesh-lab",
+            "--nixos-only",
+            "--nixos-state-dir",
+            "/var/lib/p2p-vpn/mesh-lab",
             "--interface",
             "pv-pair",
             "--mtu",
@@ -10872,6 +11241,8 @@ mod tests {
                     output,
                     nixos_output,
                     nixos_instance,
+                    nixos_only,
+                    nixos_state_dir,
                     interface,
                     mtu,
                     local_routes,
@@ -10891,6 +11262,11 @@ mod tests {
         assert_eq!(output, PathBuf::from("node-b.json"));
         assert_eq!(nixos_output, Some(PathBuf::from("node-b.nix")));
         assert_eq!(nixos_instance.as_deref(), Some("mesh-lab"));
+        assert!(nixos_only);
+        assert_eq!(
+            nixos_state_dir.as_deref(),
+            Some(Path::new("/var/lib/p2p-vpn/mesh-lab"))
+        );
         assert_eq!(interface, "pv-pair");
         assert_eq!(mtu, 1400);
         assert_eq!(local_routes.len(), 1);
@@ -10904,15 +11280,22 @@ mod tests {
     #[test]
     fn pair_accept_output_validation_checks_nixos_paths() {
         assert!(
-            validate_pair_accept_outputs(Path::new("-"), Some(Path::new("node.nix")), None, true)
-                .expect_err("stdout config should fail")
-                .contains("--nixos-output requires --output")
+            validate_pair_accept_outputs(
+                Path::new("-"),
+                Some(Path::new("node.nix")),
+                None,
+                false,
+                true
+            )
+            .expect_err("stdout config should fail")
+            .contains("--nixos-output requires --output")
         );
         assert!(
             validate_pair_accept_outputs(
                 Path::new("relative.json"),
                 Some(Path::new("node.nix")),
                 None,
+                false,
                 true
             )
             .expect_err("relative config should fail")
@@ -10923,6 +11306,7 @@ mod tests {
                 Path::new("/var/lib/p2p-vpn/lab.json"),
                 Some(Path::new("/var/lib/p2p-vpn/lab.json")),
                 None,
+                false,
                 true
             )
             .expect_err("same output should fail")
@@ -10933,6 +11317,7 @@ mod tests {
                 Path::new("/var/lib/p2p-vpn/lab.json"),
                 Some(Path::new("node.nix")),
                 Some(""),
+                false,
                 true,
             )
             .expect_err("empty instance should fail")
@@ -10942,33 +11327,121 @@ mod tests {
             Path::new("/var/lib/p2p-vpn/lab.json"),
             Some(Path::new("node.nix")),
             Some("lab"),
+            false,
             true,
         )
         .expect("valid nixos output");
+        validate_pair_accept_outputs(
+            Path::new("-"),
+            Some(Path::new("node.nix")),
+            Some("lab"),
+            true,
+            true,
+        )
+        .expect("nixos-only does not require JSON output");
+        assert!(
+            validate_pair_accept_outputs(Path::new("-"), None, Some("lab"), true, true)
+                .expect_err("nixos-only without nix output should fail")
+                .contains("--nixos-only requires --nixos-output")
+        );
     }
 
     #[test]
-    fn render_pairing_nixos_module_references_paired_json() {
-        let rendered =
-            render_pairing_nixos_module("lab", "/var/lib/p2p-vpn/lab.json").expect("render");
+    fn render_pairing_nixos_config_file_module_references_paired_json() {
+        let rendered = render_pairing_nixos_config_file_module("lab", "/var/lib/p2p-vpn/lab.json")
+            .expect("render");
 
-        assert_eq!(
-            rendered,
-            "{\n  services.p2p-vpn.instances.\"lab\" = {\n    enable = true;\n    configFile = \"/var/lib/p2p-vpn/lab.json\";\n  };\n}"
-        );
+        assert!(rendered.contains("configFile = \"/var/lib/p2p-vpn/lab.json\";"));
     }
 
     #[test]
     fn render_pairing_nixos_module_quotes_instance_names() {
-        let rendered = render_pairing_nixos_module("mesh lab", "/var/lib/p2p-vpn/mesh-lab.json")
-            .expect("render");
+        let rendered =
+            render_pairing_nixos_config_file_module("mesh lab", "/var/lib/p2p-vpn/mesh-lab.json")
+                .expect("render");
 
         assert!(rendered.contains("instances.\"mesh lab\""));
         assert!(
-            render_pairing_nixos_module("", "/var/lib/p2p-vpn/lab.json")
+            render_pairing_nixos_config_file_module("", "/var/lib/p2p-vpn/lab.json")
                 .expect_err("empty instance should fail")
                 .contains("--nixos-instance")
         );
+    }
+
+    #[test]
+    fn render_pairing_nixos_module_emits_typed_instance() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: String::new(),
+                private_key: Some(identity.private_key.clone()),
+                membership_key: Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned()),
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: Some("10.42.0.2".to_owned()),
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.2/32".to_owned(),
+                    metric: 0,
+                }],
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: vec![BootstrapPeerConfig {
+                    id: "12D3KooWBootstrap".to_owned(),
+                    address: "/ip4/203.0.113.10/tcp/4001".to_owned(),
+                }],
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig {
+                    reservations: vec![
+                        "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWBootstrap/p2p-circuit".to_owned(),
+                    ],
+                    ..RelayConfig::default()
+                },
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv-test0".to_owned(),
+                mtu: 1400,
+            },
+            peers: vec![p2p_vpn::config::PeerConfig {
+                id: "12D3KooWInviter".to_owned(),
+                name: Some("node-a".to_owned()),
+                ip: None,
+                vpn_ip: None,
+                addresses: vec!["/ip4/192.0.2.10/tcp/4001/p2p/12D3KooWInviter".to_owned()],
+                routes: vec![RouteConfig {
+                    prefix: "10.42.0.1/32".to_owned(),
+                    metric: 100,
+                }],
+            }],
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        config.network.local_peer.clear();
+
+        let rendered = render_pairing_nixos_module(
+            "lab",
+            &config,
+            &PairingNixosSecretPaths {
+                private_key_file: Some("/var/lib/p2p-vpn/lab/private.key".to_owned()),
+                membership_key_file: Some("/var/lib/p2p-vpn/lab/membership.key".to_owned()),
+            },
+        )
+        .expect("render");
+
+        assert!(rendered.contains("networkName = \"lab\";"));
+        assert!(rendered.contains("privateKeyFile = \"/var/lib/p2p-vpn/lab/private.key\";"));
+        assert!(rendered.contains("membershipKeyFile = \"/var/lib/p2p-vpn/lab/membership.key\";"));
+        assert!(rendered.contains("interfaceName = \"pv-test0\";"));
+        assert!(rendered.contains("mtu = 1400;"));
+        assert!(rendered.contains("vpnIp = \"10.42.0.2\";"));
+        assert!(rendered.contains("bootstrapPeers = ["));
+        assert!(rendered.contains("relayReservations = ["));
+        assert!(rendered.contains("peers = {"));
+        assert!(rendered.contains("\"12D3KooWInviter\" = {"));
+        assert!(rendered.contains("metric = 100;"));
+        assert!(!rendered.contains("configFile"));
+        assert!(!rendered.contains(&identity.private_key));
     }
 
     #[test]

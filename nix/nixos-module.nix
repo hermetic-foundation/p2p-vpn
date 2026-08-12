@@ -22,6 +22,7 @@ let
     optional
     optionalAttrs
     optionals
+    optionalString
     types
     unique
     ;
@@ -40,6 +41,7 @@ let
     && instance.configFile == null
     && instance.settings == null
     && instance.privateKeyFile == null
+    && instance.membershipKeyFile == null
   ) cfg.instances;
 
   generatedConfigFile = name: "/etc/p2p-vpn/${name}.json";
@@ -48,12 +50,39 @@ let
     name: instance:
     if instance.configFile != null then
       instance.configFile
-    else if instance.settings != null || instance.privateKeyFile == null then
+    else if
+      instance.settings != null || (instance.privateKeyFile == null && instance.membershipKeyFile == null)
+    then
       generatedConfigFile name
     else
       runtimeGeneratedConfigFile name;
 
-  routeObject = prefix: { inherit prefix; };
+  routeType = types.oneOf [
+    types.str
+    (types.submodule (
+      { ... }:
+      {
+        options = {
+          prefix = mkOption {
+            type = types.str;
+            example = "10.44.0.1/32";
+            description = "Overlay route prefix.";
+          };
+
+          metric = mkOption {
+            type = types.ints.unsigned;
+            default = 0;
+            example = 100;
+            description = "Overlay route metric.";
+          };
+        };
+      }
+    ))
+  ];
+  routeObject = route: if builtins.isString route then { prefix = route; } else route;
+  bootstrapPeerObject = peer: {
+    inherit (peer) id address;
+  };
   discoverySettings = discovery: {
     inherit (discovery)
       mdns
@@ -78,7 +107,7 @@ let
   generatedSettings =
     instance:
     {
-      network =
+      network = (
         {
           name = instance.networkName;
         }
@@ -86,26 +115,40 @@ let
         // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
         // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
         // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; }
+        // optionalAttrs (instance.membershipKey != null) {
+          membership_key = instance.membershipKey;
+        }
+        // optionalAttrs (instance.memberRecords != [ ]) { member_records = instance.memberRecords; }
+        // optionalAttrs (instance.bootstrapPeers != [ ]) {
+          bootstrap_peers = map bootstrapPeerObject instance.bootstrapPeers;
+        }
         // optionalAttrs (instance.discovery != null) {
           discovery = discoverySettings instance.discovery;
         }
-        // optionalAttrs (
-          instance.relayServer || instance.relayReservations != [ ] || instance.autoRelay != null
-        ) {
-          relay =
-            optionalAttrs instance.relayServer { server = true; }
-            // optionalAttrs (instance.relayReservations != [ ]) {
-              reservations = instance.relayReservations;
+        //
+          optionalAttrs
+            (instance.relayServer || instance.relayReservations != [ ] || instance.autoRelay != null)
+            {
+              relay =
+                optionalAttrs instance.relayServer { server = true; }
+                // optionalAttrs (instance.relayReservations != [ ]) {
+                  reservations = instance.relayReservations;
+                }
+                // optionalAttrs (instance.autoRelay != null) {
+                  auto = {
+                    max_candidates = instance.autoRelay.maxCandidates;
+                    max_reservations = instance.autoRelay.maxReservations;
+                    retry_interval_seconds = instance.autoRelay.retryIntervalSeconds;
+                  };
+                };
             }
-            // optionalAttrs (instance.autoRelay != null) {
-              auto = {
-                max_candidates = instance.autoRelay.maxCandidates;
-                max_reservations = instance.autoRelay.maxReservations;
-                retry_interval_seconds = instance.autoRelay.retryIntervalSeconds;
-              };
-            };
-        };
+      );
       peers = mapAttrsToList compactPeerConfig instance.peers;
+    }
+    // optionalAttrs (instance.interfaceName != "pv0" || instance.mtu != 1280) {
+      interface =
+        optionalAttrs (instance.interfaceName != "pv0") { name = instance.interfaceName; }
+        // optionalAttrs (instance.mtu != 1280) { inherit (instance) mtu; };
     };
 
   runtimeTemplateFile =
@@ -115,14 +158,32 @@ let
     );
   runtimeConfigScript =
     name: instance:
-    pkgs.writeShellScript "p2p-vpn-${name}-write-config" ''
-      set -eu
-      ${pkgs.jq}/bin/jq \
-        --rawfile private_key ${lib.escapeShellArg instance.privateKeyFile} \
-        '.network.private_key = ($private_key | rtrimstr("\n"))' \
-        ${runtimeTemplateFile name instance} \
-        > ${lib.escapeShellArg (runtimeGeneratedConfigFile name)}
-    '';
+    pkgs.writeShellScript "p2p-vpn-${name}-write-config" (
+      ''
+        set -eu
+        config="$(mktemp)"
+        cp ${runtimeTemplateFile name instance} "$config"
+      ''
+      + optionalString (instance.privateKeyFile != null) ''
+        next="$(mktemp)"
+        ${pkgs.jq}/bin/jq \
+          --rawfile private_key ${lib.escapeShellArg instance.privateKeyFile} \
+          '.network.private_key = ($private_key | rtrimstr("\n"))' \
+          "$config" > "$next"
+        mv "$next" "$config"
+      ''
+      + optionalString (instance.membershipKeyFile != null) ''
+        next="$(mktemp)"
+        ${pkgs.jq}/bin/jq \
+          --rawfile membership_key ${lib.escapeShellArg instance.membershipKeyFile} \
+          '.network.membership_key = ($membership_key | rtrimstr("\n"))' \
+          "$config" > "$next"
+        mv "$next" "$config"
+      ''
+      + ''
+        install -m 0600 "$config" ${lib.escapeShellArg (runtimeGeneratedConfigFile name)}
+      ''
+    );
 
   instanceOptions =
     { name, ... }:
@@ -216,6 +277,88 @@ let
           '';
         };
 
+        membershipKey = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "BASE64_MEMBERSHIP_KEY";
+          description = ''
+            Shared overlay membership key for generated configs.
+
+            This is copied into the Nix store. Prefer membershipKeyFile for
+            real deployments.
+          '';
+        };
+
+        membershipKeyFile = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "/run/secrets/p2p-vpn/lab.membership-key";
+          description = ''
+            Runtime file containing the base64 shared membership key.
+
+            The module reads this file at service start.
+          '';
+        };
+
+        memberRecords = mkOption {
+          type = types.listOf (types.attrsOf types.anything);
+          default = [ ];
+          example = [ ];
+          description = ''
+            Signed membership records for generated configs.
+
+            Pairing can emit these records into Nix because they are signed
+            authorization records, not private keys.
+          '';
+        };
+
+        bootstrapPeers = mkOption {
+          type = types.listOf (
+            types.submodule (
+              { ... }:
+              {
+                options = {
+                  id = mkOption {
+                    type = types.str;
+                    example = "12D3KooWBootstrap";
+                    description = "Bootstrap peer ID.";
+                  };
+
+                  address = mkOption {
+                    type = types.str;
+                    example = "/ip4/203.0.113.10/tcp/4001";
+                    description = "Bootstrap peer multiaddr without the trailing peer ID.";
+                  };
+                };
+              }
+            )
+          );
+          default = [ ];
+          example = [
+            {
+              id = "12D3KooWBootstrap";
+              address = "/ip4/203.0.113.10/tcp/4001";
+            }
+          ];
+          description = ''
+            Bootstrap peers for generated configs.
+          '';
+        };
+
+        interfaceName = mkOption {
+          type = types.str;
+          default = "pv0";
+          example = "pv0";
+          description = "TUN interface name for generated configs.";
+        };
+
+        mtu = mkOption {
+          type = types.ints.positive;
+          default = 1280;
+          example = 1280;
+          description = "TUN interface MTU for generated configs.";
+        };
+
         vpnIp = mkOption {
           type = types.nullOr types.str;
           default = null;
@@ -230,9 +373,15 @@ let
         };
 
         routes = mkOption {
-          type = types.listOf types.str;
+          type = types.listOf routeType;
           default = [ ];
-          example = [ "10.44.0.1/32" ];
+          example = [
+            "10.44.0.1/32"
+            {
+              prefix = "10.44.0.0/24";
+              metric = 100;
+            }
+          ];
           description = ''
             Overlay prefixes originated by this node in generated minimal
             configs.
@@ -416,9 +565,15 @@ let
                   };
 
                   routes = mkOption {
-                    type = types.listOf types.str;
+                    type = types.listOf routeType;
                     default = [ ];
-                    example = [ "10.44.0.2/32" ];
+                    example = [
+                      "10.44.0.2/32"
+                      {
+                        prefix = "10.44.0.0/24";
+                        metric = 100;
+                      }
+                    ];
                     description = ''
                       Overlay prefixes this peer may originate.
                     '';
@@ -528,7 +683,9 @@ let
 
       serviceConfig = {
         Type = "simple";
-        ExecStartPre = optional (instance.privateKeyFile != null) (runtimeConfigScript name instance);
+        ExecStartPre = optional (instance.privateKeyFile != null || instance.membershipKeyFile != null) (
+          runtimeConfigScript name instance
+        );
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/p2p-vpn"
@@ -653,32 +810,45 @@ in
           message = "services.p2p-vpn.instances.${name} cannot set both privateKey and privateKeyFile.";
         }
         {
+          assertion = instance.membershipKey == null || instance.membershipKeyFile == null;
+          message = "services.p2p-vpn.instances.${name} cannot set both membershipKey and membershipKeyFile.";
+        }
+        {
           assertion =
             (instance.configFile == null && instance.settings == null)
-            || (instance.localPeer == null
+            || (
+              instance.localPeer == null
               && instance.privateKey == null
               && instance.privateKeyFile == null
+              && instance.membershipKey == null
+              && instance.membershipKeyFile == null
+              && instance.memberRecords == [ ]
+              && instance.bootstrapPeers == [ ]
               && instance.vpnIp == null
               && instance.routes == [ ]
+              && instance.interfaceName == "pv0"
+              && instance.mtu == 1280
               && !instance.relayServer
               && instance.relayReservations == [ ]
               && instance.discovery == null
-              && instance.peers == { });
+              && instance.peers == { }
+            );
           message = "services.p2p-vpn.instances.${name} generated config fields cannot be combined with configFile or settings.";
         }
       ]
     ) (builtins.attrNames enabledInstances);
 
-    environment.etc = concatMapAttrs (name: instance: {
-      "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
-        builtins.toJSON instance.settings
-      );
-    }) settingsInstances
-    // concatMapAttrs (name: instance: {
-      "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
-        builtins.toJSON (generatedSettings instance)
-      );
-    }) storeGeneratedInstances;
+    environment.etc =
+      concatMapAttrs (name: instance: {
+        "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
+          builtins.toJSON instance.settings
+        );
+      }) settingsInstances
+      // concatMapAttrs (name: instance: {
+        "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
+          builtins.toJSON (generatedSettings instance)
+        );
+      }) storeGeneratedInstances;
 
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
 

@@ -286,22 +286,23 @@ Do not combine `configFile` with generated config options.
 
 ## Pairing Output
 
-Use pairing to create both files for a NixOS host:
+Use pairing to create a Nix-native module snippet:
 
 ```sh
 sudo install -d -m 0700 /var/lib/p2p-vpn
 sudo p2p-vpn pair accept lab.pair \
-  --output /var/lib/p2p-vpn/lab.json \
   --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab
+  --nixos-instance lab \
+  --nixos-only
 ```
 
-Generated JSON:
+Generated files:
 
 | File | Purpose |
 | --- | --- |
-| `/var/lib/p2p-vpn/lab.json` | Complete paired runtime config. |
-| `/etc/nixos/p2p-vpn-lab.nix` | NixOS module snippet. |
+| `/etc/nixos/p2p-vpn-lab.nix` | Typed NixOS instance. |
+| `/var/lib/p2p-vpn/lab/private.key` | Local identity key. |
+| `/var/lib/p2p-vpn/lab/membership.key` | Optional membership key. |
 
 The generated Nix uses this shape:
 
@@ -309,7 +310,12 @@ The generated Nix uses this shape:
 {
   services.p2p-vpn.instances."lab" = {
     enable = true;
-    configFile = "/var/lib/p2p-vpn/lab.json";
+    networkName = "lab";
+    privateKeyFile = "/var/lib/p2p-vpn/lab/private.key";
+
+    peers."REMOTE_PEER_ID" = {
+      routes = [ "10.44.0.1/32" ];
+    };
   };
 }
 ```
@@ -324,15 +330,33 @@ Import it from your system config:
 
 This is the recommended pairing path.
 
-It does not require hand translation into typed Nix options.
+It does not require hand translation from JSON.
 
-Keep the paired JSON root-owned and private:
+It also keeps private keys out of the Nix store.
+
+Keep generated state root-owned and private:
 
 ```sh
-sudo chmod 0600 /var/lib/p2p-vpn/lab.json
+sudo chmod 0700 /var/lib/p2p-vpn/lab
+sudo chmod 0600 /var/lib/p2p-vpn/lab/*.key
 ```
 
-Use typed options later only if you deliberately want fully declarative state.
+Use JSON-backed Nix only when full raw config state is required:
+
+```sh
+sudo p2p-vpn pair accept lab.pair \
+  --output /var/lib/p2p-vpn/lab.json \
+  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
+  --nixos-instance lab \
+  --nixos-config-file-mode
+```
+
+That mode writes:
+
+| File | Purpose |
+| --- | --- |
+| `/var/lib/p2p-vpn/lab.json` | Complete paired runtime config. |
+| `/etc/nixos/p2p-vpn-lab.nix` | `configFile` snippet. |
 
 ## Firewall
 
