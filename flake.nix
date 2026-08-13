@@ -3462,10 +3462,13 @@ EOF
           cp ${./docs/user/configuration.md} "$release_dir/docs/user/configuration.md"
           cp ${./docs/user/nixos.md} "$release_dir/docs/user/nixos.md"
           cp ${./docs/user/operations.md} "$release_dir/docs/user/operations.md"
+          cp ${./docs/user/pairing.md} "$release_dir/docs/user/pairing.md"
           cp ${./docs/user/public-libp2p.md} "$release_dir/docs/user/public-libp2p.md"
           cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
           cp ${./docs/developer/architecture.md} "$release_dir/docs/developer/architecture.md"
           cp ${./docs/developer/feature-matrix.md} "$release_dir/docs/developer/feature-matrix.md"
+          cp ${./docs/developer/nixos-module.md} "$release_dir/docs/developer/nixos-module.md"
+          cp ${./docs/developer/pairing.md} "$release_dir/docs/developer/pairing.md"
           cp ${./docs/developer/testing.md} "$release_dir/docs/developer/testing.md"
           cp ${./docs/developer/network-debugging.md} "$release_dir/docs/developer/network-debugging.md"
           cp ${./docs/developer/public-bootstrap-smoke.md} "$release_dir/docs/developer/public-bootstrap-smoke.md"
@@ -3625,13 +3628,17 @@ EOF
               "$root/docs/user/configuration.md" \
               "$root/docs/user/nixos.md" \
               "$root/docs/user/operations.md" \
+              "$root/docs/user/pairing.md" \
               "$root/docs/user/public-libp2p.md" \
               "$root/docs/developer/README.md" \
               "$root/docs/developer/architecture.md" \
               "$root/docs/developer/feature-matrix.md" \
+              "$root/docs/developer/nixos-module.md" \
+              "$root/docs/developer/pairing.md" \
               "$root/docs/developer/testing.md" \
               "$root/docs/developer/network-debugging.md" \
               "$root/docs/developer/public-bootstrap-smoke.md" \
+              "$root/examples/nixos-mesh/README.md" \
               "$root/examples/nixos-mesh/flake.nix" \
               "$root/nix/nixos-module.nix" \
               "$root/scripts/debug-bundle.sh" \
