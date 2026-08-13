@@ -56,6 +56,18 @@ let
         privateKeyFile = "/run/p2p-vpn-test-node-a.key";
         vpnIp = nodeA.vpnIp;
         listenAddresses = [ "/ip4/${nodeA.underlayIp}/tcp/4001" ];
+        discovery = {
+          mdns = true;
+          kademlia = false;
+          kademliaProviderAdvertisement = false;
+          dcutr = false;
+          autonat = false;
+        };
+        autoRelay = {
+          maxCandidates = 0;
+          maxReservations = 0;
+          retryIntervalSeconds = 30;
+        };
         metricsIntervalSeconds = 1;
         controlSocket = "/run/p2p-vpn-node-a/control.sock";
       };
@@ -65,12 +77,22 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "d /var/lib/p2p-vpn/nixos-vm-pairing 0700 root root -"
+        "f /var/lib/p2p-vpn/nixos-vm-pairing/private.key 0600 root root - ${nodeB.privateKey}"
+      ];
       networking.interfaces.eth1.ipv4.addresses = [
         {
           address = nodeB.underlayIp;
           prefixLength = 24;
         }
       ];
+
+      services.p2p-vpn.instances.nixos-vm-pairing = {
+        enable = true;
+        vpnIp = nodeB.vpnIp;
+        listenAddresses = [ "/ip4/${nodeB.underlayIp}/tcp/4001" ];
+      };
     };
 
   health =
@@ -118,10 +140,19 @@ let
                 packages.${system}.default = ${package};
               };
             };
+            minimalModule = {
+              services.p2p-vpn.instances = builtins.listToAttrs [
+                {
+                  name = instance;
+                  value.enable = true;
+                }
+              ];
+            };
             evaluated = import ${pkgs.path}/nixos/lib/eval-config.nix {
               system = "${system}";
               modules = [
                 upstreamModule
+                minimalModule
                 (builtins.toPath pairedModule)
                 {
                   system.stateVersion = "25.11";
@@ -170,7 +201,13 @@ pkgs.testers.nixosTest {
     node_a.wait_for_unit("multi-user.target")
     node_b.wait_for_unit("multi-user.target")
     node_a.wait_for_unit("p2p-vpn-node-a.service")
+    node_b.wait_for_unit("p2p-vpn-nixos-vm-pairing.service")
     node_a.wait_for_file("/run/p2p-vpn-node-a/control.sock")
+    node_b.wait_for_file("/run/p2p-vpn-nixos-vm-pairing/control.sock")
+    node_b.succeed(
+        "sha256sum /var/lib/p2p-vpn/nixos-vm-pairing/private.key "
+        "| cut -d' ' -f1 > /tmp/node-b-key.sha"
+    )
 
     with subtest("inviter starts without a preconfigured joiner"):
         node_a.succeed(
@@ -202,42 +239,34 @@ pkgs.testers.nixosTest {
         node_a.succeed("grep -q '^inviter address: /ip4/${nodeA.underlayIp}/tcp/4001$' /tmp/node-a-pair-inspect")
         node_a.succeed("grep -q '^rendezvous token: hidden$' /tmp/node-a-pair-inspect")
 
-    with subtest("new node accepts with only URI and its identity"):
+    with subtest("new node accepts into Nix and reuses its module identity"):
         offer_uri = node_a.succeed("cat /tmp/node-a.pair").strip()
         node_b.succeed("printf '%s\n' " + repr(offer_uri) + " > /tmp/node-a.pair")
         node_b.succeed(
             "p2p-vpn pair accept /tmp/node-a.pair "
-            "--output /tmp/node-b.json "
             "--nixos-output /tmp/node-b.nix "
             "--nixos-instance nixos-vm-pairing "
-            "--nixos-state-dir /tmp/p2p-vpn-node-b "
-            "--private-key '${nodeB.privateKey}' "
+            "--nixos-only "
             "--interface pv0 "
             "--vpn-ip ${nodeB.vpnIp} "
             "--timeout-seconds 30 "
-            "--force "
             "| tee /tmp/node-b-pair-accept"
         )
-        node_b.succeed("test -s /tmp/node-b.json")
         node_b.succeed("test -s /tmp/node-b.nix")
-        node_b.succeed("grep -q '^wrote /tmp/node-b.json$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q '^wrote /tmp/node-b.nix$' /tmp/node-b-pair-accept")
+        node_b.succeed("grep -q '^kept /var/lib/p2p-vpn/nixos-vm-pairing/private.key$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q '^paired with: ${nodeA.peerId}$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q 'services.p2p-vpn.instances.\"nixos-vm-pairing\"' /tmp/node-b.nix")
-        node_b.succeed("grep -q 'privateKeyFile = \"/tmp/p2p-vpn-node-b/private.key\";' /tmp/node-b.nix")
+        node_b.fail("grep -q 'privateKeyFile' /tmp/node-b.nix")
+        node_b.fail("grep -q 'listenAddresses' /tmp/node-b.nix")
+        node_b.fail("grep -q 'packetPlane' /tmp/node-b.nix")
+        node_b.fail("grep -q 'interfaceName' /tmp/node-b.nix")
         node_b.fail("grep -q 'configFile' /tmp/node-b.nix")
-        node_b.succeed("test -s /tmp/p2p-vpn-node-b/private.key")
-        node_b.succeed("jq -e '.network.name == \"nixos-vm-pairing\"' /tmp/node-b.json")
-        node_b.succeed("jq -e '.network.vpn_ip == \"${nodeB.vpnIp}\"' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.interface | has(\"name\") | not)' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.network | has(\"member_records\"))' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.network.member_records | length) >= 1' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.network | has(\"membership_key\") | not)' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.peers | length) == 1' /tmp/node-b.json")
-        node_b.succeed("jq -e '.peers[0].id == \"${nodeA.peerId}\"' /tmp/node-b.json")
-        node_b.succeed("jq -e '(.peers[0].addresses | length) >= 1' /tmp/node-b.json")
-        node_b.succeed("p2p-vpn routes --config /tmp/node-b.json | tee /tmp/node-b-config-routes")
-        node_b.succeed("grep -q 'route: ${nodeA.vpnIp}/32 owner peer ${nodeA.peerId}' /tmp/node-b-config-routes")
+        node_b.fail("test -e p2p-vpn.json")
+        node_b.succeed(
+            "test $(sha256sum /var/lib/p2p-vpn/nixos-vm-pairing/private.key | cut -d' ' -f1) "
+            "= $(cat /tmp/node-b-key.sha)"
+        )
 
     with subtest("generated Nix evaluates through the upstream module"):
         node_b.succeed(
@@ -249,20 +278,22 @@ pkgs.testers.nixosTest {
         node_b.succeed(
             "jq -e '"
             ".failedAssertions == [] "
-            "and .identityFile == \"/tmp/p2p-vpn-node-b/private.key\" "
+            "and .identityFile == \"/var/lib/p2p-vpn/nixos-vm-pairing/private.key\" "
             "and .generatedConfig.network.name == \"nixos-vm-pairing\" "
             "and .generatedConfig.network.local_peer == \"${nodeB.peerId}\" "
             "and .generatedConfig.network.vpn_ip == \"${nodeB.vpnIp}\" "
-            "and .generatedConfig.network.listen_addresses == [\"/ip4/0.0.0.0/tcp/4001\"] "
-            "and .generatedConfig.network.packet_plane.listen == [\"0.0.0.0:0\"] "
+            "and .generatedConfig.network.listen_addresses == ["
+            "\"/ip4/0.0.0.0/tcp/4001\", "
+            "\"/ip4/0.0.0.0/udp/4001/quic-v1\"] "
+            "and .generatedConfig.network.packet_plane.listen == [\"0.0.0.0:51820\"] "
             "and (.generatedConfig.network.member_records | length) >= 1 "
             "and .generatedConfig.peers[0].id == \"${nodeA.peerId}\" "
-            "and (.service.LoadCredential | length) == 1"
+            "and (.service.LoadCredential | length) == 0"
             "' /tmp/node-b-nix-evaluation.json"
         )
         node_b.fail("jq -e '.generatedConfig.network.private_key' /tmp/node-b-nix-evaluation.json")
         node_b.succeed(
-            "jq --rawfile private_key /tmp/p2p-vpn-node-b/private.key "
+            "jq --rawfile private_key /var/lib/p2p-vpn/nixos-vm-pairing/private.key "
             "'.generatedConfig "
             "| .network.private_key = ($private_key | rtrimstr(\"\\n\"))' "
             "/tmp/node-b-nix-evaluation.json "
@@ -276,12 +307,12 @@ pkgs.testers.nixosTest {
     with subtest("replayed URI is rejected with diagnostics"):
         node_b.fail(
             "p2p-vpn pair accept /tmp/node-a.pair "
-            "--output /tmp/node-b-replay.json "
-            "--private-key '${nodeB.privateKey}' "
+            "--nixos-output /tmp/node-b-replay.nix "
+            "--nixos-instance nixos-vm-pairing "
+            "--nixos-only "
             "--interface pv0 "
             "--vpn-ip ${nodeB.vpnIp} "
             "--timeout-seconds 10 "
-            "--force "
             "> /tmp/node-b-replay.out 2> /tmp/node-b-replay.err"
         )
         node_b.succeed("grep -q 'live pairing exchange failed' /tmp/node-b-replay.err")
@@ -304,6 +335,7 @@ pkgs.testers.nixosTest {
         node_a.succeed("${routes "node-a"} | tee /tmp/node-a-paired-routes")
 
     with subtest("generated joiner config starts and carries overlay traffic"):
+        node_b.succeed("systemctl stop p2p-vpn-nixos-vm-pairing.service")
         node_b.succeed("mkdir -p /run/p2p-vpn-node-b")
         node_b.succeed(
             "systemd-run "
@@ -325,6 +357,18 @@ pkgs.testers.nixosTest {
         node_b.succeed("${health "node-b"} | tee /tmp/node-b-health")
         node_a.succeed("grep -q '^daemon_health_ready true$' /tmp/node-a-health")
         node_b.succeed("grep -q '^daemon_health_ready true$' /tmp/node-b-health")
+        node_a.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=90)
+        node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=90)
+
+    with subtest("signed membership restores after inviter restart"):
+        node_a.succeed("systemctl restart p2p-vpn-node-a.service")
+        node_a.wait_for_unit("p2p-vpn-node-a.service")
+        node_a.wait_until_succeeds(
+            "${state "node-a"} | tee /tmp/node-a-restarted-state | grep -q '${nodeB.peerId}'",
+            timeout=90
+        )
+        node_a.succeed("${health "node-a"} | tee /tmp/node-a-restarted-health")
+        node_a.succeed("grep -q '^daemon_health_ready true$' /tmp/node-a-restarted-health")
         node_a.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=90)
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=90)
   '';

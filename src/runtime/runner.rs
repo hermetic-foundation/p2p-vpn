@@ -6227,6 +6227,7 @@ async fn handle_swarm_event(
                 context.infrastructure_peers,
                 context.metrics,
                 peer_id,
+                matches!(endpoint, ConnectedPoint::Listener { .. }),
                 context.auto_relay.should_discover_candidates(),
                 context.relay_server_enabled,
             ) {
@@ -6240,6 +6241,17 @@ async fn handle_swarm_event(
                     log_runtime_event(
                         LogLevel::Info,
                         "relay_infrastructure_connection_established",
+                        &[
+                            ("peer", &peer_id.to_string()),
+                            ("relayed", &endpoint.is_relayed().to_string()),
+                        ],
+                    );
+                    return Ok(());
+                }
+                EstablishedConnectionAuthorization::MembershipProbe => {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "membership_probe_connection_established",
                         &[
                             ("peer", &peer_id.to_string()),
                             ("relayed", &endpoint.is_relayed().to_string()),
@@ -6849,12 +6861,13 @@ async fn handle_control_event(
     match event {
         request_response::Event::Message {
             peer,
+            connection_id,
             message: Message::Request {
                 request, channel, ..
             },
             ..
         } => {
-            handle_control_request(swarm, context, peer, request, channel).await?;
+            handle_control_request(swarm, context, peer, connection_id, request, channel).await?;
         }
         request_response::Event::Message {
             peer,
@@ -7575,6 +7588,7 @@ async fn handle_control_request(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
+    connection_id: ConnectionId,
     request: ControlRequest,
     channel: request_response::ResponseChannel<ControlResponse>,
 ) -> Result<(), RunnerError> {
@@ -7582,6 +7596,8 @@ async fn handle_control_request(
         ControlRequest::Capabilities(capabilities) => {
             context.metrics.record_control_request_received();
             eprintln!("control capabilities from {peer}: {capabilities:?}");
+            let was_authorized = context.forwarder.is_configured_transport_peer(peer);
+            let records_before = context.forwarder.member_records().to_vec();
             let response = capability_response_for_peer_with_membership_records(
                 context.forwarder,
                 context.membership,
@@ -7590,8 +7606,23 @@ async fn handle_control_request(
                 context.local_capabilities,
                 context.previous_membership_tags,
             );
+            let membership_changed = context.forwarder.member_records() != records_before;
+            if membership_changed {
+                *context.local_capabilities =
+                    refreshed_local_capabilities(context.local_capabilities, context.forwarder);
+                sync_live_tun_routes(context.forwarder)?;
+            }
             match &response {
                 ControlResponse::CapabilitiesAccepted(_) => {
+                    if !was_authorized && context.forwarder.is_configured_transport_peer(peer) {
+                        promote_authenticated_overlay_connection(
+                            swarm,
+                            context,
+                            peer,
+                            connection_id,
+                            "membership_record_presented",
+                        );
+                    }
                     record_peer_capabilities(
                         context.forwarder,
                         context.peer_capabilities,
@@ -7835,12 +7866,6 @@ fn handle_pairing_request_event(
                 context.local_capabilities,
                 &response_for_membership,
             )?;
-            remove_overlay_peer_from_infrastructure(
-                context.infrastructure_peers,
-                context.auto_relay,
-                peer,
-                "pairing_membership_installed",
-            );
             bootstrap_accepted_pairing_peer(
                 swarm,
                 context,
@@ -7928,6 +7953,40 @@ fn bootstrap_accepted_pairing_peer(
         return;
     }
 
+    promote_authenticated_overlay_connection(
+        swarm,
+        context,
+        peer,
+        connection_id,
+        "pairing_membership_installed",
+    );
+    log_runtime_event(
+        LogLevel::Info,
+        "pairing_joiner_connection_bootstrapped",
+        &[
+            ("peer", &peer.to_string()),
+            ("connection_id", &connection_id.to_string()),
+        ],
+    );
+}
+
+fn promote_authenticated_overlay_connection(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    connection_id: ConnectionId,
+    reason: &str,
+) {
+    if !context.forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+    remove_overlay_peer_from_infrastructure(
+        context.infrastructure_peers,
+        context.auto_relay,
+        peer,
+        reason,
+    );
+
     let endpoint = context
         .active_connections
         .get(&(peer, connection_id))
@@ -7966,11 +8025,12 @@ fn bootstrap_accepted_pairing_peer(
     );
     log_runtime_event(
         LogLevel::Info,
-        "pairing_joiner_connection_bootstrapped",
+        "authenticated_overlay_connection_promoted",
         &[
             ("peer", &peer.to_string()),
             ("connection_id", &connection_id.to_string()),
             ("had_endpoint", &endpoint.is_some().to_string()),
+            ("reason", reason),
         ],
     );
 }
@@ -8065,32 +8125,28 @@ fn pairing_response_for_request(
         return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
     }
 
-    let member_records = if config.network.membership_key.is_none() {
-        let route_grants = pairing_route_grants_for_request(request)?;
-        let mut roles = vec![MembershipRole::OverlayMember];
-        if !route_grants.is_empty() {
-            roles.push(MembershipRole::RouteAuthority);
-        }
-        vec![issue_membership_record_for_subject_at(
-            identity,
-            MembershipRecordIssueOptions {
-                network_name: config.network.name.clone(),
-                member: MembershipRecordSubject {
-                    peer_id: request.payload.joiner_peer.clone(),
-                    public_key: request.payload.joiner_public_key.clone(),
-                },
-                membership_epoch: 1,
-                sequence: now_unix_seconds,
-                revoked: false,
-                roles,
-                route_grants,
-                expires_at_unix_seconds: None,
+    let route_grants = pairing_route_grants_for_request(request)?;
+    let mut roles = vec![MembershipRole::OverlayMember];
+    if !route_grants.is_empty() {
+        roles.push(MembershipRole::RouteAuthority);
+    }
+    let member_records = vec![issue_membership_record_for_subject_at(
+        identity,
+        MembershipRecordIssueOptions {
+            network_name: config.network.name.clone(),
+            member: MembershipRecordSubject {
+                peer_id: request.payload.joiner_peer.clone(),
+                public_key: request.payload.joiner_public_key.clone(),
             },
-            now_unix_seconds,
-        )?]
-    } else {
-        Vec::new()
-    };
+            membership_epoch: 1,
+            sequence: now_unix_seconds,
+            revoked: false,
+            roles,
+            route_grants,
+            expires_at_unix_seconds: None,
+        },
+        now_unix_seconds,
+    )?];
 
     let response = crate::pairing::build_pairing_response_at(
         config,
@@ -8329,10 +8385,6 @@ fn capability_response_for_peer_with_membership_records(
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
 ) -> ControlResponse {
-    if !forwarder.is_configured_transport_peer(peer) {
-        return rejected_capabilities_response(ControlRejectionReason::UnauthorizedPeer);
-    }
-
     if let Some(reason) = validate_peer_capabilities(
         forwarder,
         membership,
@@ -8889,6 +8941,10 @@ fn validate_peer_capabilities(
 
     if learn_membership_records_from_capabilities(forwarder, membership, capabilities).is_err() {
         return Some(ControlRejectionReason::InvalidMembershipRecord);
+    }
+
+    if !forwarder.is_configured_transport_peer(peer) {
+        return Some(ControlRejectionReason::UnauthorizedPeer);
     }
 
     if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
@@ -10347,6 +10403,7 @@ fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChan
 enum EstablishedConnectionAuthorization {
     OverlayPeer,
     InfrastructurePeer,
+    MembershipProbe,
     InfrastructureProbe,
     Rejected,
 }
@@ -10356,6 +10413,7 @@ fn authorize_established_connection(
     infrastructure_peers: &InfrastructurePeers,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
+    allow_membership_probe: bool,
     allow_infrastructure_probe: bool,
     relay_server_enabled: bool,
 ) -> EstablishedConnectionAuthorization {
@@ -10369,6 +10427,10 @@ fn authorize_established_connection(
 
     if membership.allows_configured_infrastructure(peer) || infrastructure_peers.contains(peer) {
         return EstablishedConnectionAuthorization::InfrastructurePeer;
+    }
+
+    if allow_membership_probe {
+        return EstablishedConnectionAuthorization::MembershipProbe;
     }
 
     if allow_infrastructure_probe {
@@ -12105,6 +12167,7 @@ mod tests {
         net::{Ipv4Addr, SocketAddr},
     };
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use libp2p::{
         core::{Endpoint, transport::PortUse},
         identity::Keypair,
@@ -12468,6 +12531,45 @@ mod tests {
             ]
         );
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn pairing_response_with_membership_key_also_issues_member_record() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        let membership_key = STANDARD.encode([9_u8; 32]);
+        config.network.membership_key = Some(membership_key.clone());
+        let offer =
+            export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+
+        let response = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect("response");
+
+        assert_eq!(response.payload.membership_key, Some(membership_key));
+        assert_eq!(response.payload.member_records.len(), 1);
+        assert_eq!(
+            response.payload.member_records[0].payload.member_peer,
+            joiner.peer_id
+        );
     }
 
     #[test]
@@ -16561,6 +16663,7 @@ mod tests {
                 relay,
                 false,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -16853,6 +16956,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 peer,
+                false,
                 false,
                 true,
             ),
@@ -17270,6 +17374,7 @@ mod tests {
                 allowed,
                 false,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::OverlayPeer,
         );
@@ -17281,6 +17386,7 @@ mod tests {
                 infrastructure,
                 false,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -17290,6 +17396,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
                 false,
             ),
@@ -17319,6 +17426,7 @@ mod tests {
                 infrastructure,
                 false,
                 false,
+                false,
             ),
             EstablishedConnectionAuthorization::InfrastructurePeer,
         );
@@ -17328,6 +17436,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
                 false,
             ),
@@ -17354,6 +17463,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 probe,
+                false,
                 true,
                 false,
             ),
@@ -17362,6 +17472,36 @@ mod tests {
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.unauthorized_connections_dropped, 0);
+    }
+
+    #[test]
+    fn inbound_membership_probe_can_present_authorization() {
+        let probe = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::new(),
+            configured_infrastructure_peers: HashSet::new(),
+        };
+        let infrastructure_peers = InfrastructurePeers::default();
+        let metrics = RuntimeMetrics::default();
+
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &metrics,
+                probe,
+                true,
+                false,
+                false,
+            ),
+            EstablishedConnectionAuthorization::MembershipProbe,
+        );
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .unauthorized_connections_dropped,
+            0
+        );
     }
 
     #[test]
@@ -17380,6 +17520,7 @@ mod tests {
                 &infrastructure_peers,
                 &metrics,
                 client,
+                false,
                 false,
                 true,
             ),
@@ -19155,6 +19296,49 @@ mod tests {
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.77.0.0/24", 1)])
         );
         assert_eq!(forwarder.member_record_count(), 2);
+    }
+
+    #[test]
+    fn capability_response_authorizes_peer_presenting_local_signed_record() {
+        let local_identity = NodeIdentity::generate_ed25519().expect("local identity");
+        let member = NodeIdentity::generate_ed25519().expect("member identity");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let member_record = issue_membership_record_at(
+            &local_identity,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("member record");
+        let mut config = config_with_peer(&local_identity, member_peer);
+        config.peers.clear();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let remote_capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_member_records(vec![member_record]);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+
+        assert!(matches!(
+            capability_response_for_peer_with_membership_records(
+                &mut forwarder,
+                &mut membership,
+                member_peer,
+                &remote_capabilities,
+                &local_capabilities,
+                &[],
+            ),
+            ControlResponse::CapabilitiesAccepted(_)
+        ));
+        assert!(membership.allows(member_peer));
+        assert!(forwarder.is_configured_transport_peer(member_peer));
+        assert_eq!(forwarder.member_record_count(), 1);
     }
 
     #[test]
