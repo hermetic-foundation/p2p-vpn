@@ -30,11 +30,14 @@ let
         pkgs.iputils
         pkgs.jq
       ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-${name}.key 0600 root root - ${local.privateKey}"
+      ];
 
       services.p2p-vpn.instances.${name} = {
         enable = true;
         networkName = "nixos-vm-mesh";
-        privateKey = local.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-${name}.key";
         vpnIp = local.vpnIp;
         peers.${remote.peerId}.vpnIp = remote.vpnIp;
         metricsIntervalSeconds = 1;
@@ -79,7 +82,7 @@ pkgs.testers.nixosTest {
             "and (.network | has(\"discovery\") | not) "
             "and (.network | has(\"relay\") | not) "
             "and (.peers == [{\"id\":\"${nodeB.peerId}\",\"vpn_ip\":\"${nodeB.vpnIp}\"}])"
-            "' /etc/p2p-vpn/node-a.json"
+            "' /run/p2p-vpn-node-a/config.json"
         )
         node_b.succeed(
             "jq -e '"
@@ -89,7 +92,7 @@ pkgs.testers.nixosTest {
             "and (.network | has(\"discovery\") | not) "
             "and (.network | has(\"relay\") | not) "
             "and (.peers == [{\"id\":\"${nodeA.peerId}\",\"vpn_ip\":\"${nodeA.vpnIp}\"}])"
-            "' /etc/p2p-vpn/node-b.json"
+            "' /run/p2p-vpn-node-b/config.json"
         )
 
     with subtest("minimal configs discover healthy peers"):

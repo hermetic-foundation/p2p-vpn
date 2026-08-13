@@ -38,6 +38,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-node-a.key 0600 root root - ${nodeA.privateKey}"
+      ];
       networking.interfaces.eth1.ipv4.addresses = [
         {
           address = nodeA.underlayIp;
@@ -48,7 +51,7 @@ let
       services.p2p-vpn.instances.node-a = {
         enable = true;
         networkName = "nixos-vm-pairing";
-        privateKey = nodeA.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-node-a.key";
         vpnIp = nodeA.vpnIp;
         listenAddresses = [ "/ip4/${nodeA.underlayIp}/tcp/4001" ];
         metricsIntervalSeconds = 1;
@@ -110,7 +113,7 @@ pkgs.testers.nixosTest {
             "and .network.vpn_ip == \"${nodeA.vpnIp}\" "
             "and .network.listen_addresses == [\"/ip4/${nodeA.underlayIp}/tcp/4001\"] "
             "and .peers == []"
-            "' /etc/p2p-vpn/node-a.json"
+            "' /run/p2p-vpn-node-a/config.json"
         )
         node_a.succeed("${state "node-a"} | tee /tmp/node-a-initial-state")
         node_a.fail("grep -q '${nodeB.peerId}' /tmp/node-a-initial-state")
@@ -118,7 +121,7 @@ pkgs.testers.nixosTest {
     with subtest("pair offer creates inspectable one-time URI"):
         node_a.succeed(
             "p2p-vpn pair offer "
-            "--config /etc/p2p-vpn/node-a.json "
+            "--config /run/p2p-vpn-node-a/config.json "
             "--output /tmp/node-a.pair "
             "--expires-in-seconds 600 "
             "--force"

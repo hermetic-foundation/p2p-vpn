@@ -44,6 +44,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-node-a.key 0600 root root - ${nodeA.privateKey}"
+      ];
       virtualisation.vlans = [ 1 ];
       networking.interfaces.eth1.ipv4.addresses = [
         {
@@ -56,7 +59,7 @@ let
         enable = true;
         networkName = "nixos-vm-network-move";
         localPeer = nodeA.peerId;
-        privateKey = nodeA.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-node-a.key";
         vpnIp = nodeA.vpnIp;
         peers.${nodeB.peerId}.vpnIp = nodeB.vpnIp;
         metricsIntervalSeconds = 5;
@@ -68,6 +71,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-node-b.key 0600 root root - ${nodeB.privateKey}"
+      ];
       virtualisation.vlans = [
         1
         2
@@ -89,7 +95,7 @@ let
         enable = true;
         networkName = "nixos-vm-network-move";
         localPeer = nodeB.peerId;
-        privateKey = nodeB.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-node-b.key";
         vpnIp = nodeB.vpnIp;
         peers.${nodeA.peerId}.vpnIp = nodeA.vpnIp;
         metricsIntervalSeconds = 5;
@@ -101,6 +107,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-relay.key 0600 root root - ${relay.privateKey}"
+      ];
       virtualisation.vlans = [
         1
         2
@@ -122,7 +131,7 @@ let
         enable = true;
         networkName = "nixos-vm-network-move";
         localPeer = relay.peerId;
-        privateKey = relay.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-relay.key";
         relayServer = true;
         metricsIntervalSeconds = 5;
         controlSocket = "/run/p2p-vpn-relay/control.sock";
@@ -138,10 +147,7 @@ let
     + "--require-validated-peers "
     + "--require-supported-paths";
 
-  state =
-    name:
-    "p2p-vpn daemon-state "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  state = name: "p2p-vpn daemon-state " + "--socket /run/p2p-vpn-${name}/control.sock";
 in
 pkgs.testers.nixosTest {
   name = "p2p-vpn-nixos-vm-network-move";
@@ -171,21 +177,21 @@ pkgs.testers.nixosTest {
             "(.network | has(\"relay\") | not) "
             "and (.network | has(\"discovery\") | not) "
             "and (.peers == [{\"id\":\"${nodeB.peerId}\",\"vpn_ip\":\"${nodeB.vpnIp}\"}])"
-            "' /etc/p2p-vpn/node-a.json"
+            "' /run/p2p-vpn-node-a/config.json"
         )
         node_b.succeed(
             "jq -e '"
             "(.network | has(\"relay\") | not) "
             "and (.network | has(\"discovery\") | not) "
             "and (.peers == [{\"id\":\"${nodeA.peerId}\",\"vpn_ip\":\"${nodeA.vpnIp}\"}])"
-            "' /etc/p2p-vpn/node-b.json"
+            "' /run/p2p-vpn-node-b/config.json"
         )
         node_a.succeed(
-            "sha256sum /etc/p2p-vpn/node-a.json "
+            "sha256sum /run/p2p-vpn-node-a/config.json "
             "| awk '{print $1}' > /tmp/node-a-config.sha256"
         )
         node_b.succeed(
-            "sha256sum /etc/p2p-vpn/node-b.json "
+            "sha256sum /run/p2p-vpn-node-b/config.json "
             "| awk '{print $1}' > /tmp/node-b-config.sha256"
         )
 
@@ -210,11 +216,11 @@ pkgs.testers.nixosTest {
         node_a.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-a-moved-state")
         node_b.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-b-moved-state")
         node_a.succeed(
-            "test \"$(sha256sum /etc/p2p-vpn/node-a.json | awk '{print $1}')\" "
+            "test \"$(sha256sum /run/p2p-vpn-node-a/config.json | awk '{print $1}')\" "
             "= \"$(cat /tmp/node-a-config.sha256)\""
         )
         node_b.succeed(
-            "test \"$(sha256sum /etc/p2p-vpn/node-b.json | awk '{print $1}')\" "
+            "test \"$(sha256sum /run/p2p-vpn-node-b/config.json | awk '{print $1}')\" "
             "= \"$(cat /tmp/node-b-config.sha256)\""
         )
 
@@ -226,11 +232,11 @@ pkgs.testers.nixosTest {
         node_a.wait_until_succeeds("${state "node-a"} | tee /tmp/node-a-returned-state | grep -q 'selected_path direct_'", timeout=120)
         node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-returned-state | grep -q 'selected_path direct_'", timeout=120)
         node_a.succeed(
-            "test \"$(sha256sum /etc/p2p-vpn/node-a.json | awk '{print $1}')\" "
+            "test \"$(sha256sum /run/p2p-vpn-node-a/config.json | awk '{print $1}')\" "
             "= \"$(cat /tmp/node-a-config.sha256)\""
         )
         node_b.succeed(
-            "test \"$(sha256sum /etc/p2p-vpn/node-b.json | awk '{print $1}')\" "
+            "test \"$(sha256sum /run/p2p-vpn-node-b/config.json | awk '{print $1}')\" "
             "= \"$(cat /tmp/node-b-config.sha256)\""
         )
   '';

@@ -43,6 +43,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-${name}.key 0600 root root - ${local.privateKey}"
+      ];
       networking.interfaces.eth1.ipv4.addresses = [
         {
           address = local.underlayIp;
@@ -54,7 +57,7 @@ let
         enable = true;
         networkName = "nixos-vm-quic-datagram";
         localPeer = local.peerId;
-        privateKey = local.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-${name}.key";
         vpnIp = local.vpnIp;
         listenAddresses = [ "/ip4/0.0.0.0/udp/4001/quic-v1" ];
         discovery = {
@@ -121,7 +124,7 @@ pkgs.testers.nixosTest {
             "and .network.packet_plane.quic_listen == [\"${nodeA.quicPacketEndpoint}\"] "
             "and .network.packet_plane.quic_external_endpoints == [\"${nodeA.quicPacketEndpoint}\"] "
             "and .peers[0].addresses == [\"${quicAddress nodeB}\"]"
-            "' /etc/p2p-vpn/node-a.json"
+            "' /run/p2p-vpn-node-a/config.json"
         )
         node_b.succeed(
             "jq -e '"
@@ -131,7 +134,7 @@ pkgs.testers.nixosTest {
             "and .network.packet_plane.quic_listen == [\"${nodeB.quicPacketEndpoint}\"] "
             "and .network.packet_plane.quic_external_endpoints == [\"${nodeB.quicPacketEndpoint}\"] "
             "and .peers[0].addresses == [\"${quicAddress nodeA}\"]"
-            "' /etc/p2p-vpn/node-b.json"
+            "' /run/p2p-vpn-node-b/config.json"
         )
 
     with subtest("pv0 traffic prefers QUIC datagram over QUIC stream"):

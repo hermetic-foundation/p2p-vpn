@@ -130,6 +130,7 @@ USAGE
             )
 
             vm_checks=(
+              ".#checks.$system.nixos-vm-module-lifecycle"
               ".#checks.$system.nixos-vm-minimal-lan"
               ".#checks.$system.nixos-vm-pairing"
               ".#checks.$system.nixos-vm-quic-datagram"
@@ -3137,7 +3138,6 @@ EOF
                 };
                 services.p2p-vpn.instances.node-b = {
                   enable = true;
-                  privateKey = "BASE64_PRIVATE_KEY";
                   peers."8888888888888888888888888888888888888888888888888888888888888888" = { };
                   controlSocket = null;
                 };
@@ -3145,7 +3145,7 @@ EOF
                   enable = true;
                   networkName = "nixos-module";
                   localPeer = "0000000000000000000000000000000000000000000000000000000000000000";
-                  privateKey = "BASE64_PRIVATE_KEY";
+                  privateKeyFile = "/run/secrets/p2p-vpn/node-c.key";
                   vpnIp = "10.44.0.1";
                   peers."1111111111111111111111111111111111111111111111111111111111111111" = {
                     ip = "192.168.0.203";
@@ -3168,13 +3168,73 @@ EOF
                 services.p2p-vpn.instances.node-e = {
                   enable = true;
                   networkName = "nixos-module-minimal";
-                  privateKey = "BASE64_PRIVATE_KEY";
                   peers."5555555555555555555555555555555555555555555555555555555555555555" = { };
                 };
                 services.p2p-vpn.instances.node-f.enable = true;
+                services.p2p-vpn.instances.node-g = {
+                  enable = true;
+                  configFile = "/run/secrets/p2p-vpn/node-g.json";
+                  openFirewall = false;
+                };
               }
             )
           ];
+        };
+        moduleAssertionMessages = instances:
+          let
+            evaluated = lib.nixosSystem {
+              inherit system;
+              modules = [
+                self.nixosModules.default
+                {
+                  system.stateVersion = "25.11";
+                  services.p2p-vpn.instances = instances;
+                }
+              ];
+            };
+          in
+          map (entry: entry.message) (
+            builtins.filter (
+              entry: !entry.assertion && lib.hasPrefix "services.p2p-vpn" entry.message
+            ) evaluated.config.assertions
+          );
+        invalidModuleAssertions = {
+          mixedModes = moduleAssertionMessages {
+            mixed = {
+              enable = true;
+              configFile = "/run/secrets/p2p-vpn/mixed.json";
+              vpnIp = "10.44.0.1";
+            };
+          };
+          inlineSecrets = moduleAssertionMessages {
+            insecure = {
+              enable = true;
+              privateKey = "INSECURE_IDENTITY";
+              membershipKey = "INSECURE_MEMBERSHIP";
+            };
+          };
+          duplicateInterfaces = moduleAssertionMessages {
+            first = {
+              enable = true;
+              interfaceName = "pv-shared";
+            };
+            second = {
+              enable = true;
+              interfaceName = "pv-shared";
+            };
+          };
+          storeConfig = moduleAssertionMessages {
+            stored = {
+              enable = true;
+              configFile = toString (pkgs.writeText "p2p-vpn-insecure.json" "{}");
+            };
+          };
+          unsafeState = moduleAssertionMessages {
+            unsafe = {
+              enable = true;
+              stateDirectory = "/var/lib/p2p vpn";
+            };
+          };
         };
         nixosVmSmoke = pkgs.testers.nixosTest {
           name = "p2p-vpn-nixos-module-smoke";
@@ -3188,7 +3248,6 @@ EOF
 
               services.p2p-vpn.instances.smoke = {
                 enable = true;
-                privateKey = "BASE64_PRIVATE_KEY";
                 interfaceName = "hs-smoke0";
                 discovery = {
                   mdns = false;
@@ -3237,6 +3296,9 @@ EOF
             machine.wait_until_fails("test -S /run/p2p-vpn-smoke/control.sock")
             machine.succeed("test \"$(systemctl show p2p-vpn-smoke.service -p Result --value)\" = success")
           '';
+        };
+        nixosVmModuleLifecycle = import ./tests/nixos/module-lifecycle.nix {
+          inherit self pkgs package;
         };
         nixosVmMesh = import ./tests/nixos/mesh.nix {
           inherit self pkgs package;
@@ -3566,27 +3628,36 @@ EOF
             nativeBuildInputs = [ pkgs.jq ];
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
-            execStartSecret = moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStart;
-            execStartMinimal = moduleEval.config.systemd.services.p2p-vpn-node-e.serviceConfig.ExecStart;
             execStartStateBacked = moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStart;
+            execStartJson = moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStart;
             execStartPreFileSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre;
             execStartPreFileSecretScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre
             );
-            stateBackedCondition =
-              moduleEval.config.systemd.services.p2p-vpn-node-f.unitConfig.ConditionPathExists;
             execStartPreStateBacked = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre;
             execStartPreStateBackedScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre
             );
-            execStartPreSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre;
-            execStartPreSecretScript = builtins.readFile (
-              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre
+            execStartPreJsonScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPre
             );
+            loadCredential = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.LoadCredential;
+            stateDirectory = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.StateDirectory;
             execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
             execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
-            generatedSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-c.json".source;
-            generatedMinimalSettings = builtins.readFile moduleEval.config.environment.etc."p2p-vpn/node-e.json".source;
+            generatedSettings = builtins.toJSON moduleEval.config.services.p2p-vpn.generatedConfigs.node-c;
+            generatedMinimalSettings = builtins.toJSON moduleEval.config.services.p2p-vpn.generatedConfigs.node-e;
+            identityFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.identityFiles;
+            effectiveInterfaces = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveInterfaces;
+            effectiveListenAddresses = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveListenAddresses;
+            failedAssertions = builtins.toJSON (
+              map (entry: entry.message) (
+                builtins.filter (
+                  entry: !entry.assertion && lib.hasPrefix "services.p2p-vpn" entry.message
+                ) moduleEval.config.assertions
+              )
+            );
+            invalidAssertions = builtins.toJSON invalidModuleAssertions;
             killSignal = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.KillSignal;
             timeoutStopSec = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.TimeoutStopSec;
             runtimeDirectory = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.RuntimeDirectory;
@@ -3619,54 +3690,55 @@ EOF
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
             esac
             case "$execStartPreFileSecret" in
-              *"p2p-vpn-node-a-write-config"*) ;;
+              *"p2p-vpn-node-a-prepare-config"*) ;;
               *) echo "unexpected file-secret ExecStartPre: $execStartPreFileSecret" >&2; exit 1 ;;
             esac
             case "$execStartPreFileSecretScript" in
-              *"--rawfile private_key /run/secrets/p2p-vpn/node-a.key"*"/run/p2p-vpn-node-a/config.json"*) ;;
+              *'private_key_file="$CREDENTIALS_DIRECTORY/private.key"'*'--rawfile private_key "$private_key_file"'*'/run/p2p-vpn-node-a/config.json'*) ;;
               *) echo "unexpected file-secret ExecStartPre script: $execStartPreFileSecretScript" >&2; exit 1 ;;
             esac
+            test "$loadCredential" = '["private.key:/run/secrets/p2p-vpn/node-a.key"]'
             case "$execStartNoSocket" in
               *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
-              *"p2p-vpn up --config /etc/p2p-vpn/node-b.json"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-b/config.json"*) ;;
               *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
-            esac
-            case "$execStartSecret" in
-              *"p2p-vpn up --config /run/p2p-vpn-node-d/config.json --control-socket /run/p2p-vpn-node-d/control.sock"*) ;;
-              *) echo "unexpected secret ExecStart: $execStartSecret" >&2; exit 1 ;;
-            esac
-            case "$execStartMinimal" in
-              *"p2p-vpn up --config /etc/p2p-vpn/node-e.json --control-socket /run/p2p-vpn-node-e/control.sock"*) ;;
-              *) echo "unexpected minimal ExecStart: $execStartMinimal" >&2; exit 1 ;;
             esac
             case "$execStartStateBacked" in
               *"p2p-vpn up --config /run/p2p-vpn-node-f/config.json --control-socket /run/p2p-vpn-node-f/control.sock"*) ;;
               *) echo "unexpected state-backed ExecStart: $execStartStateBacked" >&2; exit 1 ;;
             esac
-            test "$stateBackedCondition" = /var/lib/p2p-vpn/node-f/private.key
+            test "$stateDirectory" = '["p2p-vpn/node-f"]'
             case "$execStartPreStateBacked" in
-              *"p2p-vpn-node-f-write-config"*) ;;
+              *"p2p-vpn-node-f-prepare-config"*) ;;
               *) echo "unexpected state-backed ExecStartPre: $execStartPreStateBacked" >&2; exit 1 ;;
             esac
             case "$execStartPreStateBackedScript" in
-              *"--rawfile private_key /var/lib/p2p-vpn/node-f/private.key"*"/run/p2p-vpn-node-f/config.json"*) ;;
+              *'private_key_file=/var/lib/p2p-vpn/node-f/private.key'*'keygen --output "$private_key_file"'*'--rawfile private_key "$private_key_file"'*) ;;
               *) echo "unexpected state-backed ExecStartPre script: $execStartPreStateBackedScript" >&2; exit 1 ;;
             esac
-            case "$execStartPreSecret" in
-              *"p2p-vpn-node-d-write-config"*) ;;
-              *) echo "unexpected secret ExecStartPre: $execStartPreSecret" >&2; exit 1 ;;
+            case "$execStartJson" in
+              *"p2p-vpn up --config /run/secrets/p2p-vpn/node-g.json --control-socket /run/p2p-vpn-node-g/control.sock"*) ;;
+              *) echo "unexpected JSON ExecStart: $execStartJson" >&2; exit 1 ;;
             esac
-            case "$execStartPreSecretScript" in
-              *"--rawfile private_key /run/secrets/p2p-vpn/node-d.key"*"/run/p2p-vpn-node-d/config.json"*) ;;
-              *) echo "unexpected secret ExecStartPre script: $execStartPreSecretScript" >&2; exit 1 ;;
-            esac
-            case "$generatedSettings" in
-              *'"name":"nixos-module"'*'"private_key":"BASE64_PRIVATE_KEY"'*'"vpn_ip":"10.44.0.1"'*'"ip":"192.168.0.203"'*'"vpn_ip":"10.44.0.2"'*) ;;
-              *) echo "unexpected generated settings: $generatedSettings" >&2; exit 1 ;;
+            case "$execStartPreJsonScript" in
+              *'status --config /run/secrets/p2p-vpn/node-g.json'*) ;;
+              *'jq'*|*'private_key'*) echo "JSON mode unexpectedly generates config: $execStartPreJsonScript" >&2; exit 1 ;;
+              *) echo "unexpected JSON config check: $execStartPreJsonScript" >&2; exit 1 ;;
             esac
             printf '%s' "$generatedSettings" > generated-settings.json
             jq -e '
-              .network.relay.auto == {
+              (.network | has("private_key") | not)
+              and .network.name == "nixos-module"
+              and .network.vpn_ip == "10.44.0.1"
+              and .network.listen_addresses == [
+                "/ip4/0.0.0.0/tcp/4003",
+                "/ip4/0.0.0.0/udp/4003/quic-v1"
+              ]
+              and .network.packet_plane == {"listen":["0.0.0.0:51822"]}
+              and .interface == {"mtu":1280,"name":"pv2"}
+              and .peers[0].ip == "192.168.0.203"
+              and .peers[0].vpn_ip == "10.44.0.2"
+              and .network.relay.auto == {
                 "max_candidates": 12,
                 "max_reservations": 3,
                 "retry_interval_seconds": 45
@@ -3677,15 +3749,40 @@ EOF
             }
             printf '%s' "$generatedMinimalSettings" > generated-minimal.json
             jq -e '
-              keys == ["network", "peers"]
-              and (.network | keys == ["name", "private_key"])
+              keys == ["interface", "network", "peers"]
+              and (.network | keys == ["listen_addresses", "name", "packet_plane"])
               and (.network.name == "nixos-module-minimal")
-              and (.network.private_key == "BASE64_PRIVATE_KEY")
+              and (.network.listen_addresses == [
+                "/ip4/0.0.0.0/tcp/4005",
+                "/ip4/0.0.0.0/udp/4005/quic-v1"
+              ])
+              and (.network.packet_plane == {"listen":["0.0.0.0:51824"]})
+              and (.interface == {"mtu":1280,"name":"pv4"})
               and (.peers == [{"id":"5555555555555555555555555555555555555555555555555555555555555555"}])
             ' generated-minimal.json >/dev/null || {
               echo "minimal generated settings are not compact: $generatedMinimalSettings" >&2
               exit 1
             }
+            printf '%s' "$identityFiles" | jq -e '
+              .["node-a"] == "/run/secrets/p2p-vpn/node-a.key"
+              and .["node-f"] == "/var/lib/p2p-vpn/node-f/private.key"
+              and has("node-g") == false
+            ' >/dev/null
+            test "$effectiveInterfaces" = '{"node-a":"pv0","node-b":"pv1","node-c":"pv2","node-d":"pv3","node-e":"pv4","node-f":"pv5"}'
+            printf '%s' "$effectiveListenAddresses" | jq -e '
+              .["node-a"] == ["/ip4/0.0.0.0/tcp/4001", "/ip4/0.0.0.0/udp/4001/quic-v1"]
+              and .["node-f"] == ["/ip4/0.0.0.0/tcp/4006", "/ip4/0.0.0.0/udp/4006/quic-v1"]
+              and has("node-g") == false
+            ' >/dev/null
+            test "$failedAssertions" = '[]'
+            printf '%s' "$invalidAssertions" | jq -e '
+              (.mixedModes | index("services.p2p-vpn.instances.mixed must use either configFile JSON mode or native Nix settings, never both.")) != null
+              and (.inlineSecrets | index("services.p2p-vpn.instances.insecure.privateKey was removed because it exposes identity keys in the Nix store; use automatic identity or privateKeyFile.")) != null
+              and (.inlineSecrets | index("services.p2p-vpn.instances.insecure.membershipKey was removed because it exposes secrets in the Nix store; use membershipKeyFile.")) != null
+              and (.duplicateInterfaces | index("services.p2p-vpn instances must use unique TUN interface names.")) != null
+              and (.storeConfig | index("services.p2p-vpn.instances.stored.configFile must be an absolute runtime path outside the Nix store.")) != null
+              and (.unsafeState | index("services.p2p-vpn.instances.unsafe.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
+            ' >/dev/null
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;
               *) echo "unexpected ExecStop: $execStop" >&2; exit 1 ;;
@@ -3694,7 +3791,7 @@ EOF
             test "$killSignal" = SIGTERM
             test "$timeoutStopSec" = 30s
             test "$runtimeDirectory" = p2p-vpn-node-a
-            test "$runtimeDirectoryMode" = 0750
+            test "$runtimeDirectoryMode" = 0700
             test "$capabilityBoundingSet" = '["CAP_NET_ADMIN","CAP_NET_RAW"]'
             test "$deviceAllow" = '["/dev/net/tun rw"]'
             test "$devicePolicy" = closed
@@ -3703,7 +3800,7 @@ EOF
             test "$noNewPrivileges" = true
             test "$privateTmp" = true
             test "$protectClock" = true
-            test "$protectHome" = read-only
+            test "$protectHome" = 1
             test "$protectHostname" = true
             test "$protectKernelLogs" = true
             test "$protectKernelModules" = true
@@ -3713,23 +3810,16 @@ EOF
             test "$restrictRealtime" = true
             test "$systemCallArchitectures" = native
             test "$umask" = 0077
-            test "$tcpPorts" = '[4001]'
-            test "$udpPorts" = '[4001,51820,51821]'
+            test "$tcpPorts" = '[4001,4002,4003,4004,4005,4006]'
+            test "$udpPorts" = '[4001,4002,4003,4004,4005,4006,5353,51820,51821,51822,51823,51824,51825]'
             case "$kernelModules" in
               *tun*) ;;
               *) echo "tun kernel module not requested: $kernelModules" >&2; exit 1 ;;
             esac
-            case "$tmpfilesRules" in
-              *'"d /var/lib/p2p-vpn 0700 root root -"'*) ;;
-              *) echo "state-backed tmpfiles rule missing: $tmpfilesRules" >&2; exit 1 ;;
-            esac
-            case "$tmpfilesRules" in
-              *'"d /var/lib/p2p-vpn/node-f 0700 root root -"'*) ;;
-              *) echo "state-backed instance tmpfiles rule missing: $tmpfilesRules" >&2; exit 1 ;;
-            esac
             touch $out
           '';
           nixos-vm-smoke = nixosVmSmoke;
+          nixos-vm-module-lifecycle = nixosVmModuleLifecycle;
           nixos-vm-minimal-lan = nixosVmMesh;
           nixos-vm-mesh = nixosVmMesh;
           nixos-vm-pairing = nixosVmPairing;

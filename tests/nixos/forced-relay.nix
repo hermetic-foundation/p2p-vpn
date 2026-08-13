@@ -46,6 +46,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-${name}.key 0600 root root - ${local.privateKey}"
+      ];
       virtualisation.vlans = [ vlan ];
       networking.interfaces.eth1.ipv4.addresses = [
         {
@@ -58,7 +61,7 @@ let
         enable = true;
         networkName = "nixos-vm-forced-relay";
         localPeer = local.peerId;
-        privateKey = local.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-${name}.key";
         vpnIp = local.vpnIp;
         discovery = {
           mdns = false;
@@ -81,6 +84,9 @@ let
     { ... }:
     {
       imports = [ common ];
+      systemd.tmpfiles.rules = [
+        "f /run/p2p-vpn-test-relay.key 0600 root root - ${relay.privateKey}"
+      ];
       virtualisation.vlans = [
         1
         2
@@ -102,7 +108,7 @@ let
         enable = true;
         networkName = "nixos-vm-forced-relay";
         localPeer = relay.peerId;
-        privateKey = relay.privateKey;
+        privateKeyFile = "/run/p2p-vpn-test-relay.key";
         discovery = {
           mdns = false;
           kademlia = false;
