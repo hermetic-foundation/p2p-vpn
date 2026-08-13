@@ -596,8 +596,10 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum PairCommand {
     Offer {
-        #[arg(short, long, default_value = "p2p-vpn.json")]
-        config: PathBuf,
+        #[arg(short, long, conflicts_with = "nixos_instance")]
+        config: Option<PathBuf>,
+        #[arg(long, conflicts_with = "config")]
+        nixos_instance: Option<String>,
         #[arg(short, long, default_value = "-")]
         output: PathBuf,
         #[arg(long, default_value_t = DEFAULT_PAIRING_EXPIRES_IN_SECONDS)]
@@ -1012,6 +1014,7 @@ async fn main() -> Result<(), String> {
         Command::Pair { command } => match command {
             PairCommand::Offer {
                 config,
+                nixos_instance,
                 output,
                 expires_in_seconds,
                 rendezvous_token,
@@ -1019,6 +1022,7 @@ async fn main() -> Result<(), String> {
                 force,
             } => pair_offer(PairOfferArgs {
                 config,
+                nixos_instance,
                 output,
                 expires_in_seconds,
                 rendezvous_token,
@@ -1327,7 +1331,8 @@ struct InviteImportArgs {
 
 #[derive(Clone, Debug)]
 struct PairOfferArgs {
-    config: PathBuf,
+    config: Option<PathBuf>,
+    nixos_instance: Option<String>,
     output: PathBuf,
     expires_in_seconds: u64,
     rendezvous_token: Option<String>,
@@ -2246,8 +2251,10 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
             args.output.display()
         ));
     }
+    let config_path =
+        pair_offer_config_path(args.config.as_deref(), args.nixos_instance.as_deref())?;
     let config =
-        Config::load(&args.config).map_err(|error| format!("failed to load config: {error:?}"))?;
+        Config::load(&config_path).map_err(|error| format!("failed to load config: {error:?}"))?;
     let export_offer = if args.discovery_only {
         export_discovery_only_pairing_offer
     } else {
@@ -2277,6 +2284,25 @@ fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn pair_offer_config_path(
+    config: Option<&Path>,
+    nixos_instance: Option<&str>,
+) -> Result<PathBuf, String> {
+    match (config, nixos_instance) {
+        (Some(_), Some(_)) => {
+            Err("--config and --nixos-instance cannot be used together".to_owned())
+        }
+        (Some(config), None) => Ok(config.to_path_buf()),
+        (None, Some(instance)) => {
+            validate_nixos_instance_name(instance)?;
+            Ok(PathBuf::from(format!(
+                "/run/p2p-vpn-{instance}/config.json"
+            )))
+        }
+        (None, None) => Ok(PathBuf::from("p2p-vpn.json")),
+    }
 }
 
 fn pair_inspect(args: &PairInspectArgs) -> Result<(), String> {
@@ -11582,6 +11608,7 @@ mod tests {
             command:
                 PairCommand::Offer {
                     config,
+                    nixos_instance,
                     output,
                     expires_in_seconds,
                     rendezvous_token,
@@ -11593,12 +11620,66 @@ mod tests {
             panic!("expected pair offer command");
         };
 
-        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(config, Some(PathBuf::from("node-a.json")));
+        assert_eq!(nixos_instance, None);
         assert_eq!(output, PathBuf::from("node-a.pair"));
         assert_eq!(expires_in_seconds, 120);
         assert_eq!(rendezvous_token.as_deref(), Some("BwcHBwcHBwcHBwcHBwcHBw"));
         assert!(discovery_only);
         assert!(force);
+    }
+
+    #[test]
+    fn cli_parses_nixos_pair_offer_command() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "offer",
+            "--nixos-instance",
+            "runner-mesh",
+        ])
+        .expect("cli");
+
+        let Command::Pair {
+            command:
+                PairCommand::Offer {
+                    config,
+                    nixos_instance,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected pair offer command");
+        };
+
+        assert_eq!(config, None);
+        assert_eq!(nixos_instance.as_deref(), Some("runner-mesh"));
+    }
+
+    #[test]
+    fn pair_offer_resolves_json_and_nixos_sources() {
+        assert_eq!(
+            pair_offer_config_path(None, None).expect("legacy default"),
+            PathBuf::from("p2p-vpn.json")
+        );
+        assert_eq!(
+            pair_offer_config_path(Some(Path::new("custom.json")), None).expect("JSON config"),
+            PathBuf::from("custom.json")
+        );
+        assert_eq!(
+            pair_offer_config_path(None, Some("runner-mesh")).expect("NixOS instance"),
+            PathBuf::from("/run/p2p-vpn-runner-mesh/config.json")
+        );
+        assert!(
+            pair_offer_config_path(Some(Path::new("custom.json")), Some("runner-mesh"))
+                .expect_err("mixed source modes must fail")
+                .contains("cannot be used together")
+        );
+        assert!(
+            pair_offer_config_path(None, Some("../runner-mesh"))
+                .expect_err("unsafe NixOS instance must fail")
+                .contains("--nixos-instance")
+        );
     }
 
     #[test]

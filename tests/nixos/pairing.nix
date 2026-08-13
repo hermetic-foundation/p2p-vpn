@@ -4,6 +4,7 @@
   package,
 }:
 let
+  system = pkgs.stdenv.hostPlatform.system;
   nodeA = {
     peerId = "12D3KooWLgQHZofqKG3dcgJhSjMX5szux1v2xgbDZaReqw7qnEKr";
     privateKey = "CAESQNzMbqxrZLUOXHgvRi+GcFXQE0HkxXeivjBL7s+lpls3oWZN2qwxhfFaTxEj+lTry+D3vQbk8up80HLC7VI4f2E=";
@@ -110,15 +111,15 @@ let
         --expr '
           ({ pairedModule, instance }:
           let
-            pkgs = import ${pkgs.path} { system = "${pkgs.system}"; };
+            pkgs = import ${pkgs.path} { system = "${system}"; };
             lib = pkgs.lib;
             upstreamModule = import ${self.outPath}/nix/nixos-module.nix {
               self = {
-                packages.${pkgs.system}.default = ${package};
+                packages.${system}.default = ${package};
               };
             };
             evaluated = import ${pkgs.path}/nixos/lib/eval-config.nix {
-              system = "${pkgs.system}";
+              system = "${system}";
               modules = [
                 upstreamModule
                 (builtins.toPath pairedModule)
@@ -186,7 +187,7 @@ pkgs.testers.nixosTest {
     with subtest("pair offer creates inspectable one-time URI"):
         node_a.succeed(
             "p2p-vpn pair offer "
-            "--config /run/p2p-vpn-node-a/config.json "
+            "--nixos-instance node-a "
             "--output /tmp/node-a.pair "
             "--expires-in-seconds 600 "
             "--force"
