@@ -390,6 +390,16 @@ Use these overrides for non-derivable JSON or custom transport ports:
 
 ## Service Controls
 
+Map configured networks to interfaces and peer IDs:
+
+```sh
+sudo p2p-vpn instance list
+sudo p2p-vpn instance show lab
+```
+
+`instance show` derives the peer ID from the active runtime identity. It never
+prints the private key or membership key.
+
 ```sh
 sudo systemctl status p2p-vpn-lab.service
 sudo p2p-vpn daemon-health \

@@ -260,6 +260,18 @@ Runtime validation remains authoritative for cryptographic and protocol fields.
 
 ## Test Ownership
 
+### Public Instance Inspection
+
+`p2p-vpn instance list` scans prepared `/run/p2p-vpn-*/config.json` files.
+
+It emits a separate public-only record containing `instance`, `network`,
+`interface`, and `peer_id`. Secret configuration fields are never serialized.
+
+`p2p-vpn instance show NAME` resolves the same standard runtime path directly.
+
+The lifecycle VM proves multi-instance discovery, deterministic ordering, text
+output, JSON output, and peer-ID derivation.
+
 | Check | Contract |
 | --- | --- |
 | `nixos-module` | Minimal, full, multi-instance, JSON, and invalid evaluation |

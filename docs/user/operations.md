@@ -22,6 +22,35 @@ sudo p2p-vpn daemon-health \
 
 ## Inspect
 
+### NixOS Instances
+
+List every prepared NixOS instance:
+
+```sh
+sudo p2p-vpn instance list
+```
+
+The table maps each instance to its overlay network, TUN interface, and local
+peer ID.
+
+Inspect one instance:
+
+```sh
+sudo p2p-vpn instance show monarchic-runners
+```
+
+Use JSON for scripts:
+
+```sh
+sudo p2p-vpn instance list --format json
+sudo p2p-vpn instance show monarchic-runners --format json
+```
+
+NixOS runtime configurations are root-only because they contain injected
+credentials. These commands emit public identity metadata only.
+
+### Daemon Views
+
 | Command | Output |
 | --- | --- |
 | `daemon-status` | Metrics counters. |
