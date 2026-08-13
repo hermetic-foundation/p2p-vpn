@@ -56,10 +56,7 @@ Create the key file:
 
 ```sh
 sudo install -d -m 0700 /var/lib/p2p-vpn/lab
-p2p-vpn keygen |
-  awk '/^private_key: / { print $2 }' |
-  sudo tee /var/lib/p2p-vpn/lab/private.key >/dev/null
-sudo chmod 0600 /var/lib/p2p-vpn/lab/private.key
+sudo p2p-vpn keygen --output /var/lib/p2p-vpn/lab/private.key
 ```
 
 Or point at a secret manager path:

@@ -1,8 +1,9 @@
 use std::{
     collections::{BTreeSet, HashSet},
-    fs,
+    fs::{self, OpenOptions},
+    io::Write as _,
     net::{IpAddr, UdpSocket},
-    os::unix::fs::PermissionsExt as _,
+    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
@@ -78,7 +79,12 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Command {
-    Keygen,
+    Keygen {
+        #[arg(short, long, default_value = "-")]
+        output: PathBuf,
+        #[arg(long)]
+        force: bool,
+    },
     IdentityPublic {
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -647,7 +653,7 @@ async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Keygen => keygen(),
+        Command::Keygen { output, force } => keygen(&output, force),
         Command::IdentityPublic {
             config,
             private_key,
@@ -1577,12 +1583,48 @@ fn parse_route_arg(input: &str, context: &str) -> Result<RouteConfig, String> {
     })
 }
 
-fn keygen() -> Result<(), String> {
+fn keygen(output: &Path, force: bool) -> Result<(), String> {
     let identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate key: {error:?}"))?;
 
+    if output.to_string_lossy() == "-" {
+        println!("peer_id: {}", identity.peer_id);
+        println!("private_key: {}", identity.private_key);
+        return Ok(());
+    }
+
+    if force {
+        match fs::remove_file(output) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("failed to replace {}: {error}", output.display()));
+            }
+        }
+    }
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(output)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                format!(
+                    "{} already exists; pass --force to replace it",
+                    output.display()
+                )
+            } else {
+                format!("failed to create {}: {error}", output.display())
+            }
+        })?;
+    writeln!(file, "{}", identity.private_key)
+        .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to sync {}: {error}", output.display()))?;
+
+    println!("wrote {}", output.display());
     println!("peer_id: {}", identity.peer_id);
-    println!("private_key: {}", identity.private_key);
     Ok(())
 }
 
@@ -8535,6 +8577,52 @@ mod tests {
             path_kind_for_multiaddr("/ip4/127.0.0.1/tcp/4001"),
             Ok(PathKind::DirectTcpStream)
         );
+    }
+
+    #[test]
+    fn cli_parses_keygen_file_output() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "keygen",
+            "--output",
+            "/var/lib/p2p-vpn/lab/private.key",
+            "--force",
+        ])
+        .expect("keygen cli");
+
+        let Command::Keygen { output, force } = cli.command else {
+            panic!("expected keygen command");
+        };
+        assert_eq!(output, PathBuf::from("/var/lib/p2p-vpn/lab/private.key"));
+        assert!(force);
+    }
+
+    #[test]
+    fn keygen_writes_private_key_with_owner_only_permissions() {
+        let output = temp_config_path("p2p-vpn-keygen");
+
+        keygen(&output, false).expect("write identity");
+
+        let private_key = fs::read_to_string(&output).expect("read identity");
+        NodeIdentity::from_private_key(private_key.trim()).expect("valid identity");
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &fs::metadata(&output)
+                .expect("identity metadata")
+                .permissions(),
+        );
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(
+            keygen(&output, false)
+                .expect_err("existing identity must not be replaced")
+                .contains("already exists")
+        );
+
+        keygen(&output, true).expect("replace identity explicitly");
+        let replacement = fs::read_to_string(&output).expect("read replacement identity");
+        NodeIdentity::from_private_key(replacement.trim()).expect("valid replacement identity");
+        assert_ne!(replacement, private_key);
+
+        fs::remove_file(output).expect("remove test identity");
     }
 
     #[test]
