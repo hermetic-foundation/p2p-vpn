@@ -3232,6 +3232,48 @@ EOF
               interfaceName = "pv-shared";
             };
           };
+          duplicateListenAddresses = moduleAssertionMessages {
+            first = {
+              enable = true;
+              listenAddresses = [ "/ip4/0.0.0.0/tcp/4401" ];
+            };
+            second = {
+              enable = true;
+              listenAddresses = [ "/ip4/0.0.0.0/tcp/4401" ];
+            };
+          };
+          duplicatePacketPlaneListeners = moduleAssertionMessages {
+            first = {
+              enable = true;
+              packetPlane.listen = [ "0.0.0.0:52820" ];
+            };
+            second = {
+              enable = true;
+              packetPlane.quicListen = [ "0.0.0.0:52820" ];
+            };
+          };
+          duplicateOverlayAddresses = moduleAssertionMessages {
+            duplicate = {
+              enable = true;
+              vpnIp = "10.44.0.1";
+              peers."1111111111111111111111111111111111111111111111111111111111111111".vpnIp = "10.44.0.1";
+            };
+          };
+          invalidPeerId = moduleAssertionMessages {
+            invalid = {
+              enable = true;
+              peers."" = { };
+            };
+          };
+          duplicatePeerAddresses = moduleAssertionMessages {
+            duplicate = {
+              enable = true;
+              peers."1111111111111111111111111111111111111111111111111111111111111111".addresses = [
+                "/ip4/192.0.2.10/tcp/4001"
+                "/ip4/192.0.2.10/tcp/4001"
+              ];
+            };
+          };
           storeConfig = moduleAssertionMessages {
             stored = {
               enable = true;
@@ -3789,6 +3831,11 @@ EOF
               and (.inlineSecrets | index("services.p2p-vpn.instances.insecure.privateKey was removed because it exposes identity keys in the Nix store; use automatic identity or privateKeyFile.")) != null
               and (.inlineSecrets | index("services.p2p-vpn.instances.insecure.membershipKey was removed because it exposes secrets in the Nix store; use membershipKeyFile.")) != null
               and (.duplicateInterfaces | index("services.p2p-vpn instances must use unique TUN interface names.")) != null
+              and (.duplicateListenAddresses | index("services.p2p-vpn native instances must use unique libp2p listen addresses.")) != null
+              and (.duplicatePacketPlaneListeners | index("services.p2p-vpn native instances must use unique packet-plane listener endpoints.")) != null
+              and (.duplicateOverlayAddresses | index("services.p2p-vpn.instances.duplicate must not assign the same vpnIp to more than one local or remote peer.")) != null
+              and (.invalidPeerId | index("services.p2p-vpn.instances.invalid.peers must use non-empty alphanumeric libp2p peer IDs as attribute names.")) != null
+              and (.duplicatePeerAddresses | index("services.p2p-vpn.instances.duplicate.peers.1111111111111111111111111111111111111111111111111111111111111111.addresses must not contain duplicates.")) != null
               and (.storeConfig | index("services.p2p-vpn.instances.stored.configFile must be an absolute runtime path outside the Nix store.")) != null
               and (.unsafeState | index("services.p2p-vpn.instances.unsafe.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
             ' >/dev/null

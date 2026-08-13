@@ -68,6 +68,21 @@ let
       instance.packetPlane.listen
     else
       [ "0.0.0.0:${toString (instancePacketPort name)}" ];
+  nativeListenAddresses = concatMap (
+    name: effectiveListenAddresses name nativeInstances.${name}
+  ) nativeNames;
+  nativePacketPlaneListeners = concatMap (
+    name:
+    let
+      instance = nativeInstances.${name};
+    in
+    effectivePacketPlaneListen name instance
+    ++ optionals (instance.packetPlane.quicListen != null) instance.packetPlane.quicListen
+  ) nativeNames;
+  overlayHostAddresses =
+    instance:
+    optional (instance.vpnIp != null) instance.vpnIp
+    ++ concatMap (peer: optional (peer.vpnIp != null) peer.vpnIp) (builtins.attrValues instance.peers);
 
   routeType = types.oneOf [
     types.str
@@ -1139,6 +1154,15 @@ in
           builtins.length sockets == builtins.length (unique sockets);
         message = "services.p2p-vpn instances must use unique control sockets.";
       }
+      {
+        assertion = builtins.length nativeListenAddresses == builtins.length (unique nativeListenAddresses);
+        message = "services.p2p-vpn native instances must use unique libp2p listen addresses.";
+      }
+      {
+        assertion =
+          builtins.length nativePacketPlaneListeners == builtins.length (unique nativePacketPlaneListeners);
+        message = "services.p2p-vpn native instances must use unique packet-plane listener endpoints.";
+      }
     ]
     ++ concatMap (
       name:
@@ -1158,6 +1182,20 @@ in
         {
           assertion = instance.networkName != "";
           message = "services.p2p-vpn.instances.${name}.networkName cannot be empty.";
+        }
+        {
+          assertion =
+            !nixMode instance
+            || builtins.all (peerId: builtins.match "^[A-Za-z0-9]+$" peerId != null) (attrNames instance.peers);
+          message = "services.p2p-vpn.instances.${name}.peers must use non-empty alphanumeric libp2p peer IDs as attribute names.";
+        }
+        {
+          assertion =
+            !nixMode instance
+            ||
+              builtins.length (overlayHostAddresses instance)
+              == builtins.length (unique (overlayHostAddresses instance));
+          message = "services.p2p-vpn.instances.${name} must not assign the same vpnIp to more than one local or remote peer.";
         }
         {
           assertion =
@@ -1223,6 +1261,19 @@ in
           message = "services.p2p-vpn.instances.${name} cannot advertise Kademlia providers while Kademlia is disabled.";
         }
       ]
+      ++ concatMap (
+        peerId:
+        let
+          peer = instance.peers.${peerId};
+        in
+        [
+          {
+            assertion =
+              !nixMode instance || builtins.length peer.addresses == builtins.length (unique peer.addresses);
+            message = "services.p2p-vpn.instances.${name}.peers.${peerId}.addresses must not contain duplicates.";
+          }
+        ]
+      ) (attrNames instance.peers)
     ) enabledNames;
 
     environment.systemPackages = [ cfg.package ];
