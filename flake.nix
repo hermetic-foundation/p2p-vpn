@@ -130,6 +130,7 @@ USAGE
 
             linux_checks=(
               ".#checks.$system.nixos-module"
+              ".#checks.$system.nixos-consumer-flake"
               ".#checks.$system.public-relay-repro-structure"
               ".#checks.$system.public-vpn-repro-structure"
               ".#checks.$system.public-vpn-repro-evidence-structure"
@@ -3189,6 +3190,13 @@ EOF
             )
           ];
         };
+        consumerFlake = import ./tests/nixos/consumer-flake/flake.nix;
+        consumerFlakeOutputs = consumerFlake.outputs {
+          self = { };
+          inherit nixpkgs;
+          p2p-vpn = self;
+        };
+        consumerEval = consumerFlakeOutputs.nixosConfigurations."consumer-${system}";
         moduleAssertionMessages = instances:
           let
             evaluated = lib.nixosSystem {
@@ -3675,6 +3683,43 @@ EOF
             touch $out
           '';
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
+          nixos-consumer-flake = pkgs.runCommand "p2p-vpn-nixos-consumer-flake" {
+            nativeBuildInputs = [ pkgs.jq ];
+            consumerSource = ./tests/nixos/consumer-flake/flake.nix;
+            consumerToplevel = consumerEval.config.system.build.toplevel;
+            execStart = consumerEval.config.systemd.services.p2p-vpn-lab.serviceConfig.ExecStart;
+            generatedConfig = builtins.toJSON consumerEval.config.services.p2p-vpn.generatedConfigs.lab;
+            identityFile = consumerEval.config.services.p2p-vpn.identityFiles.lab;
+            stateDirectory = builtins.head consumerEval.config.systemd.services.p2p-vpn-lab.serviceConfig.StateDirectory;
+          } ''
+            test -e "$consumerToplevel"
+            test "$identityFile" = /var/lib/p2p-vpn/lab/private.key
+            test "$stateDirectory" = p2p-vpn/lab
+            case "$execStart" in
+              *"p2p-vpn up --config /run/p2p-vpn-lab/config.json --control-socket /run/p2p-vpn-lab/control.sock"*) ;;
+              *) echo "unexpected consumer ExecStart: $execStart" >&2; exit 1 ;;
+            esac
+
+            printf '%s' "$generatedConfig" | jq -e '
+              .network.name == "lab"
+              and .network.listen_addresses == [
+                "/ip4/0.0.0.0/tcp/4001",
+                "/ip4/0.0.0.0/udp/4001/quic-v1"
+              ]
+              and .network.packet_plane.listen == ["0.0.0.0:51820"]
+              and .interface == {"mtu":1280,"name":"pv0"}
+              and .peers == []
+              and (.network | has("private_key") | not)
+            ' >/dev/null
+
+            grep -Fq 'p2p-vpn.nixosModules.default' "$consumerSource"
+            grep -Fq 'services.p2p-vpn.instances.lab.enable = true;' "$consumerSource"
+            if grep -Eq 'configFile|privateKey(File)?|generatedConfigs|systemd.services' "$consumerSource"; then
+              echo "consumer flake recreates module or secret mechanics" >&2
+              exit 1
+            fi
+            touch $out
+          '';
           nixos-module = pkgs.runCommand "p2p-vpn-nixos-module" {
             nativeBuildInputs = [ pkgs.jq ];
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
