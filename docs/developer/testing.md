@@ -352,7 +352,7 @@ Coverage:
 
 ## Latest Local Gate
 
-The 2026-08-10 local operational gate passed:
+The 2026-08-12 local operational gate passed:
 
 ```sh
 nix run .#check-operational
@@ -365,7 +365,10 @@ Coverage:
 | Rust package | Package, format, and high-signal Clippy checks passed. |
 | Release archive | Archive sanity check passed. |
 | NixOS module | Module evaluation and service assertions passed. |
+| Consumer flake | Standalone import and full system closure passed. |
+| Module lifecycle | Automatic identity and multi-instance isolation passed. |
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
+| Native pairing | Nix-only output, traffic, and restart recovery passed. |
 | QUIC datagram | `nixos-vm-quic-datagram` passed. |
 | QUIC stream | `nixos-vm-quic-stream` passed. |
 | Forced relay | `nixos-vm-forced-relay` passed. |
