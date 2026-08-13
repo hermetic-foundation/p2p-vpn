@@ -63,6 +63,27 @@ pkgs.testers.nixosTest {
         beta_peer = machine.succeed("sed -n 's/^local peer: //p' /tmp/beta-status").strip()
         assert alpha_peer != beta_peer
 
+    with subtest("instance inspection maps networks, interfaces, and peer IDs"):
+        machine.succeed("p2p-vpn instance list >/tmp/instances")
+        machine.succeed(
+            "grep -Eq '^alpha[[:space:]]+alpha[[:space:]]+pv0[[:space:]]+12D3KooW' /tmp/instances"
+        )
+        machine.succeed(
+            "grep -Eq '^beta[[:space:]]+beta[[:space:]]+pv1[[:space:]]+12D3KooW' /tmp/instances"
+        )
+        machine.succeed(
+            "p2p-vpn instance list --format json "
+            "| jq -e 'length == 2 "
+            "and .[0].instance == \"alpha\" and .[0].network == \"alpha\" "
+            "and .[0].interface == \"pv0\" and (.[0].peer_id | startswith(\"12D3KooW\")) "
+            "and .[1].instance == \"beta\" and .[1].network == \"beta\" "
+            "and .[1].interface == \"pv1\" and (.[1].peer_id | startswith(\"12D3KooW\"))'"
+        )
+        machine.succeed(
+            f"p2p-vpn instance show alpha "
+            f"| grep -F 'peer ID: {alpha_peer}'"
+        )
+
     with subtest("computed interfaces and listeners do not collide"):
         machine.succeed("ip link show pv0")
         machine.succeed("ip link show pv1")

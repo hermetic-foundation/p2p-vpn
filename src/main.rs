@@ -95,6 +95,10 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    Instance {
+        #[command(subcommand)]
+        command: InstanceCommand,
+    },
     InitConfig {
         #[arg(short, long, default_value = "p2p-vpn.json")]
         output: PathBuf,
@@ -593,6 +597,23 @@ enum Command {
     },
 }
 
+#[derive(Clone, Debug, Subcommand)]
+enum InstanceCommand {
+    List {
+        #[arg(long, default_value = "/run")]
+        runtime_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = InstanceFormat::Text)]
+        format: InstanceFormat,
+    },
+    Show {
+        instance: String,
+        #[arg(long, default_value = "/run")]
+        runtime_root: PathBuf,
+        #[arg(long, value_enum, default_value_t = InstanceFormat::Text)]
+        format: InstanceFormat,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum PairCommand {
     Offer {
@@ -667,6 +688,7 @@ async fn main() -> Result<(), String> {
             output,
             force,
         }),
+        Command::Instance { command } => instance_command(command),
         Command::InitConfig {
             output,
             network,
@@ -1487,6 +1509,12 @@ enum DaemonViewFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum InstanceFormat {
+    Text,
+    Json,
+}
+
 impl From<MembershipRecordRoleArg> for MembershipRole {
     fn from(role: MembershipRecordRoleArg) -> Self {
         match role {
@@ -1656,6 +1684,150 @@ fn public_identity_json(identity: &NodeIdentity) -> Result<PublicIdentityJson, S
         peer_id: subject.peer_id,
         public_key: subject.public_key,
     })
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct InstanceInfo {
+    instance: String,
+    network: String,
+    interface: String,
+    peer_id: String,
+}
+
+fn instance_command(command: InstanceCommand) -> Result<(), String> {
+    match command {
+        InstanceCommand::List {
+            runtime_root,
+            format,
+        } => {
+            let instances = list_instances(&runtime_root)?;
+            write_instance_list(&instances, format)
+        }
+        InstanceCommand::Show {
+            instance,
+            runtime_root,
+            format,
+        } => {
+            validate_runtime_instance_name(&instance)?;
+            let info = load_instance_info(&runtime_root, &instance)?;
+            write_instance_show(&info, format)
+        }
+    }
+}
+
+fn validate_runtime_instance_name(instance: &str) -> Result<(), String> {
+    validate_nixos_instance_name(instance).map_err(|_| {
+        "instance must start with an ASCII letter or digit and contain only letters, digits, dots, underscores, or hyphens"
+            .to_owned()
+    })
+}
+
+fn instance_runtime_config(runtime_root: &Path, instance: &str) -> PathBuf {
+    runtime_root
+        .join(format!("p2p-vpn-{instance}"))
+        .join("config.json")
+}
+
+fn load_instance_info(runtime_root: &Path, instance: &str) -> Result<InstanceInfo, String> {
+    let path = instance_runtime_config(runtime_root, instance);
+    let config = Config::load(&path).map_err(|error| {
+        format!(
+            "failed to inspect instance `{instance}` at {}: {error:?}; NixOS runtime configs normally require sudo",
+            path.display()
+        )
+    })?;
+    let peer_id = config.local_peer().map_err(|error| {
+        format!("failed to derive peer ID for instance `{instance}`: {error:?}")
+    })?;
+
+    Ok(InstanceInfo {
+        instance: instance.to_owned(),
+        network: config.network.name,
+        interface: config.interface.name,
+        peer_id,
+    })
+}
+
+fn list_instances(runtime_root: &Path) -> Result<Vec<InstanceInfo>, String> {
+    let entries = fs::read_dir(runtime_root).map_err(|error| {
+        format!(
+            "failed to inspect runtime root {}: {error}",
+            runtime_root.display()
+        )
+    })?;
+    let mut names = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter_map(|name| name.strip_prefix("p2p-vpn-").map(str::to_owned))
+        .filter(|name| {
+            validate_runtime_instance_name(name).is_ok()
+                && instance_runtime_config(runtime_root, name).is_file()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+        .into_iter()
+        .map(|instance| load_instance_info(runtime_root, &instance))
+        .collect()
+}
+
+fn write_instance_list(instances: &[InstanceInfo], format: InstanceFormat) -> Result<(), String> {
+    match format {
+        InstanceFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(instances)
+                .map_err(|error| format!("failed to encode instance list: {error}"))?
+        ),
+        InstanceFormat::Text if instances.is_empty() => println!("no instances found"),
+        InstanceFormat::Text => {
+            let instance_width = instances
+                .iter()
+                .map(|info| info.instance.len())
+                .max()
+                .unwrap_or(8)
+                .max("INSTANCE".len());
+            let network_width = instances
+                .iter()
+                .map(|info| info.network.len())
+                .max()
+                .unwrap_or(7)
+                .max("NETWORK".len());
+            let interface_width = instances
+                .iter()
+                .map(|info| info.interface.len())
+                .max()
+                .unwrap_or(9)
+                .max("INTERFACE".len());
+            println!(
+                "{:<instance_width$}  {:<network_width$}  {:<interface_width$}  PEER_ID",
+                "INSTANCE", "NETWORK", "INTERFACE"
+            );
+            for info in instances {
+                println!(
+                    "{:<instance_width$}  {:<network_width$}  {:<interface_width$}  {}",
+                    info.instance, info.network, info.interface, info.peer_id
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_instance_show(info: &InstanceInfo, format: InstanceFormat) -> Result<(), String> {
+    match format {
+        InstanceFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(info)
+                .map_err(|error| format!("failed to encode instance: {error}"))?
+        ),
+        InstanceFormat::Text => {
+            println!("instance: {}", info.instance);
+            println!("network: {}", info.network);
+            println!("interface: {}", info.interface);
+            println!("peer ID: {}", info.peer_id);
+        }
+    }
+    Ok(())
 }
 
 fn identity_from_config_or_private_key(
@@ -9561,6 +9733,129 @@ mod tests {
 
         assert_eq!(config, PathBuf::from("node-a.json"));
         assert_eq!(format, MetricsFormat::Prometheus);
+    }
+
+    #[test]
+    fn cli_parses_instance_commands() {
+        let list = Cli::try_parse_from([
+            "p2p-vpn",
+            "instance",
+            "list",
+            "--runtime-root",
+            "/tmp/run",
+            "--format",
+            "json",
+        ])
+        .expect("list command");
+        let Command::Instance {
+            command:
+                InstanceCommand::List {
+                    runtime_root,
+                    format,
+                },
+        } = list.command
+        else {
+            panic!("expected instance list command");
+        };
+        assert_eq!(runtime_root, PathBuf::from("/tmp/run"));
+        assert_eq!(format, InstanceFormat::Json);
+
+        let show = Cli::try_parse_from([
+            "p2p-vpn",
+            "instance",
+            "show",
+            "runners",
+            "--runtime-root",
+            "/tmp/run",
+        ])
+        .expect("show command");
+        let Command::Instance {
+            command:
+                InstanceCommand::Show {
+                    instance,
+                    runtime_root,
+                    format,
+                },
+        } = show.command
+        else {
+            panic!("expected instance show command");
+        };
+        assert_eq!(instance, "runners");
+        assert_eq!(runtime_root, PathBuf::from("/tmp/run"));
+        assert_eq!(format, InstanceFormat::Text);
+    }
+
+    #[test]
+    fn instance_discovery_reports_only_public_identity_metadata() {
+        let runtime_root = std::env::temp_dir().join(format!(
+            "p2p-vpn-instance-list-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&runtime_root).expect("runtime root");
+
+        let write_instance = |name: &str, network: &str, interface: &str| {
+            let identity = NodeIdentity::generate_ed25519().expect("identity");
+            let config = Config {
+                network: p2p_vpn::config::NetworkConfig {
+                    name: network.to_owned(),
+                    local_peer: String::new(),
+                    private_key: Some(identity.private_key.clone()),
+                    membership_key: Some("private-membership-key".to_owned()),
+                    previous_membership_tags: Vec::new(),
+                    member_records: Vec::new(),
+                    vpn_ip: None,
+                    routes: Vec::new(),
+                    listen_addresses: Vec::new(),
+                    external_addresses: Vec::new(),
+                    bootstrap_peers: Vec::new(),
+                    discovery: DiscoveryConfig::default(),
+                    relay: RelayConfig::default(),
+                    packet_plane: PacketPlaneConfig::default(),
+                },
+                interface: p2p_vpn::config::InterfaceConfig {
+                    name: interface.to_owned(),
+                    mtu: 1_280,
+                },
+                peers: Vec::new(),
+                queue: QueueConfig::default(),
+                resources: ResourceConfig::default(),
+            };
+            let directory = runtime_root.join(format!("p2p-vpn-{name}"));
+            fs::create_dir(&directory).expect("instance directory");
+            fs::write(
+                directory.join("config.json"),
+                serde_json::to_vec_pretty(&config).expect("config JSON"),
+            )
+            .expect("runtime config");
+            identity
+        };
+
+        let beta = write_instance("beta", "runner-net", "pv1");
+        let alpha = write_instance("alpha", "lab-net", "pv0");
+        fs::create_dir(runtime_root.join("p2p-vpn-incomplete")).expect("incomplete directory");
+
+        let instances = list_instances(&runtime_root).expect("instance list");
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0].instance, "alpha");
+        assert_eq!(instances[0].network, "lab-net");
+        assert_eq!(instances[0].interface, "pv0");
+        assert_eq!(instances[0].peer_id, alpha.peer_id);
+        assert_eq!(instances[1].instance, "beta");
+        assert_eq!(instances[1].network, "runner-net");
+        assert_eq!(instances[1].interface, "pv1");
+        assert_eq!(instances[1].peer_id, beta.peer_id);
+
+        let public_json = serde_json::to_string(&instances).expect("public JSON");
+        assert!(!public_json.contains(&alpha.private_key));
+        assert!(!public_json.contains(&beta.private_key));
+        assert!(!public_json.contains("private-membership-key"));
+        assert!(validate_runtime_instance_name("../escape").is_err());
+
+        fs::remove_dir_all(runtime_root).expect("cleanup runtime root");
     }
 
     #[test]
