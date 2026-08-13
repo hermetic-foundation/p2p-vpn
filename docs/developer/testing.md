@@ -79,7 +79,10 @@ Coverage:
 | Rust package | `package`, `fmt`, `clippy` |
 | Release archive | `releaseArchiveSanity` |
 | NixOS service | `nixos-module` |
+| Standalone consumer | `nixos-consumer-flake` |
+| Module lifecycle | `nixos-vm-module-lifecycle` |
 | Minimal LAN | `nixos-vm-minimal-lan` |
+| Pairing | `nixos-vm-pairing` |
 | QUIC datagram | `nixos-vm-quic-datagram` |
 | QUIC stream | `nixos-vm-quic-stream` |
 | Forced relay | `nixos-vm-forced-relay` |
@@ -103,12 +106,47 @@ Coverage:
 
 | Scenario | Assertion |
 | --- | --- |
-| Service wiring | `ExecStart` uses the generated config path. |
-| Secrets | `privateKeyFile` is injected at service start. |
-| Minimal config | ID-only peer configs serialize as compact JSON. |
-| Defaults | Discovery, relay, packet-plane, queue, and resources are omitted. |
-| Auto relay | Typed policy writes `network.relay.auto` only when set. |
-| Firewall | Configured TCP, UDP, and packet-plane ports are opened. |
+| Native mode | A one-line instance compiles useful runtime defaults. |
+| JSON mode | `configFile` remains a strict passthrough mode. |
+| Identity | Automatic and explicit identity paths are distinct. |
+| Secrets | Explicit secret files use systemd credentials. |
+| Instances | Interface, libp2p, and packet-plane defaults are deterministic. |
+| Assertions | Conflicts, mixed modes, inline secrets, and unsafe paths fail. |
+| Firewall | Effective TCP, UDP, and packet-plane ports are opened. |
+
+## Standalone Consumer Flake
+
+Run the external-consumer check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-consumer-flake
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Flake output | `nixosModules.default` imports from another flake. |
+| Minimal declaration | `instances.lab.enable = true` evaluates. |
+| Full closure | The consumer NixOS system closure builds. |
+| Service | The upstream package and generated config are wired. |
+
+## NixOS VM Module Lifecycle
+
+Run the lifecycle check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-module-lifecycle
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Automatic identity | First start creates a persistent owner-only key. |
+| Restart | Identity and generated runtime settings remain stable. |
+| Multiple instances | Services, state, interfaces, and ports are isolated. |
+| Shutdown | systemd stops the daemon through its control socket. |
 
 ## NixOS VM Mesh
 
@@ -218,6 +256,33 @@ The 2026-08-10 VM run passed with minimal NixOS configs.
 
 Observed path events:
 
+| Event | Evidence |
+| --- | --- |
+| Direct start | Initial `pv0` traffic used a direct LAN path. |
+| Relay fallback | Relay paths and circuit counters appeared after movement. |
+| Direct recovery | State returned to `selected_path direct_*` after LAN return. |
+
+## NixOS VM Pairing
+
+Run the native pairing check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-pairing
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Minimal baseline | Both systems begin with native Nix instances. |
+| Identity | Accept reuses the joiner's persistent module identity. |
+| Output mode | Accept emits Nix only; no JSON file is created. |
+| Defaults | The fragment relies on module listeners, ports, MTU, and interface. |
+| Evaluation | The fragment merges over `enable = true` through the upstream module. |
+| Security | A replayed one-time URI is rejected with diagnostics. |
+| Data plane | Bidirectional traffic crosses the paired overlay. |
+| Restart | Signed membership restores authorization without re-pairing. |
+
 ## Namespace Live Pairing
 
 Run direct live pairing:
@@ -284,12 +349,6 @@ Coverage:
 | Data plane | Ping crosses the generated overlay config. |
 | Daemon state | Inviter accepts the pairing request live. |
 | Public relay smoke | Optional ignored test exercises discovery-only accept through a real relay. |
-
-| Event | Evidence |
-| --- | --- |
-| Direct start | Initial `pv0` traffic used a direct LAN path. |
-| Relay fallback | Relay paths and circuit counters appeared after movement. |
-| Direct recovery | State returned to `selected_path direct_*` after LAN return. |
 
 ## Latest Local Gate
 

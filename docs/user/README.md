@@ -6,10 +6,10 @@ Use these docs when you want to run `p2p-vpn`.
 
 | Document | Use It For |
 | --- | --- |
-| [Quick Start](quick-start.md) | Build two configs and start a small overlay. |
+| [Quick Start](quick-start.md) | Start a small JSON-managed overlay. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
-| [Pairing](pairing.md) | Generate and validate short-lived onboarding URIs. |
-| [NixOS Module](nixos.md) | Run p2p-vpn as managed NixOS services. |
+| [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
+| [Pairing](pairing.md) | Authorize a peer and generate native Nix or JSON output. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
 
@@ -21,27 +21,37 @@ Use these docs when you want to run `p2p-vpn`.
 | `/dev/net/tun` | Required for packet forwarding. |
 | `CAP_NET_ADMIN` or root | Required to create and configure TUN. |
 | Nix flakes | Recommended build and run path for this repo. |
-| Local identity key | Determines this node's libp2p peer ID. |
-| Remote peer IDs | Authorize who may join the overlay. |
+| Local identity | Generated automatically by the NixOS module. |
+| Peer authorization | Added through pairing or explicit peer settings. |
 
-## First Command
+## NixOS First Step
+
+```nix
+{
+  services.p2p-vpn.instances.lab.enable = true;
+}
+```
+
+Continue with [NixOS Module](nixos.md).
+
+## JSON First Command
 
 ```sh
 nix run .# -- init-config --output p2p-vpn.json --force
 ```
 
-For ordinary setups, do not add peer multiaddrs first.
+For ordinary JSON setups, do not add peer multiaddrs first.
 
 Start with:
 
 | Value | Configure It When |
 | --- | --- |
-| `network.private_key` | Always. |
+| `network.private_key` | Always in user-owned JSON. |
 | `network.vpn_ip` | You want a stable overlay IP. |
-| `peers.<id>` | Always for each trusted peer. |
+| `peers.<id>` | For static authorization instead of pairing. |
 | `peers.<id>.vpn_ip` | You want the peer to have a stable overlay IP. |
 
 Leave listen addresses, public relays, and peer multiaddrs unset unless you need
 an override for a controlled network or test.
 
-Use [Quick Start](quick-start.md) for the full two-node flow.
+Use [Quick Start](quick-start.md) for the full JSON two-node flow.

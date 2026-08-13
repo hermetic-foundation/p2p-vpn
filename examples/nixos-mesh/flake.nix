@@ -30,16 +30,7 @@
             { ... }:
             {
               networking.hostName = "node-a";
-              services.p2p-vpn.instances.node-a = {
-                enable = true;
-                networkName = "lab";
-                localPeer = "NODE_A_PEER_ID";
-                privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
-                vpnIp = "10.44.0.1";
-                peers."NODE_B_PEER_ID".vpnIp = "10.44.0.2";
-                metricsIntervalSeconds = 10;
-                openFirewall = true;
-              };
+              services.p2p-vpn.instances.lab.enable = true;
             }
           )
         ];
@@ -53,16 +44,7 @@
             { ... }:
             {
               networking.hostName = "node-b";
-              services.p2p-vpn.instances.node-b = {
-                enable = true;
-                networkName = "lab";
-                localPeer = "NODE_B_PEER_ID";
-                privateKeyFile = "/run/secrets/p2p-vpn/node-b.key";
-                vpnIp = "10.44.0.2";
-                peers."NODE_A_PEER_ID".vpnIp = "10.44.0.1";
-                metricsIntervalSeconds = 10;
-                openFirewall = true;
-              };
+              services.p2p-vpn.instances.lab.enable = true;
             }
           )
         ];

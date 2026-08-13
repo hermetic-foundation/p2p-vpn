@@ -1,58 +1,223 @@
 # Pairing
 
-Pairing is the interactive onboarding path.
+Pairing authorizes a new peer without manually exchanging peer IDs or keys.
 
-It is intended to replace manual key and config exchange.
+The inviter must already be running.
 
-## Requirements
+## NixOS Workflow
 
-You need one trusted node already running.
+This workflow stays in native Nix mode.
 
-The trusted node needs:
+It does not create or import a user-owned JSON configuration.
 
-| Required | Purpose |
-| --- | --- |
-| `network.name` | Selects the overlay. |
-| `network.private_key` | Signs the offer and response. |
-| `network.vpn_ip` | Advertises the inviter route. |
+### 1. Declare Both Instances
 
-The new node needs either a generated identity or `--private-key`.
+Use the same name on both hosts:
 
-## Offer
-
-Run this on an existing trusted node:
-
-```sh
-p2p-vpn pair offer --config /etc/p2p-vpn/lab.json
+```nix
+{
+  services.p2p-vpn.instances.runners.enable = true;
+}
 ```
 
-The command prints a `p2pvpn:` URI.
+Apply the configuration on both hosts:
 
-Copy that URI to the new node.
+```sh
+sudo nixos-rebuild switch
+```
+
+This creates each host's persistent identity.
+
+### 2. Create an Offer
+
+Run on the existing member:
+
+```sh
+sudo p2p-vpn pair offer \
+  --nixos-instance runners \
+  --output /tmp/runners.pair \
+  --force
+```
+
+`--nixos-instance` reads the module runtime for that instance.
+
+The default offer expires after 10 minutes.
+
+### 3. Transfer the Offer
+
+Transfer `/tmp/runners.pair` over a trusted channel.
+
+The file contains a one-line `p2pvpn:` URI.
+
+### 4. Accept into Nix
+
+Stop the unpaired joiner to avoid two processes using one identity:
+
+```sh
+sudo systemctl stop p2p-vpn-runners.service
+```
+
+Accept the offer:
+
+```sh
+sudo p2p-vpn pair accept /tmp/runners.pair \
+  --nixos-output /etc/nixos/p2p-vpn-runners.nix \
+  --nixos-instance runners \
+  --nixos-only
+```
+
+The command reuses this identity when it exists:
+
+```text
+/var/lib/p2p-vpn/runners/private.key
+```
+
+If the key does not exist, the command creates it with mode `0600`.
+
+### 5. Import and Switch
+
+```nix
+{
+  imports = [ ./p2p-vpn-runners.nix ];
+}
+```
+
+```sh
+sudo nixos-rebuild switch
+```
+
+The generated file uses typed `services.p2p-vpn.instances` options.
+
+It omits settings already supplied by module defaults.
+
+### 6. Verify
+
+```sh
+sudo p2p-vpn daemon-health \
+  --socket /run/p2p-vpn-runners/control.sock \
+  --require-validated-peers \
+  --require-supported-paths
+```
+
+Use the peer's overlay address for a traffic test.
+
+## Stable Address Request
+
+Without `--vpn-ip`, the joiner uses its peer-derived built-in address.
+
+Request a fixed address when services need a known IP:
+
+```sh
+sudo p2p-vpn pair accept runners.pair \
+  --nixos-output /etc/nixos/p2p-vpn-runners.nix \
+  --nixos-instance runners \
+  --nixos-only \
+  --vpn-ip 10.44.0.2
+```
+
+The inviter signs the requested host route into the member record.
+
+Request additional originated prefixes with repeated `--local-route` options.
+
+## Offer Inspection
+
+Inspect an offer before accepting it:
+
+```sh
+p2p-vpn pair inspect runners.pair
+```
+
+| Field | Meaning |
+| --- | --- |
+| `pairing offer` | Signature and expiry state |
+| `network` | Overlay being joined |
+| `inviter peer` | Signing peer identity |
+| `discovery only` | Whether direct inviter hints were omitted |
+| `inviter address hints` | Signed initial dial paths |
+| `bootstrap peers` | Signed discovery seeds |
+| `rendezvous token` | Hidden one-time secret |
+
+Reveal the token only on a trusted terminal:
+
+```sh
+p2p-vpn pair inspect runners.pair --show-secret
+```
+
+## Offer Expiry
+
+Set a shorter expiry for exposed transfer paths:
+
+```sh
+sudo p2p-vpn pair offer \
+  --nixos-instance runners \
+  --expires-in-seconds 120 \
+  --output /tmp/runners.pair \
+  --force
+```
+
+Accepted tokens cannot be replayed during the inviter daemon lifetime.
+
+Create a new offer for another peer.
 
 ## Discovery-Only Offer
 
-Use this when the URI should not embed current inviter addresses:
+Omit direct inviter addresses from the URI:
 
 ```sh
-p2p-vpn pair offer \
-  --config /etc/p2p-vpn/lab.json \
-  --discovery-only
+sudo p2p-vpn pair offer \
+  --nixos-instance runners \
+  --discovery-only \
+  --output /tmp/runners.pair \
+  --force
 ```
 
-This keeps bootstrap and discovery hints in the URI.
+The joiner must find the inviter through mDNS, Kademlia, bootstrap, or relay hints.
 
-The accept side must discover the inviter over mDNS, Kademlia, or relay hints.
+Use this mode only when those discovery paths are already reachable.
 
-Relay reservation hints are signed when present.
+## Identity Rules
 
-They do not expose a direct inviter address.
+| Situation | Result |
+| --- | --- |
+| Secure existing key matches | Key is reused and reported as `kept` |
+| Key is missing | New key is generated |
+| Existing key has permissive mode | Accept fails |
+| Existing key content conflicts | Accept fails without `--force` |
+| Existing path is a symlink | Accept fails |
 
-The generated config preserves the relayed inviter address after accept.
+Treat `--force` as permission to replace existing output or secret state.
 
-## Offer File
+Supplying a different key rotates the peer ID and invalidates old authorization.
 
-Write the URI to a file:
+## Signed Membership
+
+The inviter returns an inviter-signed member record.
+
+The record binds:
+
+- Network name.
+- Joiner peer ID and public key.
+- Overlay-member role.
+- Requested address and route grants.
+- Sequence and membership epoch.
+
+The joiner stores the record in generated Nix.
+
+After an inviter restart, the joiner presents the record again for verification.
+
+## Optional Membership Key
+
+If the inviter uses `membershipKeyFile`, pairing transfers that key securely.
+
+The joiner stores it outside the Nix store and references it from generated Nix.
+
+The signed member record is still issued for restart and route authorization.
+
+## Generic JSON Workflow
+
+Use this only for non-NixOS or JSON-managed hosts.
+
+### Offer
 
 ```sh
 p2p-vpn pair offer \
@@ -60,289 +225,71 @@ p2p-vpn pair offer \
   --output lab.pair
 ```
 
-The file contains one line.
-
-It is easier to inspect and rotate than a full config.
-
-## Inspect
-
-Inspect a URI or offer file:
+### Accept
 
 ```sh
-p2p-vpn pair inspect lab.pair
-```
-
-The output hides the rendezvous token by default.
-
-Use this only on trusted terminals:
-
-```sh
-p2p-vpn pair inspect lab.pair --show-secret
-```
-
-Useful fields:
-
-| Field | Meaning |
-| --- | --- |
-| `pairing offer` | `valid` or `expired`. |
-| `discovery only` | Whether direct inviter hints are omitted. |
-| `inviter address hints` | Direct plus relayed dial hints. |
-| `bootstrap peers` | Peers the accept path can seed from. |
-| `rendezvous token` | Hidden unless `--show-secret` is set. |
-
-## Expiry
-
-Default expiry:
-
-| Option | Default |
-| --- | --- |
-| `--expires-in-seconds` | `600` |
-
-Use a shorter window for public or shared terminals:
-
-```sh
-p2p-vpn pair offer --expires-in-seconds 120
-```
-
-## Accept
-
-Run this on the new node:
-
-```sh
-p2p-vpn pair accept 'p2pvpn:...'
-```
-
-You can also pass an offer file:
-
-```sh
-p2p-vpn pair accept lab.pair
-```
-
-`pair accept` will:
-
-1. Verify the signed offer.
-2. Contact the inviter over libp2p.
-3. Request the chosen VPN IP and local routes.
-4. Receive a signed membership grant.
-5. Write the new local config.
-
-## Accept Response File
-
-Use this when a signed response was produced out of band:
-
-```sh
-p2p-vpn pair accept 'p2pvpn:...' \
-  --response pairing-response.json \
-  --output p2p-vpn.json
-```
-
-Optional fields:
-
-| Option | Meaning |
-| --- | --- |
-| `--private-key` | Use an existing local identity. |
-| `--interface` | Interface name for the generated config. |
-| `--mtu` | Interface MTU. |
-| `--local-route` | Extra route to request and write locally. |
-| `--vpn-ip` | Requested VPN IP for the new node. |
-| `--peer-name` | Label for the inviter peer. |
-| `--nixos-output` | Also write a NixOS module snippet. |
-| `--nixos-instance` | Instance name for the generated NixOS snippet. |
-| `--timeout-seconds` | Live pairing exchange timeout. |
-| `--force` | Overwrite output config. |
-
-Without `--private-key`, a new identity is generated.
-
-Without `--vpn-ip`, `pair accept` requests the built-in IP derived from the new
-peer ID.
-
-With `--vpn-ip`, record-based inviters grant that host route automatically.
-
-With live pairing, each `--local-route` is included in the signed request.
-
-Record-based inviters return those routes as signed membership grants.
-
-## Live Accept
-
-By default, `pair accept` contacts the inviter over libp2p.
-
-It uses direct, relayed, bootstrap, mDNS, and Kademlia hints from the URI.
-
-```sh
-p2p-vpn pair accept 'p2pvpn:...' \
+p2p-vpn pair accept lab.pair \
   --output /etc/p2p-vpn/lab.json
 ```
 
-Use `--timeout-seconds` when the path may need relay setup:
+The default output is `p2p-vpn.json`.
+
+Use `--private-key` only when an existing JSON workflow supplies the identity.
+
+Do not combine this JSON output with native Nix instance settings.
+
+## Offline Response Import
+
+Import a response produced through an out-of-band exchange:
 
 ```sh
-p2p-vpn pair accept 'p2pvpn:...' \
-  --timeout-seconds 60
+p2p-vpn pair accept lab.pair \
+  --response pairing-response.json \
+  --output /etc/p2p-vpn/lab.json
 ```
 
-Use `--response` for offline response import.
+Normal pairing performs the encrypted libp2p exchange automatically.
 
-## NixOS Output
+## Accept Options
 
-Use `--nixos-output` for a Nix-native paired instance:
-
-```sh
-sudo p2p-vpn pair accept lab.pair \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-only
-```
-
-The generated Nix file uses typed module options.
-
-It does not point the service at a paired JSON config.
-
-Private key material is written under:
-
-```text
-/var/lib/p2p-vpn/lab/private.key
-```
-
-If a shared membership key is present, it is written under:
-
-```text
-/var/lib/p2p-vpn/lab/membership.key
-```
-
-Both files are mode `0600`.
-
-Import the generated file from your NixOS configuration:
-
-```nix
-{
-  imports = [ ./p2p-vpn-lab.nix ];
-}
-```
-
-Then switch and start the service:
-
-```sh
-sudo nixos-rebuild switch
-sudo systemctl restart p2p-vpn-lab.service
-```
-
-Use a custom state directory when needed:
-
-```sh
-sudo p2p-vpn pair accept lab.pair \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-state-dir /var/lib/p2p-vpn/lab \
-  --nixos-only
-```
-
-## Live Diagnostics
-
-If live pairing times out, the final error includes route context.
-
-Example fields:
-
-| Field | Meaning |
+| Option | Purpose |
 | --- | --- |
-| `inviter_hints` | Inviter addresses embedded in the URI. |
-| `relayed_inviter_hints` | URI hints that use `/p2p-circuit`. |
-| `bootstrap_peers` | Bootstrap peers embedded in the URI. |
-| `request_attempts` | Pairing request sends attempted. |
-| `outbound_failures` | libp2p request failures. |
-| `dial_errors` | connection setup errors observed. |
-| `relayed_dial_start_failures` | relay dial attempts rejected locally. |
+| `--nixos-output` | Write a typed NixOS module file |
+| `--nixos-instance` | Select its instance and default state path |
+| `--nixos-only` | Do not write JSON output |
+| `--nixos-state-dir` | Override the per-instance secret directory |
+| `--vpn-ip` | Request a stable joiner overlay address |
+| `--local-route` | Request an additional originated prefix |
+| `--peer-name` | Label the inviter in generated config |
+| `--interface` | Override generated interface name |
+| `--mtu` | Override generated TUN MTU |
+| `--timeout-seconds` | Extend live discovery and exchange time |
+| `--force` | Replace output or conflicting secret state |
 
-The diagnostic is intentionally compact.
+## Failure Diagnostics
 
-It does not print the pairing URI or rendezvous token.
+Live failures report compact path counters.
 
-## Daemon Status
-
-The daemon exports pairing counters through normal status and metrics views.
-
-```sh
-p2p-vpn status --config /etc/p2p-vpn/lab.json
-p2p-vpn metrics --config /etc/p2p-vpn/lab.json
-```
-
-Useful counters:
-
-| Counter | Meaning |
+| Field | Check |
 | --- | --- |
-| `pairing_requests_received` | Live pairing requests seen by the daemon. |
-| `pairing_requests_accepted` | Requests that produced a response. |
-| `pairing_requests_rejected` | Requests rejected before response. |
-| `pairing_reject_invalid_offer` | Bad signature, expiry, network, or grant shape. |
-| `pairing_reject_replayed_token` | One-time token already consumed. |
-| `pairing_reject_rate_limited` | Per-peer request limit exceeded. |
-| `pairing_outbound_failures` | Local pairing request-response sends failed. |
-| `pairing_inbound_failures` | Remote pairing request-response sends failed. |
+| `inviter_hints` | Signed direct dial hints were present |
+| `relayed_inviter_hints` | Circuit-relay hints were present |
+| `bootstrap_peers` | Discovery seeds were present |
+| `request_attempts` | Pairing request reached send stage |
+| `outbound_failures` | Request-response transport failed |
+| `dial_errors` | No candidate connection completed |
+| `relayed_dial_start_failures` | Relay path was rejected locally |
 
-## Daemon Limits
+The error does not print the URI or token.
 
-The inviter daemon rate-limits live pairing requests per libp2p peer.
+## Security Rules
 
-| Setting | Default |
-| --- | --- |
-| `resources.max_pairing_requests_per_peer_per_second` | `4` |
+- Treat the URI as a short-lived secret.
+- Verify the network and inviter peer before accepting.
+- Transfer offers over an authenticated channel.
+- Keep generated key files root-owned and mode `0600`.
+- Use one offer per joining peer.
+- Delete expired offer files.
 
-Rate-limited requests are rejected before response generation.
-
-This limit is separate from packet forwarding limits.
-
-The daemon also checks the authenticated libp2p peer.
-
-It must match the signed joiner peer in the pairing request.
-
-## URI Contents
-
-The URI includes:
-
-| Field | Meaning |
-| --- | --- |
-| Network name | Overlay to join. |
-| Inviter peer ID | Existing trusted node. |
-| Inviter public key | Verifies the signed offer. |
-| Rendezvous token | One-time pairing secret. |
-| Expiry | Rejects stale offers. |
-| Inviter addresses | Direct or relayed hints. |
-| Bootstrap peers | Discovery hints. |
-| Relay reservations | Relay paths for dialing the inviter. |
-| Discovery settings | mDNS, Kademlia, DCUtR, AutoNAT. |
-
-Minimal configs use public IPFS bootstrap peers by default.
-
-Pairing does not write the built-in public bootstrap list into the URI or
-generated config.
-
-Explicit bootstrap peers are still included.
-
-`--discovery-only` omits inviter addresses.
-
-It can still include:
-
-| Hint | Source |
-| --- | --- |
-| Bootstrap peers | `network.bootstrap_peers` or public IPFS defaults. |
-| Relay reservations | `network.relay.reservations`. |
-| Discovery settings | `network.discovery`. |
-
-## Secrets
-
-The pairing URI is sensitive.
-
-Anyone with the URI can attempt pairing until it expires.
-
-Do not post it publicly.
-
-## Exchange
-
-Live `pair accept`:
-
-1. Discover the inviter through the URI hints.
-2. Open an encrypted libp2p control exchange.
-3. Send the new peer ID and requested VPN IP.
-4. Receive the signed response automatically.
-5. Write the minimal local config.
-
-Manual invite files remain useful for offline exchange.
+Protocol details and counters are in
+[Pairing Implementation](../developer/pairing.md).

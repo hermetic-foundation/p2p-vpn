@@ -8,6 +8,7 @@ Use these docs when changing, testing, or debugging `p2p-vpn`.
 | --- | --- |
 | [Architecture](architecture.md) | Runtime and protocol layout. |
 | [Feature Matrix](feature-matrix.md) | Current implementation status. |
+| [NixOS Module Design](nixos-module.md) | Modes, secret lifecycle, service contract, and tests. |
 | [Pairing Implementation](pairing.md) | Pairing protocol status and proof commands. |
 | [Testing](testing.md) | Unit, Nix, namespace, and two-host tests. |
 | [Network Debugging](network-debugging.md) | Artifact capture and failure triage. |

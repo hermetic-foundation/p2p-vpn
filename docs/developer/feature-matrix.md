@@ -37,7 +37,7 @@ Status is conservative.
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
 | Signed membership records | Partial | Local and DHT tests; public DHT evidence remains. |
-| NixOS module | Operational | NixOS module and VM smoke checks. |
+| NixOS module | Operational | Evaluation, consumer-flake, lifecycle, mesh, and pairing checks. |
 | Release archive | Operational | Release archive sanity check. |
 
 ## Current Recorded Evidence
@@ -54,6 +54,7 @@ Status is conservative.
 | 2026-08-09 | Public relay repro refresh | Public relay scan found 12 candidates; one relayed peer circuit passed. |
 | 2026-08-11 | Public relay reservation scan | One public relay accepted a reservation. |
 | 2026-08-11 | Public discovery-only pairing smoke | Pairing completed through the public relay. |
+| 2026-08-12 | Native NixOS pairing VM | Nix-only accept, identity reuse, traffic, and restart recovery passed. |
 
 ## Main Remaining Gap
 

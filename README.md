@@ -16,6 +16,8 @@ protocols and bounded queues.
 ## Quick Links
 
 - [Quick Start](docs/user/quick-start.md)
+- [NixOS Module](docs/user/nixos.md)
+- [Pairing](docs/user/pairing.md)
 - [Configuration](docs/user/configuration.md)
 - [Operations](docs/user/operations.md)
 - [Public libp2p/IPFS Reachability](docs/user/public-libp2p.md)
