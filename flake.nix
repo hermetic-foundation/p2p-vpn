@@ -34,10 +34,19 @@
         lib = nixpkgs.lib;
         rust = pkgs.rustc;
         cargo = pkgs.cargo;
+        rustSource = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./src
+            ./tests/tun_namespace.rs
+          ];
+        };
         package = pkgs.rustPlatform.buildRustPackage {
           pname = "p2p-vpn";
           version = "0.1.0";
-          src = self;
+          src = rustSource;
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
@@ -3321,7 +3330,7 @@ EOF
         namespaceSmokePreflighted = pkgs.rustPlatform.buildRustPackage {
           pname = "p2p-vpn-namespace-smoke-preflighted";
           version = "0.1.0";
-          src = self;
+          src = rustSource;
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [
             pkgs.pkg-config
@@ -3600,7 +3609,7 @@ EOF
           clippy = pkgs.rustPlatform.buildRustPackage {
             pname = "p2p-vpn-clippy";
             version = "0.1.0";
-            src = self;
+            src = rustSource;
             cargoLock.lockFile = ./Cargo.lock;
             nativeBuildInputs = [
               pkgs.clippy
