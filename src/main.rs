@@ -619,8 +619,6 @@ enum PairCommand {
         #[arg(long)]
         nixos_instance: Option<String>,
         #[arg(long)]
-        nixos_config_file_mode: bool,
-        #[arg(long)]
         nixos_only: bool,
         #[arg(long)]
         nixos_state_dir: Option<PathBuf>,
@@ -1030,7 +1028,6 @@ async fn main() -> Result<(), String> {
                 output,
                 nixos_output,
                 nixos_instance,
-                nixos_config_file_mode,
                 nixos_only,
                 nixos_state_dir,
                 private_key,
@@ -1048,7 +1045,6 @@ async fn main() -> Result<(), String> {
                     output,
                     nixos_output,
                     nixos_instance,
-                    nixos_config_file_mode,
                     nixos_only,
                     nixos_state_dir,
                     private_key,
@@ -1346,7 +1342,6 @@ struct PairAcceptArgs {
     output: PathBuf,
     nixos_output: Option<PathBuf>,
     nixos_instance: Option<String>,
-    nixos_config_file_mode: bool,
     nixos_only: bool,
     nixos_state_dir: Option<PathBuf>,
     private_key: Option<String>,
@@ -2385,7 +2380,6 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
             PairingNixosOutputOptions {
                 output: args.nixos_output.as_deref(),
                 instance: args.nixos_instance.as_deref(),
-                config_file_mode: args.nixos_config_file_mode,
                 nixos_only: args.nixos_only,
                 state_dir: args.nixos_state_dir.as_deref(),
             },
@@ -2425,7 +2419,6 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         PairingNixosOutputOptions {
             output: args.nixos_output.as_deref(),
             instance: args.nixos_instance.as_deref(),
-            config_file_mode: args.nixos_config_file_mode,
             nixos_only: args.nixos_only,
             state_dir: args.nixos_state_dir.as_deref(),
         },
@@ -2513,7 +2506,6 @@ fn write_pairing_config(
             &rendered_config,
             output,
             nixos_output,
-            nixos.config_file_mode,
             nixos.nixos_only,
             nixos.state_dir,
         )?;
@@ -2526,7 +2518,6 @@ fn write_pairing_config(
 struct PairingNixosOutputOptions<'a> {
     output: Option<&'a Path>,
     instance: Option<&'a str>,
-    config_file_mode: bool,
     nixos_only: bool,
     state_dir: Option<&'a Path>,
 }
@@ -2534,25 +2525,13 @@ struct PairingNixosOutputOptions<'a> {
 fn write_pairing_nixos_module(
     instance: &str,
     config: &Config,
-    config_path: &Path,
+    _config_path: &Path,
     output: &Path,
-    config_file_mode: bool,
-    nixos_only: bool,
+    _nixos_only: bool,
     nixos_state_dir: Option<&Path>,
 ) -> Result<(), String> {
-    let config_path = config_path
-        .to_str()
-        .ok_or_else(|| "paired config path is not valid UTF-8".to_owned())?;
-    let rendered = if config_file_mode {
-        if nixos_only {
-            return Err("--nixos-config-file-mode cannot be combined with --nixos-only".to_owned());
-        }
-        render_pairing_nixos_config_file_module(instance, config_path)?
-    } else {
-        let secret_paths =
-            write_pairing_nixos_secret_files(config, instance, config_path, nixos_state_dir)?;
-        render_pairing_nixos_module(instance, config, &secret_paths)?
-    };
+    let secret_paths = write_pairing_nixos_secret_files(config, instance, nixos_state_dir)?;
+    let rendered = render_pairing_nixos_module(instance, config, &secret_paths)?;
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
     } else {
@@ -2572,7 +2551,6 @@ struct PairingNixosSecretPaths {
 fn write_pairing_nixos_secret_files(
     config: &Config,
     instance: &str,
-    _config_path: &str,
     nixos_state_dir: Option<&Path>,
 ) -> Result<PairingNixosSecretPaths, String> {
     let state_dir = nixos_state_dir.map_or_else(
@@ -2625,23 +2603,6 @@ fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
         .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
-}
-
-fn render_pairing_nixos_config_file_module(
-    instance: &str,
-    config_path: &str,
-) -> Result<String, String> {
-    if instance.is_empty() {
-        return Err("--nixos-instance cannot be empty".to_owned());
-    }
-    if config_path.is_empty() {
-        return Err("paired config path cannot be empty".to_owned());
-    }
-    let instance = nix_string_literal(instance)?;
-    let config_path = nix_string_literal(config_path)?;
-    Ok(format!(
-        "{{\n  services.p2p-vpn.instances.{instance} = {{\n    enable = true;\n    configFile = {config_path};\n  }};\n}}"
-    ))
 }
 
 fn render_pairing_nixos_module(
@@ -11347,22 +11308,48 @@ mod tests {
     }
 
     #[test]
-    fn render_pairing_nixos_config_file_module_references_paired_json() {
-        let rendered = render_pairing_nixos_config_file_module("lab", "/var/lib/p2p-vpn/lab.json")
-            .expect("render");
-
-        assert!(rendered.contains("configFile = \"/var/lib/p2p-vpn/lab.json\";"));
-    }
-
-    #[test]
     fn render_pairing_nixos_module_quotes_instance_names() {
-        let rendered =
-            render_pairing_nixos_config_file_module("mesh lab", "/var/lib/p2p-vpn/mesh-lab.json")
-                .expect("render");
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "mesh lab".to_owned(),
+                local_peer: String::new(),
+                private_key: Some(identity.private_key.clone()),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: None,
+                routes: Vec::new(),
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+        config.network.local_peer.clear();
+
+        let rendered = render_pairing_nixos_module(
+            "mesh lab",
+            &config,
+            &PairingNixosSecretPaths {
+                private_key_file: Some("/var/lib/p2p-vpn/mesh-lab/private.key".to_owned()),
+                membership_key_file: None,
+            },
+        )
+        .expect("render");
 
         assert!(rendered.contains("instances.\"mesh lab\""));
         assert!(
-            render_pairing_nixos_config_file_module("", "/var/lib/p2p-vpn/lab.json")
+            render_pairing_nixos_module("", &config, &PairingNixosSecretPaths::default())
                 .expect_err("empty instance should fail")
                 .contains("--nixos-instance")
         );

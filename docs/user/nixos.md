@@ -19,7 +19,7 @@ Use the flake module to run one or more `p2p-vpn` daemons as systemd services.
 
 ## Minimal Service
 
-Declare the instance first:
+Declare the instance:
 
 ```nix
 {
@@ -27,55 +27,47 @@ Declare the instance first:
 }
 ```
 
-That is enough Nix to reserve the service.
+The module generates the daemon config from Nix.
 
 The module uses these defaults:
 
 | Item | Default |
 | --- | --- |
-| Runtime config | `/var/lib/p2p-vpn/lab.json` |
-| Unit gate | Waits until the config exists |
-| State directory | `/var/lib/p2p-vpn` |
+| Network name | `lab` |
 | Interface | `pv0` |
+| Runtime config | `/run/p2p-vpn-lab/config.json` |
+| Private key file | `/var/lib/p2p-vpn/lab/private.key` |
+| Unit gate | Waits until the key file exists |
 | Control socket | `/run/p2p-vpn-lab/control.sock` |
 
-Then pair into the expected state path:
-
-```sh
-sudo p2p-vpn pair accept lab.pair \
-  --output /var/lib/p2p-vpn/lab.json \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-config-file-mode
-```
-
-The generated Nix file contains only the same service declaration:
-
-```nix
-{
-  services.p2p-vpn.instances."lab" = {
-    enable = true;
-    configFile = "/var/lib/p2p-vpn/lab.json";
-  };
-}
-```
-
-Import it if you do not already declare the instance.
-
-## Typed Service
-
-Use typed module options when you manage peer state in Nix:
+Add peers in Nix:
 
 ```nix
 {
   services.p2p-vpn.instances.lab = {
     enable = true;
 
-    networkName = "lab";
-    privateKeyFile = "/run/secrets/p2p-vpn/lab.key";
-
-    peers."REMOTE_PEER_ID" = {};
+    peers."REMOTE_PEER_ID" = { };
   };
+}
+```
+
+Create the key file:
+
+```sh
+sudo install -d -m 0700 /var/lib/p2p-vpn/lab
+p2p-vpn keygen |
+  awk '/^private_key: / { print $2 }' |
+  sudo tee /var/lib/p2p-vpn/lab/private.key >/dev/null
+sudo chmod 0600 /var/lib/p2p-vpn/lab/private.key
+```
+
+Or point at a secret manager path:
+
+```nix
+{
+  services.p2p-vpn.instances.lab.privateKeyFile =
+    "/run/secrets/p2p-vpn/lab.key";
 }
 ```
 
@@ -83,13 +75,17 @@ Required values:
 
 | Field | Purpose |
 | --- | --- |
-| `networkName` | Shared overlay name. |
-| `privateKeyFile` | This host's identity key. |
+| Instance name | Default shared overlay name. |
+| `privateKeyFile` | This host's identity key file. |
 | `peers.<id>` | Remote peer authorization. |
+
+`networkName` is optional.
+
+Set it only when the overlay name differs from the instance name.
 
 `localPeer` is optional.
 
-Set it only to assert the private key matches an expected peer ID.
+Set it only to assert the key matches an expected peer ID.
 
 ## Stable Overlay IPs
 
@@ -289,46 +285,6 @@ Use `privateKey` only for throwaway test hosts:
 
 `privateKey` is copied into the Nix store.
 
-## Raw Settings
-
-Use `settings` only when you need full JSON control:
-
-```nix
-{
-  services.p2p-vpn.instances.lab = {
-    enable = true;
-    settings = {
-      network = {
-        name = "lab";
-        private_key = "BASE64_PRIVATE_KEY";
-      };
-      peers = [
-        { id = "REMOTE_PEER_ID"; }
-      ];
-    };
-  };
-}
-```
-
-`settings` values are copied into the Nix store.
-
-Do not put private keys or membership keys in `settings` on real hosts.
-
-## Secret Config
-
-Use `configFile` when another tool writes complete JSON:
-
-```nix
-{
-  services.p2p-vpn.instances.lab = {
-    enable = true;
-    configFile = "/run/secrets/p2p-vpn/lab.json";
-  };
-}
-```
-
-Do not combine `configFile` with generated config options.
-
 ## Pairing Output
 
 Use pairing to create a typed Nix-native module snippet:
@@ -385,23 +341,6 @@ Keep generated state root-owned and private:
 sudo chmod 0700 /var/lib/p2p-vpn/lab
 sudo chmod 0600 /var/lib/p2p-vpn/lab/*.key
 ```
-
-Use JSON-backed Nix only when full raw config state is required:
-
-```sh
-sudo p2p-vpn pair accept lab.pair \
-  --output /var/lib/p2p-vpn/lab.json \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-config-file-mode
-```
-
-That mode writes:
-
-| File | Purpose |
-| --- | --- |
-| `/var/lib/p2p-vpn/lab.json` | Complete paired runtime config. |
-| `/etc/nixos/p2p-vpn-lab.nix` | `configFile` snippet. |
 
 ## Firewall
 

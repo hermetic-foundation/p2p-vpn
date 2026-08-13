@@ -32,47 +32,37 @@ let
   firewallInstances = attrValues (
     filterAttrs (_: instance: instance.enable && instance.openFirewall) cfg.instances
   );
-  settingsInstances = filterAttrs (
-    _: instance: instance.enable && instance.settings != null
-  ) cfg.instances;
-  stateBackedInstances = filterAttrs (
-    _: instance:
-    instance.enable
-    && instance.configFile == null
-    && instance.settings == null
-    && instance.privateKey == null
-    && instance.privateKeyFile == null
-    && instance.stateConfigFile != null
-  ) cfg.instances;
   storeGeneratedInstances = filterAttrs (
     _: instance:
     instance.enable
-    && instance.configFile == null
-    && instance.settings == null
     && instance.privateKey != null
     && instance.privateKeyFile == null
     && instance.membershipKeyFile == null
   ) cfg.instances;
+  defaultSecretFileInstances = filterAttrs (
+    _: instance: instance.enable && instance.privateKey == null && instance.privateKeyFile == null
+  ) cfg.instances;
   stateDirectories = unique (
-    mapAttrsToList (_: instance: instance.stateDirectory) stateBackedInstances
+    mapAttrsToList (_: instance: instance.stateDirectory) defaultSecretFileInstances
+  );
+  stateInstanceDirectories = unique (
+    mapAttrsToList (name: instance: "${instance.stateDirectory}/${name}") defaultSecretFileInstances
   );
 
   generatedConfigFile = name: "/etc/p2p-vpn/${name}.json";
   runtimeGeneratedConfigFile = name: "/run/p2p-vpn-${name}/config.json";
+  defaultPrivateKeyFile = name: instance: "${instance.stateDirectory}/${name}/private.key";
+  effectivePrivateKeyFile =
+    name: instance:
+    if instance.privateKeyFile != null then
+      instance.privateKeyFile
+    else if instance.privateKey == null then
+      defaultPrivateKeyFile name instance
+    else
+      null;
   effectiveConfigFile =
     name: instance:
-    if instance.configFile != null then
-      instance.configFile
-    else if
-      instance.settings == null
-      && instance.privateKey == null
-      && instance.privateKeyFile == null
-      && instance.stateConfigFile != null
-    then
-      instance.stateConfigFile
-    else if
-      instance.settings != null || (instance.privateKeyFile == null && instance.membershipKeyFile == null)
-    then
+    if effectivePrivateKeyFile name instance == null && instance.membershipKeyFile == null then
       generatedConfigFile name
     else
       runtimeGeneratedConfigFile name;
@@ -123,6 +113,22 @@ let
     // optionalAttrs (peer.vpnIp != null) { vpn_ip = peer.vpnIp; }
     // optionalAttrs (peer.addresses != [ ]) { inherit (peer) addresses; }
     // optionalAttrs (peer.routes != [ ]) { routes = map routeObject peer.routes; };
+  packetPlaneSettings =
+    packetPlane:
+    optionalAttrs (packetPlane.listen != null) { listen = packetPlane.listen; }
+    // optionalAttrs (packetPlane.externalEndpoints != null) {
+      external_endpoints = packetPlane.externalEndpoints;
+    }
+    // optionalAttrs (packetPlane.quicListen != null) { quic_listen = packetPlane.quicListen; }
+    // optionalAttrs (packetPlane.quicExternalEndpoints != null) {
+      quic_external_endpoints = packetPlane.quicExternalEndpoints;
+    };
+  isDefaultPacketPlane =
+    packetPlane:
+    packetPlane.listen == null
+    && packetPlane.externalEndpoints == null
+    && packetPlane.quicListen == null
+    && packetPlane.quicExternalEndpoints == null;
 
   generatedSettings =
     instance:
@@ -133,6 +139,9 @@ let
         }
         // optionalAttrs (instance.localPeer != null) { local_peer = instance.localPeer; }
         // optionalAttrs (instance.privateKey != null) { private_key = instance.privateKey; }
+        // optionalAttrs (instance.listenAddresses != null) {
+          listen_addresses = instance.listenAddresses;
+        }
         // optionalAttrs (instance.vpnIp != null) { vpn_ip = instance.vpnIp; }
         // optionalAttrs (instance.routes != [ ]) { routes = map routeObject instance.routes; }
         // optionalAttrs (instance.membershipKey != null) {
@@ -162,6 +171,9 @@ let
                   };
                 };
             }
+        // optionalAttrs (!isDefaultPacketPlane instance.packetPlane) {
+          packet_plane = packetPlaneSettings instance.packetPlane;
+        }
       );
       peers = mapAttrsToList compactPeerConfig instance.peers;
     }
@@ -178,16 +190,19 @@ let
     );
   runtimeConfigScript =
     name: instance:
+    let
+      privateKeyFile = effectivePrivateKeyFile name instance;
+    in
     pkgs.writeShellScript "p2p-vpn-${name}-write-config" (
       ''
         set -eu
         config="$(mktemp)"
         cp ${runtimeTemplateFile name instance} "$config"
       ''
-      + optionalString (instance.privateKeyFile != null) ''
+      + optionalString (privateKeyFile != null) ''
         next="$(mktemp)"
         ${pkgs.jq}/bin/jq \
-          --rawfile private_key ${lib.escapeShellArg instance.privateKeyFile} \
+          --rawfile private_key ${lib.escapeShellArg privateKeyFile} \
           '.network.private_key = ($private_key | rtrimstr("\n"))' \
           "$config" > "$next"
         mv "$next" "$config"
@@ -206,78 +221,38 @@ let
     );
 
   instanceOptions =
-    { name, config, ... }:
+    { name, ... }:
     {
       options = {
         enable = mkEnableOption "the ${name} p2p-vpn instance";
-
-        configFile = mkOption {
-          type = types.nullOr types.str;
-          default = null;
-          example = "/etc/p2p-vpn/${name}.json";
-          description = ''
-            Runtime path to an existing p2p-vpn JSON config.
-
-            Use this instead of settings when the config contains private keys,
-            membership keys, or other secret material.
-          '';
-        };
 
         stateDirectory = mkOption {
           type = types.str;
           default = "/var/lib/p2p-vpn";
           example = "/var/lib/p2p-vpn";
           description = ''
-            Persistent directory for paired runtime configs.
+            Persistent directory for runtime secret files.
 
-            The module creates this directory when an enabled instance uses
-            stateConfigFile.
+            When privateKey and privateKeyFile are omitted, the module expects
+            the local identity key at <stateDirectory>/<instance>/private.key.
           '';
         };
 
-        stateConfigFile = mkOption {
-          type = types.nullOr types.str;
-          default = "${config.stateDirectory}/${name}.json";
-          example = "/var/lib/p2p-vpn/${name}.json";
-          description = ''
-            Persistent paired JSON config path used when no config source is
-            declared.
-
-            This lets consumers enable an instance before pairing. The systemd
-            unit waits until the file exists.
-
-            Set this to null to require configFile, settings, privateKey, or
-            privateKeyFile.
-          '';
-        };
-
-        settings = mkOption {
-          type = types.nullOr (types.attrsOf types.anything);
+        listenAddresses = mkOption {
+          type = types.nullOr (types.listOf types.str);
           default = null;
-          example = {
-            network = {
-              name = "lab";
-              private_key = "BASE64_PRIVATE_KEY";
-            };
-            peers = [
-              {
-                id = "REMOTE_PEER_ID";
-                ip = "192.168.0.203";
-              }
-            ];
-          };
+          example = [ "/ip4/0.0.0.0/tcp/4001" ];
           description = ''
-            Declarative p2p-vpn JSON config.
+            Libp2p listen multiaddrs for generated configs.
 
-            The module writes this to /etc/p2p-vpn/<instance>.json. Values are
-            copied into the Nix store, so do not use this for private keys on
-            real deployments.
+            Leave unset for daemon defaults. Set to an empty list to disable
+            libp2p listeners.
           '';
         };
 
         networkName = mkOption {
           type = types.str;
-          default = "lab";
+          default = name;
           example = "lab";
           description = ''
             Overlay network name for generated minimal configs.
@@ -434,6 +409,63 @@ let
             Overlay prefixes originated by this node in generated minimal
             configs.
           '';
+        };
+
+        packetPlane = mkOption {
+          type = types.submodule (
+            { ... }:
+            {
+              options = {
+                listen = mkOption {
+                  type = types.nullOr (types.listOf types.str);
+                  default = null;
+                  example = [ "0.0.0.0:0" ];
+                  description = ''
+                    Owned UDP packet-plane listen endpoints.
+
+                    Leave unset for daemon defaults. Set to an empty list to
+                    disable UDP packet-plane listeners.
+                  '';
+                };
+
+                externalEndpoints = mkOption {
+                  type = types.nullOr (types.listOf types.str);
+                  default = null;
+                  example = [ "203.0.113.10:51820" ];
+                  description = ''
+                    Owned UDP packet-plane endpoints advertised to peers.
+
+                    Leave unset for daemon defaults.
+                  '';
+                };
+
+                quicListen = mkOption {
+                  type = types.nullOr (types.listOf types.str);
+                  default = null;
+                  example = [ "0.0.0.0:51821" ];
+                  description = ''
+                    Owned QUIC packet-plane listen endpoints.
+
+                    Leave unset for daemon defaults. Set to an empty list to
+                    disable QUIC packet-plane listeners.
+                  '';
+                };
+
+                quicExternalEndpoints = mkOption {
+                  type = types.nullOr (types.listOf types.str);
+                  default = null;
+                  example = [ "203.0.113.10:51821" ];
+                  description = ''
+                    Owned QUIC packet-plane endpoints advertised to peers.
+
+                    Leave unset for daemon defaults.
+                  '';
+                };
+              };
+            }
+          );
+          default = { };
+          description = "Owned packet-plane overrides for generated configs.";
         };
 
         relayServer = mkOption {
@@ -728,24 +760,15 @@ let
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       path = [ pkgs.iproute2 ];
-      unitConfig =
-        optionalAttrs
-          (
-            instance.configFile == null
-            && instance.settings == null
-            && instance.privateKey == null
-            && instance.privateKeyFile == null
-            && instance.stateConfigFile != null
-          )
-          {
-            ConditionPathExists = effectiveConfigFile name instance;
-          };
+      unitConfig = optionalAttrs (effectivePrivateKeyFile name instance != null) {
+        ConditionPathExists = effectivePrivateKeyFile name instance;
+      };
 
       serviceConfig = {
         Type = "simple";
-        ExecStartPre = optional (instance.privateKeyFile != null || instance.membershipKeyFile != null) (
-          runtimeConfigScript name instance
-        );
+        ExecStartPre = optional (
+          effectivePrivateKeyFile name instance != null || instance.membershipKeyFile != null
+        ) (runtimeConfigScript name instance);
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/p2p-vpn"
@@ -827,7 +850,8 @@ in
       example = {
         node-a = {
           enable = true;
-          configFile = "/etc/p2p-vpn/node-a.json";
+          privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
+          peers."12D3KooWRemotePeer" = { };
           metricsIntervalSeconds = 10;
           openFirewall = true;
           tcpPorts = [ 4001 ];
@@ -854,19 +878,6 @@ in
       in
       [
         {
-          assertion =
-            instance.configFile != null
-            || instance.settings != null
-            || instance.privateKey != null
-            || instance.privateKeyFile != null
-            || instance.stateConfigFile != null;
-          message = "services.p2p-vpn.instances.${name} requires configFile, settings, privateKey, privateKeyFile, or stateConfigFile.";
-        }
-        {
-          assertion = instance.configFile == null || instance.settings == null;
-          message = "services.p2p-vpn.instances.${name} cannot set both configFile and settings.";
-        }
-        {
           assertion = instance.privateKey == null || instance.privateKeyFile == null;
           message = "services.p2p-vpn.instances.${name} cannot set both privateKey and privateKeyFile.";
         }
@@ -874,69 +885,22 @@ in
           assertion = instance.membershipKey == null || instance.membershipKeyFile == null;
           message = "services.p2p-vpn.instances.${name} cannot set both membershipKey and membershipKeyFile.";
         }
-        {
-          assertion =
-            (instance.configFile == null && instance.settings == null)
-            && (
-              instance.privateKey != null
-              || instance.privateKeyFile != null
-              || (
-                instance.localPeer == null
-                && instance.membershipKey == null
-                && instance.membershipKeyFile == null
-                && instance.memberRecords == [ ]
-                && instance.bootstrapPeers == [ ]
-                && instance.vpnIp == null
-                && instance.routes == [ ]
-                && instance.interfaceName == "pv0"
-                && instance.mtu == 1280
-                && !instance.relayServer
-                && instance.relayReservations == [ ]
-                && instance.autoRelay == null
-                && instance.discovery == null
-                && instance.peers == { }
-              )
-            )
-            || (
-              instance.localPeer == null
-              && instance.privateKey == null
-              && instance.privateKeyFile == null
-              && instance.membershipKey == null
-              && instance.membershipKeyFile == null
-              && instance.memberRecords == [ ]
-              && instance.bootstrapPeers == [ ]
-              && instance.vpnIp == null
-              && instance.routes == [ ]
-              && instance.interfaceName == "pv0"
-              && instance.mtu == 1280
-              && !instance.relayServer
-              && instance.relayReservations == [ ]
-              && instance.autoRelay == null
-              && instance.discovery == null
-              && instance.peers == { }
-            );
-          message = "services.p2p-vpn.instances.${name} generated config fields require privateKey/privateKeyFile and cannot be combined with configFile or settings.";
-        }
       ]
     ) (builtins.attrNames enabledInstances);
 
     environment.systemPackages = [ cfg.package ];
 
-    environment.etc =
-      concatMapAttrs (name: instance: {
-        "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
-          builtins.toJSON instance.settings
-        );
-      }) settingsInstances
-      // concatMapAttrs (name: instance: {
-        "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
-          builtins.toJSON (generatedSettings instance)
-        );
-      }) storeGeneratedInstances;
+    environment.etc = concatMapAttrs (name: instance: {
+      "p2p-vpn/${name}.json".source = pkgs.writeText "p2p-vpn-${name}.json" (
+        builtins.toJSON (generatedSettings instance)
+      );
+    }) storeGeneratedInstances;
 
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
 
-    systemd.tmpfiles.rules = map (directory: "d ${directory} 0700 root root -") stateDirectories;
+    systemd.tmpfiles.rules =
+      (map (directory: "d ${directory} 0700 root root -") stateDirectories)
+      ++ (map (directory: "d ${directory} 0700 root root -") stateInstanceDirectories);
 
     networking.firewall.allowedTCPPorts = unique (
       concatMap (instance: instance.tcpPorts) firewallInstances

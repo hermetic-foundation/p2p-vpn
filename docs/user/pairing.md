@@ -236,18 +236,6 @@ sudo p2p-vpn pair accept lab.pair \
   --nixos-only
 ```
 
-Use JSON-backed Nix only when you need full raw config state:
-
-```sh
-sudo p2p-vpn pair accept lab.pair \
-  --output /var/lib/p2p-vpn/lab.json \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-config-file-mode
-```
-
-In JSON-backed mode, `--output` must be an absolute path.
-
 ## Live Diagnostics
 
 If live pairing times out, the final error includes route context.

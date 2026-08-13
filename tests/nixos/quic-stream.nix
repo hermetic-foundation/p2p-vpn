@@ -50,34 +50,27 @@ let
 
       services.p2p-vpn.instances.${name} = {
         enable = true;
-        settings = {
-          network = {
-            name = "nixos-vm-quic-stream";
-            local_peer = local.peerId;
-            private_key = local.privateKey;
-            vpn_ip = local.vpnIp;
-            listen_addresses = [ "/ip4/0.0.0.0/udp/4001/quic-v1" ];
-            discovery = {
-              mdns = false;
-              kademlia = false;
-              kademlia_provider_advertisement = false;
-              dcutr = false;
-              autonat = false;
-            };
-            packet_plane = {
-              listen = [ ];
-              external_endpoints = [ ];
-              quic_listen = [ ];
-              quic_external_endpoints = [ ];
-            };
-          };
-          peers = [
-            {
-              id = remote.peerId;
-              vpn_ip = remote.vpnIp;
-              addresses = [ (quicAddress remote) ];
-            }
-          ];
+        networkName = "nixos-vm-quic-stream";
+        localPeer = local.peerId;
+        privateKey = local.privateKey;
+        vpnIp = local.vpnIp;
+        listenAddresses = [ "/ip4/0.0.0.0/udp/4001/quic-v1" ];
+        discovery = {
+          mdns = false;
+          kademlia = false;
+          kademliaProviderAdvertisement = false;
+          dcutr = false;
+          autonat = false;
+        };
+        packetPlane = {
+          listen = [ ];
+          externalEndpoints = [ ];
+          quicListen = [ ];
+          quicExternalEndpoints = [ ];
+        };
+        peers.${remote.peerId} = {
+          vpnIp = remote.vpnIp;
+          addresses = [ (quicAddress remote) ];
         };
         metricsIntervalSeconds = 1;
         controlSocket = "/run/p2p-vpn-${name}/control.sock";
@@ -93,15 +86,9 @@ let
     + "--require-validated-peers "
     + "--require-supported-paths";
 
-  state =
-    name:
-    "p2p-vpn daemon-state "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  state = name: "p2p-vpn daemon-state " + "--socket /run/p2p-vpn-${name}/control.sock";
 
-  paths =
-    name:
-    "p2p-vpn daemon-paths "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  paths = name: "p2p-vpn daemon-paths " + "--socket /run/p2p-vpn-${name}/control.sock";
 in
 pkgs.testers.nixosTest {
   name = "p2p-vpn-nixos-vm-quic-stream";

@@ -47,15 +47,10 @@ let
 
       services.p2p-vpn.instances.node-a = {
         enable = true;
-        settings = {
-          network = {
-            name = "nixos-vm-pairing";
-            private_key = nodeA.privateKey;
-            vpn_ip = nodeA.vpnIp;
-            listen_addresses = [ "/ip4/${nodeA.underlayIp}/tcp/4001" ];
-          };
-          peers = [ ];
-        };
+        networkName = "nixos-vm-pairing";
+        privateKey = nodeA.privateKey;
+        vpnIp = nodeA.vpnIp;
+        listenAddresses = [ "/ip4/${nodeA.underlayIp}/tcp/4001" ];
         metricsIntervalSeconds = 1;
         controlSocket = "/run/p2p-vpn-node-a/control.sock";
       };
@@ -82,20 +77,11 @@ let
     + "--require-validated-peers "
     + "--require-supported-paths";
 
-  state =
-    name:
-    "p2p-vpn daemon-state "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  state = name: "p2p-vpn daemon-state " + "--socket /run/p2p-vpn-${name}/control.sock";
 
-  status =
-    name:
-    "p2p-vpn daemon-status "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  status = name: "p2p-vpn daemon-status " + "--socket /run/p2p-vpn-${name}/control.sock";
 
-  routes =
-    name:
-    "p2p-vpn daemon-routes "
-    + "--socket /run/p2p-vpn-${name}/control.sock";
+  routes = name: "p2p-vpn daemon-routes " + "--socket /run/p2p-vpn-${name}/control.sock";
 
   runtimePath = pkgs.lib.makeBinPath [
     pkgs.iproute2
@@ -155,6 +141,7 @@ pkgs.testers.nixosTest {
             "--output /tmp/node-b.json "
             "--nixos-output /tmp/node-b.nix "
             "--nixos-instance nixos-vm-pairing "
+            "--nixos-state-dir /tmp/p2p-vpn-node-b "
             "--private-key '${nodeB.privateKey}' "
             "--interface pv0 "
             "--vpn-ip ${nodeB.vpnIp} "
@@ -168,7 +155,9 @@ pkgs.testers.nixosTest {
         node_b.succeed("grep -q '^wrote /tmp/node-b.nix$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q '^paired with: ${nodeA.peerId}$' /tmp/node-b-pair-accept")
         node_b.succeed("grep -q 'services.p2p-vpn.instances.\"nixos-vm-pairing\"' /tmp/node-b.nix")
-        node_b.succeed("grep -q 'configFile = \"/tmp/node-b.json\";' /tmp/node-b.nix")
+        node_b.succeed("grep -q 'privateKeyFile = \"/tmp/p2p-vpn-node-b/private.key\";' /tmp/node-b.nix")
+        node_b.fail("grep -q 'configFile' /tmp/node-b.nix")
+        node_b.succeed("test -s /tmp/p2p-vpn-node-b/private.key")
         node_b.succeed("jq -e '.network.name == \"nixos-vm-pairing\"' /tmp/node-b.json")
         node_b.succeed("jq -e '.network.vpn_ip == \"${nodeB.vpnIp}\"' /tmp/node-b.json")
         node_b.succeed("jq -e '(.interface | has(\"name\") | not)' /tmp/node-b.json")

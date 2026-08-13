@@ -3124,7 +3124,10 @@ EOF
                 system.stateVersion = "25.11";
                 services.p2p-vpn.instances.node-a = {
                   enable = true;
-                  configFile = "/etc/p2p-vpn/node-a.json";
+                  networkName = "nixos-module-file-secret";
+                  localPeer = "4444444444444444444444444444444444444444444444444444444444444444";
+                  privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
+                  peers."9999999999999999999999999999999999999999999999999999999999999999" = { };
                   metricsIntervalSeconds = 10;
                   openFirewall = true;
                   tcpPorts = [ 4001 ];
@@ -3134,7 +3137,8 @@ EOF
                 };
                 services.p2p-vpn.instances.node-b = {
                   enable = true;
-                  configFile = "/etc/p2p-vpn/node-b.json";
+                  privateKey = "BASE64_PRIVATE_KEY";
+                  peers."8888888888888888888888888888888888888888888888888888888888888888" = { };
                   controlSocket = null;
                 };
                 services.p2p-vpn.instances.node-c = {
@@ -3172,17 +3176,6 @@ EOF
             )
           ];
         };
-        nixosSmokeConfig = pkgs.runCommand "p2p-vpn-nixos-smoke-config.json" {
-          nativeBuildInputs = [ package ];
-        } ''
-          p2p-vpn init-config \
-            --output "$out" \
-            --network nixos-smoke \
-            --interface hs-smoke0 \
-            --disable-mdns \
-            --disable-kademlia \
-            --force
-        '';
         nixosVmSmoke = pkgs.testers.nixosTest {
           name = "p2p-vpn-nixos-module-smoke";
           nodes.machine =
@@ -3192,11 +3185,18 @@ EOF
 
               system.stateVersion = "25.11";
               environment.systemPackages = [ package ];
-              environment.etc."p2p-vpn/smoke.json".source = nixosSmokeConfig;
 
               services.p2p-vpn.instances.smoke = {
                 enable = true;
-                configFile = "/etc/p2p-vpn/smoke.json";
+                privateKey = "BASE64_PRIVATE_KEY";
+                interfaceName = "hs-smoke0";
+                discovery = {
+                  mdns = false;
+                  kademlia = false;
+                  kademliaProviderAdvertisement = false;
+                  dcutr = false;
+                  autonat = false;
+                };
                 metricsIntervalSeconds = 1;
                 controlSocket = "/run/p2p-vpn-smoke/control.sock";
               };
@@ -3566,12 +3566,19 @@ EOF
             nativeBuildInputs = [ pkgs.jq ];
             execStart = moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStart;
             execStartNoSocket = moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStart;
-            execStartSettings = moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStart;
             execStartSecret = moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStart;
             execStartMinimal = moduleEval.config.systemd.services.p2p-vpn-node-e.serviceConfig.ExecStart;
             execStartStateBacked = moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStart;
+            execStartPreFileSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre;
+            execStartPreFileSecretScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre
+            );
             stateBackedCondition =
               moduleEval.config.systemd.services.p2p-vpn-node-f.unitConfig.ConditionPathExists;
+            execStartPreStateBacked = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre;
+            execStartPreStateBackedScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre
+            );
             execStartPreSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre;
             execStartPreSecretScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-d.serviceConfig.ExecStartPre
@@ -3608,17 +3615,21 @@ EOF
             tmpfilesRules = builtins.toJSON moduleEval.config.systemd.tmpfiles.rules;
           } ''
             case "$execStart" in
-              *"p2p-vpn up --config /etc/p2p-vpn/node-a.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-a/config.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
+            esac
+            case "$execStartPreFileSecret" in
+              *"p2p-vpn-node-a-write-config"*) ;;
+              *) echo "unexpected file-secret ExecStartPre: $execStartPreFileSecret" >&2; exit 1 ;;
+            esac
+            case "$execStartPreFileSecretScript" in
+              *"--rawfile private_key /run/secrets/p2p-vpn/node-a.key"*"/run/p2p-vpn-node-a/config.json"*) ;;
+              *) echo "unexpected file-secret ExecStartPre script: $execStartPreFileSecretScript" >&2; exit 1 ;;
             esac
             case "$execStartNoSocket" in
               *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
               *"p2p-vpn up --config /etc/p2p-vpn/node-b.json"*) ;;
               *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
-            esac
-            case "$execStartSettings" in
-              *"p2p-vpn up --config /etc/p2p-vpn/node-c.json --control-socket /run/p2p-vpn-node-c/control.sock"*) ;;
-              *) echo "unexpected settings ExecStart: $execStartSettings" >&2; exit 1 ;;
             esac
             case "$execStartSecret" in
               *"p2p-vpn up --config /run/p2p-vpn-node-d/config.json --control-socket /run/p2p-vpn-node-d/control.sock"*) ;;
@@ -3629,10 +3640,18 @@ EOF
               *) echo "unexpected minimal ExecStart: $execStartMinimal" >&2; exit 1 ;;
             esac
             case "$execStartStateBacked" in
-              *"p2p-vpn up --config /var/lib/p2p-vpn/node-f.json --control-socket /run/p2p-vpn-node-f/control.sock"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-f/config.json --control-socket /run/p2p-vpn-node-f/control.sock"*) ;;
               *) echo "unexpected state-backed ExecStart: $execStartStateBacked" >&2; exit 1 ;;
             esac
-            test "$stateBackedCondition" = /var/lib/p2p-vpn/node-f.json
+            test "$stateBackedCondition" = /var/lib/p2p-vpn/node-f/private.key
+            case "$execStartPreStateBacked" in
+              *"p2p-vpn-node-f-write-config"*) ;;
+              *) echo "unexpected state-backed ExecStartPre: $execStartPreStateBacked" >&2; exit 1 ;;
+            esac
+            case "$execStartPreStateBackedScript" in
+              *"--rawfile private_key /var/lib/p2p-vpn/node-f/private.key"*"/run/p2p-vpn-node-f/config.json"*) ;;
+              *) echo "unexpected state-backed ExecStartPre script: $execStartPreStateBackedScript" >&2; exit 1 ;;
+            esac
             case "$execStartPreSecret" in
               *"p2p-vpn-node-d-write-config"*) ;;
               *) echo "unexpected secret ExecStartPre: $execStartPreSecret" >&2; exit 1 ;;
@@ -3703,6 +3722,10 @@ EOF
             case "$tmpfilesRules" in
               *'"d /var/lib/p2p-vpn 0700 root root -"'*) ;;
               *) echo "state-backed tmpfiles rule missing: $tmpfilesRules" >&2; exit 1 ;;
+            esac
+            case "$tmpfilesRules" in
+              *'"d /var/lib/p2p-vpn/node-f 0700 root root -"'*) ;;
+              *) echo "state-backed instance tmpfiles rule missing: $tmpfilesRules" >&2; exit 1 ;;
             esac
             touch $out
           '';
