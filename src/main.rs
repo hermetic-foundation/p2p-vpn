@@ -2413,12 +2413,13 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         args.nixos_only,
         args.force,
     )?;
-    let identity = match args.private_key {
-        Some(private_key) => NodeIdentity::from_private_key(&private_key)
-            .map_err(|error| format!("failed to decode private key: {error:?}"))?,
-        None => NodeIdentity::generate_ed25519()
-            .map_err(|error| format!("failed to generate identity: {error:?}"))?,
-    };
+    let identity = resolve_pair_accept_identity(
+        args.private_key.as_deref(),
+        args.nixos_output.as_deref(),
+        args.nixos_instance.as_deref(),
+        args.nixos_state_dir.as_deref(),
+        &offer.payload.network_name,
+    )?;
     let local_routes = args
         .local_routes
         .into_iter()
@@ -2588,6 +2589,59 @@ fn default_nixos_instance_name(network_name: &str) -> String {
     normalized
 }
 
+fn pairing_nixos_state_dir(instance: &str, configured: Option<&Path>) -> Result<PathBuf, String> {
+    validate_nixos_instance_name(instance)?;
+    let state_dir = configured.map_or_else(
+        || PathBuf::from("/var/lib/p2p-vpn").join(instance),
+        Path::to_path_buf,
+    );
+    if !state_dir.is_absolute() {
+        return Err("--nixos-state-dir must be an absolute path".to_owned());
+    }
+    if state_dir.starts_with("/nix/store") {
+        return Err("--nixos-state-dir must be outside the Nix store".to_owned());
+    }
+    Ok(state_dir)
+}
+
+fn resolve_pair_accept_identity(
+    private_key: Option<&str>,
+    nixos_output: Option<&Path>,
+    nixos_instance: Option<&str>,
+    nixos_state_dir: Option<&Path>,
+    network_name: &str,
+) -> Result<NodeIdentity, String> {
+    if let Some(private_key) = private_key {
+        return NodeIdentity::from_private_key(private_key)
+            .map_err(|error| format!("failed to decode private key: {error:?}"));
+    }
+
+    if nixos_output.is_some() {
+        let default_instance;
+        let instance = if let Some(instance) = nixos_instance {
+            instance
+        } else {
+            default_instance = default_nixos_instance_name(network_name);
+            &default_instance
+        };
+        let state_dir = pairing_nixos_state_dir(instance, nixos_state_dir)?;
+        ensure_private_directory(&state_dir)?;
+        let private_key_file = state_dir.join("private.key");
+        if let Some(private_key) = read_private_secret_file(&private_key_file)? {
+            return NodeIdentity::from_private_key(private_key.trim_end_matches(['\r', '\n']))
+                .map_err(|error| {
+                    format!(
+                        "failed to decode existing NixOS identity {}: {error:?}",
+                        private_key_file.display()
+                    )
+                });
+        }
+    }
+
+    NodeIdentity::generate_ed25519()
+        .map_err(|error| format!("failed to generate identity: {error:?}"))
+}
+
 fn write_pairing_config(
     config: &Config,
     output: &Path,
@@ -2682,16 +2736,7 @@ fn write_pairing_nixos_secret_files(
     nixos_state_dir: Option<&Path>,
     force: bool,
 ) -> Result<PairingNixosSecretPaths, String> {
-    let state_dir = nixos_state_dir.map_or_else(
-        || PathBuf::from("/var/lib/p2p-vpn").join(instance),
-        Path::to_path_buf,
-    );
-    if !state_dir.is_absolute() {
-        return Err("--nixos-state-dir must be an absolute path".to_owned());
-    }
-    if state_dir.starts_with("/nix/store") {
-        return Err("--nixos-state-dir must be outside the Nix store".to_owned());
-    }
+    let state_dir = pairing_nixos_state_dir(instance, nixos_state_dir)?;
     ensure_private_directory(&state_dir)?;
 
     let private_key_file = config
@@ -2758,6 +2803,16 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
 
 fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String> {
     if !force {
+        if let Some(existing) = read_private_secret_file(path)? {
+            if existing.trim_end_matches(['\r', '\n']) == value {
+                println!("kept {}", path.display());
+                return Ok(());
+            }
+            return Err(format!(
+                "{} already exists with different content; pass --force to replace it",
+                path.display()
+            ));
+        }
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2816,6 +2871,35 @@ fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String
     Ok(())
 }
 
+fn read_private_secret_file(path: &Path) -> Result<Option<String>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect secret file {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "secret file must be a regular file: {}",
+            path.display()
+        ));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(format!(
+            "secret file {} has mode {mode:04o}; use an owner-only file",
+            path.display()
+        ));
+    }
+    fs::read_to_string(path)
+        .map(Some)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))
+}
+
 fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
@@ -2837,11 +2921,13 @@ fn render_pairing_nixos_module(
             nix_string_literal(instance)?
         ),
         "    enable = true;".to_owned(),
-        format!(
+    ];
+    if config.network.name != instance {
+        lines.push(format!(
             "    networkName = {};",
             nix_string_literal(&config.network.name)?
-        ),
-    ];
+        ));
+    }
 
     let local_peer = config
         .local_peer()
@@ -2850,7 +2936,10 @@ fn render_pairing_nixos_module(
         "    localPeer = {};",
         nix_string_literal(&local_peer)?
     ));
-    if let Some(path) = &secret_paths.private_key_file {
+    let default_private_key_file = format!("/var/lib/p2p-vpn/{instance}/private.key");
+    if let Some(path) = &secret_paths.private_key_file
+        && path != &default_private_key_file
+    {
         lines.push(format!(
             "    privateKeyFile = {};",
             nix_string_literal(path)?
@@ -2878,11 +2967,13 @@ fn render_pairing_nixos_module(
     if !config.network.routes.is_empty() {
         push_nixos_routes(&mut lines, "    routes", &config.network.routes)?;
     }
-    push_nixos_string_list(
-        &mut lines,
-        "    listenAddresses",
-        &config.network.listen_addresses,
-    )?;
+    if config.network.listen_addresses != default_listen_addresses() {
+        push_nixos_string_list(
+            &mut lines,
+            "    listenAddresses",
+            &config.network.listen_addresses,
+        )?;
+    }
     if !config.network.external_addresses.is_empty() {
         push_nixos_string_list(
             &mut lines,
@@ -2897,11 +2988,15 @@ fn render_pairing_nixos_module(
         push_nixos_discovery(&mut lines, &config.network.discovery)?;
     }
     push_nixos_relay(&mut lines, &config.network.relay)?;
-    push_nixos_packet_plane(&mut lines, &config.network.packet_plane)?;
-    lines.push(format!(
-        "    interfaceName = {};",
-        nix_string_literal(&config.interface.name)?
-    ));
+    if config.network.packet_plane != PacketPlaneConfig::default() {
+        push_nixos_packet_plane(&mut lines, &config.network.packet_plane)?;
+    }
+    if config.interface.name != "pv0" {
+        lines.push(format!(
+            "    interfaceName = {};",
+            nix_string_literal(&config.interface.name)?
+        ));
+    }
     if config.interface.mtu != 1280 {
         lines.push(format!("    mtu = {};", config.interface.mtu));
     }
@@ -11944,6 +12039,55 @@ mod tests {
     }
 
     #[test]
+    fn render_pairing_nixos_module_uses_module_defaults() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = Config {
+            network: p2p_vpn::config::NetworkConfig {
+                name: "lab".to_owned(),
+                local_peer: String::new(),
+                private_key: Some(identity.private_key),
+                membership_key: None,
+                previous_membership_tags: Vec::new(),
+                member_records: Vec::new(),
+                vpn_ip: None,
+                routes: Vec::new(),
+                listen_addresses: default_listen_addresses(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                discovery: DiscoveryConfig::default(),
+                relay: RelayConfig::default(),
+                packet_plane: PacketPlaneConfig::default(),
+            },
+            interface: p2p_vpn::config::InterfaceConfig {
+                name: "pv0".to_owned(),
+                mtu: 1280,
+            },
+            peers: Vec::new(),
+            queue: QueueConfig::default(),
+            resources: ResourceConfig::default(),
+        };
+
+        let rendered = render_pairing_nixos_module(
+            "lab",
+            &config,
+            &PairingNixosSecretPaths {
+                private_key_file: Some("/var/lib/p2p-vpn/lab/private.key".to_owned()),
+                membership_key_file: None,
+            },
+        )
+        .expect("render");
+
+        assert!(rendered.contains("enable = true;"));
+        assert!(rendered.contains("localPeer = "));
+        assert!(!rendered.contains("\n    networkName ="));
+        assert!(!rendered.contains("privateKeyFile"));
+        assert!(!rendered.contains("listenAddresses"));
+        assert!(!rendered.contains("packetPlane"));
+        assert!(!rendered.contains("interfaceName"));
+        assert!(!rendered.contains("mtu ="));
+    }
+
+    #[test]
     fn render_pairing_nixos_module_emits_typed_instance() {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let membership_record: SignedMembershipRecord = serde_json::from_value(serde_json::json!({
@@ -12068,14 +12212,14 @@ mod tests {
             "lab",
             &config,
             &PairingNixosSecretPaths {
-                private_key_file: Some("/var/lib/p2p-vpn/lab/private.key".to_owned()),
+                private_key_file: Some("/run/secrets/p2p-vpn-lab.key".to_owned()),
                 membership_key_file: Some("/var/lib/p2p-vpn/lab/membership.key".to_owned()),
             },
         )
         .expect("render");
 
-        assert!(rendered.contains("networkName = \"lab\";"));
-        assert!(rendered.contains("privateKeyFile = \"/var/lib/p2p-vpn/lab/private.key\";"));
+        assert!(!rendered.contains("\n    networkName ="));
+        assert!(rendered.contains("privateKeyFile = \"/run/secrets/p2p-vpn-lab.key\";"));
         assert!(rendered.contains("membershipKeyFile = \"/var/lib/p2p-vpn/lab/membership.key\";"));
         assert!(rendered.contains("interfaceName = \"pv-test0\";"));
         assert!(rendered.contains("mtu = 1400;"));
@@ -12132,7 +12276,7 @@ mod tests {
         assert!(
             write_secret_file(&output, "blocked", false)
                 .expect_err("normal write must preserve existing path")
-                .contains("failed to create")
+                .contains("regular file")
         );
         write_secret_file(&output, "replacement", true).expect("replace symlink atomically");
 
@@ -12156,6 +12300,63 @@ mod tests {
 
         fs::remove_file(output).expect("remove secret");
         fs::remove_file(victim).expect("remove victim");
+    }
+
+    #[test]
+    fn nixos_pair_accept_reuses_existing_private_identity() {
+        let state_dir = temp_config_path("p2p-vpn-pair-existing-identity");
+        ensure_private_directory(&state_dir).expect("private state directory");
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let key_path = state_dir.join("private.key");
+        write_secret_file(&key_path, &identity.private_key, false).expect("write identity");
+
+        let reused = resolve_pair_accept_identity(
+            None,
+            Some(Path::new("/tmp/p2p-vpn-paired.nix")),
+            Some("lab"),
+            Some(&state_dir),
+            "lab",
+        )
+        .expect("reuse identity");
+        assert_eq!(reused.peer_id, identity.peer_id);
+        assert_eq!(reused.private_key, identity.private_key);
+
+        write_secret_file(&key_path, &identity.private_key, false)
+            .expect("matching identity stays in place");
+        assert!(
+            write_secret_file(&key_path, "different", false)
+                .expect_err("different identity must not overwrite")
+                .contains("different content")
+        );
+
+        fs::remove_file(key_path).expect("remove identity");
+        fs::remove_dir(state_dir).expect("remove state directory");
+    }
+
+    #[test]
+    fn nixos_pair_accept_rejects_permissive_existing_identity() {
+        let state_dir = temp_config_path("p2p-vpn-pair-permissive-identity");
+        ensure_private_directory(&state_dir).expect("private state directory");
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let key_path = state_dir.join("private.key");
+        fs::write(&key_path, format!("{}\n", identity.private_key)).expect("write identity");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+            .expect("set permissive mode");
+
+        assert!(
+            resolve_pair_accept_identity(
+                None,
+                Some(Path::new("/tmp/p2p-vpn-paired.nix")),
+                Some("lab"),
+                Some(&state_dir),
+                "lab",
+            )
+            .expect_err("permissive identity must fail")
+            .contains("owner-only file")
+        );
+
+        fs::remove_file(key_path).expect("remove identity");
+        fs::remove_dir(state_dir).expect("remove state directory");
     }
 
     #[test]
