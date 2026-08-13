@@ -28,6 +28,7 @@ let
       networking.firewall.enable = false;
       environment.systemPackages = [
         package
+        evaluatePairedNix
         pkgs.iproute2
         pkgs.iputils
         pkgs.jq
@@ -85,6 +86,70 @@ let
   status = name: "p2p-vpn daemon-status " + "--socket /run/p2p-vpn-${name}/control.sock";
 
   routes = name: "p2p-vpn daemon-routes " + "--socket /run/p2p-vpn-${name}/control.sock";
+
+  evaluatePairedNix = pkgs.writeShellApplication {
+    name = "evaluate-p2p-vpn-pairing";
+    runtimeInputs = [ pkgs.nix ];
+    text = ''
+      if [ "$#" -ne 3 ]; then
+        echo "usage: evaluate-p2p-vpn-pairing MODULE INSTANCE OUTPUT" >&2
+        exit 2
+      fi
+
+      paired_module="$1"
+      instance="$2"
+      output="$3"
+      # The expression is intentionally single-quoted; values enter through --argstr.
+      # shellcheck disable=SC2016
+      nix-instantiate \
+        --eval \
+        --strict \
+        --json \
+        --argstr pairedModule "$paired_module" \
+        --argstr instance "$instance" \
+        --expr '
+          ({ pairedModule, instance }:
+          let
+            pkgs = import ${pkgs.path} { system = "${pkgs.system}"; };
+            lib = pkgs.lib;
+            upstreamModule = import ${self.outPath}/nix/nixos-module.nix {
+              self = {
+                packages.${pkgs.system}.default = ${package};
+              };
+            };
+            evaluated = import ${pkgs.path}/nixos/lib/eval-config.nix {
+              system = "${pkgs.system}";
+              modules = [
+                upstreamModule
+                (builtins.toPath pairedModule)
+                {
+                  system.stateVersion = "25.11";
+                }
+              ];
+            };
+            failedAssertions = builtins.map (item: item.message) (
+              builtins.filter (
+                item:
+                !item.assertion
+                && lib.hasPrefix "services.p2p-vpn" item.message
+              ) evaluated.config.assertions
+            );
+          in
+          {
+            inherit failedAssertions;
+            generatedConfig =
+              builtins.getAttr instance
+                evaluated.config.services.p2p-vpn.generatedConfigs;
+            identityFile =
+              builtins.getAttr instance
+                evaluated.config.services.p2p-vpn.identityFiles;
+            service =
+              (builtins.getAttr "p2p-vpn-''${instance}"
+                evaluated.config.systemd.services).serviceConfig;
+          })
+        ' > "$output"
+    '';
+  };
 
   runtimePath = pkgs.lib.makeBinPath [
     pkgs.iproute2
@@ -173,6 +238,40 @@ pkgs.testers.nixosTest {
         node_b.succeed("p2p-vpn routes --config /tmp/node-b.json | tee /tmp/node-b-config-routes")
         node_b.succeed("grep -q 'route: ${nodeA.vpnIp}/32 owner peer ${nodeA.peerId}' /tmp/node-b-config-routes")
 
+    with subtest("generated Nix evaluates through the upstream module"):
+        node_b.succeed(
+            "evaluate-p2p-vpn-pairing "
+            "/tmp/node-b.nix "
+            "nixos-vm-pairing "
+            "/tmp/node-b-nix-evaluation.json"
+        )
+        node_b.succeed(
+            "jq -e '"
+            ".failedAssertions == [] "
+            "and .identityFile == \"/tmp/p2p-vpn-node-b/private.key\" "
+            "and .generatedConfig.network.name == \"nixos-vm-pairing\" "
+            "and .generatedConfig.network.local_peer == \"${nodeB.peerId}\" "
+            "and .generatedConfig.network.vpn_ip == \"${nodeB.vpnIp}\" "
+            "and .generatedConfig.network.listen_addresses == [\"/ip4/0.0.0.0/tcp/4001\"] "
+            "and .generatedConfig.network.packet_plane.listen == [\"0.0.0.0:0\"] "
+            "and (.generatedConfig.network.member_records | length) >= 1 "
+            "and .generatedConfig.peers[0].id == \"${nodeA.peerId}\" "
+            "and (.service.LoadCredential | length) == 1"
+            "' /tmp/node-b-nix-evaluation.json"
+        )
+        node_b.fail("jq -e '.generatedConfig.network.private_key' /tmp/node-b-nix-evaluation.json")
+        node_b.succeed(
+            "jq --rawfile private_key /tmp/p2p-vpn-node-b/private.key "
+            "'.generatedConfig "
+            "| .network.private_key = ($private_key | rtrimstr(\"\\n\"))' "
+            "/tmp/node-b-nix-evaluation.json "
+            "> /tmp/node-b-from-nix.json"
+        )
+        node_b.succeed("chmod 0600 /tmp/node-b-from-nix.json")
+        node_b.succeed("p2p-vpn status --config /tmp/node-b-from-nix.json >/dev/null")
+        node_b.succeed("p2p-vpn routes --config /tmp/node-b-from-nix.json | tee /tmp/node-b-nix-routes")
+        node_b.succeed("grep -q 'route: ${nodeA.vpnIp}/32 owner peer ${nodeA.peerId}' /tmp/node-b-nix-routes")
+
     with subtest("replayed URI is rejected with diagnostics"):
         node_b.fail(
             "p2p-vpn pair accept /tmp/node-a.pair "
@@ -212,7 +311,7 @@ pkgs.testers.nixosTest {
             "--property=Restart=no "
             "--setenv=PATH=${runtimePath} "
             "${package}/bin/p2p-vpn up "
-            "--config /tmp/node-b.json "
+            "--config /tmp/node-b-from-nix.json "
             "--metrics-interval-seconds 1 "
             "--control-socket /run/p2p-vpn-node-b/control.sock"
         )

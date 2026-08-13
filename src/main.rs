@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write as _,
     net::{IpAddr, UdpSocket},
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant},
@@ -2383,6 +2383,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         &args.output,
         args.nixos_output.as_deref(),
         args.nixos_instance.as_deref(),
+        args.nixos_state_dir.as_deref(),
         args.nixos_only,
         args.force,
     )?;
@@ -2424,6 +2425,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
                 instance: args.nixos_instance.as_deref(),
                 nixos_only: args.nixos_only,
                 state_dir: args.nixos_state_dir.as_deref(),
+                force: args.force,
             },
             response.payload.inviter_peer.as_str(),
         )?;
@@ -2463,6 +2465,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
             instance: args.nixos_instance.as_deref(),
             nixos_only: args.nixos_only,
             state_dir: args.nixos_state_dir.as_deref(),
+            force: args.force,
         },
         response.payload.inviter_peer.as_str(),
     )
@@ -2472,6 +2475,7 @@ fn validate_pair_accept_outputs(
     output: &Path,
     nixos_output: Option<&Path>,
     nixos_instance: Option<&str>,
+    nixos_state_dir: Option<&Path>,
     nixos_only: bool,
     force: bool,
 ) -> Result<(), String> {
@@ -2485,6 +2489,12 @@ fn validate_pair_accept_outputs(
         if nixos_only {
             return Err("--nixos-only requires --nixos-output".to_owned());
         }
+        if nixos_instance.is_some() {
+            return Err("--nixos-instance requires --nixos-output".to_owned());
+        }
+        if nixos_state_dir.is_some() {
+            return Err("--nixos-state-dir requires --nixos-output".to_owned());
+        }
         return Ok(());
     };
     if !nixos_only && output.to_string_lossy() == "-" {
@@ -2496,8 +2506,11 @@ fn validate_pair_accept_outputs(
     if !nixos_only && output == nixos_output {
         return Err("--output and --nixos-output must be different paths".to_owned());
     }
-    if nixos_instance.is_some_and(str::is_empty) {
-        return Err("--nixos-instance cannot be empty".to_owned());
+    if let Some(instance) = nixos_instance {
+        validate_nixos_instance_name(instance)?;
+    }
+    if nixos_state_dir.is_some_and(|path| !path.is_absolute()) {
+        return Err("--nixos-state-dir must be an absolute path".to_owned());
     }
     if !force && nixos_output.to_string_lossy() != "-" && nixos_output.exists() {
         return Err(format!(
@@ -2506,6 +2519,47 @@ fn validate_pair_accept_outputs(
         ));
     }
     Ok(())
+}
+
+fn validate_nixos_instance_name(instance: &str) -> Result<(), String> {
+    let mut characters = instance.chars();
+    let valid = characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        });
+    if !valid {
+        return Err(
+            "--nixos-instance must start with an ASCII letter or digit and contain only letters, digits, dots, underscores, or hyphens"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn default_nixos_instance_name(network_name: &str) -> String {
+    let mut normalized = network_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if normalized.is_empty() {
+        return "vpn".to_owned();
+    }
+    if !normalized
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+    {
+        normalized.insert_str(0, "vpn-");
+    }
+    normalized
 }
 
 fn write_pairing_config(
@@ -2542,14 +2596,19 @@ fn write_pairing_config(
     }
 
     if let Some(nixos_output) = nixos.output {
-        let instance = nixos.instance.unwrap_or(&config.network.name);
+        let default_instance;
+        let instance = if let Some(instance) = nixos.instance {
+            instance
+        } else {
+            default_instance = default_nixos_instance_name(&config.network.name);
+            &default_instance
+        };
         write_pairing_nixos_module(
             instance,
             &rendered_config,
-            output,
             nixos_output,
-            nixos.nixos_only,
             nixos.state_dir,
+            nixos.force,
         )?;
     }
 
@@ -2562,17 +2621,18 @@ struct PairingNixosOutputOptions<'a> {
     instance: Option<&'a str>,
     nixos_only: bool,
     state_dir: Option<&'a Path>,
+    force: bool,
 }
 
 fn write_pairing_nixos_module(
     instance: &str,
     config: &Config,
-    _config_path: &Path,
     output: &Path,
-    _nixos_only: bool,
     nixos_state_dir: Option<&Path>,
+    force: bool,
 ) -> Result<(), String> {
-    let secret_paths = write_pairing_nixos_secret_files(config, instance, nixos_state_dir)?;
+    validate_nixos_instance_name(instance)?;
+    let secret_paths = write_pairing_nixos_secret_files(config, instance, nixos_state_dir, force)?;
     let rendered = render_pairing_nixos_module(instance, config, &secret_paths)?;
     if output.to_string_lossy() == "-" {
         println!("{rendered}");
@@ -2594,15 +2654,19 @@ fn write_pairing_nixos_secret_files(
     config: &Config,
     instance: &str,
     nixos_state_dir: Option<&Path>,
+    force: bool,
 ) -> Result<PairingNixosSecretPaths, String> {
     let state_dir = nixos_state_dir.map_or_else(
         || PathBuf::from("/var/lib/p2p-vpn").join(instance),
         Path::to_path_buf,
     );
-    fs::create_dir_all(&state_dir)
-        .map_err(|error| format!("failed to create {}: {error}", state_dir.display()))?;
-    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("failed to chmod {}: {error}", state_dir.display()))?;
+    if !state_dir.is_absolute() {
+        return Err("--nixos-state-dir must be an absolute path".to_owned());
+    }
+    if state_dir.starts_with("/nix/store") {
+        return Err("--nixos-state-dir must be outside the Nix store".to_owned());
+    }
+    ensure_private_directory(&state_dir)?;
 
     let private_key_file = config
         .network
@@ -2610,7 +2674,7 @@ fn write_pairing_nixos_secret_files(
         .as_ref()
         .map(|private_key| {
             let path = state_dir.join("private.key");
-            write_secret_file(&path, private_key)?;
+            write_secret_file(&path, private_key, force)?;
             path_to_string(&path)
         })
         .transpose()?;
@@ -2621,7 +2685,7 @@ fn write_pairing_nixos_secret_files(
         .as_ref()
         .map(|membership_key| {
             let path = state_dir.join("membership.key");
-            write_secret_file(&path, membership_key)?;
+            write_secret_file(&path, membership_key, force)?;
             path_to_string(&path)
         })
         .transpose()?;
@@ -2632,11 +2696,96 @@ fn write_pairing_nixos_secret_files(
     })
 }
 
-fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
-    fs::write(path, format!("{value}\n"))
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("failed to chmod {}: {error}", path.display()))?;
+fn ensure_private_directory(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "paired-key directory must be a real directory: {}",
+                    path.display()
+                ));
+            }
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                return Err(format!(
+                    "paired-key directory {} has mode {mode:04o}; use an owner-only directory",
+                    path.display()
+                ));
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder
+                .create(path)
+                .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("failed to chmod {}: {error}", path.display()))
+        }
+        Err(error) => Err(format!(
+            "failed to inspect paired-key directory {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn write_secret_file(path: &Path, value: &str, force: bool) -> Result<(), String> {
+    if !force {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+        if let Err(error) = file.write_all(format!("{value}\n").as_bytes()) {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(format!("failed to write {}: {error}", path.display()));
+        }
+        println!("wrote {}", path.display());
+        return Ok(());
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("{} has no UTF-8 file name", path.display()))?;
+    let mut temporary = None;
+    for attempt in 0..100_u8 {
+        let candidate =
+            path.with_file_name(format!(".{file_name}.{}.{}", std::process::id(), attempt));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                temporary = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(format!("failed to create {}: {error}", candidate.display()));
+            }
+        }
+    }
+    let (temporary_path, mut file) = temporary.ok_or_else(|| {
+        format!(
+            "failed to create a temporary secret next to {}",
+            path.display()
+        )
+    })?;
+    if let Err(error) = file.write_all(format!("{value}\n").as_bytes()) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("failed to write {}: {error}", path.display()));
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("failed to replace {}: {error}", path.display()));
+    }
     println!("wrote {}", path.display());
     Ok(())
 }
@@ -2647,14 +2796,13 @@ fn path_to_string(path: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_pairing_nixos_module(
     instance: &str,
     config: &Config,
     secret_paths: &PairingNixosSecretPaths,
 ) -> Result<String, String> {
-    if instance.is_empty() {
-        return Err("--nixos-instance cannot be empty".to_owned());
-    }
+    validate_nixos_instance_name(instance)?;
 
     let mut lines = vec![
         "{".to_owned(),
@@ -2669,21 +2817,13 @@ fn render_pairing_nixos_module(
         ),
     ];
 
-    if config.network.local_peer.is_empty() {
-        let local_peer = config
-            .local_peer()
-            .map_err(|error| format!("failed to resolve local peer: {error:?}"))?
-            .clone();
-        lines.push(format!(
-            "    localPeer = {};",
-            nix_string_literal(&local_peer)?
-        ));
-    } else {
-        lines.push(format!(
-            "    localPeer = {};",
-            nix_string_literal(&config.network.local_peer)?
-        ));
-    }
+    let local_peer = config
+        .local_peer()
+        .map_err(|error| format!("failed to resolve local peer: {error:?}"))?;
+    lines.push(format!(
+        "    localPeer = {};",
+        nix_string_literal(&local_peer)?
+    ));
     if let Some(path) = &secret_paths.private_key_file {
         lines.push(format!(
             "    privateKeyFile = {};",
@@ -2696,20 +2836,33 @@ fn render_pairing_nixos_module(
             nix_string_literal(path)?
         ));
     }
+    if !config.network.previous_membership_tags.is_empty() {
+        push_nixos_string_list(
+            &mut lines,
+            "    previousMembershipTags",
+            &config.network.previous_membership_tags,
+        )?;
+    }
+    if !config.network.member_records.is_empty() {
+        push_nixos_member_records(&mut lines, &config.network.member_records)?;
+    }
     if let Some(vpn_ip) = &config.network.vpn_ip {
         lines.push(format!("    vpnIp = {};", nix_string_literal(vpn_ip)?));
     }
     if !config.network.routes.is_empty() {
         push_nixos_routes(&mut lines, "    routes", &config.network.routes)?;
     }
-    if config.interface.name != "pv0" {
-        lines.push(format!(
-            "    interfaceName = {};",
-            nix_string_literal(&config.interface.name)?
-        ));
-    }
-    if config.interface.mtu != 1280 {
-        lines.push(format!("    mtu = {};", config.interface.mtu));
+    push_nixos_string_list(
+        &mut lines,
+        "    listenAddresses",
+        &config.network.listen_addresses,
+    )?;
+    if !config.network.external_addresses.is_empty() {
+        push_nixos_string_list(
+            &mut lines,
+            "    externalAddresses",
+            &config.network.external_addresses,
+        )?;
     }
     if !config.network.bootstrap_peers.is_empty() {
         push_nixos_bootstrap_peers(&mut lines, &config.network.bootstrap_peers)?;
@@ -2717,25 +2870,252 @@ fn render_pairing_nixos_module(
     if config.network.discovery != DiscoveryConfig::default() {
         push_nixos_discovery(&mut lines, &config.network.discovery)?;
     }
-    if !config.network.relay.reservations.is_empty() {
-        push_nixos_string_list(
-            &mut lines,
-            "    relayReservations",
-            &config.network.relay.reservations,
-        )?;
-    }
-    if !config.network.member_records.is_empty() {
-        push_nixos_json_attrs_list(
-            &mut lines,
-            "    memberRecords",
-            &config.network.member_records,
-        )?;
+    push_nixos_relay(&mut lines, &config.network.relay)?;
+    push_nixos_packet_plane(&mut lines, &config.network.packet_plane)?;
+    lines.push(format!(
+        "    interfaceName = {};",
+        nix_string_literal(&config.interface.name)?
+    ));
+    if config.interface.mtu != 1280 {
+        lines.push(format!("    mtu = {};", config.interface.mtu));
     }
     push_nixos_peers(&mut lines, &config.peers)?;
+    if config.queue != QueueConfig::default() {
+        push_nixos_queue(&mut lines, config.queue);
+    }
+    if config.resources != ResourceConfig::default() {
+        push_nixos_resources(&mut lines, config.resources);
+    }
 
     lines.push("  };".to_owned());
     lines.push("}".to_owned());
     Ok(lines.join("\n"))
+}
+
+fn push_nixos_member_records(
+    lines: &mut Vec<String>,
+    records: &[SignedMembershipRecord],
+) -> Result<(), String> {
+    lines.push("    memberRecords = [".to_owned());
+    for record in records {
+        let payload = &record.payload;
+        lines.push("      {".to_owned());
+        lines.push("        payload = {".to_owned());
+        lines.push(format!("          version = {};", payload.version));
+        lines.push(format!(
+            "          networkName = {};",
+            nix_string_literal(&payload.network_name)?
+        ));
+        lines.push(format!(
+            "          memberPeer = {};",
+            nix_string_literal(&payload.member_peer)?
+        ));
+        lines.push(format!(
+            "          memberPublicKey = {};",
+            nix_string_literal(&payload.member_public_key)?
+        ));
+        lines.push(format!(
+            "          issuerPeer = {};",
+            nix_string_literal(&payload.issuer_peer)?
+        ));
+        lines.push(format!(
+            "          issuerPublicKey = {};",
+            nix_string_literal(&payload.issuer_public_key)?
+        ));
+        lines.push(format!(
+            "          membershipEpoch = {};",
+            payload.membership_epoch
+        ));
+        lines.push(format!("          sequence = {};", payload.sequence));
+        lines.push(format!(
+            "          revoked = {};",
+            nix_bool(payload.revoked)
+        ));
+        let roles = payload
+            .roles
+            .iter()
+            .map(|role| match role {
+                MembershipRole::OverlayMember => "overlay_member",
+                MembershipRole::RouteAuthority => "route_authority",
+            })
+            .collect::<Vec<_>>();
+        push_nixos_string_list(lines, "          roles", &roles)?;
+        push_nixos_routes(lines, "          routeGrants", &payload.route_grants)?;
+        lines.push(format!(
+            "          issuedAtUnixSeconds = {};",
+            payload.issued_at_unix_seconds
+        ));
+        if let Some(expires_at) = payload.expires_at_unix_seconds {
+            lines.push(format!("          expiresAtUnixSeconds = {expires_at};"));
+        }
+        lines.push("        };".to_owned());
+        lines.push(format!(
+            "        signature = {};",
+            nix_string_literal(&record.signature)?
+        ));
+        lines.push("      }".to_owned());
+    }
+    lines.push("    ];".to_owned());
+    Ok(())
+}
+
+fn push_nixos_relay(lines: &mut Vec<String>, relay: &RelayConfig) -> Result<(), String> {
+    if relay.server {
+        lines.push("    relayServer = true;".to_owned());
+    }
+    if !relay.reservations.is_empty() {
+        push_nixos_string_list(lines, "    relayReservations", &relay.reservations)?;
+    }
+    if relay.auto != AutoRelayConfig::default() {
+        lines.push("    autoRelay = {".to_owned());
+        lines.push(format!(
+            "      maxCandidates = {};",
+            relay.auto.max_candidates
+        ));
+        lines.push(format!(
+            "      maxReservations = {};",
+            relay.auto.max_reservations
+        ));
+        lines.push(format!(
+            "      retryIntervalSeconds = {};",
+            relay.auto.retry_interval_seconds
+        ));
+        lines.push("    };".to_owned());
+    }
+    if relay.resources != RelayResourceConfig::default() {
+        let resources = relay.resources;
+        lines.push("    relayResources = {".to_owned());
+        lines.push(format!(
+            "      maxReservations = {};",
+            resources.max_reservations
+        ));
+        lines.push(format!(
+            "      maxReservationsPerPeer = {};",
+            resources.max_reservations_per_peer
+        ));
+        lines.push(format!(
+            "      reservationDurationSeconds = {};",
+            resources.reservation_duration_secs
+        ));
+        lines.push(format!("      maxCircuits = {};", resources.max_circuits));
+        lines.push(format!(
+            "      maxCircuitsPerPeer = {};",
+            resources.max_circuits_per_peer
+        ));
+        lines.push(format!(
+            "      maxCircuitDurationSeconds = {};",
+            resources.max_circuit_duration_secs
+        ));
+        lines.push(format!(
+            "      maxCircuitBytes = {};",
+            resources.max_circuit_bytes
+        ));
+        lines.push("    };".to_owned());
+    }
+    Ok(())
+}
+
+fn push_nixos_packet_plane(
+    lines: &mut Vec<String>,
+    packet_plane: &PacketPlaneConfig,
+) -> Result<(), String> {
+    lines.push("    packetPlane = {".to_owned());
+    push_nixos_string_list(lines, "      listen", &packet_plane.listen)?;
+    if !packet_plane.external_endpoints.is_empty() {
+        push_nixos_string_list(
+            lines,
+            "      externalEndpoints",
+            &packet_plane.external_endpoints,
+        )?;
+    }
+    if !packet_plane.quic_listen.is_empty() {
+        push_nixos_string_list(lines, "      quicListen", &packet_plane.quic_listen)?;
+    }
+    if !packet_plane.quic_external_endpoints.is_empty() {
+        push_nixos_string_list(
+            lines,
+            "      quicExternalEndpoints",
+            &packet_plane.quic_external_endpoints,
+        )?;
+    }
+    if packet_plane.session_ttl_seconds != default_packet_plane_session_ttl_seconds() {
+        lines.push(format!(
+            "      sessionTtlSeconds = {};",
+            packet_plane.session_ttl_seconds
+        ));
+    }
+    if packet_plane.max_replay_windows_per_session
+        != default_packet_plane_replay_windows_per_session()
+    {
+        lines.push(format!(
+            "      maxReplayWindowsPerSession = {};",
+            packet_plane.max_replay_windows_per_session
+        ));
+    }
+    lines.push("    };".to_owned());
+    Ok(())
+}
+
+fn push_nixos_queue(lines: &mut Vec<String>, queue: QueueConfig) {
+    lines.push("    queue = {".to_owned());
+    lines.push(format!(
+        "      maxPacketsPerPeer = {};",
+        queue.max_packets_per_peer
+    ));
+    lines.push(format!(
+        "      maxBytesPerPeer = {};",
+        queue.max_bytes_per_peer
+    ));
+    lines.push(format!(
+        "      maxPacketAgeMillis = {};",
+        queue.max_packet_age_millis
+    ));
+    lines.push("    };".to_owned());
+}
+
+fn push_nixos_resources(lines: &mut Vec<String>, resources: ResourceConfig) {
+    lines.push("    resources = {".to_owned());
+    lines.push(format!(
+        "      maxConcurrentPacketStreams = {};",
+        resources.max_concurrent_packet_streams
+    ));
+    lines.push(format!(
+        "      maxConcurrentControlStreams = {};",
+        resources.max_concurrent_control_streams
+    ));
+    lines.push(format!(
+        "      maxInboundPacketsPerPeerPerSecond = {};",
+        resources.max_inbound_packets_per_peer_per_second
+    ));
+    lines.push(format!(
+        "      maxPairingRequestsPerPeerPerSecond = {};",
+        resources.max_pairing_requests_per_peer_per_second
+    ));
+    lines.push(format!(
+        "      maxPendingIncomingConnections = {};",
+        resources.max_pending_incoming_connections
+    ));
+    lines.push(format!(
+        "      maxPendingOutgoingConnections = {};",
+        resources.max_pending_outgoing_connections
+    ));
+    lines.push(format!(
+        "      maxEstablishedIncomingConnections = {};",
+        resources.max_established_incoming_connections
+    ));
+    lines.push(format!(
+        "      maxEstablishedOutgoingConnections = {};",
+        resources.max_established_outgoing_connections
+    ));
+    lines.push(format!(
+        "      maxEstablishedConnectionsPerPeer = {};",
+        resources.max_established_connections_per_peer
+    ));
+    lines.push(format!(
+        "      maxEstablishedConnections = {};",
+        resources.max_established_connections
+    ));
+    lines.push("    };".to_owned());
 }
 
 fn push_nixos_peers(
@@ -2816,62 +3196,50 @@ fn push_nixos_routes(
     attr: &str,
     routes: &[RouteConfig],
 ) -> Result<(), String> {
+    let indent = nix_attr_indent(attr);
+    let item_indent = format!("{indent}  ");
+    let field_indent = format!("{item_indent}  ");
     lines.push(format!("{attr} = ["));
     for route in routes {
         if route.metric == 0 {
-            lines.push(format!("      {}", nix_string_literal(&route.prefix)?));
-        } else {
-            lines.push("      {".to_owned());
             lines.push(format!(
-                "        prefix = {};",
+                "{item_indent}{}",
                 nix_string_literal(&route.prefix)?
             ));
-            lines.push(format!("        metric = {};", route.metric));
-            lines.push("      }".to_owned());
+        } else {
+            lines.push(format!("{item_indent}{{"));
+            lines.push(format!(
+                "{field_indent}prefix = {};",
+                nix_string_literal(&route.prefix)?
+            ));
+            lines.push(format!("{field_indent}metric = {};", route.metric));
+            lines.push(format!("{item_indent}}}"));
         }
     }
-    lines.push("    ];".to_owned());
+    lines.push(format!("{indent}];"));
     Ok(())
 }
 
-fn push_nixos_string_list(
-    lines: &mut Vec<String>,
-    attr: &str,
-    values: &[String],
-) -> Result<(), String> {
-    lines.push(format!("{attr} = ["));
-    for value in values {
-        lines.push(format!("      {}", nix_string_literal(value)?));
-    }
-    lines.push("    ];".to_owned());
-    Ok(())
-}
-
-fn push_nixos_json_attrs_list<T: Serialize>(
+fn push_nixos_string_list<T: AsRef<str>>(
     lines: &mut Vec<String>,
     attr: &str,
     values: &[T],
 ) -> Result<(), String> {
+    let indent = nix_attr_indent(attr);
+    let item_indent = format!("{indent}  ");
     lines.push(format!("{attr} = ["));
     for value in values {
-        let rendered = serde_json::to_string_pretty(value)
-            .map_err(|error| format!("failed to render JSON: {error}"))?;
-        lines.push(format!("      {}", json_to_nix_expression(&rendered)));
+        lines.push(format!(
+            "{item_indent}{}",
+            nix_string_literal(value.as_ref())?
+        ));
     }
-    lines.push("    ];".to_owned());
+    lines.push(format!("{indent}];"));
     Ok(())
 }
 
-fn json_to_nix_expression(rendered_json: &str) -> String {
-    format!(
-        "builtins.fromJSON {}",
-        nix_multiline_string_literal(rendered_json)
-    )
-}
-
-fn nix_multiline_string_literal(value: &str) -> String {
-    let escaped = value.replace("''", "'''");
-    format!("''\n{escaped}\n      ''")
+fn nix_attr_indent(attr: &str) -> &str {
+    &attr[..attr.len() - attr.trim_start().len()]
 }
 
 const fn nix_bool(value: bool) -> &'static str {
@@ -2879,7 +3247,25 @@ const fn nix_bool(value: bool) -> &'static str {
 }
 
 fn nix_string_literal(value: &str) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|error| format!("failed to render Nix string: {error}"))
+    let mut rendered = String::with_capacity(value.len() + 2);
+    rendered.push('"');
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => rendered.push_str("\\\""),
+            '\\' => rendered.push_str("\\\\"),
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            '$' if characters.peek() == Some(&'{') => rendered.push_str("\\$"),
+            control if control.is_control() => {
+                return Err("Nix strings cannot contain unsupported control characters".to_owned());
+            }
+            character => rendered.push(character),
+        }
+    }
+    rendered.push('"');
+    Ok(rendered)
 }
 
 fn pairing_requested_vpn_ip(
@@ -11333,6 +11719,7 @@ mod tests {
                 Path::new("-"),
                 Some(Path::new("node.nix")),
                 None,
+                None,
                 false,
                 true
             )
@@ -11343,6 +11730,7 @@ mod tests {
             validate_pair_accept_outputs(
                 Path::new("relative.json"),
                 Some(Path::new("node.nix")),
+                None,
                 None,
                 false,
                 true
@@ -11355,6 +11743,7 @@ mod tests {
                 Path::new("/var/lib/p2p-vpn/lab.json"),
                 Some(Path::new("/var/lib/p2p-vpn/lab.json")),
                 None,
+                None,
                 false,
                 true
             )
@@ -11366,6 +11755,7 @@ mod tests {
                 Path::new("/var/lib/p2p-vpn/lab.json"),
                 Some(Path::new("node.nix")),
                 Some(""),
+                None,
                 false,
                 true,
             )
@@ -11376,6 +11766,7 @@ mod tests {
             Path::new("/var/lib/p2p-vpn/lab.json"),
             Some(Path::new("node.nix")),
             Some("lab"),
+            Some(Path::new("/var/lib/p2p-vpn/lab")),
             false,
             true,
         )
@@ -11384,19 +11775,44 @@ mod tests {
             Path::new("-"),
             Some(Path::new("node.nix")),
             Some("lab"),
+            None,
             true,
             true,
         )
         .expect("nixos-only does not require JSON output");
         assert!(
-            validate_pair_accept_outputs(Path::new("-"), None, Some("lab"), true, true)
+            validate_pair_accept_outputs(Path::new("-"), None, Some("lab"), None, true, true)
                 .expect_err("nixos-only without nix output should fail")
                 .contains("--nixos-only requires --nixos-output")
+        );
+        assert!(
+            validate_pair_accept_outputs(
+                Path::new("-"),
+                Some(Path::new("node.nix")),
+                Some("../escape"),
+                None,
+                true,
+                true,
+            )
+            .expect_err("unsafe instance should fail")
+            .contains("--nixos-instance")
+        );
+        assert!(
+            validate_pair_accept_outputs(
+                Path::new("-"),
+                Some(Path::new("node.nix")),
+                Some("lab"),
+                Some(Path::new("relative")),
+                true,
+                true,
+            )
+            .expect_err("relative state path should fail")
+            .contains("absolute path")
         );
     }
 
     #[test]
-    fn render_pairing_nixos_module_quotes_instance_names() {
+    fn render_pairing_nixos_module_uses_safe_instance_names() {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: p2p_vpn::config::NetworkConfig {
@@ -11426,7 +11842,7 @@ mod tests {
         config.network.local_peer.clear();
 
         let rendered = render_pairing_nixos_module(
-            "mesh lab",
+            "mesh-lab",
             &config,
             &PairingNixosSecretPaths {
                 private_key_file: Some("/var/lib/p2p-vpn/mesh-lab/private.key".to_owned()),
@@ -11435,10 +11851,13 @@ mod tests {
         )
         .expect("render");
 
-        assert!(rendered.contains("instances.\"mesh lab\""));
+        assert!(rendered.contains("instances.\"mesh-lab\""));
+        assert!(rendered.contains("networkName = \"mesh lab\";"));
+        assert_eq!(default_nixos_instance_name("mesh lab"), "mesh-lab");
+        assert_eq!(default_nixos_instance_name("../lab"), "vpn-..-lab");
         assert!(
-            render_pairing_nixos_module("", &config, &PairingNixosSecretPaths::default())
-                .expect_err("empty instance should fail")
+            render_pairing_nixos_module("../mesh", &config, &PairingNixosSecretPaths::default())
+                .expect_err("unsafe instance should fail")
                 .contains("--nixos-instance")
         );
     }
@@ -11446,33 +11865,88 @@ mod tests {
     #[test]
     fn render_pairing_nixos_module_emits_typed_instance() {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let membership_record: SignedMembershipRecord = serde_json::from_value(serde_json::json!({
+            "payload": {
+                "version": 1,
+                "network_name": "lab",
+                "member_peer": "12D3KooWMember",
+                "member_public_key": "member-public-key",
+                "issuer_peer": "12D3KooWIssuer",
+                "issuer_public_key": "issuer-public-key",
+                "membership_epoch": 3,
+                "sequence": 4,
+                "revoked": false,
+                "roles": ["overlay_member", "route_authority"],
+                "route_grants": [
+                    {
+                        "prefix": "10.43.0.0/24",
+                        "metric": 25
+                    }
+                ],
+                "issued_at_unix_seconds": 1_700_000_000_u64,
+                "expires_at_unix_seconds": 1_800_000_000_u64
+            },
+            "signature": "record-signature"
+        }))
+        .expect("membership record");
         let mut config = Config {
             network: p2p_vpn::config::NetworkConfig {
                 name: "lab".to_owned(),
                 local_peer: String::new(),
                 private_key: Some(identity.private_key.clone()),
                 membership_key: Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned()),
-                previous_membership_tags: Vec::new(),
-                member_records: Vec::new(),
+                previous_membership_tags: vec!["previous-tag".to_owned()],
+                member_records: vec![membership_record],
                 vpn_ip: Some("10.42.0.2".to_owned()),
                 routes: vec![RouteConfig {
                     prefix: "10.42.0.2/32".to_owned(),
                     metric: 0,
                 }],
-                listen_addresses: Vec::new(),
-                external_addresses: Vec::new(),
+                listen_addresses: vec![
+                    "/ip4/0.0.0.0/tcp/4201".to_owned(),
+                    "/ip4/0.0.0.0/udp/4201/quic-v1".to_owned(),
+                ],
+                external_addresses: vec!["/ip4/198.51.100.8/udp/4201/quic-v1".to_owned()],
                 bootstrap_peers: vec![BootstrapPeerConfig {
                     id: "12D3KooWBootstrap".to_owned(),
                     address: "/ip4/203.0.113.10/tcp/4001".to_owned(),
                 }],
-                discovery: DiscoveryConfig::default(),
+                discovery: DiscoveryConfig {
+                    mdns: false,
+                    kademlia: true,
+                    kademlia_provider_advertisement: false,
+                    kademlia_protocol: PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+                    dcutr: false,
+                    autonat: false,
+                },
                 relay: RelayConfig {
+                    server: true,
                     reservations: vec![
                         "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWBootstrap/p2p-circuit".to_owned(),
                     ],
-                    ..RelayConfig::default()
+                    auto: AutoRelayConfig {
+                        max_candidates: 8,
+                        max_reservations: 1,
+                        retry_interval_seconds: 11,
+                    },
+                    resources: RelayResourceConfig {
+                        max_reservations: 20,
+                        max_reservations_per_peer: 2,
+                        reservation_duration_secs: 1200,
+                        max_circuits: 12,
+                        max_circuits_per_peer: 3,
+                        max_circuit_duration_secs: 90,
+                        max_circuit_bytes: 262_144,
+                    },
                 },
-                packet_plane: PacketPlaneConfig::default(),
+                packet_plane: PacketPlaneConfig {
+                    listen: vec!["0.0.0.0:52000".to_owned()],
+                    external_endpoints: vec!["198.51.100.8:52000".to_owned()],
+                    quic_listen: vec!["0.0.0.0:52001".to_owned()],
+                    quic_external_endpoints: vec!["198.51.100.8:52001".to_owned()],
+                    session_ttl_seconds: 120,
+                    max_replay_windows_per_session: 64,
+                },
             },
             interface: p2p_vpn::config::InterfaceConfig {
                 name: "pv-test0".to_owned(),
@@ -11489,8 +11963,23 @@ mod tests {
                     metric: 100,
                 }],
             }],
-            queue: QueueConfig::default(),
-            resources: ResourceConfig::default(),
+            queue: QueueConfig {
+                max_packets_per_peer: 32,
+                max_bytes_per_peer: 65_536,
+                max_packet_age_millis: 900,
+            },
+            resources: ResourceConfig {
+                max_concurrent_packet_streams: 20,
+                max_concurrent_control_streams: 10,
+                max_inbound_packets_per_peer_per_second: 1000,
+                max_pairing_requests_per_peer_per_second: 2,
+                max_pending_incoming_connections: 11,
+                max_pending_outgoing_connections: 12,
+                max_established_incoming_connections: 13,
+                max_established_outgoing_connections: 14,
+                max_established_connections_per_peer: 5,
+                max_established_connections: 30,
+            },
         };
         config.network.local_peer.clear();
 
@@ -11510,13 +11999,106 @@ mod tests {
         assert!(rendered.contains("interfaceName = \"pv-test0\";"));
         assert!(rendered.contains("mtu = 1400;"));
         assert!(rendered.contains("vpnIp = \"10.42.0.2\";"));
+        assert!(rendered.contains("previousMembershipTags = ["));
+        assert!(rendered.contains("memberRecords = ["));
+        assert!(rendered.contains("membershipEpoch = 3;"));
+        assert!(rendered.contains("routeGrants = ["));
+        assert!(rendered.contains("\"route_authority\""));
+        assert!(rendered.contains("listenAddresses = ["));
+        assert!(rendered.contains("externalAddresses = ["));
         assert!(rendered.contains("bootstrapPeers = ["));
+        assert!(rendered.contains("kademliaProtocol = \"/p2p-vpn/kad/1\";"));
+        assert!(rendered.contains("relayServer = true;"));
         assert!(rendered.contains("relayReservations = ["));
+        assert!(rendered.contains("autoRelay = {"));
+        assert!(rendered.contains("relayResources = {"));
+        assert!(rendered.contains("packetPlane = {"));
+        assert!(rendered.contains("externalEndpoints = ["));
+        assert!(rendered.contains("quicListen = ["));
+        assert!(rendered.contains("sessionTtlSeconds = 120;"));
         assert!(rendered.contains("peers = {"));
         assert!(rendered.contains("\"12D3KooWInviter\" = {"));
         assert!(rendered.contains("metric = 100;"));
+        assert!(rendered.contains("queue = {"));
+        assert!(rendered.contains("resources = {"));
         assert!(!rendered.contains("configFile"));
+        assert!(!rendered.contains("network_name"));
+        assert!(!rendered.contains("member_peer"));
         assert!(!rendered.contains(&identity.private_key));
+    }
+
+    #[test]
+    fn nix_string_literal_escapes_interpolation_and_rejects_controls() {
+        assert_eq!(
+            nix_string_literal(concat!("lab $", "{builtins.abort \"no\"}"))
+                .expect("literal interpolation marker"),
+            concat!("\"lab \\$", "{builtins.abort \\\"no\\\"}\"")
+        );
+        assert!(
+            nix_string_literal("lab\u{0008}")
+                .expect_err("unsupported control")
+                .contains("control")
+        );
+    }
+
+    #[test]
+    fn paired_secret_replacement_does_not_follow_symlinks() {
+        let output = temp_config_path("p2p-vpn-paired-secret");
+        let victim = temp_config_path("p2p-vpn-paired-secret-victim");
+        fs::write(&victim, "keep\n").expect("write victim");
+        std::os::unix::fs::symlink(&victim, &output).expect("create secret symlink");
+
+        assert!(
+            write_secret_file(&output, "blocked", false)
+                .expect_err("normal write must preserve existing path")
+                .contains("failed to create")
+        );
+        write_secret_file(&output, "replacement", true).expect("replace symlink atomically");
+
+        assert_eq!(fs::read_to_string(&victim).expect("read victim"), "keep\n");
+        assert_eq!(
+            fs::read_to_string(&output).expect("read secret"),
+            "replacement\n"
+        );
+        assert!(
+            !fs::symlink_metadata(&output)
+                .expect("secret metadata")
+                .file_type()
+                .is_symlink()
+        );
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &fs::metadata(&output)
+                .expect("secret metadata")
+                .permissions(),
+        );
+        assert_eq!(mode & 0o777, 0o600);
+
+        fs::remove_file(output).expect("remove secret");
+        fs::remove_file(victim).expect("remove victim");
+    }
+
+    #[test]
+    fn paired_secret_directory_rejects_permissive_existing_paths_without_chmod() {
+        let directory = temp_config_path("p2p-vpn-paired-secret-directory");
+        fs::create_dir(&directory).expect("create secret directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("set permissive mode");
+
+        assert!(
+            ensure_private_directory(&directory)
+                .expect_err("permissive directory should fail")
+                .contains("owner-only")
+        );
+        let mode = fs::metadata(&directory)
+            .expect("directory metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("set private mode");
+        ensure_private_directory(&directory).expect("private directory");
+        fs::remove_dir(directory).expect("remove secret directory");
     }
 
     #[test]
