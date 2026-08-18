@@ -120,7 +120,7 @@ USAGE
             fi
 
             system="${system}"
-            is_linux="${if pkgs.stdenv.isLinux then "1" else "0"}"
+            is_linux="${if pkgs.stdenv.hostPlatform.isLinux then "1" else "0"}"
             checks=(
               ".#checks.$system.package"
               ".#checks.$system.fmt"
@@ -268,7 +268,7 @@ USAGE
             pkgs.jq
             pkgs.jujutsu
             pkgs.nix
-          ] ++ lib.optionals pkgs.stdenv.isLinux [
+          ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.iproute2
             pkgs.procps
             pkgs.util-linux
@@ -3485,7 +3485,7 @@ EOF
             --owner=0 --group=0 --numeric-owner \
             -czf "$out" -C "$TMPDIR" "p2p-vpn-0.1.0-${system}"
         '';
-        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           namespace-preflight = namespacePreflight;
           namespace-repro = namespaceRepro;
           public-relay-repro = publicRelayRepro;
@@ -3531,7 +3531,7 @@ EOF
               description = "Capture local debug metadata and optional fast-check artifacts";
             };
           };
-        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           namespace-preflight = {
             type = "app";
             program = "${namespacePreflight}/bin/p2p-vpn-namespace-preflight";
@@ -3689,7 +3689,7 @@ EOF
             cargo fmt --check
             touch $out
           '';
-        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nixos-consumer-flake = pkgs.runCommand "p2p-vpn-nixos-consumer-flake" {
             nativeBuildInputs = [ pkgs.jq ];
             consumerSource = ./tests/nixos/consumer-flake/flake.nix;
@@ -4700,7 +4700,7 @@ EOF
 
             touch $out
           '';
-        } // lib.optionalAttrs pkgs.stdenv.isLinux {
+        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           namespace-smoke-preflighted = namespaceSmokePreflighted;
         };
 

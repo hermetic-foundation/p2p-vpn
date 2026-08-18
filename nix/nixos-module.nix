@@ -1129,7 +1129,7 @@ in
   config = mkIf (enabledInstances != { }) {
     assertions = [
       {
-        assertion = pkgs.stdenv.isLinux;
+        assertion = pkgs.stdenv.hostPlatform.isLinux;
         message = "services.p2p-vpn requires Linux TUN support.";
       }
       {
