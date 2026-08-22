@@ -37,6 +37,24 @@ pub struct TunRuntimeConfig {
     pub routes: Vec<Route>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TunRouteUpdate {
+    apply: Vec<IpCommand>,
+    rollback: Vec<IpCommand>,
+}
+
+impl TunRouteUpdate {
+    #[must_use]
+    pub fn apply_commands(&self) -> &[IpCommand] {
+        &self.apply
+    }
+
+    #[must_use]
+    pub fn rollback_commands(&self) -> &[IpCommand] {
+        &self.rollback
+    }
+}
+
 impl TunRuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, TunRuntimeError> {
         Self::from_config_with_member_records(config, &config.network.member_records)
@@ -96,6 +114,70 @@ impl TunRuntimeConfig {
             )
         }));
         commands
+    }
+
+    pub fn additive_update_from(&self, current: &Self) -> Result<TunRouteUpdate, TunRuntimeError> {
+        if self.name != current.name
+            || self.mtu != current.mtu
+            || self.addresses != current.addresses
+        {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing cannot change the running TUN identity or MTU",
+            ));
+        }
+        if current
+            .additional_addresses
+            .iter()
+            .any(|address| !self.additional_addresses.contains(address))
+            || current
+                .routes
+                .iter()
+                .any(|route| !self.routes.contains(route))
+        {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "pairing cannot remove or replace a running TUN address or route",
+            ));
+        }
+
+        let new_addresses = self
+            .additional_addresses
+            .iter()
+            .copied()
+            .filter(|address| !current.additional_addresses.contains(address))
+            .collect::<Vec<_>>();
+        let new_routes = self
+            .routes
+            .iter()
+            .copied()
+            .filter(|route| !current.routes.contains(route))
+            .collect::<Vec<_>>();
+
+        let mut apply = new_addresses
+            .iter()
+            .copied()
+            .map(|prefix| IpCommand::addr_replace(self.name.clone(), prefix))
+            .collect::<Vec<_>>();
+        apply.extend(new_routes.iter().map(|route| {
+            IpCommand::route_replace(
+                self.name.clone(),
+                route.prefix,
+                self.route_source(route.prefix),
+                self.mtu,
+            )
+        }));
+
+        let mut rollback = new_addresses
+            .iter()
+            .copied()
+            .map(|prefix| IpCommand::addr_delete(self.name.clone(), prefix))
+            .collect::<Vec<_>>();
+        rollback.extend(
+            new_routes
+                .iter()
+                .map(|route| IpCommand::route_delete(self.name.clone(), route.prefix)),
+        );
+
+        Ok(TunRouteUpdate { apply, rollback })
     }
 
     fn route_source(&self, prefix: IpCidr) -> IpAddr {
@@ -173,6 +255,22 @@ impl IpCommand {
     }
 
     #[must_use]
+    pub fn addr_delete(interface: String, prefix: IpCidr) -> Self {
+        let mut args = Vec::new();
+        if prefix.address().is_ipv6() {
+            args.push("-6".to_owned());
+        }
+        args.extend([
+            "addr".to_owned(),
+            "del".to_owned(),
+            prefix.to_string(),
+            "dev".to_owned(),
+            interface,
+        ]);
+        Self { args }
+    }
+
+    #[must_use]
     pub fn route_replace(interface: String, prefix: IpCidr, source: IpAddr, mtu: u16) -> Self {
         let mut args = Vec::new();
         if prefix.address().is_ipv6() {
@@ -194,6 +292,24 @@ impl IpCommand {
         if let Some(advmss) = route_advmss(prefix, mtu) {
             args.extend(["advmss".to_owned(), advmss.to_string()]);
         }
+        Self { args }
+    }
+
+    #[must_use]
+    pub fn route_delete(interface: String, prefix: IpCidr) -> Self {
+        let mut args = Vec::new();
+        if prefix.address().is_ipv6() {
+            args.push("-6".to_owned());
+        }
+        args.extend([
+            "route".to_owned(),
+            "del".to_owned(),
+            prefix.to_string(),
+            "dev".to_owned(),
+            interface,
+            "metric".to_owned(),
+            "3000".to_owned(),
+        ]);
         Self { args }
     }
 
@@ -424,6 +540,7 @@ pub enum TunRuntimeError {
     Config(crate::config::ConfigError),
     Tun(tun::Error),
     Io(io::Error),
+    NonAdditiveUpdate(&'static str),
 }
 
 impl From<crate::config::ConfigError> for TunRuntimeError {
@@ -487,6 +604,88 @@ mod tests {
         packet[8..24].copy_from_slice(&source.octets());
         packet[24..40].copy_from_slice(&destination.octets());
         packet
+    }
+
+    #[test]
+    fn additive_route_update_has_inverse_commands_in_safe_order() {
+        let local = PeerId::from_bytes([1; 32]);
+        let remote = PeerId::from_bytes([2; 32]);
+        let current = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(local),
+            additional_addresses: Vec::new(),
+            routes: Vec::new(),
+        };
+        let address =
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1)), 32).expect("host address");
+        let route = Route {
+            owner: remote,
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 2)), 32).expect("host route"),
+            metric: 0,
+        };
+        let next = TunRuntimeConfig {
+            additional_addresses: vec![address],
+            routes: vec![route],
+            ..current.clone()
+        };
+
+        let update = next
+            .additive_update_from(&current)
+            .expect("additive update");
+        assert_eq!(
+            update
+                .apply_commands()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![
+                "ip addr replace 10.42.0.1/32 dev pv0",
+                "ip route replace 10.42.0.2/32 dev pv0 src 10.42.0.1 metric 3000 mtu 1280 advmss 1240",
+            ]
+        );
+        assert_eq!(
+            update
+                .rollback_commands()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![
+                "ip addr del 10.42.0.1/32 dev pv0",
+                "ip route del 10.42.0.2/32 dev pv0 metric 3000",
+            ]
+        );
+    }
+
+    #[test]
+    fn additive_route_update_rejects_removal_or_runtime_identity_change() {
+        let local = PeerId::from_bytes([1; 32]);
+        let address =
+            IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 1)), 32).expect("host address");
+        let current = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(local),
+            additional_addresses: vec![address],
+            routes: Vec::new(),
+        };
+        let removed = TunRuntimeConfig {
+            additional_addresses: Vec::new(),
+            ..current.clone()
+        };
+        let renamed = TunRuntimeConfig {
+            name: "pv1".to_owned(),
+            ..current.clone()
+        };
+
+        assert!(matches!(
+            removed.additive_update_from(&current),
+            Err(TunRuntimeError::NonAdditiveUpdate(_))
+        ));
+        assert!(matches!(
+            renamed.additive_update_from(&current),
+            Err(TunRuntimeError::NonAdditiveUpdate(_))
+        ));
     }
 
     #[test]

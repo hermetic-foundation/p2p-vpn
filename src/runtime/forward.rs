@@ -39,6 +39,16 @@ pub struct Forwarder {
     mtu: usize,
 }
 
+#[derive(Debug)]
+pub struct ForwarderUpdate {
+    config: Config,
+    member_records: Vec<SignedMembershipRecord>,
+    routes: RouteTable,
+    peers: HashMap<PeerId, Libp2pPeerId>,
+    authorized_peers: AuthorizedPeers,
+    mtu: usize,
+}
+
 const REPLAY_WINDOW_BITS: u64 = 64;
 const DEFAULT_REPLAY_SESSION_TTL: Duration = Duration::from_mins(15);
 const MAX_REPLAY_WINDOWS: usize = 4096;
@@ -252,6 +262,46 @@ impl Forwarder {
         self.authorized_peers = authorized_peers;
         self.member_records = member_records;
         Ok(stats)
+    }
+
+    pub fn prepare_reconfigure(
+        &self,
+        config: Config,
+        now_unix_seconds: u64,
+    ) -> Result<ForwarderUpdate, ForwardError> {
+        let local_peer = config.local_peer_id()?;
+        if local_peer != self.local_peer {
+            return Err(ForwardError::LocalPeerChanged {
+                expected: self.local_peer,
+                actual: local_peer,
+            });
+        }
+
+        let member_records = config.network.member_records.clone();
+        let routes = config.compile_routes_with_member_records(&member_records)?;
+        let peers =
+            transport_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
+        let authorized_peers =
+            authorized_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
+        let mtu = usize::from(config.effective_packet_mtu());
+
+        Ok(ForwarderUpdate {
+            config,
+            member_records,
+            routes,
+            peers,
+            authorized_peers,
+            mtu,
+        })
+    }
+
+    pub fn commit_reconfigure(&mut self, update: ForwarderUpdate) {
+        self.config = update.config;
+        self.member_records = update.member_records;
+        self.routes = update.routes;
+        self.peers = update.peers;
+        self.authorized_peers = update.authorized_peers;
+        self.mtu = update.mtu;
     }
 
     pub fn prune_membership_records(
@@ -691,6 +741,10 @@ pub enum ForwardError {
     Enqueue(EnqueueError),
     NoRoute(IpAddr),
     NoTransportPeer(PeerId),
+    LocalPeerChanged {
+        expected: PeerId,
+        actual: PeerId,
+    },
     PacketTooLarge {
         actual: usize,
         max: usize,
@@ -1130,6 +1184,63 @@ mod tests {
 
         assert_eq!(stats.accepted, 1);
         assert_eq!(prepared.peer(), PeerId::from_libp2p(member_peer));
+    }
+
+    #[test]
+    fn staged_reconfigure_preserves_packet_and_replay_state_until_commit() {
+        let original_remote = Keypair::generate_ed25519().public().to_peer_id();
+        let added_remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut forwarder =
+            Forwarder::from_config(&config_for(original_remote)).expect("forwarder");
+        let original_session = forwarder.session_id;
+        forwarder.next_sequence = 41;
+        forwarder.replay_windows.insert(
+            (PeerId::from_libp2p(original_remote), 7),
+            ReplayWindow::new(Instant::now()),
+        );
+
+        let mut next = forwarder.config().clone();
+        next.peers.push(PeerConfig {
+            id: added_remote.to_string(),
+            name: Some("added".to_owned()),
+            ip: None,
+            vpn_ip: None,
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        let update = forwarder
+            .prepare_reconfigure(next, 1_000)
+            .expect("prepare update");
+
+        assert!(!forwarder.is_configured_transport_peer(added_remote));
+        assert_eq!(forwarder.session_id, original_session);
+        assert_eq!(forwarder.next_sequence, 41);
+        assert_eq!(forwarder.replay_window_count(), 1);
+
+        forwarder.commit_reconfigure(update);
+
+        assert!(forwarder.is_configured_transport_peer(added_remote));
+        assert_eq!(forwarder.session_id, original_session);
+        assert_eq!(forwarder.next_sequence, 41);
+        assert_eq!(forwarder.replay_window_count(), 1);
+    }
+
+    #[test]
+    fn staged_reconfigure_rejects_local_identity_changes() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let forwarder = Forwarder::from_config(&config_for(remote)).expect("forwarder");
+        let expected = forwarder.local_peer;
+        let mut next = forwarder.config().clone();
+        next.network.local_peer = Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_string();
+
+        assert!(matches!(
+            forwarder.prepare_reconfigure(next, 1_000),
+            Err(ForwardError::LocalPeerChanged { expected: actual_expected, .. })
+                if actual_expected == expected
+        ));
     }
 
     #[test]
