@@ -5,13 +5,23 @@ use futures::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use libp2p::{StreamProtocol, request_response};
 use serde::{Deserialize, Serialize};
 
-use crate::pairing_code::{PairingCodeChallenge, PairingCodeHello};
+use crate::{
+    pairing::{PairingRequest, PairingResponse},
+    pairing_code::{PairingCodeChallenge, PairingCodeHello},
+};
 
 pub const PAIRING_CODE_PROTOCOL: &str = "/p2p-vpn/pairing-code/1";
 const MAX_PAIRING_CODE_MESSAGE_LEN: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct PairingCodeCodec;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PairingCodeRequest {
+    Hello { hello: Box<PairingCodeHello> },
+    Grant { request: Box<PairingRequest> },
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +30,8 @@ pub enum PairingCodeRejectionReason {
     InvalidRequest,
     RateLimited,
     Busy,
+    UserRejected,
+    Expired,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,6 +39,9 @@ pub enum PairingCodeRejectionReason {
 pub enum PairingCodeResponse {
     Challenge {
         challenge: Box<PairingCodeChallenge>,
+    },
+    Accepted {
+        response: Box<PairingResponse>,
     },
     Rejected {
         reason: PairingCodeRejectionReason,
@@ -36,7 +51,7 @@ pub enum PairingCodeResponse {
 #[async_trait]
 impl request_response::Codec for PairingCodeCodec {
     type Protocol = StreamProtocol;
-    type Request = PairingCodeHello;
+    type Request = PairingCodeRequest;
     type Response = PairingCodeResponse;
 
     async fn read_request<T>(
@@ -197,7 +212,9 @@ mod tests {
     #[tokio::test]
     async fn pairing_code_codec_round_trips_messages() {
         let protocol = StreamProtocol::new(PAIRING_CODE_PROTOCOL);
-        let request = hello();
+        let request = PairingCodeRequest::Hello {
+            hello: Box::new(hello()),
+        };
         let response = PairingCodeResponse::Challenge {
             challenge: Box::new(challenge()),
         };
