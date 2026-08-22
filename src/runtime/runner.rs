@@ -61,10 +61,12 @@ use crate::{
             validate_capabilities,
         },
         control_socket::{
-            ControlSocket, PairRpcCandidate, PairRpcDiscoveryStage, PairRpcErrorCode,
-            PairRpcFailure, PairRpcFailureCode, PairRpcJoinStarted, PairRpcOpenStarted,
-            PairRpcOperationStatus, PairRpcPhase, PairRpcRequest, PairRpcResponseEnvelope,
-            PairRpcResult, PairRpcRole, PairRpcRoute, RuntimeControlRequest,
+            ControlSocket, PairRpcCandidate, PairRpcCompletionArtifacts, PairRpcDiscoveryStage,
+            PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode, PairRpcJoinStarted,
+            PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan,
+            PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
+            PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
+            PairRpcSignedMembershipRecord, RuntimeControlRequest,
         },
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
         p2p::{
@@ -1295,7 +1297,7 @@ fn reconcile_persisted_pairing_enrollments_with(
                 sessions.recover_prepared_join(&network_name, enrollment)?;
             }
         }
-        sessions.mark_enrollment_applied(&enrollment.operation_id)?;
+        sessions.mark_enrollment_applied_at(&enrollment.operation_id, now)?;
         finalized += 1;
     }
     if let Err(error) = persist_code_pairing_sessions(store, sessions, &network_name) {
@@ -2013,7 +2015,7 @@ fn handle_pair_rpc_request(
                 .complete_open(&operation_id, &approval_id, response)
                 .map_err(code_session_pair_rpc)?;
             sessions
-                .mark_enrollment_applied(&operation_id)
+                .mark_enrollment_applied_at(&operation_id, now)
                 .map_err(code_session_pair_rpc)?;
             stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
             if let Err(error) = persist_code_pairing_sessions(store, sessions, &network_name) {
@@ -2046,23 +2048,14 @@ fn handle_pair_rpc_request(
                 pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
                     .map(|status| PairRpcResult::ActionAccepted(Box::new(status)))
             }),
-        PairRpcRequest::PairArtifacts { operation_id } => {
-            if sessions.open_completion(&operation_id).is_some()
-                || sessions.join_completion(&operation_id).is_some()
-            {
-                Err(pair_rpc_error(
-                    PairRpcErrorCode::Unavailable,
-                    "pairing artifacts are not rendered yet",
-                    true,
-                ))
-            } else {
-                Err(pair_rpc_error(
-                    PairRpcErrorCode::InvalidState,
-                    "pairing operation is not complete",
-                    false,
-                ))
-            }
-        }
+        PairRpcRequest::PairArtifacts { operation_id } => pairing_rpc_completion_artifacts(
+            sessions,
+            &operation_id,
+            &network_name,
+            &local_peer,
+            store,
+        )
+        .map(|artifacts| PairRpcResult::Artifacts(Box::new(artifacts))),
     };
 
     match result {
@@ -2079,7 +2072,240 @@ fn pair_rpc_requires_durable_state(request: &PairRpcRequest) -> bool {
             | PairRpcRequest::PairApprove { .. }
             | PairRpcRequest::PairReject { .. }
             | PairRpcRequest::PairCancel { .. }
+            | PairRpcRequest::PairArtifacts { .. }
     )
+}
+
+fn pairing_rpc_completion_artifacts(
+    sessions: &CodePairingSessions,
+    operation_id: &str,
+    network_name: &str,
+    local_peer: &str,
+    store: Option<&PairingStateStore>,
+) -> Result<PairRpcCompletionArtifacts, PairRpcResponseEnvelope> {
+    let enrollment = sessions.enrollment(operation_id).ok_or_else(|| {
+        pair_rpc_error(
+            PairRpcErrorCode::NotFound,
+            "pairing enrollment was not found",
+            false,
+        )
+    })?;
+    if enrollment.state != PairingEnrollmentState::Applied {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::InvalidState,
+            "pairing operation is not complete",
+            false,
+        ));
+    }
+    if enrollment.transcript_sha256.is_empty() {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::Unavailable,
+            "legacy pairing enrollment has no authenticated transcript receipt",
+            false,
+        ));
+    }
+
+    let response = &enrollment.response.payload;
+    if response.network_name != network_name {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::Internal,
+            "pairing enrollment belongs to a different network",
+            false,
+        ));
+    }
+    let (role, expected_local, remote_peer, assigned_vpn_ip) = match enrollment.role {
+        PairingEnrollmentRole::Inviter => (
+            PairRpcRole::Inviter,
+            response.inviter_peer.as_str(),
+            response.joiner_peer.clone(),
+            None,
+        ),
+        PairingEnrollmentRole::Joiner => (
+            PairRpcRole::Joiner,
+            response.joiner_peer.as_str(),
+            response.inviter_peer.clone(),
+            response.assigned_vpn_ip.clone(),
+        ),
+    };
+    if expected_local != local_peer {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::Internal,
+            "pairing enrollment does not match the daemon identity",
+            false,
+        ));
+    }
+    if !pairing_rpc_artifacts_ready(sessions, operation_id) {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::InvalidState,
+            "pairing operation completion does not match its durable enrollment",
+            false,
+        ));
+    }
+
+    let local_routes = pairing_rpc_member_routes(&response.member_records, local_peer);
+    let remote_routes = pairing_rpc_member_routes(&response.member_records, &remote_peer);
+    let remote_vpn_ip = (enrollment.role == PairingEnrollmentRole::Inviter)
+        .then(|| response.assigned_vpn_ip.clone())
+        .flatten();
+    let membership_key_file = response
+        .membership_key
+        .as_deref()
+        .map(|membership_key| {
+            let store = store.ok_or_else(|| {
+                pair_rpc_error(
+                    PairRpcErrorCode::Unavailable,
+                    "pairing membership key requires a durable daemon state path",
+                    false,
+                )
+            })?;
+            let path = store
+                .save_membership_key(membership_key)
+                .map_err(|error| runner_error_pair_rpc(error.into()))?;
+            path.to_str().map(str::to_owned).ok_or_else(|| {
+                pair_rpc_error(
+                    PairRpcErrorCode::Internal,
+                    "managed membership key path is not valid UTF-8",
+                    false,
+                )
+            })
+        })
+        .transpose()?;
+
+    Ok(PairRpcCompletionArtifacts {
+        receipt: PairRpcReceipt {
+            network_name: network_name.to_owned(),
+            local_peer: local_peer.to_owned(),
+            remote_peer: remote_peer.clone(),
+            role,
+            transcript_sha256: enrollment.transcript_sha256.clone(),
+            completed_at_unix_seconds: enrollment
+                .completed_at_unix_seconds
+                .unwrap_or(response.issued_at_unix_seconds),
+        },
+        nix: PairRpcNixPlan {
+            instance_name: default_pairing_instance_name(network_name),
+            network_name: network_name.to_owned(),
+            local_peer: local_peer.to_owned(),
+            assigned_vpn_ip: assigned_vpn_ip.clone(),
+            additional_local_routes: if role == PairRpcRole::Joiner {
+                pairing_rpc_routes_without_host(local_routes, assigned_vpn_ip.as_deref())
+            } else {
+                Vec::new()
+            },
+            peer: PairRpcPeer {
+                id: remote_peer,
+                name: None,
+                vpn_ip: remote_vpn_ip.clone(),
+                routes: pairing_rpc_routes_without_host(remote_routes, remote_vpn_ip.as_deref()),
+            },
+            member_records: response
+                .member_records
+                .iter()
+                .map(pairing_rpc_membership_record)
+                .collect(),
+            membership_key_file,
+        },
+    })
+}
+
+fn pairing_rpc_artifacts_ready(sessions: &CodePairingSessions, operation_id: &str) -> bool {
+    sessions.enrollment(operation_id).is_some_and(|enrollment| {
+        enrollment.state == PairingEnrollmentState::Applied
+            && !enrollment.transcript_sha256.is_empty()
+            && match enrollment.role {
+                PairingEnrollmentRole::Inviter => sessions
+                    .open_completion(operation_id)
+                    .is_some_and(|completed| completed == &enrollment.response),
+                PairingEnrollmentRole::Joiner => sessions
+                    .join_completion(operation_id)
+                    .is_some_and(|(_, completed)| completed == &enrollment.response),
+            }
+    })
+}
+
+fn pairing_rpc_member_routes(records: &[SignedMembershipRecord], peer: &str) -> Vec<PairRpcRoute> {
+    records
+        .iter()
+        .filter(|record| record.payload.member_peer == peer)
+        .max_by_key(|record| (record.payload.membership_epoch, record.payload.sequence))
+        .filter(|record| {
+            !record.payload.revoked
+                && record
+                    .payload
+                    .roles
+                    .contains(&MembershipRole::RouteAuthority)
+        })
+        .map(|record| config_routes_to_pair_rpc(record.payload.route_grants.clone()))
+        .unwrap_or_default()
+}
+
+fn pairing_rpc_routes_without_host(
+    routes: Vec<PairRpcRoute>,
+    vpn_ip: Option<&str>,
+) -> Vec<PairRpcRoute> {
+    let host_prefix = vpn_ip.and_then(|vpn_ip| {
+        vpn_ip.parse::<IpAddr>().ok().map(|address| {
+            let prefix = if address.is_ipv4() { 32 } else { 128 };
+            format!("{address}/{prefix}")
+        })
+    });
+    routes
+        .into_iter()
+        .filter(|route| host_prefix.as_deref() != Some(route.prefix.as_str()))
+        .collect()
+}
+
+fn pairing_rpc_membership_record(record: &SignedMembershipRecord) -> PairRpcSignedMembershipRecord {
+    let payload = &record.payload;
+    PairRpcSignedMembershipRecord {
+        payload: PairRpcMembershipRecordPayload {
+            version: payload.version,
+            network_name: payload.network_name.clone(),
+            member_peer: payload.member_peer.clone(),
+            member_public_key: payload.member_public_key.clone(),
+            issuer_peer: payload.issuer_peer.clone(),
+            issuer_public_key: payload.issuer_public_key.clone(),
+            membership_epoch: payload.membership_epoch,
+            sequence: payload.sequence,
+            revoked: payload.revoked,
+            roles: payload
+                .roles
+                .iter()
+                .map(|role| match role {
+                    MembershipRole::OverlayMember => PairRpcMembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority => PairRpcMembershipRole::RouteAuthority,
+                })
+                .collect(),
+            route_grants: config_routes_to_pair_rpc(payload.route_grants.clone()),
+            issued_at_unix_seconds: payload.issued_at_unix_seconds,
+            expires_at_unix_seconds: payload.expires_at_unix_seconds,
+        },
+        signature: record.signature.clone(),
+    }
+}
+
+fn default_pairing_instance_name(network_name: &str) -> String {
+    let mut normalized = network_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if normalized.is_empty() {
+        return "vpn".to_owned();
+    }
+    if !normalized
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+    {
+        normalized.insert_str(0, "vpn-");
+    }
+    normalized
 }
 
 fn pairing_rpc_status(
@@ -2133,7 +2359,13 @@ fn pairing_rpc_status(
                     None,
                 )
             }
-            PairingOpenStatus::Completed => (PairRpcPhase::Completed, None, None, false, None),
+            PairingOpenStatus::Completed => (
+                PairRpcPhase::Completed,
+                None,
+                None,
+                pairing_rpc_artifacts_ready(sessions, operation_id),
+                None,
+            ),
             PairingOpenStatus::Rejected => (
                 PairRpcPhase::Rejected,
                 None,
@@ -2197,7 +2429,12 @@ fn pairing_rpc_status(
         PairingJoinStatus::AwaitingApproval { .. } => {
             (PairRpcPhase::AwaitingApproval, None, None, false)
         }
-        PairingJoinStatus::Completed => (PairRpcPhase::Completed, None, None, false),
+        PairingJoinStatus::Completed => (
+            PairRpcPhase::Completed,
+            None,
+            None,
+            pairing_rpc_artifacts_ready(sessions, operation_id),
+        ),
         PairingJoinStatus::Cancelled => (PairRpcPhase::Cancelled, None, None, false),
         PairingJoinStatus::Expired => (
             PairRpcPhase::Expired,
@@ -9339,7 +9576,7 @@ fn handle_pairing_code_response(
             }
             if let Err(error) = context
                 .code_pairing_sessions
-                .mark_enrollment_applied(&outbound.operation_id)
+                .mark_enrollment_applied_at(&outbound.operation_id, now)
             {
                 log_runtime_event(
                     LogLevel::Error,
@@ -14571,11 +14808,25 @@ mod tests {
         PairingRequest,
         PairingResponse,
     ) {
+        code_pairing_runtime_fixture_with_membership_key(None)
+    }
+
+    fn code_pairing_runtime_fixture_with_membership_key(
+        membership_key: Option<String>,
+    ) -> (
+        Config,
+        NodeIdentity,
+        NodeIdentity,
+        PairingOffer,
+        PairingRequest,
+        PairingResponse,
+    ) {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
         let mut config = config_with_peer(&inviter, joiner_peer);
         config.peers.clear();
+        config.network.membership_key = membership_key;
         let offer = export_code_pairing_offer_at(
             &config,
             PairingOfferOptions {
@@ -15071,7 +15322,7 @@ mod tests {
                 operation_id: "operation".to_owned(),
             }
         ));
-        assert!(!pair_rpc_requires_durable_state(
+        assert!(pair_rpc_requires_durable_state(
             &PairRpcRequest::PairArtifacts {
                 operation_id: "operation".to_owned(),
             }
@@ -15299,6 +15550,151 @@ mod tests {
         );
         let serialized = serde_json::to_string(&status).expect("serialize status");
         assert!(!serialized.contains(&started.code));
+    }
+
+    #[test]
+    fn pair_rpc_artifacts_emit_native_trust_without_secret_material() {
+        let membership_key = STANDARD.encode([9_u8; 32]);
+        let (_, inviter, joiner, offer, request, response) =
+            code_pairing_runtime_fixture_with_membership_key(Some(membership_key.clone()));
+        let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut sessions = CodePairingSessions::new();
+        let started = sessions
+            .open_with_id(operation_id.clone(), "lab", 600, 1_000, Instant::now())
+            .expect("open pairing");
+        let approval = PendingApproval::new(
+            operation_id.clone(),
+            joiner_peer,
+            started.expires_at_unix_seconds,
+            request,
+        )
+        .expect("pending approval");
+        let approval_id = approval.approval_id.clone();
+        let transcript_sha256 = approval.transcript_sha256.clone();
+        sessions
+            .set_pending_approval(approval)
+            .expect("set pending approval");
+        sessions
+            .prepare_enrollment(
+                "lab",
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Inviter,
+                    approval_id: Some(approval_id.clone()),
+                    offer: Some(offer),
+                    response: response.clone(),
+                    transcript_sha256: transcript_sha256.clone(),
+                },
+            )
+            .expect("prepare enrollment");
+        sessions
+            .complete_open(&operation_id, &approval_id, response)
+            .expect("complete pairing");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 1_020)
+            .expect("apply enrollment");
+
+        let state_path = test_pairing_state_path("artifacts");
+        let store = PairingStateStore::new(&state_path);
+        let artifacts = pairing_rpc_completion_artifacts(
+            &sessions,
+            &operation_id,
+            "lab",
+            &inviter.peer_id,
+            Some(&store),
+        )
+        .expect("completion artifacts");
+
+        assert_eq!(artifacts.receipt.role, PairRpcRole::Inviter);
+        assert_eq!(artifacts.receipt.local_peer, inviter.peer_id);
+        assert_eq!(artifacts.receipt.remote_peer, joiner.peer_id);
+        assert_eq!(artifacts.receipt.transcript_sha256, transcript_sha256);
+        assert_eq!(artifacts.receipt.completed_at_unix_seconds, 1_020);
+        assert_eq!(artifacts.nix.instance_name, "lab");
+        assert_eq!(artifacts.nix.peer.id, artifacts.receipt.remote_peer);
+        assert_eq!(artifacts.nix.peer.vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert!(artifacts.nix.peer.routes.is_empty());
+        assert_eq!(artifacts.nix.member_records.len(), 2);
+        let membership_key_file = artifacts
+            .nix
+            .membership_key_file
+            .as_deref()
+            .expect("managed membership key path");
+        assert_eq!(
+            fs::read_to_string(membership_key_file).expect("managed membership key"),
+            format!("{membership_key}\n")
+        );
+        assert!(
+            pairing_rpc_status(&sessions, &operation_id, "lab", &inviter.peer_id)
+                .expect("completed status")
+                .artifacts_ready
+        );
+        let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!serialized.contains(&membership_key));
+        assert!(!serialized.contains(&inviter.private_key));
+        fs::remove_dir_all(state_path.parent().expect("state directory"))
+            .expect("remove test state");
+    }
+
+    #[test]
+    fn pair_rpc_joiner_artifacts_assign_local_address_without_static_routing() {
+        let (_, inviter, joiner, offer, request, response) = code_pairing_runtime_fixture();
+        let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+        let transcript_sha256 =
+            pairing_request_transcript_sha256(&request).expect("transcript digest");
+        let mut sessions = CodePairingSessions::new();
+        sessions
+            .join_with_id(
+                operation_id.clone(),
+                "lab",
+                crate::pairing_code::PairingCode::generate(),
+                Some("10.42.0.2".to_owned()),
+                Vec::new(),
+                600,
+                1_000,
+                Instant::now(),
+            )
+            .expect("join pairing");
+        sessions
+            .prepare_enrollment(
+                "lab",
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Joiner,
+                    approval_id: None,
+                    offer: Some(offer.clone()),
+                    response: response.clone(),
+                    transcript_sha256: transcript_sha256.clone(),
+                },
+            )
+            .expect("prepare enrollment");
+        sessions
+            .complete_join(&operation_id, offer, response)
+            .expect("complete pairing");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 1_020)
+            .expect("apply enrollment");
+
+        let artifacts = pairing_rpc_completion_artifacts(
+            &sessions,
+            &operation_id,
+            "lab",
+            &joiner.peer_id,
+            None,
+        )
+        .expect("joiner artifacts");
+
+        assert_eq!(artifacts.receipt.role, PairRpcRole::Joiner);
+        assert_eq!(artifacts.receipt.remote_peer, inviter.peer_id);
+        assert_eq!(artifacts.receipt.transcript_sha256, transcript_sha256);
+        assert_eq!(artifacts.receipt.completed_at_unix_seconds, 1_020);
+        assert_eq!(artifacts.nix.assigned_vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert!(artifacts.nix.additional_local_routes.is_empty());
+        assert_eq!(artifacts.nix.peer.id, artifacts.receipt.remote_peer);
+        assert!(artifacts.nix.peer.vpn_ip.is_none());
+        assert!(artifacts.nix.membership_key_file.is_none());
+        assert_eq!(artifacts.nix.member_records.len(), 2);
     }
 
     #[test]

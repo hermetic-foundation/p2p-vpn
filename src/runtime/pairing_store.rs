@@ -8,6 +8,7 @@ use std::{
 use rand_core::{OsRng, RngCore as _};
 
 pub const MAX_PAIRING_STATE_BYTES: usize = 512 * 1024;
+pub const PAIRING_MEMBERSHIP_KEY_FILE: &str = "membership.key";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairingStateStore {
@@ -40,6 +41,20 @@ impl PairingStateStore {
 
     pub fn save(&self, bytes: &[u8]) -> Result<(), PairingStateStoreError> {
         self.save_with_parent_sync(bytes, sync_parent_directory)
+    }
+
+    pub fn save_membership_key(
+        &self,
+        membership_key: &str,
+    ) -> Result<PathBuf, PairingStateStoreError> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or(PairingStateStoreError::MissingParent)?;
+        let path = parent.join(PAIRING_MEMBERSHIP_KEY_FILE);
+        let contents = format!("{membership_key}\n");
+        Self::new(&path).save(contents.as_bytes())?;
+        Ok(path)
     }
 
     fn save_with_parent_sync(
@@ -267,6 +282,31 @@ mod tests {
             .expect("save");
 
         assert_eq!(sync_calls.get(), 1);
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn pairing_store_materializes_membership_key_without_exposing_permissions() {
+        let directory = test_directory("membership-key");
+        let store = PairingStateStore::new(directory.join("pairing-state.json"));
+
+        let path = store
+            .save_membership_key("private-membership-key")
+            .expect("save membership key");
+
+        assert_eq!(path, directory.join(PAIRING_MEMBERSHIP_KEY_FILE));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read membership key"),
+            "private-membership-key\n"
+        );
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("membership key metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
         fs::remove_dir_all(directory).expect("cleanup");
     }
 

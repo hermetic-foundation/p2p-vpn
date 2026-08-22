@@ -125,6 +125,8 @@ pub struct PairingEnrollment {
     pub response: PairingResponse,
     #[serde(default)]
     pub transcript_sha256: String,
+    #[serde(default)]
+    pub completed_at_unix_seconds: Option<u64>,
     pub state: PairingEnrollmentState,
 }
 
@@ -1061,6 +1063,7 @@ impl CodePairingSessions {
             offer: preparation.offer,
             response: preparation.response,
             transcript_sha256: preparation.transcript_sha256,
+            completed_at_unix_seconds: None,
             state: PairingEnrollmentState::Prepared,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
@@ -1102,11 +1105,30 @@ impl CodePairingSessions {
         &mut self,
         operation_id: &str,
     ) -> Result<&PairingEnrollment, CodePairingSessionError> {
+        let completed_at_unix_seconds = self
+            .enrollment(operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?
+            .response
+            .payload
+            .issued_at_unix_seconds;
+        self.mark_enrollment_applied_at(operation_id, completed_at_unix_seconds)
+    }
+
+    pub fn mark_enrollment_applied_at(
+        &mut self,
+        operation_id: &str,
+        completed_at_unix_seconds: u64,
+    ) -> Result<&PairingEnrollment, CodePairingSessionError> {
         let enrollment = self
             .enrollments
             .iter_mut()
             .find(|enrollment| enrollment.operation_id == operation_id)
             .ok_or(CodePairingSessionError::NotFound)?;
+        let completed_at_unix_seconds =
+            completed_at_unix_seconds.max(enrollment.response.payload.issued_at_unix_seconds);
+        enrollment
+            .completed_at_unix_seconds
+            .get_or_insert(completed_at_unix_seconds);
         enrollment.state = PairingEnrollmentState::Applied;
         Ok(enrollment)
     }
@@ -1845,6 +1867,17 @@ fn validate_pairing_enrollment(
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
     validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
+    if enrollment
+        .completed_at_unix_seconds
+        .is_some_and(|completed_at| {
+            enrollment.state != PairingEnrollmentState::Applied
+                || completed_at < enrollment.response.payload.issued_at_unix_seconds
+        })
+    {
+        return Err(invalid_enrollment(
+            "enrollment has an invalid completion timestamp",
+        ));
+    }
 
     let response = &enrollment.response.payload;
     if response.version != PAIRING_OFFER_VERSION {
@@ -3584,6 +3617,7 @@ mod tests {
                 offer: Some(offer.clone()),
                 response: response.clone(),
                 transcript_sha256: transcript_sha256.clone(),
+                completed_at_unix_seconds: Some(1_002),
                 state: PairingEnrollmentState::Applied,
             })
         );
@@ -3596,6 +3630,7 @@ mod tests {
                 offer: Some(offer),
                 response,
                 transcript_sha256,
+                completed_at_unix_seconds: None,
                 state: PairingEnrollmentState::Prepared,
             })
         );
@@ -3656,8 +3691,18 @@ mod tests {
         assert_eq!(retry, &first);
 
         sessions
-            .mark_enrollment_applied(&operation_id)
+            .mark_enrollment_applied_at(&operation_id, 2_000)
             .expect("apply enrollment");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 3_000)
+            .expect("idempotently apply enrollment");
+        assert_eq!(
+            sessions
+                .enrollment(&operation_id)
+                .expect("applied enrollment")
+                .completed_at_unix_seconds,
+            Some(2_000)
+        );
         assert_eq!(
             sessions
                 .prepare_enrollment(
