@@ -20,7 +20,8 @@ pub struct PairingCodeCodec;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PairingCodeRequest {
     Hello { hello: Box<PairingCodeHello> },
-    Grant { request: Box<PairingRequest> },
+    Submit { request: Box<PairingRequest> },
+    Poll { ticket: String },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,6 +43,10 @@ pub enum PairingCodeResponse {
     },
     Accepted {
         response: Box<PairingResponse>,
+    },
+    Pending {
+        ticket: String,
+        expires_at_unix_seconds: u64,
     },
     Rejected {
         reason: PairingCodeRejectionReason,

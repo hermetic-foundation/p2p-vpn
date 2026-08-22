@@ -52,7 +52,10 @@ use crate::{
         },
         control_socket::{ControlSocket, RuntimeControlRequest},
         forward::{ForwardError, Forwarder, packet_destination, packet_source},
-        p2p::{Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node},
+        p2p::{
+            Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node,
+            kademlia_pairing_code_key,
+        },
         packet::{PacketRejectionReason, PacketResponse},
         packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeError,
@@ -62,6 +65,8 @@ use crate::{
             PacketPlaneSessionRole, PacketPlaneSessionSnapshot, PacketPlaneSnapshot,
             VerifiedPacketPlaneHandshake,
         },
+        pairing_sessions::{CODE_PAIRING_TICK, CodePairingSessionError, CodePairingSessions},
+        pairing_store::{PairingStateStore, PairingStateStoreError},
         pinned_packet_stream,
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
@@ -311,6 +316,7 @@ pub async fn run_config(
         device,
         metrics_interval,
         None,
+        None,
         std::future::pending::<ShutdownReason>(),
     )
     .await
@@ -321,6 +327,7 @@ pub async fn run_config_until<Shutdown>(
     device: TunDevice,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -395,6 +402,7 @@ where
         config.resources,
         metrics_interval,
         control_socket,
+        pairing_state_path,
         packet_plane,
         packet_plane_quic,
         config.packet_plane_quic_endpoint_candidates()?,
@@ -444,6 +452,7 @@ pub async fn run_node(
         options.resources,
         options.metrics_interval,
         None,
+        None,
         PacketPlaneRuntime::disabled(),
         None,
         Vec::new(),
@@ -481,6 +490,7 @@ pub async fn run_node_until<Shutdown>(
     resources: ResourceConfig,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
     mut packet_plane_quic: Option<PacketPlaneQuicRuntime>,
     packet_plane_quic_external_endpoints: Vec<String>,
@@ -522,6 +532,13 @@ where
     let mut pairing_request_rate_limiters =
         PeerRateLimiters::new(resources.pairing_request_rate_limit());
     let mut consumed_pairing_tokens = HashSet::new();
+    let pairing_state_store = pairing_state_path.map(PairingStateStore::new);
+    let mut code_pairing_sessions = load_code_pairing_sessions(
+        pairing_state_store.as_ref(),
+        &node.network_name,
+        current_unix_seconds_lossy(),
+        Instant::now(),
+    )?;
     let mut active_connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint> =
         HashMap::new();
     let kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
@@ -699,6 +716,7 @@ where
                         packet_plane_session_ttl,
                         packet_plane_replay_windows_per_session,
                         consumed_pairing_tokens: &mut consumed_pairing_tokens,
+                        code_pairing_sessions: &mut code_pairing_sessions,
                         active_connections: &mut active_connections,
                     },
                     event,
@@ -884,6 +902,24 @@ where
                 };
                 expire_packet_plane_sessions(&mut expiry_context);
             }
+            _ = timers.code_pairing.tick() => {
+                let actions = code_pairing_sessions.expire(
+                    current_unix_seconds_lossy(),
+                    Instant::now(),
+                );
+                stop_code_pairing_provider(&mut node.swarm, actions.stop_providing_locator.as_deref());
+                drive_code_pairing_discovery(
+                    &mut node.swarm,
+                    &mut code_pairing_sessions,
+                    &node.identity,
+                    &discovery,
+                );
+                persist_code_pairing_sessions(
+                    pairing_state_store.as_ref(),
+                    &code_pairing_sessions,
+                    &node.network_name,
+                )?;
+            }
             _ = timers.path_probe.tick() => {
                 expire_unconfirmed_path_probes(
                     &mut node.swarm,
@@ -989,6 +1025,81 @@ struct RuntimeTimers {
     kademlia_refresh: Option<tokio::time::Interval>,
     queue_expiry: tokio::time::Interval,
     path_probe: tokio::time::Interval,
+    code_pairing: tokio::time::Interval,
+}
+
+fn load_code_pairing_sessions(
+    store: Option<&PairingStateStore>,
+    network_name: &str,
+    now_unix_seconds: u64,
+    now: Instant,
+) -> Result<CodePairingSessions, RunnerError> {
+    let Some(store) = store else {
+        return Ok(CodePairingSessions::new());
+    };
+    let Some(bytes) = store.load()? else {
+        return Ok(CodePairingSessions::new());
+    };
+    Ok(CodePairingSessions::restore_persisted(
+        &bytes,
+        network_name,
+        now_unix_seconds,
+        now,
+    )?)
+}
+
+fn persist_code_pairing_sessions(
+    store: Option<&PairingStateStore>,
+    sessions: &CodePairingSessions,
+    network_name: &str,
+) -> Result<(), RunnerError> {
+    let Some(store) = store else {
+        return Ok(());
+    };
+    store.save(&sessions.encode_persisted(network_name)?)?;
+    Ok(())
+}
+
+fn stop_code_pairing_provider(swarm: &mut Swarm<Behaviour>, locator: Option<&str>) {
+    let Some(locator) = locator else {
+        return;
+    };
+    swarm
+        .behaviour_mut()
+        .kad
+        .stop_providing(&kademlia_pairing_code_key(locator));
+}
+
+fn drive_code_pairing_discovery(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    _identity: &NodeIdentity,
+    discovery: &DiscoveryConfig,
+) {
+    if !discovery.kademlia {
+        return;
+    }
+
+    let now = Instant::now();
+    if let Some(locator) = sessions.should_start_open_provider(now).map(str::to_owned) {
+        let key = kademlia_pairing_code_key(&locator);
+        match swarm.behaviour_mut().kad.start_providing(key) {
+            Ok(_) => sessions.mark_open_provider_started(&locator),
+            Err(error) => log_runtime_event(
+                LogLevel::Warn,
+                "pairing_code_provider_advertisement_failed",
+                &[("error", &format!("{error:?}"))],
+            ),
+        }
+    }
+
+    if let Some(locator) = sessions.should_start_join_lookup(now).map(str::to_owned) {
+        swarm
+            .behaviour_mut()
+            .kad
+            .get_providers(kademlia_pairing_code_key(&locator));
+        sessions.mark_join_lookup_started(&locator);
+    }
 }
 
 impl RuntimeTimers {
@@ -1006,6 +1117,7 @@ impl RuntimeTimers {
                 queue_config.max_packet_age(),
             )),
             path_probe: tokio::time::interval(PATH_PROBE_INTERVAL),
+            code_pairing: tokio::time::interval(CODE_PAIRING_TICK),
         }
     }
 
@@ -1016,6 +1128,7 @@ impl RuntimeTimers {
         }
         self.queue_expiry.tick().await;
         self.path_probe.tick().await;
+        self.code_pairing.tick().await;
     }
 }
 
@@ -1501,6 +1614,21 @@ fn handle_runtime_control_request(
                 eprintln!("control socket shutdown response receiver dropped");
             }
             Some(ShutdownReason::ControlSocket)
+        }
+        RuntimeControlRequest::PairRpc { respond_to, .. } => {
+            if respond_to
+                .send(
+                    crate::runtime::control_socket::PairRpcResponseEnvelope::error(
+                        crate::runtime::control_socket::PairRpcErrorCode::Unavailable,
+                        "pairing control is not initialized",
+                        true,
+                    ),
+                )
+                .is_err()
+            {
+                eprintln!("control socket pair RPC response receiver dropped");
+            }
+            None
         }
     }
 }
@@ -6128,6 +6256,7 @@ struct SwarmEventContext<'a> {
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
     consumed_pairing_tokens: &'a mut HashSet<String>,
+    code_pairing_sessions: &'a mut CodePairingSessions,
     active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
 }
 
@@ -6197,6 +6326,7 @@ async fn handle_swarm_event(
                 local_capabilities: context.local_capabilities,
                 previous_membership_tags: context.previous_membership_tags,
                 identity: context.identity,
+                code_pairing_sessions: context.code_pairing_sessions,
                 public_discovery_quiet,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
@@ -6227,7 +6357,8 @@ async fn handle_swarm_event(
                 context.infrastructure_peers,
                 context.metrics,
                 peer_id,
-                matches!(endpoint, ConnectedPoint::Listener { .. }),
+                matches!(endpoint, ConnectedPoint::Listener { .. })
+                    || context.code_pairing_sessions.allows_pairing_probe(peer_id),
                 context.auto_relay.should_discover_candidates(),
                 context.relay_server_enabled,
             ) {
@@ -8082,6 +8213,26 @@ fn pairing_response_for_request(
     request: &PairingRequest,
     now_unix_seconds: u64,
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
+    pairing_response_for_request_with_mode(
+        config,
+        identity,
+        consumed_tokens,
+        transport_peer,
+        request,
+        now_unix_seconds,
+        crate::pairing::PairingAcceptanceMode::FileBearer,
+    )
+}
+
+fn pairing_response_for_request_with_mode(
+    config: &Config,
+    identity: &NodeIdentity,
+    consumed_tokens: &mut HashSet<String>,
+    transport_peer: Libp2pPeerId,
+    request: &PairingRequest,
+    now_unix_seconds: u64,
+    expected_acceptance_mode: crate::pairing::PairingAcceptanceMode,
+) -> Result<PairingResponse, crate::pairing::PairingError> {
     let reconstructed_offer;
     let offer = if let Some(offer) = request.offer.as_ref() {
         offer
@@ -8109,6 +8260,9 @@ fn pairing_response_for_request(
         }
         &reconstructed_offer
     };
+    if offer.payload.acceptance_mode != expected_acceptance_mode {
+        return Err(crate::pairing::PairingError::ApprovalRequired);
+    }
     request.verify_for_offer_at(offer, now_unix_seconds)?;
     if offer.payload.network_name != config.network.name
         || offer.payload.inviter_peer != config.local_peer()?
@@ -10505,6 +10659,7 @@ struct BehaviourEventContext<'a> {
     local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
     identity: &'a NodeIdentity,
+    code_pairing_sessions: &'a mut CodePairingSessions,
     public_discovery_quiet: bool,
 }
 
@@ -10517,6 +10672,11 @@ fn handle_behaviour_event(
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
                 let infrastructure_address = address.clone();
+                context.code_pairing_sessions.record_lan_candidate(
+                    peer,
+                    address.clone(),
+                    Instant::now(),
+                );
                 learn_peer_address(
                     swarm,
                     context.forwarder,
@@ -10543,6 +10703,9 @@ fn handle_behaviour_event(
         }
         BehaviourEvent::Mdns(mdns::Event::Expired(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
+                context
+                    .code_pairing_sessions
+                    .remove_lan_candidate(peer, &address);
                 if context.forwarder.is_configured_transport_peer(peer)
                     && relayed_address_relay_peer(&address).is_none()
                 {
@@ -12128,6 +12291,8 @@ pub enum RunnerError {
     ControlResponseDropped,
     PairingResponseDropped,
     ServiceResponseDropped,
+    PairingStateStore(PairingStateStoreError),
+    CodePairingSession(CodePairingSessionError),
 }
 
 impl From<crate::config::ConfigError> for RunnerError {
@@ -12160,6 +12325,18 @@ impl From<io::Error> for RunnerError {
     }
 }
 
+impl From<PairingStateStoreError> for RunnerError {
+    fn from(error: PairingStateStoreError) -> Self {
+        Self::PairingStateStore(error)
+    }
+}
+
+impl From<CodePairingSessionError> for RunnerError {
+    fn from(error: CodePairingSessionError) -> Self {
+        Self::CodePairingSession(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -12182,7 +12359,8 @@ mod tests {
         identity::NodeIdentity,
         membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
         pairing::{
-            PairingOfferOptions, PairingRequestOptions, build_pairing_request_at,
+            PairingAcceptanceMode, PairingOfferOptions, PairingRequestOptions,
+            build_pairing_request_at, export_code_pairing_offer_at,
             export_discovery_only_pairing_offer_at, export_pairing_offer_at,
         },
         route::builtin_ipv4,
@@ -12531,6 +12709,45 @@ mod tests {
             ]
         );
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn file_pairing_handler_rejects_code_approval_offer() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let config = config_with_peer(&inviter, joiner_peer);
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("request");
+
+        let error = pairing_response_for_request(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_002,
+        )
+        .expect_err("code offers require the approval handler");
+
+        assert_eq!(
+            offer.payload.acceptance_mode,
+            PairingAcceptanceMode::CodeApproval
+        );
+        assert!(matches!(
+            error,
+            crate::pairing::PairingError::ApprovalRequired
+        ));
     }
 
     #[test]

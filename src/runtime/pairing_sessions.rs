@@ -5,9 +5,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use libp2p::{
-    Multiaddr, PeerId as Libp2pPeerId,
-    request_response::{OutboundRequestId, ResponseChannel},
-    swarm::ConnectionId,
+    Multiaddr, PeerId as Libp2pPeerId, request_response::OutboundRequestId, swarm::ConnectionId,
 };
 use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
@@ -17,7 +15,6 @@ use crate::{
     config::RouteConfig,
     pairing::{PairingOffer, PairingRequest, PairingResponse},
     pairing_code::{PairingCode, PairingCodeSession, PendingPairingCodeHello},
-    runtime::pairing_code::PairingCodeResponse,
 };
 
 pub const DEFAULT_CODE_PAIRING_EXPIRES_IN_SECONDS: u64 = 10 * 60;
@@ -171,7 +168,6 @@ pub struct PendingApproval {
     pub peer: Libp2pPeerId,
     pub connection_id: ConnectionId,
     pub request: PairingRequest,
-    pub channel: ResponseChannel<PairingCodeResponse>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -252,7 +248,6 @@ impl PendingApproval {
         peer: Libp2pPeerId,
         connection_id: ConnectionId,
         request: PairingRequest,
-        channel: ResponseChannel<PairingCodeResponse>,
     ) -> Result<Self, CodePairingSessionError> {
         let approval_id = pairing_approval_id(&request)?;
         Ok(Self {
@@ -261,7 +256,6 @@ impl PendingApproval {
             peer,
             connection_id,
             request,
-            channel,
         })
     }
 }

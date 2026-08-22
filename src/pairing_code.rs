@@ -22,7 +22,7 @@ use crate::{
     identity::NodeIdentity,
     pairing::{
         PairingCodeAuthentication, PairingError, PairingOffer, PairingOfferOptions, PairingRequest,
-        export_pairing_offer_at,
+        export_code_pairing_offer_at,
     },
 };
 
@@ -354,7 +354,7 @@ pub fn answer_pairing_code_hello_at(
         inviter_peer,
         transport_peer,
     )?;
-    let offer = export_pairing_offer_at(config, offer_options, issued_at_unix_seconds)?;
+    let offer = export_code_pairing_offer_at(config, offer_options, issued_at_unix_seconds)?;
     let mut nonce = [0_u8; PAIRING_CODE_NONCE_BYTES];
     OsRng.fill_bytes(&mut nonce);
     let mut payload = PairingCodeChallengePayload {
@@ -971,6 +971,10 @@ mod tests {
     #[test]
     fn pairing_code_exchange_authenticates_existing_pairing_request() {
         let (joiner, inviter_session, joiner_session, offer) = exchange();
+        assert_eq!(
+            offer.payload.acceptance_mode,
+            crate::pairing::PairingAcceptanceMode::CodeApproval
+        );
         let mut request = build_pairing_request_at(
             &offer,
             PairingRequestOptions {

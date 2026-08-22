@@ -82,6 +82,8 @@ pub struct PairingOfferPayload {
     pub rendezvous_token: String,
     pub issued_at_unix_seconds: u64,
     pub expires_at_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "PairingAcceptanceMode::is_file_bearer")]
+    pub acceptance_mode: PairingAcceptanceMode,
     #[serde(default)]
     pub inviter_addresses: Vec<String>,
     #[serde(default)]
@@ -90,6 +92,21 @@ pub struct PairingOfferPayload {
     pub relay_reservations: Vec<String>,
     pub discovery: DiscoveryConfig,
     pub protocols: PairingProtocols,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingAcceptanceMode {
+    #[default]
+    FileBearer,
+    CodeApproval,
+}
+
+impl PairingAcceptanceMode {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_file_bearer(&self) -> bool {
+        matches!(self, Self::FileBearer)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -287,7 +304,27 @@ pub fn export_pairing_offer_at(
     options: PairingOfferOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<PairingOffer, PairingError> {
-    export_pairing_offer_at_with_address_policy(config, options, issued_at_unix_seconds, true)
+    export_pairing_offer_at_with_policy(
+        config,
+        options,
+        issued_at_unix_seconds,
+        true,
+        PairingAcceptanceMode::FileBearer,
+    )
+}
+
+pub fn export_code_pairing_offer_at(
+    config: &Config,
+    options: PairingOfferOptions,
+    issued_at_unix_seconds: u64,
+) -> Result<PairingOffer, PairingError> {
+    export_pairing_offer_at_with_policy(
+        config,
+        options,
+        issued_at_unix_seconds,
+        true,
+        PairingAcceptanceMode::CodeApproval,
+    )
 }
 
 pub fn export_discovery_only_pairing_offer(
@@ -302,14 +339,21 @@ pub fn export_discovery_only_pairing_offer_at(
     options: PairingOfferOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<PairingOffer, PairingError> {
-    export_pairing_offer_at_with_address_policy(config, options, issued_at_unix_seconds, false)
+    export_pairing_offer_at_with_policy(
+        config,
+        options,
+        issued_at_unix_seconds,
+        false,
+        PairingAcceptanceMode::FileBearer,
+    )
 }
 
-fn export_pairing_offer_at_with_address_policy(
+fn export_pairing_offer_at_with_policy(
     config: &Config,
     options: PairingOfferOptions,
     issued_at_unix_seconds: u64,
     include_inviter_addresses: bool,
+    acceptance_mode: PairingAcceptanceMode,
 ) -> Result<PairingOffer, PairingError> {
     config.validate_runtime()?;
     if options.expires_in_seconds == 0 {
@@ -337,6 +381,7 @@ fn export_pairing_offer_at_with_address_policy(
         },
         issued_at_unix_seconds,
         expires_at_unix_seconds,
+        acceptance_mode,
         inviter_addresses: if include_inviter_addresses {
             exported_inviter_addresses(config)
         } else {
@@ -866,6 +911,7 @@ pub enum PairingError {
     InvalidRendezvousTokenLength { actual: usize, expected: usize },
     NoDiscoveryPath,
     IncompatibleProtocols,
+    ApprovalRequired,
     MissingRelayPeer,
     MissingRelayCircuit,
     UnexpectedRelayTarget,
@@ -998,6 +1044,15 @@ mod tests {
         parsed.verify_at(1_001).expect("verified");
         assert_eq!(parsed.payload.network_name, "lab");
         assert_eq!(parsed.payload.expires_at_unix_seconds, 1_600);
+        assert_eq!(
+            parsed.payload.acceptance_mode,
+            PairingAcceptanceMode::FileBearer
+        );
+        assert!(
+            serde_json::to_value(&offer).expect("JSON")["payload"]
+                .get("acceptance_mode")
+                .is_none()
+        );
         assert!(parsed.payload.bootstrap_peers.is_empty());
         assert!(parsed.payload.discovery.kademlia);
     }

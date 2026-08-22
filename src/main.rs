@@ -8087,6 +8087,7 @@ async fn up(
         device,
         metrics_interval,
         control_socket,
+        None,
         shutdown_signal(),
     ))
     .await
@@ -12781,6 +12782,7 @@ mod tests {
                 rendezvous_token: "BwcHBwcHBwcHBwcHBwcHBw".to_owned(),
                 issued_at_unix_seconds: 1_000,
                 expires_at_unix_seconds: 1_600,
+                acceptance_mode: p2p_vpn::pairing::PairingAcceptanceMode::FileBearer,
                 inviter_addresses: Vec::new(),
                 bootstrap_peers: Vec::new(),
                 relay_reservations: Vec::new(),

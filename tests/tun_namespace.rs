@@ -2759,6 +2759,7 @@ async fn run_ready_node(
         config.resources,
         Some(Duration::from_secs(1)),
         Some(control_socket),
+        None,
         packet_plane,
         packet_plane_quic,
         config.packet_plane_quic_endpoint_candidates()?,
