@@ -32,6 +32,7 @@ pub const MAX_PENDING_CODE_HELLOS: usize = 32;
 pub const MAX_INBOUND_CODE_SESSIONS: usize = 8;
 
 const OPERATION_ID_BYTES: usize = 16;
+const PERSISTED_PAIRING_STATE_VERSION: u8 = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +112,7 @@ struct OpenOperation {
     locator: String,
     opened_at: Instant,
     expires_at_unix_seconds: u64,
+    expires_in_seconds: u64,
     provider_advertised: bool,
     completed: Option<PairingResponse>,
     terminal: Option<TerminalStatus>,
@@ -122,6 +124,7 @@ struct JoinOperation {
     locator: String,
     started_at: Instant,
     expires_at_unix_seconds: u64,
+    expires_in_seconds: u64,
     public_lookup_started: bool,
     attempted_peers: HashSet<Libp2pPeerId>,
     selected_inviter: Option<Libp2pPeerId>,
@@ -131,7 +134,8 @@ struct JoinOperation {
     terminal: Option<TerminalStatus>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", content = "reason", rename_all = "snake_case")]
 enum TerminalStatus {
     Rejected,
     Cancelled,
@@ -186,6 +190,10 @@ pub enum CodePairingSessionError {
     Capacity,
     InvalidCode(crate::pairing_code::PairingCodeError),
     Serialization(serde_json::Error),
+    InvalidOperationId,
+    Conflict,
+    PersistedNetworkMismatch { expected: String, actual: String },
+    InvalidPersistedState(String),
 }
 
 impl std::fmt::Display for CodePairingSessionError {
@@ -208,6 +216,17 @@ impl std::fmt::Display for CodePairingSessionError {
             Self::InvalidCode(error) => write!(formatter, "invalid pairing code: {error:?}"),
             Self::Serialization(error) => {
                 write!(formatter, "failed to encode pairing state: {error}")
+            }
+            Self::InvalidOperationId => formatter.write_str("invalid pairing operation id"),
+            Self::Conflict => {
+                formatter.write_str("pairing operation id conflicts with existing state")
+            }
+            Self::PersistedNetworkMismatch { expected, actual } => write!(
+                formatter,
+                "persisted pairing network mismatch: expected {expected}, got {actual}"
+            ),
+            Self::InvalidPersistedState(reason) => {
+                write!(formatter, "invalid persisted pairing state: {reason}")
             }
         }
     }
@@ -274,14 +293,52 @@ impl CodePairingSessions {
         now_unix_seconds: u64,
         now: Instant,
     ) -> Result<PairingOpenStarted, CodePairingSessionError> {
-        self.ensure_idle()?;
+        self.open_with_id(
+            fresh_pairing_operation_id(),
+            network_name,
+            expires_in_seconds,
+            now_unix_seconds,
+            now,
+        )
+    }
+
+    pub fn open_with_id(
+        &mut self,
+        operation_id: String,
+        network_name: &str,
+        expires_in_seconds: u64,
+        now_unix_seconds: u64,
+        now: Instant,
+    ) -> Result<PairingOpenStarted, CodePairingSessionError> {
+        validate_pairing_operation_id(&operation_id)?;
         validate_expiry(expires_in_seconds)?;
+        if let Some(existing) = self.open.as_ref().filter(|open| open.id == operation_id) {
+            if existing.expires_in_seconds != expires_in_seconds {
+                return Err(CodePairingSessionError::Conflict);
+            }
+            let code = existing
+                .code
+                .as_ref()
+                .ok_or(CodePairingSessionError::Conflict)?;
+            return Ok(PairingOpenStarted {
+                operation_id,
+                code: code.to_string(),
+                expires_at_unix_seconds: existing.expires_at_unix_seconds,
+            });
+        }
+        if self
+            .join
+            .as_ref()
+            .is_some_and(|join| join.id == operation_id)
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        self.ensure_idle()?;
         let expires_at_unix_seconds = now_unix_seconds
             .checked_add(expires_in_seconds)
             .ok_or(CodePairingSessionError::ExpiryOverflow)?;
         let code = PairingCode::generate();
         let locator = code.locator(network_name)?;
-        let operation_id = fresh_operation_id();
         let started = PairingOpenStarted {
             operation_id: operation_id.clone(),
             code: code.to_string(),
@@ -293,6 +350,7 @@ impl CodePairingSessions {
             locator,
             opened_at: now,
             expires_at_unix_seconds,
+            expires_in_seconds,
             provider_advertised: false,
             completed: None,
             terminal: None,
@@ -310,19 +368,64 @@ impl CodePairingSessions {
         now_unix_seconds: u64,
         now: Instant,
     ) -> Result<PairingJoinStarted, CodePairingSessionError> {
-        self.ensure_idle()?;
+        self.join_with_id(
+            fresh_pairing_operation_id(),
+            network_name,
+            code,
+            requested_vpn_ip,
+            requested_routes,
+            expires_in_seconds,
+            now_unix_seconds,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn join_with_id(
+        &mut self,
+        operation_id: String,
+        network_name: &str,
+        code: PairingCode,
+        requested_vpn_ip: Option<String>,
+        requested_routes: Vec<RouteConfig>,
+        expires_in_seconds: u64,
+        now_unix_seconds: u64,
+        now: Instant,
+    ) -> Result<PairingJoinStarted, CodePairingSessionError> {
+        validate_pairing_operation_id(&operation_id)?;
         validate_expiry(expires_in_seconds)?;
+        let locator = code.locator(network_name)?;
+        if let Some(existing) = self.join.as_ref().filter(|join| join.id == operation_id) {
+            if existing.expires_in_seconds != expires_in_seconds
+                || existing.locator != locator
+                || existing.requested_vpn_ip != requested_vpn_ip
+                || existing.requested_routes != requested_routes
+            {
+                return Err(CodePairingSessionError::Conflict);
+            }
+            return Ok(PairingJoinStarted {
+                operation_id,
+                expires_at_unix_seconds: existing.expires_at_unix_seconds,
+            });
+        }
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.id == operation_id)
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        self.ensure_idle()?;
         let expires_at_unix_seconds = now_unix_seconds
             .checked_add(expires_in_seconds)
             .ok_or(CodePairingSessionError::ExpiryOverflow)?;
-        let locator = code.locator(network_name)?;
-        let operation_id = fresh_operation_id();
         self.join = Some(JoinOperation {
             id: operation_id.clone(),
             code: Some(code),
             locator,
             started_at: now,
             expires_at_unix_seconds,
+            expires_in_seconds,
             public_lookup_started: false,
             attempted_peers: HashSet::new(),
             selected_inviter: None,
@@ -551,6 +654,64 @@ impl CodePairingSessions {
         {
             self.deactivate_join(TerminalStatus::Failed(reason.into()));
         }
+    }
+
+    pub fn encode_persisted(&self, network_name: &str) -> Result<Vec<u8>, CodePairingSessionError> {
+        Ok(serde_json::to_vec_pretty(
+            &PersistedCodePairingSessions::from_runtime(self, network_name),
+        )?)
+    }
+
+    pub fn restore_persisted(
+        bytes: &[u8],
+        expected_network_name: &str,
+        now_unix_seconds: u64,
+        now: Instant,
+    ) -> Result<Self, CodePairingSessionError> {
+        let persisted: PersistedCodePairingSessions = serde_json::from_slice(bytes)?;
+        if persisted.version != PERSISTED_PAIRING_STATE_VERSION {
+            return Err(CodePairingSessionError::InvalidPersistedState(format!(
+                "unsupported version {}",
+                persisted.version
+            )));
+        }
+        if persisted.network_name != expected_network_name {
+            return Err(CodePairingSessionError::PersistedNetworkMismatch {
+                expected: expected_network_name.to_owned(),
+                actual: persisted.network_name,
+            });
+        }
+
+        let resumed_at = now.checked_sub(CODE_PAIRING_LAN_GRACE).unwrap_or(now);
+        let open = persisted
+            .open
+            .map(|open| open.into_runtime(expected_network_name, now_unix_seconds, resumed_at))
+            .transpose()?;
+        let join = persisted
+            .join
+            .map(|join| join.into_runtime(expected_network_name, now_unix_seconds, resumed_at))
+            .transpose()?;
+        let active_open = open
+            .as_ref()
+            .is_some_and(|operation| operation.terminal.is_none() && operation.completed.is_none());
+        let active_join = join
+            .as_ref()
+            .is_some_and(|operation| operation.terminal.is_none() && operation.completed.is_none());
+        if active_open && active_join {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "inviter and joiner operations cannot both be active".to_owned(),
+            ));
+        }
+
+        Ok(Self {
+            open,
+            join,
+            lan_candidates: HashMap::new(),
+            outbound_hellos: HashMap::new(),
+            inbound_sessions: HashMap::new(),
+            outbound_pairing: HashMap::new(),
+            pending_approval: None,
+        })
     }
 
     pub fn expire(&mut self, now_unix_seconds: u64, now: Instant) -> PairingExpiryActions {
@@ -905,10 +1066,218 @@ fn validate_expiry(expires_in_seconds: u64) -> Result<(), CodePairingSessionErro
     }
 }
 
-fn fresh_operation_id() -> String {
+#[must_use]
+pub fn fresh_pairing_operation_id() -> String {
     let mut bytes = [0_u8; OPERATION_ID_BYTES];
     OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+pub fn validate_pairing_operation_id(operation_id: &str) -> Result<(), CodePairingSessionError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(operation_id)
+        .map_err(|_| CodePairingSessionError::InvalidOperationId)?;
+    if bytes.len() == OPERATION_ID_BYTES && URL_SAFE_NO_PAD.encode(bytes) == operation_id {
+        Ok(())
+    } else {
+        Err(CodePairingSessionError::InvalidOperationId)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedCodePairingSessions {
+    version: u8,
+    network_name: String,
+    open: Option<PersistedOpenOperation>,
+    join: Option<PersistedJoinOperation>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedOpenOperation {
+    id: String,
+    code: Option<String>,
+    locator: String,
+    expires_at_unix_seconds: u64,
+    expires_in_seconds: u64,
+    completed: Option<PairingResponse>,
+    terminal: Option<TerminalStatus>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedJoinOperation {
+    id: String,
+    code: Option<String>,
+    locator: String,
+    expires_at_unix_seconds: u64,
+    expires_in_seconds: u64,
+    requested_vpn_ip: Option<String>,
+    requested_routes: Vec<RouteConfig>,
+    completed: Option<(PairingOffer, PairingResponse)>,
+    terminal: Option<TerminalStatus>,
+}
+
+impl PersistedCodePairingSessions {
+    fn from_runtime(sessions: &CodePairingSessions, network_name: &str) -> Self {
+        Self {
+            version: PERSISTED_PAIRING_STATE_VERSION,
+            network_name: network_name.to_owned(),
+            open: sessions
+                .open
+                .as_ref()
+                .map(PersistedOpenOperation::from_runtime),
+            join: sessions
+                .join
+                .as_ref()
+                .map(PersistedJoinOperation::from_runtime),
+        }
+    }
+}
+
+impl PersistedOpenOperation {
+    fn from_runtime(operation: &OpenOperation) -> Self {
+        Self {
+            id: operation.id.clone(),
+            code: operation.code.as_ref().map(ToString::to_string),
+            locator: operation.locator.clone(),
+            expires_at_unix_seconds: operation.expires_at_unix_seconds,
+            expires_in_seconds: operation.expires_in_seconds,
+            completed: operation.completed.clone(),
+            terminal: operation.terminal.clone(),
+        }
+    }
+
+    fn into_runtime(
+        self,
+        network_name: &str,
+        now_unix_seconds: u64,
+        resumed_at: Instant,
+    ) -> Result<OpenOperation, CodePairingSessionError> {
+        validate_pairing_operation_id(&self.id)?;
+        validate_expiry(self.expires_in_seconds)?;
+        let code = self
+            .code
+            .map(|code| code.parse::<PairingCode>())
+            .transpose()?;
+        if let Some(code) = &code
+            && code.locator(network_name)? != self.locator
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "inviter code locator does not match".to_owned(),
+            ));
+        }
+        let mut operation = OpenOperation {
+            id: self.id,
+            code,
+            locator: self.locator,
+            opened_at: resumed_at,
+            expires_at_unix_seconds: self.expires_at_unix_seconds,
+            expires_in_seconds: self.expires_in_seconds,
+            provider_advertised: false,
+            completed: self.completed,
+            terminal: self.terminal,
+        };
+        validate_restored_operation(
+            operation.code.is_some(),
+            operation.completed.is_some(),
+            operation.terminal.is_some(),
+        )?;
+        if operation.completed.is_none()
+            && operation.terminal.is_none()
+            && now_unix_seconds > operation.expires_at_unix_seconds
+        {
+            operation.code.take();
+            operation.terminal = Some(TerminalStatus::Expired);
+        }
+        Ok(operation)
+    }
+}
+
+impl PersistedJoinOperation {
+    fn from_runtime(operation: &JoinOperation) -> Self {
+        Self {
+            id: operation.id.clone(),
+            code: operation.code.as_ref().map(ToString::to_string),
+            locator: operation.locator.clone(),
+            expires_at_unix_seconds: operation.expires_at_unix_seconds,
+            expires_in_seconds: operation.expires_in_seconds,
+            requested_vpn_ip: operation.requested_vpn_ip.clone(),
+            requested_routes: operation.requested_routes.clone(),
+            completed: operation.completed.clone(),
+            terminal: operation.terminal.clone(),
+        }
+    }
+
+    fn into_runtime(
+        self,
+        network_name: &str,
+        now_unix_seconds: u64,
+        resumed_at: Instant,
+    ) -> Result<JoinOperation, CodePairingSessionError> {
+        validate_pairing_operation_id(&self.id)?;
+        validate_expiry(self.expires_in_seconds)?;
+        let code = self
+            .code
+            .map(|code| code.parse::<PairingCode>())
+            .transpose()?;
+        if let Some(code) = &code
+            && code.locator(network_name)? != self.locator
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "join code locator does not match".to_owned(),
+            ));
+        }
+        let mut operation = JoinOperation {
+            id: self.id,
+            code,
+            locator: self.locator,
+            started_at: resumed_at,
+            expires_at_unix_seconds: self.expires_at_unix_seconds,
+            expires_in_seconds: self.expires_in_seconds,
+            public_lookup_started: false,
+            attempted_peers: HashSet::new(),
+            selected_inviter: None,
+            requested_vpn_ip: self.requested_vpn_ip,
+            requested_routes: self.requested_routes,
+            completed: self.completed,
+            terminal: self.terminal,
+        };
+        validate_restored_operation(
+            operation.code.is_some(),
+            operation.completed.is_some(),
+            operation.terminal.is_some(),
+        )?;
+        if operation.completed.is_none()
+            && operation.terminal.is_none()
+            && now_unix_seconds > operation.expires_at_unix_seconds
+        {
+            operation.code.take();
+            operation.terminal = Some(TerminalStatus::Expired);
+        }
+        Ok(operation)
+    }
+}
+
+fn validate_restored_operation(
+    has_code: bool,
+    completed: bool,
+    terminal: bool,
+) -> Result<(), CodePairingSessionError> {
+    if completed && terminal {
+        return Err(CodePairingSessionError::InvalidPersistedState(
+            "operation cannot be both completed and terminal".to_owned(),
+        ));
+    }
+    if !completed && !terminal && !has_code {
+        return Err(CodePairingSessionError::InvalidPersistedState(
+            "active operation is missing its pairing code".to_owned(),
+        ));
+    }
+    if (completed || terminal) && has_code {
+        return Err(CodePairingSessionError::InvalidPersistedState(
+            "terminal operation retained its pairing code".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn pairing_approval_id(request: &PairingRequest) -> Result<String, serde_json::Error> {
@@ -1086,5 +1455,76 @@ mod tests {
             sessions.open_status(&started.operation_id).expect("status"),
             PairingOpenStatus::Expired
         );
+    }
+
+    #[test]
+    fn operation_ids_make_open_idempotent_and_detect_conflicts() {
+        let mut sessions = CodePairingSessions::new();
+        let operation_id = fresh_pairing_operation_id();
+        let now = Instant::now();
+        let first = sessions
+            .open_with_id(operation_id.clone(), "runners", 600, 1_000, now)
+            .expect("first open");
+        let retry = sessions
+            .open_with_id(operation_id.clone(), "runners", 600, 1_010, now)
+            .expect("idempotent retry");
+
+        assert_eq!(retry, first);
+        assert!(matches!(
+            sessions.open_with_id(operation_id, "runners", 601, 1_010, now),
+            Err(CodePairingSessionError::Conflict)
+        ));
+    }
+
+    #[test]
+    fn active_open_restores_with_same_code_and_resumes_public_discovery() {
+        let mut sessions = CodePairingSessions::new();
+        let operation_id = fresh_pairing_operation_id();
+        let now = Instant::now();
+        let started = sessions
+            .open_with_id(operation_id.clone(), "runners", 600, 1_000, now)
+            .expect("open");
+        let bytes = sessions.encode_persisted("runners").expect("encode");
+
+        let restored = CodePairingSessions::restore_persisted(
+            &bytes,
+            "runners",
+            1_010,
+            now + Duration::from_secs(10),
+        )
+        .expect("restore");
+
+        assert_eq!(
+            restored
+                .active_open_code_for_locator(
+                    &started
+                        .code
+                        .parse::<PairingCode>()
+                        .expect("code")
+                        .locator("runners")
+                        .expect("locator")
+                )
+                .map(|(_, code, _)| code.to_string()),
+            Some(started.code)
+        );
+        assert!(
+            restored
+                .should_start_open_provider(now + Duration::from_secs(10))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn persisted_pairing_state_is_network_scoped() {
+        let mut sessions = CodePairingSessions::new();
+        sessions
+            .open("runners", 600, 1_000, Instant::now())
+            .expect("open");
+        let bytes = sessions.encode_persisted("runners").expect("encode");
+
+        assert!(matches!(
+            CodePairingSessions::restore_persisted(&bytes, "other", 1_010, Instant::now()),
+            Err(CodePairingSessionError::PersistedNetworkMismatch { .. })
+        ));
     }
 }
