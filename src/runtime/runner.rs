@@ -558,7 +558,16 @@ where
     let mut pairing_request_rate_limiters =
         PeerRateLimiters::new(resources.pairing_request_rate_limit());
     let mut consumed_pairing_tokens = HashSet::new();
-    let pairing_state_store = pairing_state_path.map(PairingStateStore::new);
+    let pairing_state_store = pairing_state_path
+        .map(|path| {
+            PairingStateStore::encrypted(
+                path,
+                &node.identity.private_key,
+                &node.network_name,
+                &node.identity.peer_id,
+            )
+        })
+        .transpose()?;
     let mut code_pairing_sessions = load_code_pairing_sessions(
         pairing_state_store.as_ref(),
         &node.network_name,
@@ -2147,29 +2156,33 @@ fn pairing_rpc_completion_artifacts(
     let remote_vpn_ip = (enrollment.role == PairingEnrollmentRole::Inviter)
         .then(|| response.assigned_vpn_ip.clone())
         .flatten();
-    let membership_key_file = response
-        .membership_key
-        .as_deref()
-        .map(|membership_key| {
-            let store = store.ok_or_else(|| {
-                pair_rpc_error(
-                    PairRpcErrorCode::Unavailable,
-                    "pairing membership key requires a durable daemon state path",
-                    false,
-                )
-            })?;
-            let path = store
-                .save_membership_key(membership_key)
-                .map_err(|error| runner_error_pair_rpc(error.into()))?;
-            path.to_str().map(str::to_owned).ok_or_else(|| {
-                pair_rpc_error(
-                    PairRpcErrorCode::Internal,
-                    "managed membership key path is not valid UTF-8",
-                    false,
-                )
+    let membership_key_file = if enrollment.role == PairingEnrollmentRole::Joiner {
+        response
+            .membership_key
+            .as_deref()
+            .map(|membership_key| {
+                let store = store.ok_or_else(|| {
+                    pair_rpc_error(
+                        PairRpcErrorCode::Unavailable,
+                        "pairing membership key requires a durable daemon state path",
+                        false,
+                    )
+                })?;
+                let path = store
+                    .save_membership_key(membership_key)
+                    .map_err(|error| runner_error_pair_rpc(error.into()))?;
+                path.to_str().map(str::to_owned).ok_or_else(|| {
+                    pair_rpc_error(
+                        PairRpcErrorCode::Internal,
+                        "managed membership key path is not valid UTF-8",
+                        false,
+                    )
+                })
             })
-        })
-        .transpose()?;
+            .transpose()?
+    } else {
+        None
+    };
 
     Ok(PairRpcCompletionArtifacts {
         receipt: PairRpcReceipt {
@@ -15616,15 +15629,7 @@ mod tests {
         assert_eq!(artifacts.nix.peer.vpn_ip.as_deref(), Some("10.42.0.2"));
         assert!(artifacts.nix.peer.routes.is_empty());
         assert_eq!(artifacts.nix.member_records.len(), 2);
-        let membership_key_file = artifacts
-            .nix
-            .membership_key_file
-            .as_deref()
-            .expect("managed membership key path");
-        assert_eq!(
-            fs::read_to_string(membership_key_file).expect("managed membership key"),
-            format!("{membership_key}\n")
-        );
+        assert!(artifacts.nix.membership_key_file.is_none());
         assert!(
             pairing_rpc_status(&sessions, &operation_id, "lab", &inviter.peer_id)
                 .expect("completed status")
@@ -15639,7 +15644,9 @@ mod tests {
 
     #[test]
     fn pair_rpc_joiner_artifacts_assign_local_address_without_static_routing() {
-        let (_, inviter, joiner, offer, request, response) = code_pairing_runtime_fixture();
+        let membership_key = STANDARD.encode([11_u8; 32]);
+        let (_, inviter, joiner, offer, request, response) =
+            code_pairing_runtime_fixture_with_membership_key(Some(membership_key.clone()));
         let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
         let transcript_sha256 =
             pairing_request_transcript_sha256(&request).expect("transcript digest");
@@ -15676,12 +15683,14 @@ mod tests {
             .mark_enrollment_applied_at(&operation_id, 1_020)
             .expect("apply enrollment");
 
+        let state_path = test_pairing_state_path("joiner-artifacts");
+        let store = PairingStateStore::new(&state_path);
         let artifacts = pairing_rpc_completion_artifacts(
             &sessions,
             &operation_id,
             "lab",
             &joiner.peer_id,
-            None,
+            Some(&store),
         )
         .expect("joiner artifacts");
 
@@ -15693,8 +15702,18 @@ mod tests {
         assert!(artifacts.nix.additional_local_routes.is_empty());
         assert_eq!(artifacts.nix.peer.id, artifacts.receipt.remote_peer);
         assert!(artifacts.nix.peer.vpn_ip.is_none());
-        assert!(artifacts.nix.membership_key_file.is_none());
+        let membership_key_file = artifacts
+            .nix
+            .membership_key_file
+            .as_deref()
+            .expect("managed membership key path");
+        assert_eq!(
+            fs::read_to_string(membership_key_file).expect("managed membership key"),
+            format!("{membership_key}\n")
+        );
         assert_eq!(artifacts.nix.member_records.len(), 2);
+        fs::remove_dir_all(state_path.parent().expect("state directory"))
+            .expect("remove test state");
     }
 
     #[test]

@@ -5,20 +5,82 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chacha20poly1305::{
+    XChaCha20Poly1305, XNonce,
+    aead::{Aead as _, KeyInit as _, Payload},
+};
+use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore as _};
+use sha2_010::Sha256;
 
 pub const MAX_PAIRING_STATE_BYTES: usize = 512 * 1024;
 pub const PAIRING_MEMBERSHIP_KEY_FILE: &str = "membership.key";
+const PAIRING_STATE_MAGIC: &[u8] = b"P2PVPN-PAIR-STATE";
+const PAIRING_STATE_ENVELOPE_VERSION: u8 = 1;
+const PAIRING_STATE_NONCE_BYTES: usize = 24;
+const PAIRING_STATE_TAG_BYTES: usize = 16;
+const PAIRING_STATE_KEY_BYTES: usize = 32;
+const PAIRING_STATE_KDF_SALT: &[u8] = b"p2p-vpn pairing state encryption v1";
+const MAX_PAIRING_STATE_FILE_BYTES: usize = MAX_PAIRING_STATE_BYTES
+    + PAIRING_STATE_MAGIC.len()
+    + 1
+    + PAIRING_STATE_NONCE_BYTES
+    + PAIRING_STATE_TAG_BYTES;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairingStateStore {
     path: PathBuf,
+    encryption_key: Option<[u8; PAIRING_STATE_KEY_BYTES]>,
+}
+
+impl std::fmt::Debug for PairingStateStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PairingStateStore")
+            .field("path", &self.path)
+            .field("encrypted", &self.encryption_key.is_some())
+            .finish()
+    }
+}
+
+impl Drop for PairingStateStore {
+    fn drop(&mut self) {
+        if let Some(key) = self.encryption_key.as_mut() {
+            key.fill(0);
+        }
+    }
 }
 
 impl PairingStateStore {
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            encryption_key: None,
+        }
+    }
+
+    pub fn encrypted(
+        path: impl Into<PathBuf>,
+        identity_private_key: &str,
+        network_name: &str,
+        local_peer: &str,
+    ) -> Result<Self, PairingStateStoreError> {
+        let hkdf = Hkdf::<Sha256>::new(
+            Some(PAIRING_STATE_KDF_SALT),
+            identity_private_key.as_bytes(),
+        );
+        let mut context = Vec::with_capacity(network_name.len() + local_peer.len() + 16);
+        context.extend_from_slice(b"p2p-vpn-state\0");
+        context.extend_from_slice(network_name.as_bytes());
+        context.push(0);
+        context.extend_from_slice(local_peer.as_bytes());
+        let mut encryption_key = [0_u8; PAIRING_STATE_KEY_BYTES];
+        hkdf.expand(&context, &mut encryption_key)
+            .map_err(|_| PairingStateStoreError::InvalidEncryptionContext)?;
+        Ok(Self {
+            path: path.into(),
+            encryption_key: Some(encryption_key),
+        })
     }
 
     #[must_use]
@@ -35,8 +97,8 @@ impl PairingStateStore {
         validate_state_file(&self.path, &metadata)?;
         let length = usize::try_from(metadata.len())
             .map_err(|_| PairingStateStoreError::TooLarge { actual: usize::MAX })?;
-        validate_length(length)?;
-        Ok(Some(fs::read(&self.path)?))
+        validate_stored_length(length)?;
+        Ok(Some(self.open(&fs::read(&self.path)?)?))
     }
 
     pub fn save(&self, bytes: &[u8]) -> Result<(), PairingStateStoreError> {
@@ -53,7 +115,14 @@ impl PairingStateStore {
             .ok_or(PairingStateStoreError::MissingParent)?;
         let path = parent.join(PAIRING_MEMBERSHIP_KEY_FILE);
         let contents = format!("{membership_key}\n");
-        Self::new(&path).save(contents.as_bytes())?;
+        let membership_store = Self::new(&path);
+        if let Some(existing) = membership_store.load()? {
+            if existing != contents.as_bytes() {
+                return Err(PairingStateStoreError::MembershipKeyConflict);
+            }
+            return Ok(path);
+        }
+        membership_store.save(contents.as_bytes())?;
         Ok(path)
     }
 
@@ -63,6 +132,7 @@ impl PairingStateStore {
         sync_parent: impl FnOnce(&Path) -> io::Result<()>,
     ) -> Result<(), PairingStateStoreError> {
         validate_length(bytes.len())?;
+        let stored = self.seal(bytes)?;
         let parent = self
             .path
             .parent()
@@ -94,7 +164,7 @@ impl PairingStateStore {
             .open(&temporary_path)?;
         if let Err(error) = temporary
             .set_permissions(fs::Permissions::from_mode(0o600))
-            .and_then(|()| temporary.write_all(bytes))
+            .and_then(|()| temporary.write_all(&stored))
             .and_then(|()| temporary.sync_all())
         {
             drop(temporary);
@@ -108,6 +178,64 @@ impl PairingStateStore {
         }
         sync_parent(parent)?;
         Ok(())
+    }
+
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, PairingStateStoreError> {
+        let Some(key) = self.encryption_key.as_ref() else {
+            return Ok(plaintext.to_vec());
+        };
+        let mut nonce = [0_u8; PAIRING_STATE_NONCE_BYTES];
+        OsRng.fill_bytes(&mut nonce);
+        let mut header = Vec::with_capacity(PAIRING_STATE_MAGIC.len() + 1);
+        header.extend_from_slice(PAIRING_STATE_MAGIC);
+        header.push(PAIRING_STATE_ENVELOPE_VERSION);
+        let ciphertext = XChaCha20Poly1305::new(key.into())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &header,
+                },
+            )
+            .map_err(|_| PairingStateStoreError::EncryptionFailed)?;
+        let mut stored = Vec::with_capacity(header.len() + nonce.len() + ciphertext.len());
+        stored.extend_from_slice(&header);
+        stored.extend_from_slice(&nonce);
+        stored.extend_from_slice(&ciphertext);
+        Ok(stored)
+    }
+
+    fn open(&self, stored: &[u8]) -> Result<Vec<u8>, PairingStateStoreError> {
+        if !stored.starts_with(PAIRING_STATE_MAGIC) {
+            validate_length(stored.len())?;
+            return Ok(stored.to_vec());
+        }
+        let key = self
+            .encryption_key
+            .as_ref()
+            .ok_or(PairingStateStoreError::EncryptionKeyRequired)?;
+        let header_len = PAIRING_STATE_MAGIC.len() + 1;
+        let minimum_len = header_len + PAIRING_STATE_NONCE_BYTES + PAIRING_STATE_TAG_BYTES;
+        if stored.len() < minimum_len {
+            return Err(PairingStateStoreError::InvalidEncryptedState);
+        }
+        if stored[PAIRING_STATE_MAGIC.len()] != PAIRING_STATE_ENVELOPE_VERSION {
+            return Err(PairingStateStoreError::UnsupportedEncryptionVersion(
+                stored[PAIRING_STATE_MAGIC.len()],
+            ));
+        }
+        let nonce_end = header_len + PAIRING_STATE_NONCE_BYTES;
+        let plaintext = XChaCha20Poly1305::new(key.into())
+            .decrypt(
+                XNonce::from_slice(&stored[header_len..nonce_end]),
+                Payload {
+                    msg: &stored[nonce_end..],
+                    aad: &stored[..header_len],
+                },
+            )
+            .map_err(|_| PairingStateStoreError::DecryptionFailed)?;
+        validate_length(plaintext.len())?;
+        Ok(plaintext)
     }
 
     pub fn remove(&self) -> Result<(), PairingStateStoreError> {
@@ -161,6 +289,14 @@ fn validate_length(length: usize) -> Result<(), PairingStateStoreError> {
     }
 }
 
+fn validate_stored_length(length: usize) -> Result<(), PairingStateStoreError> {
+    if length > MAX_PAIRING_STATE_FILE_BYTES {
+        Err(PairingStateStoreError::TooLarge { actual: length })
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub enum PairingStateStoreError {
     Io(io::Error),
@@ -170,6 +306,13 @@ pub enum PairingStateStoreError {
     PermissiveMode { mode: u32 },
     InvalidFileName,
     TooLarge { actual: usize },
+    InvalidEncryptionContext,
+    EncryptionFailed,
+    EncryptionKeyRequired,
+    InvalidEncryptedState,
+    UnsupportedEncryptionVersion(u8),
+    DecryptionFailed,
+    MembershipKeyConflict,
 }
 
 impl std::fmt::Display for PairingStateStoreError {
@@ -198,6 +341,24 @@ impl std::fmt::Display for PairingStateStoreError {
                 formatter,
                 "pairing state size {actual} exceeds limit {MAX_PAIRING_STATE_BYTES}"
             ),
+            Self::InvalidEncryptionContext => {
+                formatter.write_str("pairing state encryption context is invalid")
+            }
+            Self::EncryptionFailed => formatter.write_str("pairing state encryption failed"),
+            Self::EncryptionKeyRequired => {
+                formatter.write_str("encrypted pairing state requires the matching identity key")
+            }
+            Self::InvalidEncryptedState => {
+                formatter.write_str("encrypted pairing state envelope is truncated")
+            }
+            Self::UnsupportedEncryptionVersion(version) => write!(
+                formatter,
+                "unsupported pairing state encryption version {version}"
+            ),
+            Self::DecryptionFailed => formatter
+                .write_str("pairing state authentication failed for this identity and network"),
+            Self::MembershipKeyConflict => formatter
+                .write_str("managed pairing membership key already contains different material"),
         }
     }
 }
@@ -246,6 +407,116 @@ mod tests {
                 & 0o777,
             0o600
         );
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn encrypted_pairing_state_round_trips_without_plaintext_at_rest() {
+        let directory = test_directory("encrypted-round-trip");
+        let store = PairingStateStore::encrypted(
+            directory.join("pairing.json"),
+            "private-identity-material",
+            "runner-mesh",
+            "local-peer",
+        )
+        .expect("encrypted store");
+        let plaintext = b"one-time-code and membership-secret";
+
+        store.save(plaintext).expect("save encrypted state");
+
+        let stored = fs::read(store.path()).expect("stored envelope");
+        assert!(stored.starts_with(PAIRING_STATE_MAGIC));
+        assert!(
+            !stored
+                .windows(plaintext.len())
+                .any(|window| window == plaintext)
+        );
+        assert_eq!(store.load().expect("load"), Some(plaintext.to_vec()));
+        assert!(!format!("{store:?}").contains("private-identity-material"));
+
+        let mut tampered = stored;
+        *tampered.last_mut().expect("authenticated ciphertext") ^= 1;
+        fs::write(store.path(), tampered).expect("tampered envelope");
+        assert!(matches!(
+            store.load(),
+            Err(PairingStateStoreError::DecryptionFailed)
+        ));
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn encrypted_pairing_state_is_bound_to_identity_and_network() {
+        let directory = test_directory("encrypted-binding");
+        let path = directory.join("pairing.json");
+        let store = PairingStateStore::encrypted(
+            &path,
+            "private-identity-material",
+            "runner-mesh",
+            "local-peer",
+        )
+        .expect("encrypted store");
+        store.save(b"durable state").expect("save encrypted state");
+
+        for (identity, network, peer) in [
+            ("other-identity", "runner-mesh", "local-peer"),
+            ("private-identity-material", "other-network", "local-peer"),
+            ("private-identity-material", "runner-mesh", "other-peer"),
+        ] {
+            let mismatched = PairingStateStore::encrypted(&path, identity, network, peer)
+                .expect("mismatched store");
+            assert!(matches!(
+                mismatched.load(),
+                Err(PairingStateStoreError::DecryptionFailed)
+            ));
+        }
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn encrypted_pairing_state_migrates_owner_only_plaintext_on_save() {
+        let directory = test_directory("encrypted-migration");
+        let path = directory.join("pairing.json");
+        fs::write(&path, b"legacy state").expect("legacy state");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("legacy mode");
+        let store = PairingStateStore::encrypted(
+            &path,
+            "private-identity-material",
+            "runner-mesh",
+            "local-peer",
+        )
+        .expect("encrypted store");
+
+        assert_eq!(
+            store.load().expect("legacy load"),
+            Some(b"legacy state".to_vec())
+        );
+        store.save(b"legacy state").expect("encrypted rewrite");
+        assert!(
+            fs::read(&path)
+                .expect("rewritten state")
+                .starts_with(PAIRING_STATE_MAGIC)
+        );
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn unencrypted_pairing_store_rejects_encrypted_envelope() {
+        let directory = test_directory("encrypted-key-required");
+        let path = directory.join("pairing.json");
+        PairingStateStore::encrypted(
+            &path,
+            "private-identity-material",
+            "runner-mesh",
+            "local-peer",
+        )
+        .expect("encrypted store")
+        .save(b"durable state")
+        .expect("save encrypted state");
+
+        assert!(matches!(
+            PairingStateStore::new(&path).load(),
+            Err(PairingStateStoreError::EncryptionKeyRequired)
+        ));
         fs::remove_dir_all(directory).expect("cleanup");
     }
 
@@ -306,6 +577,20 @@ mod tests {
                 .mode()
                 & 0o777,
             0o600
+        );
+        assert_eq!(
+            store
+                .save_membership_key("private-membership-key")
+                .expect("idempotent membership key"),
+            path
+        );
+        assert!(matches!(
+            store.save_membership_key("different-membership-key"),
+            Err(PairingStateStoreError::MembershipKeyConflict)
+        ));
+        assert_eq!(
+            fs::read_to_string(&path).expect("unchanged membership key"),
+            "private-membership-key\n"
         );
         fs::remove_dir_all(directory).expect("cleanup");
     }
