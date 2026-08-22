@@ -10,7 +10,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId as Libp2pPeerId, kad, mdns, multiaddr::Protocol, request_response::Message,
@@ -20,10 +20,10 @@ use p2p_vpn::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId,
     config::{
         AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate,
-        InitPeer, PRIVATE_KADEMLIA_PROTOCOL, PUBLIC_IPFS_BOOTSTRAP_PEERS,
-        PUBLIC_IPFS_KADEMLIA_PROTOCOL, PacketPlaneConfig, QueueConfig, RelayConfig,
-        RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
-        default_auto_relay_max_candidates, default_auto_relay_max_reservations,
+        InitPeer, InterfaceConfig, NetworkConfig, PRIVATE_KADEMLIA_PROTOCOL,
+        PUBLIC_IPFS_BOOTSTRAP_PEERS, PUBLIC_IPFS_KADEMLIA_PROTOCOL, PacketPlaneConfig, PeerConfig,
+        QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
+        RuntimeDefaults, default_auto_relay_max_candidates, default_auto_relay_max_reservations,
         default_auto_relay_retry_interval_seconds, default_listen_addresses,
         default_max_packet_age_millis, default_packet_plane_replay_windows_per_session,
         default_packet_plane_session_ttl_seconds,
@@ -34,9 +34,9 @@ use p2p_vpn::{
         import_invite_config,
     },
     membership::{
-        MembershipRecordIssueOptions, MembershipRecordMergeStats, MembershipRecordSubject,
-        MembershipRole, SignedMembershipRecord, issue_membership_record_for_subject_at,
-        validate_membership_records_at,
+        MembershipRecordIssueOptions, MembershipRecordMergeStats, MembershipRecordPayload,
+        MembershipRecordSubject, MembershipRole, SignedMembershipRecord,
+        issue_membership_record_for_subject_at, validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
@@ -55,9 +55,17 @@ use p2p_vpn::{
             parse_public_relay_addresses, parse_public_relay_addresses_with_limit,
             scan_public_relay_candidates, start_public_dcutr_listener,
         },
+        control_socket::{
+            PairRpcCompletionArtifacts, PairRpcError, PairRpcMembershipRole,
+            PairRpcOperationStatus, PairRpcOutcome, PairRpcPhase, PairRpcQueryError,
+            PairRpcRejectionReason, PairRpcRequest, PairRpcRequestEnvelope,
+            PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
+            PairRpcSignedMembershipRecord, query_pair_rpc,
+        },
         forward::session_id_for_peer,
         p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
+        pairing_sessions::fresh_pairing_operation_id,
         remote::{RemotePeerStatus, query_peer_status},
         runner::{self, ShutdownReason},
         service::SERVICE_PROTOCOL,
@@ -618,6 +626,84 @@ enum InstanceCommand {
 
 #[derive(Debug, Subcommand)]
 enum PairCommand {
+    /// Open a one-time pairing window on a running daemon.
+    Open {
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long, default_value_t = DEFAULT_PAIRING_EXPIRES_IN_SECONDS)]
+        expires_in_seconds: u64,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Join a running daemon using its one-time pairing code.
+    Join {
+        code: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long, default_value_t = DEFAULT_PAIRING_EXPIRES_IN_SECONDS)]
+        timeout_seconds: u64,
+        #[arg(long = "vpn-ip")]
+        requested_vpn_ip: Option<String>,
+        #[arg(long = "route")]
+        requested_routes: Vec<LocalRouteArg>,
+        #[arg(long)]
+        no_wait: bool,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Show a live pairing operation and pending approval.
+    Status {
+        operation_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Approve a discovered peer and its explicit route grants.
+    Approve {
+        operation_id: String,
+        approval_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long = "vpn-ip")]
+        assigned_vpn_ip: Option<String>,
+        #[arg(long = "route")]
+        granted_routes: Vec<LocalRouteArg>,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Reject a pending peer approval.
+    Reject {
+        operation_id: String,
+        approval_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long, value_enum, default_value_t = PairRejectionReasonArg::Declined)]
+        reason: PairRejectionReasonArg,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Cancel a live pairing operation.
+    Cancel {
+        operation_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
+    /// Render a completed pairing as native NixOS configuration.
+    Artifacts {
+        operation_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(short, long, default_value = "-")]
+        output: PathBuf,
+        #[arg(long)]
+        nixos_instance: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Export an offline offer for file-based pairing.
     Offer {
         #[arg(short, long, conflicts_with = "nixos_instance")]
         config: Option<PathBuf>,
@@ -634,11 +720,13 @@ enum PairCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Inspect an offline pairing offer.
     Inspect {
         offer: String,
         #[arg(long)]
         show_secret: bool,
     },
+    /// Accept an offline offer or import its response.
     Accept {
         offer: String,
         #[arg(long)]
@@ -670,6 +758,19 @@ enum PairCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Clone, Debug, ClapArgs)]
+struct PairDaemonTarget {
+    /// Running daemon control socket. Defaults to /run/p2p-vpn/control.sock.
+    #[arg(long, conflicts_with = "instance")]
+    socket: Option<PathBuf>,
+    /// NixOS module instance, resolved to its generated control socket.
+    #[arg(long, conflicts_with = "socket")]
+    instance: Option<String>,
+    /// Timeout for each local daemon RPC.
+    #[arg(long, default_value_t = 5)]
+    rpc_timeout_seconds: u64,
 }
 
 #[tokio::main]
@@ -1036,6 +1137,96 @@ async fn main() -> Result<(), String> {
             force,
         }),
         Command::Pair { command } => match command {
+            PairCommand::Open {
+                target,
+                expires_in_seconds,
+                format,
+            } => pair_daemon_open(&target, expires_in_seconds, format).await,
+            PairCommand::Join {
+                code,
+                target,
+                timeout_seconds,
+                requested_vpn_ip,
+                requested_routes,
+                no_wait,
+                format,
+            } => {
+                pair_daemon_join(
+                    &target,
+                    &code,
+                    timeout_seconds,
+                    requested_vpn_ip,
+                    requested_routes,
+                    !no_wait,
+                    format,
+                )
+                .await
+            }
+            PairCommand::Status {
+                operation_id,
+                target,
+                format,
+            } => pair_daemon_status(&target, &operation_id, format).await,
+            PairCommand::Approve {
+                operation_id,
+                approval_id,
+                target,
+                assigned_vpn_ip,
+                granted_routes,
+                format,
+            } => {
+                pair_daemon_approve(
+                    &target,
+                    &operation_id,
+                    &approval_id,
+                    assigned_vpn_ip,
+                    granted_routes,
+                    format,
+                )
+                .await
+            }
+            PairCommand::Reject {
+                operation_id,
+                approval_id,
+                target,
+                reason,
+                format,
+            } => {
+                pair_daemon_action(
+                    &target,
+                    PairRpcRequest::PairReject {
+                        operation_id,
+                        approval_id,
+                        reason: reason.into(),
+                    },
+                    format,
+                )
+                .await
+            }
+            PairCommand::Cancel {
+                operation_id,
+                target,
+                format,
+            } => {
+                pair_daemon_action(&target, PairRpcRequest::PairCancel { operation_id }, format)
+                    .await
+            }
+            PairCommand::Artifacts {
+                operation_id,
+                target,
+                output,
+                nixos_instance,
+                force,
+            } => {
+                pair_daemon_artifacts(
+                    &target,
+                    &operation_id,
+                    &output,
+                    nixos_instance.as_deref(),
+                    force,
+                )
+                .await
+            }
             PairCommand::Offer {
                 config,
                 nixos_instance,
@@ -1517,6 +1708,33 @@ enum DaemonViewFormat {
 enum InstanceFormat {
     Text,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PairOutputFormat {
+    Text,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PairRejectionReasonArg {
+    Declined,
+    IdentityMismatch,
+    AddressConflict,
+    RouteRequestDenied,
+    Policy,
+}
+
+impl From<PairRejectionReasonArg> for PairRpcRejectionReason {
+    fn from(reason: PairRejectionReasonArg) -> Self {
+        match reason {
+            PairRejectionReasonArg::Declined => Self::Declined,
+            PairRejectionReasonArg::IdentityMismatch => Self::IdentityMismatch,
+            PairRejectionReasonArg::AddressConflict => Self::AddressConflict,
+            PairRejectionReasonArg::RouteRequestDenied => Self::RouteRequestDenied,
+            PairRejectionReasonArg::Policy => Self::Policy,
+        }
+    }
 }
 
 impl From<MembershipRecordRoleArg> for MembershipRole {
@@ -2418,6 +2636,459 @@ fn invite_import(args: InviteImportArgs) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+async fn pair_daemon_open(
+    target: &PairDaemonTarget,
+    expires_in_seconds: u64,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    let result = pair_daemon_rpc(
+        target,
+        PairRpcRequest::PairOpen {
+            operation_id: fresh_pairing_operation_id(),
+            expires_in_seconds,
+        },
+    )
+    .await?;
+    let PairRpcResult::OpenStarted(started) = result else {
+        return Err("daemon returned an unexpected response to pair open".to_owned());
+    };
+    match format {
+        PairOutputFormat::Json => print_pair_json(&started, "pair open result"),
+        PairOutputFormat::Text => {
+            println!("operation: {}", started.operation_id);
+            println!("network: {}", started.network_name);
+            println!("local peer: {}", started.local_peer);
+            println!("pairing code: {}", started.code);
+            println!("expires at: {}", started.expires_at_unix_seconds);
+            Ok(())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn pair_daemon_join(
+    target: &PairDaemonTarget,
+    code: &str,
+    timeout_seconds: u64,
+    requested_vpn_ip: Option<String>,
+    requested_routes: Vec<LocalRouteArg>,
+    wait: bool,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    let result = pair_daemon_rpc(
+        target,
+        PairRpcRequest::PairJoin {
+            operation_id: fresh_pairing_operation_id(),
+            code: code.to_owned(),
+            timeout_seconds,
+            requested_vpn_ip,
+            requested_routes: Some(pair_rpc_routes(requested_routes)),
+        },
+    )
+    .await?;
+    let PairRpcResult::JoinStarted(started) = result else {
+        return Err("daemon returned an unexpected response to pair join".to_owned());
+    };
+    if !wait {
+        return match format {
+            PairOutputFormat::Json => print_pair_json(&started, "pair join result"),
+            PairOutputFormat::Text => {
+                println!("operation: {}", started.operation_id);
+                println!("network: {}", started.network_name);
+                println!("local peer: {}", started.local_peer);
+                println!("expires at: {}", started.expires_at_unix_seconds);
+                Ok(())
+            }
+        };
+    }
+
+    if format == PairOutputFormat::Text {
+        println!("operation: {}", started.operation_id);
+        println!("waiting for inviter approval");
+    }
+    let status = wait_for_pairing_terminal(target, &started.operation_id, timeout_seconds).await?;
+    print_pair_status(&status, format)
+}
+
+async fn pair_daemon_status(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    let status = pair_daemon_status_result(target, operation_id).await?;
+    print_pair_status(&status, format)
+}
+
+async fn pair_daemon_approve(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+    approval_id: &str,
+    assigned_vpn_ip: Option<String>,
+    granted_routes: Vec<LocalRouteArg>,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    pair_daemon_action(
+        target,
+        PairRpcRequest::PairApprove {
+            operation_id: operation_id.to_owned(),
+            approval_id: approval_id.to_owned(),
+            assigned_vpn_ip,
+            granted_routes: pair_rpc_routes(granted_routes),
+        },
+        format,
+    )
+    .await
+}
+
+async fn pair_daemon_action(
+    target: &PairDaemonTarget,
+    request: PairRpcRequest,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    let result = pair_daemon_rpc(target, request).await?;
+    let status = match result {
+        PairRpcResult::ActionAccepted(status) | PairRpcResult::OperationStatus(status) => *status,
+        _ => return Err("daemon returned an unexpected pairing action response".to_owned()),
+    };
+    print_pair_status(&status, format)
+}
+
+async fn pair_daemon_artifacts(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+    output: &Path,
+    nixos_instance: Option<&str>,
+    force: bool,
+) -> Result<(), String> {
+    if !force && output.to_string_lossy() != "-" && output.exists() {
+        return Err(format!(
+            "{} already exists; pass --force to overwrite it",
+            output.display()
+        ));
+    }
+    let result = pair_daemon_rpc(
+        target,
+        PairRpcRequest::PairArtifacts {
+            operation_id: operation_id.to_owned(),
+        },
+    )
+    .await?;
+    let PairRpcResult::Artifacts(mut artifacts) = result else {
+        return Err("daemon returned an unexpected pairing artifacts response".to_owned());
+    };
+    if let Some(instance) = nixos_instance {
+        validate_nixos_instance_name(instance)?;
+        instance.clone_into(&mut artifacts.nix.instance_name);
+    }
+    let rendered = render_pair_rpc_nixos_module(&artifacts)?;
+    if output.to_string_lossy() == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(output, format!("{rendered}\n"))
+            .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
+        println!("wrote {}", output.display());
+        println!("pairing receipt: {}", artifacts.receipt.transcript_sha256);
+    }
+    Ok(())
+}
+
+async fn pair_daemon_rpc(
+    target: &PairDaemonTarget,
+    request: PairRpcRequest,
+) -> Result<PairRpcResult, String> {
+    let (socket, timeout) = pair_daemon_target(target)?;
+    let response = query_pair_rpc(&socket, timeout, &PairRpcRequestEnvelope::new(request))
+        .await
+        .map_err(|error| pair_rpc_query_error(&socket, error))?;
+    pair_rpc_result(response)
+}
+
+fn pair_daemon_target(target: &PairDaemonTarget) -> Result<(PathBuf, Duration), String> {
+    if target.rpc_timeout_seconds == 0 || target.rpc_timeout_seconds > 300 {
+        return Err("--rpc-timeout-seconds must be between 1 and 300".to_owned());
+    }
+    let socket = if let Some(instance) = target.instance.as_deref() {
+        validate_nixos_instance_name(instance).map_err(|_| {
+            "--instance must start with an ASCII letter or digit and contain only letters, digits, dots, underscores, or hyphens"
+                .to_owned()
+        })?;
+        PathBuf::from(format!("/run/p2p-vpn-{instance}/control.sock"))
+    } else {
+        target
+            .socket
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/run/p2p-vpn/control.sock"))
+    };
+    Ok((socket, Duration::from_secs(target.rpc_timeout_seconds)))
+}
+
+fn pair_rpc_result(response: PairRpcResponseEnvelope) -> Result<PairRpcResult, String> {
+    match response.outcome {
+        PairRpcOutcome::Ok { result } => Ok(result),
+        PairRpcOutcome::Error { error } => Err(pair_rpc_remote_error(&error)),
+    }
+}
+
+fn pair_rpc_query_error(socket: &Path, error: PairRpcQueryError) -> String {
+    match error {
+        PairRpcQueryError::Io(error) => {
+            format!(
+                "failed to query pairing daemon at {}: {error}",
+                socket.display()
+            )
+        }
+        PairRpcQueryError::TimedOut => {
+            format!("pairing daemon at {} timed out", socket.display())
+        }
+        PairRpcQueryError::InvalidRequest(message) => {
+            format!("invalid local pairing RPC request: {message}")
+        }
+        PairRpcQueryError::InvalidResponse(message) => {
+            format!("pairing daemon returned an invalid response: {message}")
+        }
+    }
+}
+
+fn pair_rpc_remote_error(error: &PairRpcError) -> String {
+    format!(
+        "pairing daemon rejected the request ({:?}, retryable={}): {}",
+        error.code, error.retryable, error.message
+    )
+}
+
+async fn pair_daemon_status_result(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+) -> Result<PairRpcOperationStatus, String> {
+    let result = pair_daemon_rpc(
+        target,
+        PairRpcRequest::PairStatus {
+            operation_id: operation_id.to_owned(),
+        },
+    )
+    .await?;
+    match result {
+        PairRpcResult::OperationStatus(status) | PairRpcResult::ActionAccepted(status) => {
+            Ok(*status)
+        }
+        _ => Err("daemon returned an unexpected pair status response".to_owned()),
+    }
+}
+
+async fn wait_for_pairing_terminal(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+    timeout_seconds: u64,
+) -> Result<PairRpcOperationStatus, String> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(timeout_seconds.saturating_add(5)))
+        .ok_or_else(|| "pairing wait timeout is too large".to_owned())?;
+    loop {
+        let status = pair_daemon_status_result(target, operation_id).await?;
+        match status.phase {
+            PairRpcPhase::Completed => return Ok(status),
+            PairRpcPhase::Rejected
+            | PairRpcPhase::Cancelled
+            | PairRpcPhase::Expired
+            | PairRpcPhase::Failed => {
+                let reason = status.failure.as_ref().map_or_else(
+                    || pair_phase_name(status.phase).to_owned(),
+                    |failure| failure.message.clone(),
+                );
+                return Err(format!("pairing did not complete: {reason}"));
+            }
+            PairRpcPhase::WaitingForPeer
+            | PairRpcPhase::Discovering
+            | PairRpcPhase::Authenticating
+            | PairRpcPhase::AwaitingApproval
+            | PairRpcPhase::Finalizing => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for pairing operation {operation_id}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn print_pair_status(
+    status: &PairRpcOperationStatus,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    if format == PairOutputFormat::Json {
+        return print_pair_json(status, "pair status");
+    }
+    println!("operation: {}", status.operation_id);
+    println!("network: {}", status.network_name);
+    println!("local peer: {}", status.local_peer);
+    println!("role: {}", pair_role_name(status.role));
+    println!("phase: {}", pair_phase_name(status.phase));
+    if let Some(discovery) = status.discovery {
+        println!("discovery: {discovery:?}");
+    }
+    if let Some(candidate) = &status.candidate {
+        println!("approval: {}", candidate.approval_id);
+        println!("candidate peer: {}", candidate.peer_id);
+        println!(
+            "candidate key fingerprint: {}",
+            candidate.public_key_fingerprint
+        );
+        if let Some(vpn_ip) = &candidate.requested_vpn_ip {
+            println!("requested VPN IP: {vpn_ip}");
+        }
+        for route in &candidate.requested_routes {
+            println!("requested route: {} metric {}", route.prefix, route.metric);
+        }
+    }
+    println!("artifacts ready: {}", status.artifacts_ready);
+    if let Some(failure) = &status.failure {
+        println!("failure: {}", failure.message);
+    }
+    Ok(())
+}
+
+fn print_pair_json(value: &impl Serialize, label: &str) -> Result<(), String> {
+    let rendered = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("failed to render {label}: {error}"))?;
+    println!("{rendered}");
+    Ok(())
+}
+
+const fn pair_role_name(role: PairRpcRole) -> &'static str {
+    match role {
+        PairRpcRole::Inviter => "inviter",
+        PairRpcRole::Joiner => "joiner",
+    }
+}
+
+const fn pair_phase_name(phase: PairRpcPhase) -> &'static str {
+    match phase {
+        PairRpcPhase::WaitingForPeer => "waiting_for_peer",
+        PairRpcPhase::Discovering => "discovering",
+        PairRpcPhase::Authenticating => "authenticating",
+        PairRpcPhase::AwaitingApproval => "awaiting_approval",
+        PairRpcPhase::Finalizing => "finalizing",
+        PairRpcPhase::Completed => "completed",
+        PairRpcPhase::Rejected => "rejected",
+        PairRpcPhase::Cancelled => "cancelled",
+        PairRpcPhase::Expired => "expired",
+        PairRpcPhase::Failed => "failed",
+    }
+}
+
+fn pair_rpc_routes(routes: Vec<LocalRouteArg>) -> Vec<PairRpcRoute> {
+    routes
+        .into_iter()
+        .map(|route| PairRpcRoute {
+            prefix: route.route.prefix,
+            metric: route.route.metric,
+        })
+        .collect()
+}
+
+fn render_pair_rpc_nixos_module(artifacts: &PairRpcCompletionArtifacts) -> Result<String, String> {
+    let plan = &artifacts.nix;
+    validate_nixos_instance_name(&plan.instance_name)?;
+    let records = plan
+        .member_records
+        .iter()
+        .map(pair_rpc_membership_record_to_config)
+        .collect();
+    let config = Config {
+        network: NetworkConfig {
+            name: plan.network_name.clone(),
+            local_peer: plan.local_peer.clone(),
+            private_key: None,
+            membership_key: None,
+            previous_membership_tags: Vec::new(),
+            member_records: records,
+            vpn_ip: plan.assigned_vpn_ip.clone(),
+            routes: plan
+                .additional_local_routes
+                .iter()
+                .map(pair_rpc_route_to_config)
+                .collect(),
+            listen_addresses: default_listen_addresses(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            discovery: DiscoveryConfig::default(),
+            relay: RelayConfig::default(),
+            packet_plane: PacketPlaneConfig::default(),
+        },
+        interface: InterfaceConfig {
+            name: "pv0".to_owned(),
+            mtu: 1_280,
+        },
+        peers: vec![PeerConfig {
+            id: plan.peer.id.clone(),
+            name: plan.peer.name.clone(),
+            ip: None,
+            vpn_ip: plan.peer.vpn_ip.clone(),
+            addresses: Vec::new(),
+            routes: plan
+                .peer
+                .routes
+                .iter()
+                .map(pair_rpc_route_to_config)
+                .collect(),
+        }],
+        queue: QueueConfig::default(),
+        resources: ResourceConfig::default(),
+    };
+    render_pairing_nixos_module(
+        &plan.instance_name,
+        &config,
+        &PairingNixosSecretPaths {
+            private_key_file: None,
+            membership_key_file: plan.membership_key_file.clone(),
+        },
+    )
+}
+
+fn pair_rpc_membership_record_to_config(
+    record: &PairRpcSignedMembershipRecord,
+) -> SignedMembershipRecord {
+    SignedMembershipRecord {
+        payload: MembershipRecordPayload {
+            version: record.payload.version,
+            network_name: record.payload.network_name.clone(),
+            member_peer: record.payload.member_peer.clone(),
+            member_public_key: record.payload.member_public_key.clone(),
+            issuer_peer: record.payload.issuer_peer.clone(),
+            issuer_public_key: record.payload.issuer_public_key.clone(),
+            membership_epoch: record.payload.membership_epoch,
+            sequence: record.payload.sequence,
+            revoked: record.payload.revoked,
+            roles: record
+                .payload
+                .roles
+                .iter()
+                .map(|role| match role {
+                    PairRpcMembershipRole::OverlayMember => MembershipRole::OverlayMember,
+                    PairRpcMembershipRole::RouteAuthority => MembershipRole::RouteAuthority,
+                })
+                .collect(),
+            route_grants: record
+                .payload
+                .route_grants
+                .iter()
+                .map(pair_rpc_route_to_config)
+                .collect(),
+            issued_at_unix_seconds: record.payload.issued_at_unix_seconds,
+            expires_at_unix_seconds: record.payload.expires_at_unix_seconds,
+        },
+        signature: record.signature.clone(),
+    }
+}
+
+fn pair_rpc_route_to_config(route: &PairRpcRoute) -> RouteConfig {
+    RouteConfig {
+        prefix: route.prefix.clone(),
+        metric: route.metric,
+    }
 }
 
 fn pair_offer(args: PairOfferArgs) -> Result<(), String> {
@@ -11985,6 +12656,157 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_live_pairing_commands() {
+        let open = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "open",
+            "--instance",
+            "runner-mesh",
+            "--expires-in-seconds",
+            "120",
+            "--format",
+            "json",
+        ])
+        .expect("pair open CLI");
+        let Command::Pair {
+            command:
+                PairCommand::Open {
+                    target,
+                    expires_in_seconds,
+                    format,
+                },
+        } = open.command
+        else {
+            panic!("expected live pair open command");
+        };
+        assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
+        assert_eq!(target.socket, None);
+        assert_eq!(target.rpc_timeout_seconds, 5);
+        assert_eq!(expires_in_seconds, 120);
+        assert_eq!(format, PairOutputFormat::Json);
+        assert_eq!(
+            pair_daemon_target(&target).expect("NixOS target").0,
+            PathBuf::from("/run/p2p-vpn-runner-mesh/control.sock")
+        );
+
+        let join = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "join",
+            "ABCD-EFGH-JKLM-NPQR",
+            "--socket",
+            "/tmp/pair.sock",
+            "--vpn-ip",
+            "10.42.0.2",
+            "--route",
+            "10.60.0.0/24,20",
+            "--no-wait",
+        ])
+        .expect("pair join CLI");
+        let Command::Pair {
+            command:
+                PairCommand::Join {
+                    code,
+                    target,
+                    requested_vpn_ip,
+                    requested_routes,
+                    no_wait,
+                    ..
+                },
+        } = join.command
+        else {
+            panic!("expected live pair join command");
+        };
+        assert_eq!(code, "ABCD-EFGH-JKLM-NPQR");
+        assert_eq!(target.socket, Some(PathBuf::from("/tmp/pair.sock")));
+        assert_eq!(requested_vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert_eq!(requested_routes[0].route.prefix, "10.60.0.0/24");
+        assert_eq!(requested_routes[0].route.metric, 20);
+        assert!(no_wait);
+
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "pair",
+                "status",
+                "operation",
+                "--instance",
+                "runner-mesh",
+                "--socket",
+                "/tmp/pair.sock",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_parses_live_pairing_approval_and_artifact_commands() {
+        let approve = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "approve",
+            "operation",
+            "approval",
+            "--vpn-ip",
+            "10.42.0.2",
+            "--route",
+            "10.60.0.0/24,20",
+        ])
+        .expect("pair approve CLI");
+        let Command::Pair {
+            command:
+                PairCommand::Approve {
+                    operation_id,
+                    approval_id,
+                    assigned_vpn_ip,
+                    granted_routes,
+                    ..
+                },
+        } = approve.command
+        else {
+            panic!("expected pair approve command");
+        };
+        assert_eq!(operation_id, "operation");
+        assert_eq!(approval_id, "approval");
+        assert_eq!(assigned_vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert_eq!(granted_routes[0].route.metric, 20);
+
+        let artifacts = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "artifacts",
+            "operation",
+            "--instance",
+            "runner-mesh",
+            "--output",
+            "paired.nix",
+            "--nixos-instance",
+            "renamed-mesh",
+            "--force",
+        ])
+        .expect("pair artifacts CLI");
+        let Command::Pair {
+            command:
+                PairCommand::Artifacts {
+                    operation_id,
+                    target,
+                    output,
+                    nixos_instance,
+                    force,
+                },
+        } = artifacts.command
+        else {
+            panic!("expected pair artifacts command");
+        };
+        assert_eq!(operation_id, "operation");
+        assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
+        assert_eq!(output, PathBuf::from("paired.nix"));
+        assert_eq!(nixos_instance.as_deref(), Some("renamed-mesh"));
+        assert!(force);
+    }
+
+    #[test]
     fn cli_parses_pair_offer_command() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -12389,6 +13211,79 @@ mod tests {
         assert!(!rendered.contains("packetPlane"));
         assert!(!rendered.contains("interfaceName"));
         assert!(!rendered.contains("mtu ="));
+    }
+
+    #[test]
+    fn render_pair_rpc_nixos_module_emits_minimal_dynamic_fragment() {
+        let artifacts: PairRpcCompletionArtifacts = serde_json::from_value(serde_json::json!({
+            "receipt": {
+                "network_name": "runner mesh",
+                "local_peer": "12D3KooWLocal",
+                "remote_peer": "12D3KooWRemote",
+                "role": "joiner",
+                "transcript_sha256": "receipt-digest",
+                "completed_at_unix_seconds": 1_700_000_000_u64
+            },
+            "nix": {
+                "instance_name": "runner-mesh",
+                "network_name": "runner mesh",
+                "local_peer": "12D3KooWLocal",
+                "assigned_vpn_ip": "10.42.0.2",
+                "additional_local_routes": [
+                    { "prefix": "10.60.0.0/24", "metric": 20 }
+                ],
+                "peer": {
+                    "id": "12D3KooWRemote",
+                    "name": null,
+                    "vpn_ip": null,
+                    "routes": [
+                        { "prefix": "10.70.0.0/24", "metric": 30 }
+                    ]
+                },
+                "member_records": [
+                    {
+                        "payload": {
+                            "version": 1,
+                            "network_name": "runner mesh",
+                            "member_peer": "12D3KooWLocal",
+                            "member_public_key": "member-public-key",
+                            "issuer_peer": "12D3KooWRemote",
+                            "issuer_public_key": "issuer-public-key",
+                            "membership_epoch": 1,
+                            "sequence": 2,
+                            "revoked": false,
+                            "roles": ["overlay_member", "route_authority"],
+                            "route_grants": [
+                                { "prefix": "10.60.0.0/24", "metric": 20 }
+                            ],
+                            "issued_at_unix_seconds": 1_700_000_000_u64,
+                            "expires_at_unix_seconds": null
+                        },
+                        "signature": "record-signature"
+                    }
+                ],
+                "membership_key_file": "/var/lib/p2p-vpn/runner-mesh/membership.key"
+            }
+        }))
+        .expect("pairing artifacts");
+
+        let rendered = render_pair_rpc_nixos_module(&artifacts).expect("render artifacts");
+
+        assert!(rendered.contains("services.p2p-vpn.instances.\"runner-mesh\""));
+        assert!(rendered.contains("networkName = \"runner mesh\";"));
+        assert!(rendered.contains("localPeer = \"12D3KooWLocal\";"));
+        assert!(
+            rendered
+                .contains("membershipKeyFile = \"/var/lib/p2p-vpn/runner-mesh/membership.key\";")
+        );
+        assert!(rendered.contains("vpnIp = \"10.42.0.2\";"));
+        assert!(rendered.contains("prefix = \"10.60.0.0/24\";"));
+        assert!(rendered.contains("\"12D3KooWRemote\" = {"));
+        assert!(rendered.contains("prefix = \"10.70.0.0/24\";"));
+        assert!(rendered.contains("memberRecords = ["));
+        assert!(!rendered.contains("bootstrapPeers"));
+        assert!(!rendered.contains("listenAddresses"));
+        assert!(!rendered.contains("addresses ="));
     }
 
     #[test]
