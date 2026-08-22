@@ -12,18 +12,21 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    PeerId,
     config::{
         BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, PeerConfig, QueueConfig,
         RelayConfig, ResourceConfig, RouteConfig,
     },
     identity::NodeIdentity,
     membership::{MembershipRole, SignedMembershipRecord, validate_membership_records_at},
+    route::{builtin_ipv4, builtin_ipv6},
     runtime::{control::CONTROL_PROTOCOL, packet::PACKET_PROTOCOL, service::SERVICE_PROTOCOL},
     wire::{HEADER_LEN, WIRE_VERSION},
 };
 
 pub const PAIRING_OFFER_VERSION: u8 = 1;
 pub const DEFAULT_PAIRING_EXPIRES_IN_SECONDS: u64 = 600;
+pub const MAX_PAIRING_MEMBERSHIP_RECORDS: usize = 16;
 
 const PAIRING_URI_PREFIX: &str = "p2pvpn:";
 const SIGNING_DOMAIN: &[u8] = b"p2p-vpn pairing offer v1\n";
@@ -544,6 +547,187 @@ pub fn import_pairing_response_config_at(
     Ok(config)
 }
 
+pub fn apply_pairing_response_to_config_at(
+    base: &Config,
+    offer: &PairingOffer,
+    response: &PairingResponse,
+    local_identity: &NodeIdentity,
+    now_unix_seconds: u64,
+) -> Result<Config, PairingError> {
+    let local_peer = base.local_peer()?;
+    if local_peer != local_identity.peer_id {
+        return Err(PairingError::LocalIdentityMismatch {
+            expected: local_peer,
+            actual: local_identity.peer_id.clone(),
+        });
+    }
+
+    let joiner_identity = if local_identity.peer_id == response.payload.joiner_peer {
+        local_identity.clone()
+    } else if local_identity.peer_id == response.payload.inviter_peer {
+        NodeIdentity {
+            peer_id: response.payload.joiner_peer.clone(),
+            private_key: String::new(),
+        }
+    } else {
+        return Err(PairingError::LocalPeerNotParticipant {
+            local: local_identity.peer_id.clone(),
+        });
+    };
+    response.verify_for_offer_at(offer, &joiner_identity, now_unix_seconds)?;
+    validate_pairing_membership_record_count(&response.payload.member_records)?;
+    let mut next = base.clone();
+    adopt_optional_value(
+        &mut next.network.membership_key,
+        response.payload.membership_key.as_ref(),
+        PairingError::ConflictingMembershipKey,
+    )?;
+    if local_identity.peer_id == response.payload.joiner_peer {
+        adopt_optional_value(
+            &mut next.network.vpn_ip,
+            response.payload.assigned_vpn_ip.as_ref(),
+            PairingError::ConflictingAssignedVpnIp,
+        )?;
+    }
+    for record in &response.payload.member_records {
+        upsert_pairing_membership_record(&mut next.network.member_records, record)?;
+    }
+    next.validate_runtime()?;
+
+    Ok(next)
+}
+
+fn validate_code_pairing_membership_records(
+    offer: &PairingOffer,
+    payload: &PairingResponsePayload,
+) -> Result<(), PairingError> {
+    if offer.payload.acceptance_mode != PairingAcceptanceMode::CodeApproval {
+        return Ok(());
+    }
+    let records = &payload.member_records;
+    validate_pairing_membership_record_count(records)?;
+
+    for record in records {
+        if record.payload.issuer_peer != payload.inviter_peer {
+            return Err(PairingError::MembershipIssuerMismatch {
+                expected: payload.inviter_peer.clone(),
+                actual: record.payload.issuer_peer.clone(),
+            });
+        }
+    }
+
+    let inviter_record = latest_membership_record_for(records, &payload.inviter_peer);
+    if inviter_record.is_none_or(|record| {
+        record.payload.revoked
+            || !record
+                .payload
+                .roles
+                .contains(&MembershipRole::OverlayMember)
+    }) {
+        return Err(PairingError::MissingInviterTrustRoot);
+    }
+
+    let joiner_record = latest_membership_record_for(records, &payload.joiner_peer)
+        .filter(|record| {
+            !record.payload.revoked
+                && record
+                    .payload
+                    .roles
+                    .contains(&MembershipRole::OverlayMember)
+        })
+        .ok_or(PairingError::MissingMembershipGrant)?;
+
+    if let Some(assigned_vpn_ip) = payload.assigned_vpn_ip.as_deref() {
+        let assigned_vpn_ip = assigned_vpn_ip.parse::<IpAddr>()?;
+        let joiner_peer = payload.joiner_peer.parse::<Libp2pPeerId>()?;
+        let joiner_overlay = PeerId::from_libp2p(joiner_peer);
+        let is_builtin = assigned_vpn_ip == IpAddr::V4(builtin_ipv4(joiner_overlay))
+            || assigned_vpn_ip == IpAddr::V6(builtin_ipv6(joiner_overlay));
+        let is_granted = joiner_record
+            .payload
+            .roles
+            .contains(&MembershipRole::RouteAuthority)
+            && joiner_record
+                .payload
+                .route_grants
+                .iter()
+                .try_fold(false, |authorized, route| {
+                    Ok::<_, PairingError>(authorized || route.prefix()?.contains(assigned_vpn_ip))
+                })?;
+        if !is_builtin && !is_granted {
+            return Err(PairingError::AssignedVpnIpNotAuthorized {
+                assigned: assigned_vpn_ip.to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_pairing_membership_record_count(
+    records: &[SignedMembershipRecord],
+) -> Result<(), PairingError> {
+    if records.len() > MAX_PAIRING_MEMBERSHIP_RECORDS {
+        return Err(PairingError::TooManyMembershipRecords {
+            actual: records.len(),
+            max: MAX_PAIRING_MEMBERSHIP_RECORDS,
+        });
+    }
+    Ok(())
+}
+
+fn latest_membership_record_for<'a>(
+    records: &'a [SignedMembershipRecord],
+    member_peer: &str,
+) -> Option<&'a SignedMembershipRecord> {
+    records
+        .iter()
+        .filter(|record| record.payload.member_peer == member_peer)
+        .max_by_key(|record| (record.payload.membership_epoch, record.payload.sequence))
+}
+
+fn adopt_optional_value<T: Clone + Eq>(
+    current: &mut Option<T>,
+    incoming: Option<&T>,
+    conflict: PairingError,
+) -> Result<(), PairingError> {
+    match (current.as_ref(), incoming) {
+        (Some(existing), Some(incoming)) if existing != incoming => Err(conflict),
+        (None, Some(incoming)) => {
+            *current = Some(incoming.clone());
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn upsert_pairing_membership_record(
+    records: &mut Vec<SignedMembershipRecord>,
+    incoming: &SignedMembershipRecord,
+) -> Result<(), PairingError> {
+    let existing = records.iter().position(|record| {
+        record.payload.issuer_peer == incoming.payload.issuer_peer
+            && record.payload.member_peer == incoming.payload.member_peer
+    });
+    let Some(index) = existing else {
+        records.push(incoming.clone());
+        return Ok(());
+    };
+
+    let current = &records[index];
+    let current_version = (current.payload.membership_epoch, current.payload.sequence);
+    let incoming_version = (incoming.payload.membership_epoch, incoming.payload.sequence);
+    if incoming_version > current_version {
+        records[index] = incoming.clone();
+    } else if incoming_version == current_version && current != incoming {
+        return Err(PairingError::ConflictingMembershipRecord {
+            issuer: incoming.payload.issuer_peer.clone(),
+            member: incoming.payload.member_peer.clone(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_payload(
     payload: &PairingOfferPayload,
     now_unix_seconds: u64,
@@ -685,6 +869,7 @@ fn validate_response_payload(
         &payload.network_name,
         now_unix_seconds,
     )?;
+    validate_code_pairing_membership_records(offer, payload)?;
     if payload.membership_key.is_none() && !has_joiner_membership_record(payload) {
         return Err(PairingError::MissingMembershipGrant);
     }
@@ -906,6 +1091,15 @@ pub enum PairingError {
     TransportPeerMismatch { expected: String, actual: String },
     RendezvousTokenMismatch,
     MissingMembershipGrant,
+    MissingInviterTrustRoot,
+    TooManyMembershipRecords { actual: usize, max: usize },
+    MembershipIssuerMismatch { expected: String, actual: String },
+    ConflictingMembershipRecord { issuer: String, member: String },
+    ConflictingMembershipKey,
+    ConflictingAssignedVpnIp,
+    AssignedVpnIpNotAuthorized { assigned: String },
+    LocalPeerNotParticipant { local: String },
+    LocalIdentityMismatch { expected: String, actual: String },
     InvalidExpiry,
     ExpiryOverflow,
     InvalidRendezvousTokenLength { actual: usize, expected: usize },
@@ -1267,6 +1461,264 @@ mod tests {
             Err(PairingError::Config(
                 crate::config::ConfigError::RoutePrefix(_)
             ))
+        ));
+    }
+
+    fn code_pairing_response_fixture() -> (Config, NodeIdentity, PairingOffer, PairingResponse) {
+        let inviter_config = config();
+        let inviter = NodeIdentity::from_private_key(
+            inviter_config
+                .network
+                .private_key
+                .as_deref()
+                .expect("inviter private key"),
+        )
+        .expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let offer =
+            export_code_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
+                .expect("code offer");
+        let inviter_record = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&inviter).expect("inviter subject"),
+                membership_epoch: 1,
+                sequence: 1_010,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_010,
+        )
+        .expect("inviter record");
+        let joiner_record = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&joiner).expect("joiner subject"),
+                membership_epoch: 1,
+                sequence: 1_010,
+                revoked: false,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.42.0.2/32".to_owned(),
+                    metric: 0,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_010,
+        )
+        .expect("joiner record");
+        let response = build_pairing_response_at(
+            &inviter_config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: joiner.peer_id.clone(),
+                assigned_vpn_ip: Some("10.42.0.2".to_owned()),
+                membership_key: Some(STANDARD.encode([9_u8; 32])),
+                member_records: vec![inviter_record, joiner_record],
+                expires_in_seconds: 300,
+            },
+            1_010,
+        )
+        .expect("response");
+        (inviter_config, joiner, offer, response)
+    }
+
+    fn code_pairing_joiner_config(mut inviter_config: Config, joiner: &NodeIdentity) -> Config {
+        inviter_config.network.local_peer = joiner.peer_id.clone();
+        inviter_config.network.private_key = Some(joiner.private_key.clone());
+        inviter_config.network.membership_key = None;
+        inviter_config.network.member_records.clear();
+        inviter_config.network.vpn_ip = None;
+        inviter_config
+    }
+
+    fn resign_code_pairing_response(config: &Config, response: &mut PairingResponse) {
+        let inviter = NodeIdentity::from_private_key(
+            config
+                .network
+                .private_key
+                .as_deref()
+                .expect("inviter private key"),
+        )
+        .expect("inviter identity");
+        response.signature = STANDARD.encode(
+            inviter
+                .sign(&response_signing_message(&response.payload).expect("message"))
+                .expect("signature"),
+        );
+    }
+
+    #[test]
+    fn code_pairing_response_applies_additively_without_static_peer_authorization() {
+        let (inviter_config, joiner, offer, response) = code_pairing_response_fixture();
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        let applied =
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011)
+                .expect("applied response");
+
+        assert_eq!(applied.network.vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert_eq!(
+            applied.network.membership_key.as_deref(),
+            response.payload.membership_key.as_deref()
+        );
+        assert_eq!(
+            applied.network.member_records,
+            response.payload.member_records
+        );
+        assert!(applied.peers.is_empty());
+        applied.validate_runtime().expect("runtime config");
+    }
+
+    #[test]
+    fn code_pairing_response_accepts_builtin_ip_without_matching_route_grant() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        let joiner_peer = joiner.peer_id.parse::<Libp2pPeerId>().expect("joiner peer");
+        let builtin_ip = builtin_ipv4(PeerId::from_libp2p(joiner_peer)).to_string();
+        response.payload.assigned_vpn_ip = Some(builtin_ip.clone());
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        let applied =
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011)
+                .expect("built-in address is implicitly authorized");
+
+        assert_eq!(applied.network.vpn_ip.as_deref(), Some(builtin_ip.as_str()));
+    }
+
+    #[test]
+    fn code_pairing_response_rejects_membership_key_without_joiner_grant() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        response
+            .payload
+            .member_records
+            .retain(|record| record.payload.member_peer != joiner.peer_id);
+        assert!(response.payload.membership_key.is_some());
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::MissingMembershipGrant)
+        ));
+    }
+
+    #[test]
+    fn code_pairing_response_rejects_revoked_joiner_grant() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        let inviter = NodeIdentity::from_private_key(
+            inviter_config
+                .network
+                .private_key
+                .as_deref()
+                .expect("inviter private key"),
+        )
+        .expect("inviter identity");
+        let revocation = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&joiner).expect("joiner subject"),
+                membership_epoch: 1,
+                sequence: 1_011,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_010,
+        )
+        .expect("joiner revocation");
+        response.payload.member_records.push(revocation);
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::MissingMembershipGrant)
+        ));
+    }
+
+    #[test]
+    fn code_pairing_response_rejects_joiner_record_from_another_issuer() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        let other_issuer = NodeIdentity::generate_ed25519().expect("other issuer");
+        let joiner_record = issue_membership_record_for_subject_at(
+            &other_issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&joiner).expect("joiner subject"),
+                membership_epoch: 1,
+                sequence: 1_011,
+                revoked: false,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.42.0.2/32".to_owned(),
+                    metric: 0,
+                }],
+                expires_at_unix_seconds: None,
+            },
+            1_010,
+        )
+        .expect("joiner record");
+        response.payload.member_records[1] = joiner_record;
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::MembershipIssuerMismatch { expected, actual })
+                if expected == response.payload.inviter_peer
+                    && actual == other_issuer.peer_id
+        ));
+    }
+
+    #[test]
+    fn code_pairing_response_rejects_assigned_ip_outside_joiner_route_grants() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        response.payload.assigned_vpn_ip = Some("10.42.0.3".to_owned());
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::AssignedVpnIpNotAuthorized { assigned })
+                if assigned == "10.42.0.3"
+        ));
+    }
+
+    #[test]
+    fn code_pairing_response_requires_inviter_self_trust_root() {
+        let (inviter_config, joiner, offer, mut response) = code_pairing_response_fixture();
+        response.payload.member_records.remove(0);
+        resign_code_pairing_response(&inviter_config, &mut response);
+        let joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::MissingInviterTrustRoot)
+        ));
+    }
+
+    #[test]
+    fn code_pairing_response_rejects_conflicting_membership_key() {
+        let (inviter_config, joiner, offer, response) = code_pairing_response_fixture();
+        let mut joiner_config = code_pairing_joiner_config(inviter_config, &joiner);
+        joiner_config.network.membership_key = Some(STANDARD.encode([7_u8; 32]));
+
+        assert!(matches!(
+            apply_pairing_response_to_config_at(&joiner_config, &offer, &response, &joiner, 1_011,),
+            Err(PairingError::ConflictingMembershipKey)
         ));
     }
 
