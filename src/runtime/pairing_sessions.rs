@@ -123,7 +123,18 @@ pub struct PairingEnrollment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offer: Option<PairingOffer>,
     pub response: PairingResponse,
+    #[serde(default)]
+    pub transcript_sha256: String,
     pub state: PairingEnrollmentState,
+}
+
+pub struct PairingEnrollmentPreparation {
+    pub operation_id: String,
+    pub role: PairingEnrollmentRole,
+    pub approval_id: Option<String>,
+    pub offer: Option<PairingOffer>,
+    pub response: PairingResponse,
+    pub transcript_sha256: String,
 }
 
 pub struct CodePairingSessions {
@@ -198,6 +209,7 @@ pub struct OutboundPairing {
     pub operation_id: String,
     pub peer: Libp2pPeerId,
     pub offer: PairingOffer,
+    pub transcript_sha256: String,
 }
 
 pub enum OutboundCodeRequest {
@@ -214,6 +226,7 @@ pub struct PendingApproval {
     pub ticket: String,
     pub expires_at_unix_seconds: u64,
     pub request: PairingRequest,
+    pub transcript_sha256: String,
 }
 
 struct InboundTicket {
@@ -237,6 +250,7 @@ struct RemoteApproval {
     peer: Libp2pPeerId,
     ticket: String,
     offer: PairingOffer,
+    transcript_sha256: String,
     next_poll_at: Instant,
     poll_in_flight: bool,
 }
@@ -247,6 +261,7 @@ pub struct PendingRemotePoll {
     pub peer: Libp2pPeerId,
     pub ticket: String,
     pub offer: PairingOffer,
+    pub transcript_sha256: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -331,6 +346,7 @@ impl PendingApproval {
         request: PairingRequest,
     ) -> Result<Self, CodePairingSessionError> {
         let approval_id = pairing_approval_id(&request)?;
+        let transcript_sha256 = crate::pairing_code::pairing_request_transcript_sha256(&request)?;
         Ok(Self {
             operation_id,
             approval_id,
@@ -338,6 +354,7 @@ impl PendingApproval {
             ticket: fresh_pairing_ticket(),
             expires_at_unix_seconds,
             request,
+            transcript_sha256,
         })
     }
 }
@@ -824,6 +841,7 @@ impl CodePairingSessions {
             if approval.operation_id != enrollment.operation_id
                 || approval.approval_id != approval_id
                 || approval.peer != joiner
+                || approval.transcript_sha256 != enrollment.transcript_sha256
                 || approval.request.payload.inviter_peer != enrollment.response.payload.inviter_peer
                 || approval.request.payload.joiner_peer != enrollment.response.payload.joiner_peer
                 || approval.request.payload.rendezvous_token
@@ -955,6 +973,7 @@ impl CodePairingSessions {
         if operation.selected_inviter != Some(inviter)
             || remote.peer != inviter
             || &remote.offer != offer
+            || remote.transcript_sha256 != enrollment.transcript_sha256
         {
             return Err(invalid_recovery(
                 "prepared joiner enrollment does not match its remote approval",
@@ -1032,18 +1051,16 @@ impl CodePairingSessions {
     pub fn prepare_enrollment(
         &mut self,
         network_name: &str,
-        operation_id: String,
-        role: PairingEnrollmentRole,
-        approval_id: Option<String>,
-        offer: Option<PairingOffer>,
-        response: PairingResponse,
+        preparation: PairingEnrollmentPreparation,
     ) -> Result<&PairingEnrollment, CodePairingSessionError> {
+        validate_transcript_sha256(&preparation.transcript_sha256, false)?;
         let enrollment = PairingEnrollment {
-            operation_id,
-            role,
-            approval_id,
-            offer,
-            response,
+            operation_id: preparation.operation_id,
+            role: preparation.role,
+            approval_id: preparation.approval_id,
+            offer: preparation.offer,
+            response: preparation.response,
+            transcript_sha256: preparation.transcript_sha256,
             state: PairingEnrollmentState::Prepared,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
@@ -1535,10 +1552,12 @@ impl CodePairingSessions {
         operation_id: &str,
         peer: Libp2pPeerId,
         offer: PairingOffer,
+        transcript_sha256: String,
         ticket: String,
         now: Instant,
     ) -> Result<(), CodePairingSessionError> {
         validate_pairing_ticket(&ticket)?;
+        validate_transcript_sha256(&transcript_sha256, false)?;
         let operation = self
             .active_join_mut()
             .filter(|operation| operation.id == operation_id)
@@ -1554,6 +1573,7 @@ impl CodePairingSessions {
             peer,
             ticket,
             offer,
+            transcript_sha256,
             next_poll_at: now,
             poll_in_flight: false,
         });
@@ -1573,6 +1593,7 @@ impl CodePairingSessions {
             peer: remote.peer,
             ticket: remote.ticket.clone(),
             offer: remote.offer.clone(),
+            transcript_sha256: remote.transcript_sha256.clone(),
         })
     }
 
@@ -1814,6 +1835,7 @@ impl PairingEnrollment {
             && self.approval_id == other.approval_id
             && self.offer == other.offer
             && self.response == other.response
+            && self.transcript_sha256 == other.transcript_sha256
     }
 }
 
@@ -1822,6 +1844,7 @@ fn validate_pairing_enrollment(
     network_name: &str,
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
+    validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
 
     let response = &enrollment.response.payload;
     if response.version != PAIRING_OFFER_VERSION {
@@ -1956,6 +1979,25 @@ fn is_canonical_pairing_approval_id(approval_id: &str) -> bool {
     })
 }
 
+fn validate_transcript_sha256(
+    transcript_sha256: &str,
+    allow_legacy_empty: bool,
+) -> Result<(), CodePairingSessionError> {
+    if allow_legacy_empty && transcript_sha256.is_empty() {
+        return Ok(());
+    }
+    if URL_SAFE_NO_PAD
+        .decode(transcript_sha256)
+        .is_ok_and(|bytes| bytes.len() == 32 && URL_SAFE_NO_PAD.encode(bytes) == transcript_sha256)
+    {
+        Ok(())
+    } else {
+        Err(invalid_enrollment(
+            "enrollment has an invalid transcript SHA-256 digest",
+        ))
+    }
+}
+
 fn invalid_enrollment(reason: impl Into<String>) -> CodePairingSessionError {
     CodePairingSessionError::InvalidPersistedState(reason.into())
 }
@@ -2074,6 +2116,8 @@ struct PersistedRemoteApproval {
     peer: String,
     ticket: String,
     offer: PairingOffer,
+    #[serde(default)]
+    transcript_sha256: String,
 }
 
 impl PersistedCodePairingSessions {
@@ -2275,6 +2319,8 @@ impl PersistedPendingApproval {
                 "pending approval digest does not match its request".to_owned(),
             ));
         }
+        let transcript_sha256 =
+            crate::pairing_code::pairing_request_transcript_sha256(&self.request)?;
         Ok(PendingApproval {
             operation_id: self.operation_id,
             approval_id: self.approval_id,
@@ -2282,6 +2328,7 @@ impl PersistedPendingApproval {
             ticket: self.ticket,
             expires_at_unix_seconds: self.expires_at_unix_seconds,
             request: self.request,
+            transcript_sha256,
         })
     }
 }
@@ -2332,11 +2379,13 @@ impl PersistedRemoteApproval {
             peer: approval.peer.to_string(),
             ticket: approval.ticket.clone(),
             offer: approval.offer.clone(),
+            transcript_sha256: approval.transcript_sha256.clone(),
         }
     }
 
     fn into_runtime(self, resumed_at: Instant) -> Result<RemoteApproval, CodePairingSessionError> {
         validate_pairing_ticket(&self.ticket)?;
+        validate_transcript_sha256(&self.transcript_sha256, true)?;
         let peer = self.peer.parse().map_err(|_| {
             CodePairingSessionError::InvalidPersistedState(
                 "remote approval has an invalid peer ID".to_owned(),
@@ -2346,6 +2395,7 @@ impl PersistedRemoteApproval {
             peer,
             ticket: self.ticket,
             offer: self.offer,
+            transcript_sha256: self.transcript_sha256,
             next_poll_at: resumed_at,
             poll_in_flight: false,
         })
@@ -2587,6 +2637,28 @@ mod tests {
         pairing_approval_id(&test_request(inviter, joiner)).expect("approval ID")
     }
 
+    fn test_transcript_sha256() -> String {
+        URL_SAFE_NO_PAD.encode([0x42; 32])
+    }
+
+    fn test_preparation(
+        operation_id: String,
+        role: PairingEnrollmentRole,
+        approval_id: Option<String>,
+        offer: Option<PairingOffer>,
+        response: PairingResponse,
+        transcript_sha256: String,
+    ) -> PairingEnrollmentPreparation {
+        PairingEnrollmentPreparation {
+            operation_id,
+            role,
+            approval_id,
+            offer,
+            response,
+            transcript_sha256,
+        }
+    }
+
     fn persisted_joiner_enrollment() -> serde_json::Value {
         let inviter = peer(1);
         let joiner = peer(2);
@@ -2594,11 +2666,14 @@ mod tests {
         sessions
             .prepare_enrollment(
                 "runners",
-                fresh_pairing_operation_id(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(test_offer(inviter)),
-                test_response(inviter, joiner),
+                test_preparation(
+                    fresh_pairing_operation_id(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(test_offer(inviter)),
+                    test_response(inviter, joiner),
+                    test_transcript_sha256(),
+                ),
             )
             .expect("prepare joiner enrollment");
         serde_json::from_slice(&sessions.encode_persisted("runners").expect("encode ledger"))
@@ -2643,17 +2718,21 @@ mod tests {
         .expect("approval");
         let ticket = approval.ticket.clone();
         let approval_id = approval.approval_id.clone();
+        let transcript_sha256 = approval.transcript_sha256.clone();
         sessions
             .set_pending_approval(approval)
             .expect("pending approval");
         let enrollment = sessions
             .prepare_enrollment(
                 "runners",
-                started.operation_id,
-                PairingEnrollmentRole::Inviter,
-                Some(approval_id),
-                Some(offer),
-                test_response(inviter, joiner),
+                test_preparation(
+                    started.operation_id,
+                    PairingEnrollmentRole::Inviter,
+                    Some(approval_id),
+                    Some(offer),
+                    test_response(inviter, joiner),
+                    transcript_sha256,
+                ),
             )
             .expect("prepare inviter enrollment")
             .clone();
@@ -2679,11 +2758,13 @@ mod tests {
                 now,
             )
             .expect("join");
+        let transcript_sha256 = test_transcript_sha256();
         sessions
             .set_remote_pending(
                 &started.operation_id,
                 inviter,
                 offer.clone(),
+                transcript_sha256.clone(),
                 fresh_pairing_ticket(),
                 now,
             )
@@ -2691,11 +2772,14 @@ mod tests {
         let enrollment = sessions
             .prepare_enrollment(
                 "runners",
-                started.operation_id,
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer),
-                test_response(inviter, joiner),
+                test_preparation(
+                    started.operation_id,
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer),
+                    test_response(inviter, joiner),
+                    transcript_sha256,
+                ),
             )
             .expect("prepare joiner enrollment")
             .clone();
@@ -3155,6 +3239,7 @@ mod tests {
                 &started.operation_id,
                 inviter,
                 test_offer(inviter),
+                test_transcript_sha256(),
                 ticket.clone(),
                 now,
             )
@@ -3213,6 +3298,7 @@ mod tests {
                 &started.operation_id,
                 inviter,
                 test_offer(inviter),
+                test_transcript_sha256(),
                 "not-a-ticket".to_owned(),
                 now,
             ),
@@ -3248,6 +3334,7 @@ mod tests {
                 &started.operation_id,
                 inviter,
                 test_offer(inviter),
+                test_transcript_sha256(),
                 fresh_pairing_ticket(),
                 now,
             )
@@ -3446,16 +3533,20 @@ mod tests {
         let approval_id = test_approval_id(inviter, joiner);
         let response = test_response(inviter, joiner);
         let offer = test_offer(inviter);
+        let transcript_sha256 = test_transcript_sha256();
         let mut sessions = CodePairingSessions::new();
 
         sessions
             .prepare_enrollment(
                 "runners",
-                inviter_operation_id.clone(),
-                PairingEnrollmentRole::Inviter,
-                Some(approval_id.clone()),
-                Some(offer.clone()),
-                response.clone(),
+                test_preparation(
+                    inviter_operation_id.clone(),
+                    PairingEnrollmentRole::Inviter,
+                    Some(approval_id.clone()),
+                    Some(offer.clone()),
+                    response.clone(),
+                    transcript_sha256.clone(),
+                ),
             )
             .expect("prepare inviter enrollment");
         sessions
@@ -3467,11 +3558,14 @@ mod tests {
         sessions
             .prepare_enrollment(
                 "runners",
-                joiner_operation_id.clone(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer.clone()),
-                response.clone(),
+                test_preparation(
+                    joiner_operation_id.clone(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer.clone()),
+                    response.clone(),
+                    transcript_sha256.clone(),
+                ),
             )
             .expect("prepare joiner enrollment");
 
@@ -3489,6 +3583,7 @@ mod tests {
                 approval_id: Some(approval_id),
                 offer: Some(offer.clone()),
                 response: response.clone(),
+                transcript_sha256: transcript_sha256.clone(),
                 state: PairingEnrollmentState::Applied,
             })
         );
@@ -3500,6 +3595,7 @@ mod tests {
                 approval_id: None,
                 offer: Some(offer),
                 response,
+                transcript_sha256,
                 state: PairingEnrollmentState::Prepared,
             })
         );
@@ -3512,27 +3608,49 @@ mod tests {
         let operation_id = fresh_pairing_operation_id();
         let offer = test_offer(inviter);
         let response = test_response(inviter, joiner);
+        let transcript_sha256 = test_transcript_sha256();
         let mut sessions = CodePairingSessions::new();
+
+        assert!(matches!(
+            sessions.prepare_enrollment(
+                "runners",
+                test_preparation(
+                    operation_id.clone(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer.clone()),
+                    response.clone(),
+                    "invalid".to_owned(),
+                ),
+            ),
+            Err(CodePairingSessionError::InvalidPersistedState(_))
+        ));
 
         let first = sessions
             .prepare_enrollment(
                 "runners",
-                operation_id.clone(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer.clone()),
-                response.clone(),
+                test_preparation(
+                    operation_id.clone(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer.clone()),
+                    response.clone(),
+                    transcript_sha256.clone(),
+                ),
             )
             .expect("prepare enrollment")
             .clone();
         let retry = sessions
             .prepare_enrollment(
                 "runners",
-                operation_id.clone(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer.clone()),
-                response.clone(),
+                test_preparation(
+                    operation_id.clone(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer.clone()),
+                    response.clone(),
+                    transcript_sha256.clone(),
+                ),
             )
             .expect("retry exact enrollment");
         assert_eq!(retry, &first);
@@ -3544,11 +3662,14 @@ mod tests {
             sessions
                 .prepare_enrollment(
                     "runners",
-                    operation_id.clone(),
-                    PairingEnrollmentRole::Joiner,
-                    None,
-                    Some(offer.clone()),
-                    response.clone(),
+                    test_preparation(
+                        operation_id.clone(),
+                        PairingEnrollmentRole::Joiner,
+                        None,
+                        Some(offer.clone()),
+                        response.clone(),
+                        transcript_sha256.clone(),
+                    ),
                 )
                 .expect("retry applied enrollment")
                 .state,
@@ -3560,11 +3681,14 @@ mod tests {
         assert!(matches!(
             sessions.prepare_enrollment(
                 "runners",
-                operation_id,
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer),
-                conflicting_response,
+                test_preparation(
+                    operation_id,
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer),
+                    conflicting_response,
+                    transcript_sha256,
+                ),
             ),
             Err(CodePairingSessionError::Conflict)
         ));
@@ -3576,6 +3700,7 @@ mod tests {
         let joiner = peer(2);
         let offer = test_offer(inviter);
         let response = test_response(inviter, joiner);
+        let transcript_sha256 = test_transcript_sha256();
         let mut sessions = CodePairingSessions::new();
         let first_operation_id = fresh_pairing_operation_id();
 
@@ -3588,11 +3713,14 @@ mod tests {
             sessions
                 .prepare_enrollment(
                     "runners",
-                    operation_id,
-                    PairingEnrollmentRole::Joiner,
-                    None,
-                    Some(offer.clone()),
-                    response.clone(),
+                    test_preparation(
+                        operation_id,
+                        PairingEnrollmentRole::Joiner,
+                        None,
+                        Some(offer.clone()),
+                        response.clone(),
+                        transcript_sha256.clone(),
+                    ),
                 )
                 .expect("prepare bounded enrollment");
         }
@@ -3601,22 +3729,28 @@ mod tests {
             sessions
                 .prepare_enrollment(
                     "runners",
-                    first_operation_id,
-                    PairingEnrollmentRole::Joiner,
-                    None,
-                    Some(offer.clone()),
-                    response.clone(),
+                    test_preparation(
+                        first_operation_id,
+                        PairingEnrollmentRole::Joiner,
+                        None,
+                        Some(offer.clone()),
+                        response.clone(),
+                        transcript_sha256.clone(),
+                    ),
                 )
                 .is_ok()
         );
         assert!(matches!(
             sessions.prepare_enrollment(
                 "runners",
-                fresh_pairing_operation_id(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer),
-                response,
+                test_preparation(
+                    fresh_pairing_operation_id(),
+                    PairingEnrollmentRole::Joiner,
+                    None,
+                    Some(offer),
+                    response,
+                    transcript_sha256,
+                ),
             ),
             Err(CodePairingSessionError::Capacity)
         ));

@@ -47,7 +47,8 @@ use crate::{
     },
     pairing_code::{
         answer_pairing_code_hello_at, authenticate_pairing_request, open_pairing_code_challenge_at,
-        start_pairing_code_hello_at, verify_pairing_request_code_authentication,
+        pairing_request_transcript_sha256, start_pairing_code_hello_at,
+        verify_pairing_request_code_authentication,
     },
     path::{PathConnectionRole, PathOrigin, PathSet, PathTransportSupport},
     queue::{EnqueueError, FlowShard, PeerQueues},
@@ -83,8 +84,8 @@ use crate::{
         pairing_sessions::{
             CODE_PAIRING_TICK, CodePairingSessionError, CodePairingSessions, InboundSession,
             OutboundCodeRequest, OutboundHello, OutboundPairing, PairingDiscoveryStage,
-            PairingEnrollmentRole, PairingEnrollmentState, PairingJoinStatus, PairingOpenStatus,
-            PendingApproval,
+            PairingEnrollmentPreparation, PairingEnrollmentRole, PairingEnrollmentState,
+            PairingJoinStatus, PairingOpenStatus, PendingApproval,
         },
         pairing_store::{PairingStateStore, PairingStateStoreError},
         pinned_packet_stream,
@@ -1348,6 +1349,7 @@ fn drive_code_pairing_discovery(
                     operation_id: poll.operation_id.clone(),
                     peer: poll.peer,
                     offer: poll.offer,
+                    transcript_sha256: poll.transcript_sha256,
                 },
             )
             .is_err()
@@ -1986,11 +1988,14 @@ fn handle_pair_rpc_request(
             sessions
                 .prepare_enrollment(
                     &network_name,
-                    operation_id.clone(),
-                    PairingEnrollmentRole::Inviter,
-                    Some(approval_id.clone()),
-                    Some(offer),
-                    response.clone(),
+                    PairingEnrollmentPreparation {
+                        operation_id: operation_id.clone(),
+                        role: PairingEnrollmentRole::Inviter,
+                        approval_id: Some(approval_id.clone()),
+                        offer: Some(offer),
+                        response: response.clone(),
+                        transcript_sha256: approval.transcript_sha256.clone(),
+                    },
                 )
                 .map_err(code_session_pair_rpc)?;
             persist_code_pairing_sessions(store, sessions, &network_name)
@@ -9135,6 +9140,8 @@ fn handle_pairing_code_response(
             )?;
             authenticate_pairing_request(&mut request, &session)
                 .map_err(CodePairingSessionError::InvalidCode)?;
+            let transcript_sha256 = pairing_request_transcript_sha256(&request)
+                .map_err(CodePairingSessionError::InvalidCode)?;
             let submit_id = swarm.behaviour_mut().pairing_code.send_request(
                 &peer,
                 PairingCodeRequest::Submit {
@@ -9150,6 +9157,7 @@ fn handle_pairing_code_response(
                         operation_id: operation_id.clone(),
                         peer,
                         offer,
+                        transcript_sha256,
                     },
                 )
                 .is_err()
@@ -9175,6 +9183,7 @@ fn handle_pairing_code_response(
                 &outbound.operation_id,
                 peer,
                 outbound.offer,
+                outbound.transcript_sha256,
                 ticket,
                 Instant::now(),
             ) {
@@ -9256,11 +9265,14 @@ fn handle_pairing_code_response(
             };
             if let Err(error) = context.code_pairing_sessions.prepare_enrollment(
                 &context.local_capabilities.network_name,
-                outbound.operation_id.clone(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(outbound.offer.clone()),
-                (*response).clone(),
+                PairingEnrollmentPreparation {
+                    operation_id: outbound.operation_id.clone(),
+                    role: PairingEnrollmentRole::Joiner,
+                    approval_id: None,
+                    offer: Some(outbound.offer.clone()),
+                    response: (*response).clone(),
+                    transcript_sha256: outbound.transcript_sha256.clone(),
+                },
             ) {
                 fail_code_pairing_join(
                     context,
@@ -14674,18 +14686,22 @@ mod tests {
         let (config, inviter, joiner, offer, request, response) = code_pairing_runtime_fixture();
         let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
-        let approval_id = PendingApproval::new(operation_id.clone(), joiner_peer, 1_600, request)
-            .expect("pending approval")
-            .approval_id;
+        let approval = PendingApproval::new(operation_id.clone(), joiner_peer, 1_600, request)
+            .expect("pending approval");
+        let approval_id = approval.approval_id;
+        let transcript_sha256 = approval.transcript_sha256;
         let mut sessions = CodePairingSessions::new();
         sessions
             .prepare_enrollment(
                 "lab",
-                operation_id.clone(),
-                PairingEnrollmentRole::Inviter,
-                Some(approval_id),
-                Some(offer.clone()),
-                response.clone(),
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Inviter,
+                    approval_id: Some(approval_id),
+                    offer: Some(offer.clone()),
+                    response: response.clone(),
+                    transcript_sha256,
+                },
             )
             .expect("prepared enrollment");
         let state_path = test_pairing_state_path("failed-commit");
@@ -14750,17 +14766,21 @@ mod tests {
         let approval = PendingApproval::new(operation_id.clone(), joiner_peer, 1_600, request)
             .expect("pending approval");
         let approval_id = approval.approval_id.clone();
+        let transcript_sha256 = approval.transcript_sha256.clone();
         sessions
             .set_pending_approval(approval)
             .expect("set pending approval");
         sessions
             .prepare_enrollment(
                 "lab",
-                operation_id.clone(),
-                PairingEnrollmentRole::Inviter,
-                Some(approval_id),
-                Some(offer),
-                response,
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Inviter,
+                    approval_id: Some(approval_id),
+                    offer: Some(offer),
+                    response,
+                    transcript_sha256,
+                },
             )
             .expect("prepare enrollment");
         sessions
@@ -14817,17 +14837,21 @@ mod tests {
         )
         .expect("pending approval");
         let approval_id = approval.approval_id.clone();
+        let transcript_sha256 = approval.transcript_sha256.clone();
         sessions
             .set_pending_approval(approval)
             .expect("set pending approval");
         sessions
             .prepare_enrollment(
                 "lab",
-                operation_id.clone(),
-                PairingEnrollmentRole::Inviter,
-                Some(approval_id),
-                Some(offer),
-                response,
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Inviter,
+                    approval_id: Some(approval_id),
+                    offer: Some(offer),
+                    response,
+                    transcript_sha256,
+                },
             )
             .expect("prepare enrollment");
 
@@ -14940,20 +14964,31 @@ mod tests {
             .expect("join pairing");
         let inviter_peer = inviter.peer_id.parse().expect("inviter peer");
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
-        let ticket = PendingApproval::new(operation_id.clone(), joiner_peer, 1_015, request)
-            .expect("ticket fixture")
-            .ticket;
+        let approval = PendingApproval::new(operation_id.clone(), joiner_peer, 1_015, request)
+            .expect("ticket fixture");
+        let ticket = approval.ticket;
+        let transcript_sha256 = approval.transcript_sha256;
         sessions
-            .set_remote_pending(&operation_id, inviter_peer, offer.clone(), ticket, now)
+            .set_remote_pending(
+                &operation_id,
+                inviter_peer,
+                offer.clone(),
+                transcript_sha256.clone(),
+                ticket,
+                now,
+            )
             .expect("remote approval");
         sessions
             .prepare_enrollment(
                 "lab",
-                operation_id.clone(),
-                PairingEnrollmentRole::Joiner,
-                None,
-                Some(offer),
-                response,
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Joiner,
+                    approval_id: None,
+                    offer: Some(offer),
+                    response,
+                    transcript_sha256,
+                },
             )
             .expect("prepare enrollment");
 

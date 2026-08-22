@@ -44,6 +44,7 @@ const SPAKE_IDENTITY_DOMAIN: &[u8] = b"p2p-vpn pairing code spake2 v1\n";
 const KEY_DERIVATION_DOMAIN: &[u8] = b"p2p-vpn pairing code keys v1\n";
 const CHALLENGE_AAD_DOMAIN: &[u8] = b"p2p-vpn pairing code encrypted offer v1\n";
 const REQUEST_CONFIRMATION_DOMAIN: &[u8] = b"p2p-vpn pairing code request confirmation v1\n";
+const REQUEST_TRANSCRIPT_DOMAIN: &[u8] = b"p2p-vpn pairing code transcript v1\n";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -531,6 +532,15 @@ pub fn verify_pairing_request_code_authentication(
         .map_err(|_| PairingCodeError::InvalidCodeConfirmation)
 }
 
+pub fn pairing_request_transcript_sha256(
+    request: &PairingRequest,
+) -> Result<String, PairingCodeError> {
+    let mut hasher = Sha256::new();
+    hasher.update(REQUEST_TRANSCRIPT_DOMAIN);
+    hash_length_prefixed(&mut hasher, &serde_json::to_vec(request)?);
+    Ok(URL_SAFE_NO_PAD.encode(hasher.finalize()))
+}
+
 fn pairing_code_session(
     challenge: &PairingCodeChallenge,
     offer: &PairingOffer,
@@ -990,6 +1000,46 @@ mod tests {
         verify_pairing_request_code_authentication(&request, &inviter_session).expect("verify");
         assert_eq!(inviter_session, joiner_session);
         assert!(request.code_authentication.is_some());
+    }
+
+    #[test]
+    fn pairing_request_transcript_digest_is_stable_and_binds_authenticated_request() {
+        let (joiner, _, joiner_session, offer) = exchange();
+        let mut request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_003,
+        )
+        .expect("request");
+        authenticate_pairing_request(&mut request, &joiner_session).expect("authenticate");
+
+        let digest = pairing_request_transcript_sha256(&request).expect("transcript digest");
+        let restored: PairingRequest = serde_json::from_slice(
+            &serde_json::to_vec(&request).expect("serialize authenticated request"),
+        )
+        .expect("restore authenticated request");
+        assert_eq!(
+            pairing_request_transcript_sha256(&restored).expect("restored transcript digest"),
+            digest
+        );
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(&digest)
+                .expect("decode digest")
+                .len(),
+            32
+        );
+
+        let mut tampered = request;
+        tampered.payload.requested_vpn_ip = Some("10.42.0.9".to_owned());
+        assert_ne!(
+            pairing_request_transcript_sha256(&tampered).expect("tampered transcript digest"),
+            digest
+        );
     }
 
     #[test]
