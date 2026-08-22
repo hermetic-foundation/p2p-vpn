@@ -594,6 +594,8 @@ enum Command {
         metrics_interval_seconds: Option<u64>,
         #[arg(long)]
         control_socket: Option<PathBuf>,
+        #[arg(long, requires = "control_socket")]
+        pairing_state: Option<PathBuf>,
     },
 }
 
@@ -1229,12 +1231,14 @@ async fn main() -> Result<(), String> {
             dry_run,
             metrics_interval_seconds,
             control_socket,
+            pairing_state,
         } => {
             Box::pin(up(
                 &config,
                 dry_run,
                 metrics_interval_seconds,
                 control_socket,
+                pairing_state,
             ))
             .await
         }
@@ -8007,6 +8011,7 @@ async fn up(
     dry_run: bool,
     metrics_interval_seconds: Option<u64>,
     control_socket: Option<PathBuf>,
+    pairing_state: Option<PathBuf>,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -8051,6 +8056,9 @@ async fn up(
         if let Some(socket) = &control_socket {
             println!("control socket {socket}", socket = socket.display());
         }
+        if let Some(state) = &pairing_state {
+            println!("pairing state {state}", state = state.display());
+        }
         if config.network.relay.server {
             println!("libp2p relay server enabled");
         }
@@ -8087,7 +8095,7 @@ async fn up(
         device,
         metrics_interval,
         control_socket,
-        None,
+        pairing_state,
         shutdown_signal(),
     ))
     .await
@@ -14532,12 +14540,15 @@ mod tests {
             "node-a.json",
             "--control-socket",
             "/run/p2p-vpn-node-a/control.sock",
+            "--pairing-state",
+            "/var/lib/p2p-vpn/node-a/pairing-state.json",
         ])
         .expect("cli");
 
         let Command::Up {
             config,
             control_socket,
+            pairing_state,
             ..
         } = cli.command
         else {
@@ -14548,6 +14559,19 @@ mod tests {
         assert_eq!(
             control_socket,
             Some(PathBuf::from("/run/p2p-vpn-node-a/control.sock"))
+        );
+        assert_eq!(
+            pairing_state,
+            Some(PathBuf::from("/var/lib/p2p-vpn/node-a/pairing-state.json"))
+        );
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "up",
+                "--pairing-state",
+                "/tmp/pairing-state.json",
+            ])
+            .is_err()
         );
     }
 

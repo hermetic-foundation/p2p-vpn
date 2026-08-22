@@ -1017,6 +1017,10 @@ let
             "--control-socket"
             instance.controlSocket
           ]
+          ++ optionals (nixMode instance && instance.controlSocket != null) [
+            "--pairing-state"
+            "${instanceStateDirectory name instance}/pairing-state.json"
+          ]
           ++ instance.extraArgs
         );
         ExecStop = optionals (instance.controlSocket != null) [
