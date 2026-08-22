@@ -17,6 +17,7 @@ use crate::{
         control::{self, ControlCodec},
         packet::{self, PacketCodec},
         pairing::{self, PairingCodec},
+        pairing_code::{self, PairingCodeCodec},
         pinned_packet_stream,
         service::{self, ServiceCodec},
     },
@@ -38,6 +39,7 @@ pub struct Behaviour {
     pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
     pub pairing: request_response::Behaviour<PairingCodec>,
+    pub pairing_code: request_response::Behaviour<PairingCodeCodec>,
     pub pinned_packet_stream: pinned_packet_stream::Behaviour,
     pub service: request_response::Behaviour<ServiceCodec>,
 }
@@ -173,6 +175,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     control: control::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
                     pairing: pairing::behaviour(control_streams),
+                    pairing_code: pairing_code::behaviour(control_streams),
                     pinned_packet_stream: pinned_packet_stream::Behaviour::new(usize::from(mtu)),
                     service: service::behaviour(control_streams),
                 })
@@ -413,6 +416,11 @@ pub fn kademlia_peer_addresses_key(
         },
     );
     kad::RecordKey::new(&key)
+}
+
+#[must_use]
+pub fn kademlia_pairing_code_key(locator: &str) -> kad::RecordKey {
+    kad::RecordKey::new(&format!("/p2p-vpn/pairing-code/{locator}/providers/1"))
 }
 
 fn kademlia_stream_protocol(protocol: &str) -> Result<libp2p::StreamProtocol, P2pBuildError> {
