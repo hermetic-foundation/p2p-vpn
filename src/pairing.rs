@@ -119,6 +119,14 @@ pub struct PairingRequest {
     pub offer: Option<PairingOffer>,
     pub payload: PairingRequestPayload,
     pub signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_authentication: Option<PairingCodeAuthentication>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PairingCodeAuthentication {
+    pub locator: String,
+    pub confirmation: String,
 }
 
 impl PairingRequest {
@@ -375,6 +383,7 @@ pub fn build_pairing_request_at(
             .then(|| offer.clone()),
         payload,
         signature,
+        code_authentication: None,
     };
     request.verify_for_offer_at(offer, issued_at_unix_seconds)?;
 
