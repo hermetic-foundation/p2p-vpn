@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{self, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
@@ -39,6 +39,14 @@ impl PairingStateStore {
     }
 
     pub fn save(&self, bytes: &[u8]) -> Result<(), PairingStateStoreError> {
+        self.save_with_parent_sync(bytes, sync_parent_directory)
+    }
+
+    fn save_with_parent_sync(
+        &self,
+        bytes: &[u8],
+        sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Result<(), PairingStateStoreError> {
         validate_length(bytes.len())?;
         let parent = self
             .path
@@ -70,7 +78,8 @@ impl PairingStateStore {
             .mode(0o600)
             .open(&temporary_path)?;
         if let Err(error) = temporary
-            .write_all(bytes)
+            .set_permissions(fs::Permissions::from_mode(0o600))
+            .and_then(|()| temporary.write_all(bytes))
             .and_then(|()| temporary.sync_all())
         {
             drop(temporary);
@@ -82,7 +91,7 @@ impl PairingStateStore {
             let _ = fs::remove_file(&temporary_path);
             return Err(PairingStateStoreError::Io(error));
         }
-        fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
+        sync_parent(parent)?;
         Ok(())
     }
 
@@ -92,6 +101,29 @@ impl PairingStateStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(PairingStateStoreError::Io(error)),
         }
+    }
+}
+
+fn sync_parent_directory(parent: &Path) -> io::Result<()> {
+    let directory = match File::open(parent) {
+        Ok(directory) => directory,
+        Err(error) => return handle_directory_sync_error(error),
+    };
+    match directory.sync_all() {
+        Ok(()) => Ok(()),
+        Err(error) => handle_directory_sync_error(error),
+    }
+}
+
+fn handle_directory_sync_error(error: io::Error) -> io::Result<()> {
+    // Some Unix filesystems reject directory fsync with EINVAL rather than ENOTSUP.
+    if matches!(
+        error.kind(),
+        io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    ) {
+        Ok(())
+    } else {
+        Err(error)
     }
 }
 
@@ -165,7 +197,10 @@ impl From<io::Error> for PairingStateStoreError {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::{
+        cell::Cell,
+        os::unix::fs::{PermissionsExt as _, symlink},
+    };
 
     use super::*;
 
@@ -195,6 +230,76 @@ mod tests {
                 .mode()
                 & 0o777,
             0o600
+        );
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn pairing_state_syncs_parent_after_owner_only_atomic_replace() {
+        let directory = test_directory("sync-order");
+        let path = directory.join("pairing.json");
+        fs::write(&path, b"old state").expect("old state");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("old mode");
+        let store = PairingStateStore::new(&path);
+        let sync_calls = Cell::new(0);
+
+        store
+            .save_with_parent_sync(b"new state", |parent| {
+                sync_calls.set(sync_calls.get() + 1);
+                assert_eq!(parent, directory);
+                assert_eq!(fs::read(&path).expect("replacement"), b"new state");
+                assert_eq!(
+                    fs::metadata(&path)
+                        .expect("replacement metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+                let entries = fs::read_dir(parent)
+                    .expect("parent entries")
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("read parent entries");
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].path(), path);
+                Ok(())
+            })
+            .expect("save");
+
+        assert_eq!(sync_calls.get(), 1);
+        fs::remove_dir_all(directory).expect("cleanup");
+    }
+
+    #[test]
+    fn pairing_state_ignores_only_unsupported_directory_sync_errors() {
+        assert!(handle_directory_sync_error(io::Error::from(io::ErrorKind::Unsupported)).is_ok());
+        assert!(handle_directory_sync_error(io::Error::from(io::ErrorKind::InvalidInput)).is_ok());
+
+        let error = handle_directory_sync_error(io::Error::from(io::ErrorKind::PermissionDenied))
+            .expect_err("permission failure must remain visible");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn pairing_state_reports_parent_sync_failure_after_replace() {
+        let directory = test_directory("sync-failure");
+        let path = directory.join("pairing.json");
+        let store = PairingStateStore::new(&path);
+
+        let error = store
+            .save_with_parent_sync(b"new state", |_| {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            })
+            .expect_err("sync failure");
+
+        assert!(matches!(
+            error,
+            PairingStateStoreError::Io(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            store.load().expect("load replacement"),
+            Some(b"new state".to_vec())
         );
         fs::remove_dir_all(directory).expect("cleanup");
     }
