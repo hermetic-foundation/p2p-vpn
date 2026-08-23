@@ -127,6 +127,8 @@ pub struct PairingEnrollment {
     pub transcript_sha256: String,
     #[serde(default)]
     pub completed_at_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership_key_preconfigured: Option<bool>,
     pub state: PairingEnrollmentState,
 }
 
@@ -137,6 +139,7 @@ pub struct PairingEnrollmentPreparation {
     pub offer: Option<PairingOffer>,
     pub response: PairingResponse,
     pub transcript_sha256: String,
+    pub membership_key_preconfigured: Option<bool>,
 }
 
 pub struct CodePairingSessions {
@@ -1064,6 +1067,7 @@ impl CodePairingSessions {
             response: preparation.response,
             transcript_sha256: preparation.transcript_sha256,
             completed_at_unix_seconds: None,
+            membership_key_preconfigured: preparation.membership_key_preconfigured,
             state: PairingEnrollmentState::Prepared,
         };
         validate_pairing_enrollment(&enrollment, network_name)?;
@@ -1858,6 +1862,7 @@ impl PairingEnrollment {
             && self.offer == other.offer
             && self.response == other.response
             && self.transcript_sha256 == other.transcript_sha256
+            && self.membership_key_preconfigured == other.membership_key_preconfigured
     }
 }
 
@@ -1867,6 +1872,13 @@ fn validate_pairing_enrollment(
 ) -> Result<(), CodePairingSessionError> {
     validate_pairing_operation_id(&enrollment.operation_id)?;
     validate_transcript_sha256(&enrollment.transcript_sha256, true)?;
+    if enrollment.membership_key_preconfigured == Some(true)
+        && enrollment.response.payload.membership_key.is_none()
+    {
+        return Err(invalid_enrollment(
+            "enrollment marks a missing membership key as preconfigured",
+        ));
+    }
     if enrollment
         .completed_at_unix_seconds
         .is_some_and(|completed_at| {
@@ -2689,6 +2701,7 @@ mod tests {
             offer,
             response,
             transcript_sha256,
+            membership_key_preconfigured: None,
         }
     }
 
@@ -3618,6 +3631,7 @@ mod tests {
                 response: response.clone(),
                 transcript_sha256: transcript_sha256.clone(),
                 completed_at_unix_seconds: Some(1_002),
+                membership_key_preconfigured: None,
                 state: PairingEnrollmentState::Applied,
             })
         );
@@ -3631,6 +3645,7 @@ mod tests {
                 response,
                 transcript_sha256,
                 completed_at_unix_seconds: None,
+                membership_key_preconfigured: None,
                 state: PairingEnrollmentState::Prepared,
             })
         );

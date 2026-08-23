@@ -2006,6 +2006,9 @@ fn handle_pair_rpc_request(
                         offer: Some(offer),
                         response: response.clone(),
                         transcript_sha256: approval.transcript_sha256.clone(),
+                        membership_key_preconfigured: Some(
+                            forwarder.config().network.membership_key.is_some(),
+                        ),
                     },
                 )
                 .map_err(code_session_pair_rpc)?;
@@ -2156,7 +2159,9 @@ fn pairing_rpc_completion_artifacts(
     let remote_vpn_ip = (enrollment.role == PairingEnrollmentRole::Inviter)
         .then(|| response.assigned_vpn_ip.clone())
         .flatten();
-    let membership_key_file = if enrollment.role == PairingEnrollmentRole::Joiner {
+    let membership_key_file = if enrollment.role == PairingEnrollmentRole::Joiner
+        && !enrollment.membership_key_preconfigured.unwrap_or(false)
+    {
         response
             .membership_key
             .as_deref()
@@ -9522,6 +9527,9 @@ fn handle_pairing_code_response(
                     offer: Some(outbound.offer.clone()),
                     response: (*response).clone(),
                     transcript_sha256: outbound.transcript_sha256.clone(),
+                    membership_key_preconfigured: Some(
+                        context.forwarder.config().network.membership_key.is_some(),
+                    ),
                 },
             ) {
                 fail_code_pairing_join(
@@ -14965,6 +14973,7 @@ mod tests {
                     offer: Some(offer.clone()),
                     response: response.clone(),
                     transcript_sha256,
+                    membership_key_preconfigured: None,
                 },
             )
             .expect("prepared enrollment");
@@ -15044,6 +15053,7 @@ mod tests {
                     offer: Some(offer),
                     response,
                     transcript_sha256,
+                    membership_key_preconfigured: None,
                 },
             )
             .expect("prepare enrollment");
@@ -15115,6 +15125,7 @@ mod tests {
                     offer: Some(offer),
                     response,
                     transcript_sha256,
+                    membership_key_preconfigured: None,
                 },
             )
             .expect("prepare enrollment");
@@ -15252,6 +15263,7 @@ mod tests {
                     offer: Some(offer),
                     response,
                     transcript_sha256,
+                    membership_key_preconfigured: None,
                 },
             )
             .expect("prepare enrollment");
@@ -15598,6 +15610,7 @@ mod tests {
                     offer: Some(offer),
                     response: response.clone(),
                     transcript_sha256: transcript_sha256.clone(),
+                    membership_key_preconfigured: None,
                 },
             )
             .expect("prepare enrollment");
@@ -15647,41 +15660,46 @@ mod tests {
         let membership_key = STANDARD.encode([11_u8; 32]);
         let (_, inviter, joiner, offer, request, response) =
             code_pairing_runtime_fixture_with_membership_key(Some(membership_key.clone()));
-        let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
         let transcript_sha256 =
             pairing_request_transcript_sha256(&request).expect("transcript digest");
-        let mut sessions = CodePairingSessions::new();
-        sessions
-            .join_with_id(
-                operation_id.clone(),
-                "lab",
-                crate::pairing_code::PairingCode::generate(),
-                Some("10.42.0.2".to_owned()),
-                Vec::new(),
-                600,
-                1_000,
-                Instant::now(),
-            )
-            .expect("join pairing");
-        sessions
-            .prepare_enrollment(
-                "lab",
-                PairingEnrollmentPreparation {
-                    operation_id: operation_id.clone(),
-                    role: PairingEnrollmentRole::Joiner,
-                    approval_id: None,
-                    offer: Some(offer.clone()),
-                    response: response.clone(),
-                    transcript_sha256: transcript_sha256.clone(),
-                },
-            )
-            .expect("prepare enrollment");
-        sessions
-            .complete_join(&operation_id, offer, response)
-            .expect("complete pairing");
-        sessions
-            .mark_enrollment_applied_at(&operation_id, 1_020)
-            .expect("apply enrollment");
+        let completed_sessions = |membership_key_preconfigured| {
+            let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+            let mut sessions = CodePairingSessions::new();
+            sessions
+                .join_with_id(
+                    operation_id.clone(),
+                    "lab",
+                    crate::pairing_code::PairingCode::generate(),
+                    Some("10.42.0.2".to_owned()),
+                    Vec::new(),
+                    600,
+                    1_000,
+                    Instant::now(),
+                )
+                .expect("join pairing");
+            sessions
+                .prepare_enrollment(
+                    "lab",
+                    PairingEnrollmentPreparation {
+                        operation_id: operation_id.clone(),
+                        role: PairingEnrollmentRole::Joiner,
+                        approval_id: None,
+                        offer: Some(offer.clone()),
+                        response: response.clone(),
+                        transcript_sha256: transcript_sha256.clone(),
+                        membership_key_preconfigured: Some(membership_key_preconfigured),
+                    },
+                )
+                .expect("prepare enrollment");
+            sessions
+                .complete_join(&operation_id, offer.clone(), response.clone())
+                .expect("complete pairing");
+            sessions
+                .mark_enrollment_applied_at(&operation_id, 1_020)
+                .expect("apply enrollment");
+            (sessions, operation_id)
+        };
+        let (sessions, operation_id) = completed_sessions(false);
 
         let state_path = test_pairing_state_path("joiner-artifacts");
         let store = PairingStateStore::new(&state_path);
@@ -15714,6 +15732,32 @@ mod tests {
         assert_eq!(artifacts.nix.member_records.len(), 2);
         fs::remove_dir_all(state_path.parent().expect("state directory"))
             .expect("remove test state");
+
+        let (preconfigured_sessions, preconfigured_operation_id) = completed_sessions(true);
+        let preconfigured_path = test_pairing_state_path("preconfigured-joiner-artifacts");
+        let preconfigured_store = PairingStateStore::new(&preconfigured_path);
+        let preconfigured = pairing_rpc_completion_artifacts(
+            &preconfigured_sessions,
+            &preconfigured_operation_id,
+            "lab",
+            &joiner.peer_id,
+            Some(&preconfigured_store),
+        )
+        .expect("preconfigured joiner artifacts");
+        assert!(preconfigured.nix.membership_key_file.is_none());
+        assert!(
+            !preconfigured_path
+                .parent()
+                .expect("preconfigured state directory")
+                .join(crate::runtime::pairing_store::PAIRING_MEMBERSHIP_KEY_FILE)
+                .exists()
+        );
+        fs::remove_dir_all(
+            preconfigured_path
+                .parent()
+                .expect("preconfigured state directory"),
+        )
+        .expect("remove preconfigured test state");
     }
 
     #[test]

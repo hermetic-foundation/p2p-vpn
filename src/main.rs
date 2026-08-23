@@ -21,9 +21,9 @@ use p2p_vpn::{
     config::{
         AutoRelayConfig, BootstrapPeerConfig, Config, DiscoveryConfig, InitConfigTemplate,
         InitPeer, InterfaceConfig, NetworkConfig, PRIVATE_KADEMLIA_PROTOCOL,
-        PUBLIC_IPFS_BOOTSTRAP_PEERS, PUBLIC_IPFS_KADEMLIA_PROTOCOL, PacketPlaneConfig, PeerConfig,
-        QueueConfig, RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig,
-        RuntimeDefaults, default_auto_relay_max_candidates, default_auto_relay_max_reservations,
+        PUBLIC_IPFS_BOOTSTRAP_PEERS, PUBLIC_IPFS_KADEMLIA_PROTOCOL, PacketPlaneConfig, QueueConfig,
+        RelayConfig, RelayResourceConfig, ResourceConfig, RouteConfig, RuntimeDefaults,
+        default_auto_relay_max_candidates, default_auto_relay_max_reservations,
         default_auto_relay_retry_interval_seconds, default_listen_addresses,
         default_max_packet_age_millis, default_packet_plane_replay_windows_per_session,
         default_packet_plane_session_ttl_seconds,
@@ -2778,7 +2778,7 @@ async fn pair_daemon_artifacts(
     let PairRpcResult::Artifacts(mut artifacts) = result else {
         return Err("daemon returned an unexpected pairing artifacts response".to_owned());
     };
-    if let Some(instance) = nixos_instance {
+    if let Some(instance) = pair_artifact_nixos_instance(target, nixos_instance) {
         validate_nixos_instance_name(instance)?;
         instance.clone_into(&mut artifacts.nix.instance_name);
     }
@@ -2792,6 +2792,13 @@ async fn pair_daemon_artifacts(
         println!("pairing receipt: {}", artifacts.receipt.transcript_sha256);
     }
     Ok(())
+}
+
+fn pair_artifact_nixos_instance<'a>(
+    target: &'a PairDaemonTarget,
+    explicit_instance: Option<&'a str>,
+) -> Option<&'a str> {
+    explicit_instance.or(target.instance.as_deref())
 }
 
 async fn pair_daemon_rpc(
@@ -2992,12 +2999,26 @@ fn pair_rpc_routes(routes: Vec<LocalRouteArg>) -> Vec<PairRpcRoute> {
 fn render_pair_rpc_nixos_module(artifacts: &PairRpcCompletionArtifacts) -> Result<String, String> {
     let plan = &artifacts.nix;
     validate_nixos_instance_name(&plan.instance_name)?;
+    let config = pair_rpc_nixos_config(artifacts);
+    render_pairing_nixos_module(
+        &plan.instance_name,
+        &config,
+        &PairingNixosSecretPaths {
+            private_key_file: None,
+            membership_key_file: plan.membership_key_file.clone(),
+            membership_key_file_is_default: plan.membership_key_file.is_some(),
+        },
+    )
+}
+
+fn pair_rpc_nixos_config(artifacts: &PairRpcCompletionArtifacts) -> Config {
+    let plan = &artifacts.nix;
     let records = plan
         .member_records
         .iter()
         .map(pair_rpc_membership_record_to_config)
         .collect();
-    let config = Config {
+    Config {
         network: NetworkConfig {
             name: plan.network_name.clone(),
             local_peer: plan.local_peer.clone(),
@@ -3006,11 +3027,7 @@ fn render_pair_rpc_nixos_module(artifacts: &PairRpcCompletionArtifacts) -> Resul
             previous_membership_tags: Vec::new(),
             member_records: records,
             vpn_ip: plan.assigned_vpn_ip.clone(),
-            routes: plan
-                .additional_local_routes
-                .iter()
-                .map(pair_rpc_route_to_config)
-                .collect(),
+            routes: Vec::new(),
             listen_addresses: default_listen_addresses(),
             external_addresses: Vec::new(),
             bootstrap_peers: Vec::new(),
@@ -3022,30 +3039,10 @@ fn render_pair_rpc_nixos_module(artifacts: &PairRpcCompletionArtifacts) -> Resul
             name: "pv0".to_owned(),
             mtu: 1_280,
         },
-        peers: vec![PeerConfig {
-            id: plan.peer.id.clone(),
-            name: plan.peer.name.clone(),
-            ip: None,
-            vpn_ip: plan.peer.vpn_ip.clone(),
-            addresses: Vec::new(),
-            routes: plan
-                .peer
-                .routes
-                .iter()
-                .map(pair_rpc_route_to_config)
-                .collect(),
-        }],
+        peers: Vec::new(),
         queue: QueueConfig::default(),
         resources: ResourceConfig::default(),
-    };
-    render_pairing_nixos_module(
-        &plan.instance_name,
-        &config,
-        &PairingNixosSecretPaths {
-            private_key_file: None,
-            membership_key_file: plan.membership_key_file.clone(),
-        },
-    )
+    }
 }
 
 fn pair_rpc_membership_record_to_config(
@@ -3575,6 +3572,7 @@ fn write_pairing_nixos_module(
 struct PairingNixosSecretPaths {
     private_key_file: Option<String>,
     membership_key_file: Option<String>,
+    membership_key_file_is_default: bool,
 }
 
 fn write_pairing_nixos_secret_files(
@@ -3611,6 +3609,7 @@ fn write_pairing_nixos_secret_files(
     Ok(PairingNixosSecretPaths {
         private_key_file,
         membership_key_file,
+        membership_key_file_is_default: false,
     })
 }
 
@@ -3761,14 +3760,18 @@ fn render_pairing_nixos_module(
 ) -> Result<String, String> {
     validate_nixos_instance_name(instance)?;
 
-    let mut lines = vec![
+    let mut lines = Vec::new();
+    if secret_paths.membership_key_file_is_default {
+        lines.push("{ lib, ... }:".to_owned());
+    }
+    lines.extend([
         "{".to_owned(),
         format!(
             "  services.p2p-vpn.instances.{} = {{",
             nix_string_literal(instance)?
         ),
         "    enable = true;".to_owned(),
-    ];
+    ]);
     if config.network.name != instance {
         lines.push(format!(
             "    networkName = {};",
@@ -3793,10 +3796,12 @@ fn render_pairing_nixos_module(
         ));
     }
     if let Some(path) = &secret_paths.membership_key_file {
-        lines.push(format!(
-            "    membershipKeyFile = {};",
-            nix_string_literal(path)?
-        ));
+        let value = nix_string_literal(path)?;
+        if secret_paths.membership_key_file_is_default {
+            lines.push(format!("    membershipKeyFile = lib.mkDefault {value};"));
+        } else {
+            lines.push(format!("    membershipKeyFile = {value};"));
+        }
     }
     if !config.network.previous_membership_tags.is_empty() {
         push_nixos_string_list(
@@ -8841,6 +8846,12 @@ mod tests {
     use super::*;
 
     use p2p_vpn::pairing::{PairingResponseOptions, build_pairing_response_at};
+    use p2p_vpn::runtime::{
+        control_socket::{
+            PairRpcMembershipRecordPayload, PairRpcNixPlan, PairRpcPeer, PairRpcReceipt,
+        },
+        packet::AuthorizedPeers,
+    };
 
     const LIVE_PAIRING_RELAY_MULTIADDR_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDR";
     const LIVE_PAIRING_RELAY_MULTIADDRS_ENV: &str = "P2P_VPN_LIVE_RELAY_MULTIADDRS";
@@ -12803,6 +12814,14 @@ mod tests {
         assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
         assert_eq!(output, PathBuf::from("paired.nix"));
         assert_eq!(nixos_instance.as_deref(), Some("renamed-mesh"));
+        assert_eq!(
+            pair_artifact_nixos_instance(&target, None),
+            Some("runner-mesh")
+        );
+        assert_eq!(
+            pair_artifact_nixos_instance(&target, nixos_instance.as_deref()),
+            Some("renamed-mesh")
+        );
         assert!(force);
     }
 
@@ -13149,6 +13168,7 @@ mod tests {
             &PairingNixosSecretPaths {
                 private_key_file: Some("/var/lib/p2p-vpn/mesh-lab/private.key".to_owned()),
                 membership_key_file: None,
+                membership_key_file_is_default: false,
             },
         )
         .expect("render");
@@ -13199,6 +13219,7 @@ mod tests {
             &PairingNixosSecretPaths {
                 private_key_file: Some("/var/lib/p2p-vpn/lab/private.key".to_owned()),
                 membership_key_file: None,
+                membership_key_file_is_default: false,
             },
         )
         .expect("render");
@@ -13270,20 +13291,117 @@ mod tests {
         let rendered = render_pair_rpc_nixos_module(&artifacts).expect("render artifacts");
 
         assert!(rendered.contains("services.p2p-vpn.instances.\"runner-mesh\""));
+        assert!(rendered.starts_with("{ lib, ... }:\n{"));
         assert!(rendered.contains("networkName = \"runner mesh\";"));
         assert!(rendered.contains("localPeer = \"12D3KooWLocal\";"));
-        assert!(
-            rendered
-                .contains("membershipKeyFile = \"/var/lib/p2p-vpn/runner-mesh/membership.key\";")
-        );
+        assert!(rendered.contains(
+            "membershipKeyFile = lib.mkDefault \"/var/lib/p2p-vpn/runner-mesh/membership.key\";"
+        ));
         assert!(rendered.contains("vpnIp = \"10.42.0.2\";"));
         assert!(rendered.contains("prefix = \"10.60.0.0/24\";"));
-        assert!(rendered.contains("\"12D3KooWRemote\" = {"));
-        assert!(rendered.contains("prefix = \"10.70.0.0/24\";"));
+        assert!(!rendered.contains("\"12D3KooWRemote\" = {"));
+        assert!(!rendered.contains("prefix = \"10.70.0.0/24\";"));
         assert!(rendered.contains("memberRecords = ["));
+        assert!(!rendered.contains("    peers."));
         assert!(!rendered.contains("bootstrapPeers"));
         assert!(!rendered.contains("listenAddresses"));
         assert!(!rendered.contains("addresses ="));
+    }
+
+    #[test]
+    fn pair_rpc_nixos_config_keeps_signed_revocation_authoritative() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let subject = MembershipRecordSubject::from_identity(&joiner).expect("joiner subject");
+        let grant = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "runner-mesh".to_owned(),
+                member: subject.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("membership grant");
+        let revocation = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "runner-mesh".to_owned(),
+                member: subject,
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("membership revocation");
+        let rpc_grant = PairRpcSignedMembershipRecord {
+            payload: PairRpcMembershipRecordPayload {
+                version: grant.payload.version,
+                network_name: grant.payload.network_name.clone(),
+                member_peer: grant.payload.member_peer.clone(),
+                member_public_key: grant.payload.member_public_key.clone(),
+                issuer_peer: grant.payload.issuer_peer.clone(),
+                issuer_public_key: grant.payload.issuer_public_key.clone(),
+                membership_epoch: grant.payload.membership_epoch,
+                sequence: grant.payload.sequence,
+                revoked: grant.payload.revoked,
+                roles: vec![PairRpcMembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                issued_at_unix_seconds: grant.payload.issued_at_unix_seconds,
+                expires_at_unix_seconds: grant.payload.expires_at_unix_seconds,
+            },
+            signature: grant.signature,
+        };
+        let artifacts = PairRpcCompletionArtifacts {
+            receipt: PairRpcReceipt {
+                network_name: "runner-mesh".to_owned(),
+                local_peer: inviter.peer_id.clone(),
+                remote_peer: joiner.peer_id.clone(),
+                role: PairRpcRole::Inviter,
+                transcript_sha256: "receipt-digest".to_owned(),
+                completed_at_unix_seconds: 1_002,
+            },
+            nix: PairRpcNixPlan {
+                instance_name: "runner-mesh".to_owned(),
+                network_name: "runner-mesh".to_owned(),
+                local_peer: inviter.peer_id,
+                assigned_vpn_ip: None,
+                additional_local_routes: Vec::new(),
+                peer: PairRpcPeer {
+                    id: joiner.peer_id.clone(),
+                    name: None,
+                    vpn_ip: None,
+                    routes: Vec::new(),
+                },
+                member_records: vec![rpc_grant],
+                membership_key_file: None,
+            },
+        };
+
+        let mut config = pair_rpc_nixos_config(&artifacts);
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer ID");
+        assert!(config.peers.is_empty());
+        assert!(
+            AuthorizedPeers::try_from_config(&config)
+                .expect("authorized grant")
+                .allows(&joiner_peer)
+        );
+
+        config.network.member_records.push(revocation);
+        assert!(
+            !AuthorizedPeers::try_from_config(&config)
+                .expect("authorized revocation")
+                .allows(&joiner_peer)
+        );
     }
 
     #[test]
@@ -13413,6 +13531,7 @@ mod tests {
             &PairingNixosSecretPaths {
                 private_key_file: Some("/run/secrets/p2p-vpn-lab.key".to_owned()),
                 membership_key_file: Some("/var/lib/p2p-vpn/lab/membership.key".to_owned()),
+                membership_key_file_is_default: false,
             },
         )
         .expect("render");

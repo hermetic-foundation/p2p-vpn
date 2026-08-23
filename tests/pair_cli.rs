@@ -9,9 +9,10 @@ use std::{
 };
 
 use p2p_vpn::runtime::control_socket::{
-    PairRpcCompletionArtifacts, PairRpcJoinStarted, PairRpcNixPlan, PairRpcOpenStarted,
-    PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt, PairRpcRequest,
-    PairRpcRequestEnvelope, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole,
+    PairRpcCompletionArtifacts, PairRpcJoinStarted, PairRpcMembershipRecordPayload,
+    PairRpcMembershipRole, PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer,
+    PairRpcPhase, PairRpcReceipt, PairRpcRequest, PairRpcRequestEnvelope, PairRpcResponseEnvelope,
+    PairRpcResult, PairRpcRole, PairRpcSignedMembershipRecord,
 };
 
 fn test_path(label: &str, extension: &str) -> PathBuf {
@@ -222,7 +223,24 @@ fn pair_artifacts_cli_writes_native_nix_without_json_or_secrets() {
                 vpn_ip: None,
                 routes: Vec::new(),
             },
-            member_records: Vec::new(),
+            member_records: vec![PairRpcSignedMembershipRecord {
+                payload: PairRpcMembershipRecordPayload {
+                    version: 1,
+                    network_name: "runner-mesh".to_owned(),
+                    member_peer: "12D3KooWRemote".to_owned(),
+                    member_public_key: "remote-public-key".to_owned(),
+                    issuer_peer: "12D3KooWLocal".to_owned(),
+                    issuer_public_key: "local-public-key".to_owned(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    revoked: false,
+                    roles: vec![PairRpcMembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    issued_at_unix_seconds: 1_700_000_000,
+                    expires_at_unix_seconds: None,
+                },
+                signature: "record-signature".to_owned(),
+            }],
             membership_key_file: None,
         },
     };
@@ -260,7 +278,9 @@ fn pair_artifacts_cli_writes_native_nix_without_json_or_secrets() {
     let rendered = fs::read_to_string(&output_path).expect("native Nix artifact");
     assert!(rendered.contains("services.p2p-vpn.instances.\"runner-mesh\""));
     assert!(rendered.contains("localPeer = \"12D3KooWLocal\";"));
-    assert!(rendered.contains("\"12D3KooWRemote\" = {"));
+    assert!(rendered.contains("memberPeer = \"12D3KooWRemote\";"));
+    assert!(!rendered.contains("\"12D3KooWRemote\" = {"));
+    assert!(!rendered.contains("    peers."));
     assert!(!rendered.contains("private_key"));
     assert!(!rendered.contains("membership_key"));
     assert!(serde_json::from_str::<serde_json::Value>(&rendered).is_err());
