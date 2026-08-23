@@ -13,10 +13,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId as Libp2pPeerId, Swarm, TransportError, autonat,
-    core::ConnectedPoint,
+    core::{ConnectedPoint, transport::ListenerId},
     dcutr, identify, kad, mdns,
     multiaddr::Protocol,
-    relay,
+    ping, relay,
     request_response::{self, Message},
     swarm::{ConnectionId, DialError, SwarmEvent},
 };
@@ -915,6 +915,7 @@ where
                     public_discovery_quiet,
                 );
                 expire_pending_auto_relay_reservations(
+                    &mut node.swarm,
                     &mut auto_relay,
                     &metrics,
                     Instant::now(),
@@ -4993,6 +4994,7 @@ struct AutoRelayState {
     attempted_reservations: HashSet<(Libp2pPeerId, Multiaddr)>,
     pending_reservations: HashMap<Libp2pPeerId, PendingAutoRelayReservation>,
     accepted_reservation_peers: HashSet<Libp2pPeerId>,
+    reservation_listeners: HashMap<Libp2pPeerId, ListenerId>,
     retry_after: HashMap<Libp2pPeerId, Instant>,
     reservation_failures: HashMap<Libp2pPeerId, u8>,
 }
@@ -5001,6 +5003,13 @@ struct AutoRelayState {
 struct PendingAutoRelayReservation {
     address: Multiaddr,
     expires_at: Instant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReleasedAutoRelayListener {
+    relay: Libp2pPeerId,
+    pending_address: Option<Multiaddr>,
+    was_accepted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -5029,6 +5038,7 @@ impl AutoRelayState {
             attempted_reservations: HashSet::new(),
             pending_reservations: HashMap::new(),
             accepted_reservation_peers: HashSet::new(),
+            reservation_listeners: HashMap::new(),
             retry_after: HashMap::new(),
             reservation_failures: HashMap::new(),
         }
@@ -5103,6 +5113,7 @@ impl AutoRelayState {
             .retain(|(attempted_peer, _)| *attempted_peer != peer);
         self.pending_reservations.remove(&peer);
         self.accepted_reservation_peers.remove(&peer);
+        self.reservation_listeners.remove(&peer);
         self.retry_after.remove(&peer);
         self.reservation_failures.remove(&peer);
         self.candidates.len() != original_len
@@ -5168,14 +5179,26 @@ impl AutoRelayState {
         self.reservation_failures.remove(&peer);
     }
 
+    fn record_reservation_listener(&mut self, peer: Libp2pPeerId, listener_id: ListenerId) -> bool {
+        if !self.pending_reservations.contains_key(&peer)
+            || self.reservation_listeners.contains_key(&peer)
+        {
+            return false;
+        }
+        self.reservation_listeners.insert(peer, listener_id);
+        true
+    }
+
     #[cfg(test)]
     fn has_active_reservation(&self, peer: Libp2pPeerId) -> bool {
         self.accepted_reservation_peers.contains(&peer)
     }
 
     fn release_reservation_peer(&mut self, peer: Libp2pPeerId) -> bool {
+        let listener_removed = self.reservation_listeners.remove(&peer).is_some();
         self.pending_reservations.remove(&peer).is_some()
             | self.accepted_reservation_peers.remove(&peer)
+            | listener_removed
     }
 
     fn release_reservation_for_retry(&mut self, peer: Libp2pPeerId) -> bool {
@@ -5192,7 +5215,32 @@ impl AutoRelayState {
         released
     }
 
-    fn expire_pending_reservations(&mut self, now: Instant) -> Vec<(Libp2pPeerId, Multiaddr)> {
+    fn release_listener_for_retry_after(
+        &mut self,
+        listener_id: ListenerId,
+        now: Instant,
+    ) -> Option<ReleasedAutoRelayListener> {
+        let relay = self
+            .reservation_listeners
+            .iter()
+            .find_map(|(relay, tracked)| (*tracked == listener_id).then_some(*relay))?;
+        let pending_address = self
+            .pending_reservations
+            .get(&relay)
+            .map(|pending| pending.address.clone());
+        let was_accepted = self.accepted_reservation_peers.contains(&relay);
+        self.release_reservation_for_retry_after(relay, now);
+        Some(ReleasedAutoRelayListener {
+            relay,
+            pending_address,
+            was_accepted,
+        })
+    }
+
+    fn expire_pending_reservations(
+        &mut self,
+        now: Instant,
+    ) -> Vec<(Libp2pPeerId, Multiaddr, Option<ListenerId>)> {
         let expired_peers = self
             .pending_reservations
             .iter()
@@ -5201,11 +5249,12 @@ impl AutoRelayState {
         let mut expired = Vec::with_capacity(expired_peers.len());
         for peer in expired_peers {
             if let Some(pending) = self.pending_reservations.remove(&peer) {
+                let listener_id = self.reservation_listeners.remove(&peer);
                 self.attempted_reservations
                     .remove(&(peer, pending.address.clone()));
                 self.retry_after
                     .insert(peer, now + self.policy.retry_interval());
-                expired.push((peer, pending.address));
+                expired.push((peer, pending.address, listener_id));
             }
         }
         expired
@@ -5500,20 +5549,78 @@ fn attempt_auto_relay_reservations(
                 ("address", &reservation_address.to_string()),
             ],
         );
-        if let Err(error) = swarm.listen_on(reservation_address.clone()) {
-            auto_relay.release_reservation_for_retry_after(relay_peer, now);
-            metrics.record_auto_relay_reservation_failure();
-            log_runtime_event(
-                LogLevel::Warn,
-                "auto_relay_reservation_failed",
-                &[
-                    ("relay", &relay_peer.to_string()),
-                    ("address", &reservation_address.to_string()),
-                    ("error", &error.to_string()),
-                ],
-            );
+        match swarm.listen_on(reservation_address.clone()) {
+            Ok(listener_id) => {
+                if !auto_relay.record_reservation_listener(relay_peer, listener_id) {
+                    swarm.remove_listener(listener_id);
+                    auto_relay.release_reservation_for_retry_after(relay_peer, now);
+                    metrics.record_auto_relay_reservation_failure();
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "auto_relay_reservation_state_conflict",
+                        &[
+                            ("relay", &relay_peer.to_string()),
+                            ("address", &reservation_address.to_string()),
+                            ("listener", &listener_id.to_string()),
+                        ],
+                    );
+                }
+            }
+            Err(error) => {
+                auto_relay.release_reservation_for_retry_after(relay_peer, now);
+                metrics.record_auto_relay_reservation_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "auto_relay_reservation_failed",
+                    &[
+                        ("relay", &relay_peer.to_string()),
+                        ("address", &reservation_address.to_string()),
+                        ("error", &error.to_string()),
+                    ],
+                );
+            }
         }
     }
+}
+
+fn record_auto_relay_listener_termination(
+    auto_relay: &mut AutoRelayState,
+    relay_readiness: &mut RelayReadiness,
+    metrics: &RuntimeMetrics,
+    listener_id: ListenerId,
+    now: Instant,
+    event: &str,
+) -> Option<ReleasedAutoRelayListener> {
+    let released = auto_relay.release_listener_for_retry_after(listener_id, now)?;
+    let status = if released.was_accepted {
+        relay_readiness.record_relay_reservation_lost(released.relay);
+        metrics.record_relay_reservation_lost();
+        "accepted"
+    } else {
+        metrics.record_auto_relay_reservation_failure();
+        "pending"
+    };
+    let evicted = released
+        .pending_address
+        .is_some()
+        .then(|| auto_relay.record_reservation_failure(released.relay))
+        .unwrap_or(false);
+    let address = released
+        .pending_address
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), ToString::to_string);
+    log_runtime_event(
+        LogLevel::Warn,
+        event,
+        &[
+            ("relay", &released.relay.to_string()),
+            ("address", &address),
+            ("listener", &listener_id.to_string()),
+            ("status", status),
+            ("evicted", &evicted.to_string()),
+        ],
+    );
+    Some(released)
 }
 
 fn auto_relay_candidate_addresses(peer: Libp2pPeerId, info: &identify::Info) -> Vec<Multiaddr> {
@@ -8147,7 +8254,11 @@ async fn handle_swarm_event(
                 );
             }
         }
-        SwarmEvent::ListenerClosed { addresses, .. } => {
+        SwarmEvent::ListenerClosed {
+            listener_id,
+            addresses,
+            ..
+        } => {
             for address in addresses {
                 if let Some(relay) = relayed_address_relay_peer(&address)
                     && let Some(relay_base_address) =
@@ -8176,8 +8287,43 @@ async fn handle_swarm_event(
                     );
                 }
             }
+            if record_auto_relay_listener_termination(
+                context.auto_relay,
+                context.relay_readiness,
+                context.metrics,
+                listener_id,
+                Instant::now(),
+                "auto_relay_reservation_listener_closed",
+            )
+            .is_some_and(|released| released.was_accepted)
+            {
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
+                );
+            }
         }
         SwarmEvent::ListenerError { listener_id, error } => {
+            if record_auto_relay_listener_termination(
+                context.auto_relay,
+                context.relay_readiness,
+                context.metrics,
+                listener_id,
+                Instant::now(),
+                "auto_relay_reservation_listener_error",
+            )
+            .is_some_and(|released| released.was_accepted)
+            {
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
+                );
+            }
+            swarm.remove_listener(listener_id);
             log_runtime_event(
                 LogLevel::Warn,
                 "listener_error",
@@ -13294,6 +13440,23 @@ fn handle_behaviour_event(
             }
             eprintln!("identify with {peer_id} failed: {error}");
         }
+        BehaviourEvent::Ping(event) => {
+            if let Err(error) = event.result
+                && ping_failure_requires_connection_close(&error)
+            {
+                let closed = swarm.close_connection(event.connection);
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "connection_liveness_failure",
+                    &[
+                        ("peer", &event.peer.to_string()),
+                        ("connection_id", &event.connection.to_string()),
+                        ("error", &error.to_string()),
+                        ("close_requested", &closed.to_string()),
+                    ],
+                );
+            }
+        }
         BehaviourEvent::Kad(event) if context.discovery.kademlia => {
             handle_kademlia_event(
                 swarm,
@@ -13361,6 +13524,10 @@ fn handle_behaviour_event(
         }
         _ => {}
     }
+}
+
+fn ping_failure_requires_connection_close(error: &ping::Failure) -> bool {
+    !matches!(error, ping::Failure::Unsupported)
 }
 
 fn handle_identify_received(
@@ -14038,11 +14205,15 @@ fn handle_relay_event(
 }
 
 fn expire_pending_auto_relay_reservations(
+    swarm: &mut Swarm<Behaviour>,
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
     now: Instant,
 ) {
-    for (relay_peer, relay_address) in auto_relay.expire_pending_reservations(now) {
+    for (relay_peer, relay_address, listener_id) in auto_relay.expire_pending_reservations(now) {
+        if let Some(listener_id) = listener_id {
+            swarm.remove_listener(listener_id);
+        }
         metrics.record_auto_relay_reservation_failure();
         let evicted = auto_relay.record_reservation_failure(relay_peer);
         log_runtime_event(
@@ -20175,7 +20346,7 @@ mod tests {
         assert!(state.next_reservation_targets(now).is_empty());
         assert_eq!(
             state.expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
-            vec![(relay, stale_address)]
+            vec![(relay, stale_address, None)]
         );
         assert!(
             state
@@ -20282,6 +20453,78 @@ mod tests {
     }
 
     #[test]
+    fn auto_relay_state_retries_when_pending_listener_closes() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let listener_id = ListenerId::next();
+        let mut state = AutoRelayState::new(AutoRelayConfig {
+            max_candidates: 1,
+            max_reservations: 1,
+            retry_interval_seconds: 7,
+        });
+        let now = Instant::now();
+
+        assert!(state.record_candidate(relay, address.clone()));
+        assert_eq!(
+            state.next_reservation_targets(now),
+            vec![(relay, address.clone())]
+        );
+        assert!(state.record_reservation_listener(relay, listener_id));
+        assert_eq!(
+            state.release_listener_for_retry_after(listener_id, now),
+            Some(ReleasedAutoRelayListener {
+                relay,
+                pending_address: Some(address.clone()),
+                was_accepted: false,
+            })
+        );
+        assert!(state.next_reservation_targets(now).is_empty());
+        assert_eq!(
+            state.next_reservation_targets(now + Duration::from_secs(7)),
+            vec![(relay, address)]
+        );
+    }
+
+    #[test]
+    fn ping_timeout_closes_connection_but_unsupported_ping_does_not() {
+        assert!(ping_failure_requires_connection_close(
+            &ping::Failure::Timeout
+        ));
+        assert!(!ping_failure_requires_connection_close(
+            &ping::Failure::Unsupported
+        ));
+    }
+
+    #[test]
+    fn auto_relay_state_releases_accepted_listener_for_retry() {
+        let relay = peer_id();
+        let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+            .parse()
+            .expect("relay address");
+        let listener_id = ListenerId::next();
+        let mut state = AutoRelayState::default();
+        let now = Instant::now();
+
+        assert!(state.record_candidate(relay, address.clone()));
+        assert_eq!(state.next_reservation_targets(now), vec![(relay, address)]);
+        assert!(state.record_reservation_listener(relay, listener_id));
+        state.record_reservation_accepted(relay);
+
+        assert_eq!(
+            state.release_listener_for_retry_after(listener_id, now),
+            Some(ReleasedAutoRelayListener {
+                relay,
+                pending_address: None,
+                was_accepted: true,
+            })
+        );
+        assert!(!state.has_active_reservation(relay));
+        assert_eq!(state.snapshot(now).reservations, 0);
+    }
+
+    #[test]
     fn auto_relay_state_retries_timed_out_single_candidate_after_configured_delay() {
         let relay = peer_id();
         let address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
@@ -20299,10 +20542,12 @@ mod tests {
             state.next_reservation_targets(now),
             vec![(relay, address.clone())]
         );
+        let listener_id = ListenerId::next();
+        assert!(state.record_reservation_listener(relay, listener_id));
 
         assert_eq!(
             state.expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
-            vec![(relay, address.clone())]
+            vec![(relay, address.clone(), Some(listener_id))]
         );
         assert!(
             state
@@ -20397,7 +20642,7 @@ mod tests {
 
         assert_eq!(
             state.expire_pending_reservations(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
-            vec![(relay_a, address_a)]
+            vec![(relay_a, address_a, None)]
         );
         assert_eq!(
             state.next_reservation_targets(now + AUTO_RELAY_RESERVATION_PENDING_TIMEOUT),
