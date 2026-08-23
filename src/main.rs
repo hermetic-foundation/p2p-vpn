@@ -653,6 +653,7 @@ enum PairCommand {
     },
     /// Show a live pairing operation and pending approval.
     Status {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
@@ -661,7 +662,9 @@ enum PairCommand {
     },
     /// Approve a discovered peer and its explicit route grants.
     Approve {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
+        #[arg(allow_hyphen_values = true)]
         approval_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
@@ -674,7 +677,9 @@ enum PairCommand {
     },
     /// Reject a pending peer approval.
     Reject {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
+        #[arg(allow_hyphen_values = true)]
         approval_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
@@ -685,6 +690,7 @@ enum PairCommand {
     },
     /// Cancel a live pairing operation.
     Cancel {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
@@ -693,6 +699,7 @@ enum PairCommand {
     },
     /// Render a completed pairing as native NixOS configuration.
     Artifacts {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
@@ -705,10 +712,11 @@ enum PairCommand {
     },
     /// Compact a completed enrollment after its generated configuration is installed.
     Acknowledge {
+        #[arg(allow_hyphen_values = true)]
         operation_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
-        #[arg(long = "receipt")]
+        #[arg(long = "receipt", allow_hyphen_values = true)]
         transcript_sha256: String,
         #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
         format: PairOutputFormat,
@@ -12919,6 +12927,29 @@ mod tests {
         assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
         assert_eq!(transcript_sha256, "transcript-digest");
         assert_eq!(format, PairOutputFormat::Json);
+    }
+
+    #[test]
+    fn cli_accepts_hyphen_prefixed_live_pairing_ids() {
+        let commands: &[&[&str]] = &[
+            &["p2p-vpn", "pair", "status", "-operation"],
+            &["p2p-vpn", "pair", "approve", "-operation", "-approval"],
+            &["p2p-vpn", "pair", "reject", "-operation", "-approval"],
+            &["p2p-vpn", "pair", "cancel", "-operation"],
+            &["p2p-vpn", "pair", "artifacts", "-operation"],
+            &[
+                "p2p-vpn",
+                "pair",
+                "acknowledge",
+                "-operation",
+                "--receipt",
+                "-receipt",
+            ],
+        ];
+
+        for command in commands {
+            Cli::try_parse_from(*command).expect("hyphen-prefixed pairing ID");
+        }
     }
 
     #[test]
