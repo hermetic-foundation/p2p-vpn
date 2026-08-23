@@ -33,11 +33,15 @@ Status is conservative.
 | Public IPFS bootstrap | Partial | Rootless bootstrap checks. |
 | Public relay discovery | Operational | Public reservation scan and live pairing smoke. |
 | Public discovery-only pairing | Operational | `live_pair_accept_uses_public_relay_for_discovery_only_offer`. |
+| Code pairing on LAN | Operational | Namespace E2E and `nixos-vm-code-pairing-lan`. |
+| Code pairing through relay | Operational | Isolated `nixos-vm-code-pairing-relay`. |
+| Code pairing approval | Operational | CLI, RPC, protocol, namespace, and VM tests. |
+| Durable pairing enrollment | Operational | Encrypted-state unit tests and service-restart VM proofs. |
 | Public DCUtR proof | Partial | Needs non-LAN topology evidence. |
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
-| Signed membership records | Partial | Local and DHT tests; public DHT evidence remains. |
-| NixOS module | Operational | Evaluation, consumer-flake, lifecycle, mesh, and pairing checks. |
+| Signed membership records | Operational | Unit, DHT, code-pairing, restart, and revocation tests. |
+| NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Release archive | Operational | Release archive sanity check. |
 
 ## Current Recorded Evidence
@@ -55,11 +59,15 @@ Status is conservative.
 | 2026-08-11 | Public relay reservation scan | One public relay accepted a reservation. |
 | 2026-08-11 | Public discovery-only pairing smoke | Pairing completed through the public relay. |
 | 2026-08-12 | Native NixOS pairing VM | Nix-only accept, identity reuse, traffic, and restart recovery passed. |
+| 2026-08-22 | Peerless code-pairing namespace | LAN discovery, approval, and bidirectional traffic passed. |
+| 2026-08-22 | NixOS code-pairing LAN VM | Artifacts, evaluation, acknowledgment, restart, and traffic passed. |
+| 2026-08-22 | NixOS code-pairing relay VM | DHT discovery, relay transport, restart, and traffic passed. |
 
 ## Main Remaining Gap
 
-Public non-LAN proof is still open.
+Real public-internet code pairing remains an external evidence target.
 
-The next evidence target is a host pair split by hotspot or VPN.
+The local release gate proves the same state machine on isolated LAN and relay VMs.
 
-That run must prove overlay ping and route recovery without manual route edits.
+A public run should pair two fresh hosts from only the code, require approval,
+and capture bidirectional overlay traffic without manual routes.

@@ -49,148 +49,64 @@ It must not replace explicit membership checks.
 
 | Piece | Rule |
 | --- | --- |
-| Pairing URI | Short-lived `p2pvpn:` offer. |
-| Rendezvous token | One-time pairing secret. |
+| Default UX | `pair open` and `pair join CODE` through running daemons. |
+| Pairing code | 80-bit one-time SPAKE2 password. |
+| DHT locator | Network-bound hash that does not expose the code. |
 | Inviter identity | Signed by inviter private key. |
+| Joiner identity | Signed and matched to the libp2p transport peer. |
+| Approval | Required through the inviter's local control socket. |
 | Public bootstrap | Discovery hint only. |
 | Relay paths | Discovery and reachability only. |
-| Membership result | Signed record preferred over shared key. |
+| Membership result | Signed records for both members. |
+| Optional shared key | Transferred inside the authenticated response. |
+| Durable state | Encrypted, identity-bound, and restart-safe. |
+| Offline fallback | Signed `p2pvpn:` offer and `pair accept`. |
 
-The URI format is JSON encoded with base64url under `p2pvpn:`.
+Online code messages use `/p2p-vpn/pairing-code/1`.
 
-The URI must not include the local private key.
+The exchange is `Hello`, `Challenge`, `Submit`, then approval polling.
 
-It should not include the membership key unless an explicit future mode requests
-shared-secret onboarding.
+SPAKE2 derives separate offer-encryption and request-confirmation keys.
 
-Pairing exchange messages are signed:
+The transcript binds:
 
-| Message | Signed By | Required Binding |
+| Binding | Purpose |
 | --- | --- | --- |
-| Offer | Inviter | network, inviter peer, rendezvous token, expiry |
-| Request | Joiner | offer network, inviter peer, rendezvous token |
-| Response | Inviter | offer, joiner peer, membership grant |
+| Network name | Prevent cross-overlay pairing. |
+| Inviter and joiner peer IDs | Prevent identity substitution. |
+| Authenticated connections | Match signatures to transport identities. |
+| Signed encrypted offer | Bind expiry and one-time rendezvous token. |
+| Requested authority | Bind address and route requests. |
 
-Live requests use a compact offer proof.
+Discovery is LAN first:
 
-| Field | Purpose |
+| Stage | Source |
 | --- | --- |
-| `offer_issued_at_unix_seconds` | Reconstruct inviter offer. |
-| `offer_expires_at_unix_seconds` | Reconstruct inviter offer. |
-| `offer_signature` | Bind request to the signed offer. |
+| LAN | mDNS candidates. |
+| Public | Kademlia provider record for the code locator. |
+| Relay | Configured or discovered circuit paths. |
 
-Live requests include a requested VPN IP.
+Provider publication repeats with bounded exponential backoff.
 
-If the accept CLI has no `--vpn-ip`, it requests the built-in IPv4 address
-derived from the joiner peer ID.
+This handles DHT bootstrap convergence after the pairing window opens.
 
-Live requests also include any `--local-route` entries.
+Approval produces a durable two-phase enrollment:
 
-The daemon validates those route prefixes before issuing grants.
+```text
+persist Prepared
+  -> apply forwarding, membership, and TUN routes
+  -> persist Applied
+  -> render native Nix
+  -> acknowledge into compact receipt
+```
 
-Record-based membership responses copy requested routes into the joiner grant.
+Startup reconciles both prepared and applied enrollments idempotently.
 
-Legacy embedded offers are still accepted.
+Generated Nix contains signed records and managed secret paths.
 
-Discovery-only offers omit inviter addresses from the signed payload.
+It contains no private key, membership-key contents, JSON, or static peer bypass.
 
-Requests for those offers carry the full signed offer.
-
-That lets the daemon validate the exact discovery-only payload.
-
-Discovery-only offers may still include relay reservation hints.
-
-Those hints are signed and skipped in JSON when empty.
-
-Older offers without the field keep the same signature shape.
-
-Pairing transport uses libp2p request-response:
-
-| Field | Value |
-| --- | --- |
-| Protocol | `/p2p-vpn/pairing/1` |
-| Encoding | 2-byte length-prefixed JSON |
-| Limit | 32 KiB per message |
-| Stream class | Control-plane stream |
-
-Live accept starts discovery before sending requests:
-
-| Source | Use |
-| --- | --- |
-| Offer inviter addresses | Dial the signed inviter peer. |
-| Offer bootstrap peers | Seed libp2p routing and request delivery. |
-| Empty bootstrap peers with public Kademlia | Expand built-in public IPFS bootstrap peers locally. |
-| Offer relay reservations | Append the signed inviter peer and dial through relay. |
-| mDNS discoveries | Dial only the signed inviter peer. |
-| Kademlia provider results | Retry closest-peer lookup for the inviter. |
-| Kademlia closest peers | Dial only addresses for the signed inviter peer. |
-| Kademlia peer-address record | Verify inviter-signed address hints. |
-
-Discovery records are hints.
-
-The signed offer and libp2p peer identity remain authoritative.
-
-Live accept diagnostics are local to the accepting CLI:
-
-| Counter | Source |
-| --- | --- |
-| `inviter_hints` | Offer URI inviter addresses. |
-| `relayed_inviter_hints` | Offer URI `/p2p-circuit` addresses. |
-| `bootstrap_peers` | Offer URI bootstrap peers. |
-| `request_attempts` | Request-response send attempts. |
-| `outbound_failures` | Request-response outbound failures. |
-| `dial_errors` | Swarm connection errors. |
-| `relayed_dial_start_failures` | Synchronous relay dial start errors. |
-
-The daemon exposes aggregate pairing counters in status and metrics views.
-
-The accept-side timeout diagnostic remains CLI-local.
-
-Together they make discovery, relay, and rejection failures reproducible.
-
-`pair inspect` decodes a URI or offer file before accept.
-
-It reports signed reachability hints and protocol versions.
-
-It hides the rendezvous token unless `--show-secret` is set.
-
-Daemon pairing counters:
-
-| Counter | Meaning |
-| --- | --- |
-| `pairing_requests_received` | Live requests handled by the daemon. |
-| `pairing_requests_accepted` | Requests that produced a response. |
-| `pairing_requests_rejected` | Requests rejected before response. |
-| `pairing_reject_invalid_offer` | Invalid signature, expiry, network, or grant shape. |
-| `pairing_reject_replayed_token` | One-time rendezvous token already consumed. |
-| `pairing_reject_rate_limited` | Per-peer pairing request limit exceeded. |
-| `pairing_outbound_failures` | Local pairing request-response sends failed. |
-| `pairing_inbound_failures` | Remote pairing request-response sends failed. |
-
-Offer-derived dials are retryable during the accept timeout.
-
-A transient failed circuit dial does not permanently discard the hint.
-
-Daemon handling rules:
-
-| Check | Behavior |
-| --- | --- |
-| Offer proof | Compact proof or legacy embedded offer. |
-| Offer signer | Must match the local daemon identity. |
-| Offer network | Must match the local daemon network. |
-| Transport peer | Must match the signed joiner peer. |
-| Rendezvous token | Consumed after the first accepted response. |
-| Rate limit | Per libp2p peer before response generation. |
-| Membership key | Returned when the network uses shared-key membership. |
-| Member record | Issued when the network uses record-based membership. |
-| Custom VPN IP | Added as a host route grant when it is not the built-in peer IP. |
-
-A response is invalid without either:
-
-| Grant | Meaning |
-| --- | --- |
-| `membership_key` | Shared-secret onboarding. |
-| `member_records[]` | Signed membership grant for the joiner. |
+See [Pairing Implementation](pairing.md) for message fields, limits, and tests.
 
 ## Routing
 

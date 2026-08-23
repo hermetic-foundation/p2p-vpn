@@ -82,7 +82,9 @@ Coverage:
 | Standalone consumer | `nixos-consumer-flake` |
 | Module lifecycle | `nixos-vm-module-lifecycle` |
 | Minimal LAN | `nixos-vm-minimal-lan` |
-| Pairing | `nixos-vm-pairing` |
+| Offline pairing | `nixos-vm-pairing` |
+| Code pairing on LAN | `nixos-vm-code-pairing-lan` |
+| Code pairing over relay | `nixos-vm-code-pairing-relay` |
 | QUIC datagram | `nixos-vm-quic-datagram` |
 | QUIC stream | `nixos-vm-quic-stream` |
 | Forced relay | `nixos-vm-forced-relay` |
@@ -283,7 +285,63 @@ Coverage:
 | Data plane | Bidirectional traffic crosses the paired overlay. |
 | Restart | Signed membership restores authorization without re-pairing. |
 
-## Namespace Live Pairing
+## NixOS VM Code Pairing on LAN
+
+Run the peerless code-pairing check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-lan -L
+```
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Baseline | Both native instances start with no configured peers. |
+| Identity | Services use agenix-style runtime identity paths. |
+| Discovery | Joiner finds inviter through mDNS from only the code. |
+| Approval | Inviter exposes peer ID, fingerprint, address, and routes. |
+| Live install | Both daemons apply signed membership without restart. |
+| Data plane | Five bidirectional ICMP packets cross `pv0`. |
+| Restart | Both services restore the durable enrollment. |
+| Artifacts | Both sides emit matching, secret-free native Nix. |
+| Evaluation | Generated fragments merge through the exported module. |
+| Acknowledgment | Receipt-bound compaction removes artifact payloads. |
+| Rebooted config | Evaluated generated configs carry traffic. |
+
+## NixOS VM Code Pairing over Relay
+
+Run the isolated relay check:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-relay -L
+```
+
+Topology:
+
+```text
+node A -- VLAN 1 -- relay -- VLAN 2 -- node B
+```
+
+The edge nodes have no underlay route to each other.
+
+Each edge knows only its side of the relay.
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Baseline | Edge configs contain no overlay peers. |
+| Isolation | Direct edge-to-edge underlay ping fails. |
+| Relay | Both reservation requests are accepted. |
+| DHT | Inviter republishes and joiner resolves the code locator. |
+| Approval | Candidate remains blocked until local approval. |
+| Pairing path | Status and metrics report relay transport. |
+| Data path | Five bidirectional ICMP packets cross the relay. |
+| Path state | Both peers select `circuit_relay`. |
+| Restart | Both services recover enrollment and traffic. |
+
+## Offline Pairing Integration
 
 Run direct live pairing:
 
@@ -548,6 +606,14 @@ nix run .#tun-e2e -- \
   -- --ignored --exact --nocapture
 ```
 
+Run the code-pairing case:
+
+```sh
+nix run .#tun-e2e -- \
+  tun_namespace_code_pairing_crosses_peerless_overlay \
+  -- --ignored --exact --nocapture
+```
+
 Coverage:
 
 | Scenario | Assertion |
@@ -558,6 +624,18 @@ Coverage:
 | Live inviter state | Inviter starts without the joiner and installs paired routes live. |
 | Replay rejection | Reusing the same offer fails and increments replay metrics. |
 | Data plane | The generated config boots and carries overlay ping. |
+
+Code-pairing namespace coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Peerless startup | Both daemons start with empty peer lists. |
+| Durable state | Mutations use encrypted per-daemon state files. |
+| Code CLI | Open and join operate through real Unix control sockets. |
+| LAN discovery | Join status reports mDNS candidates. |
+| Approval | Joiner remains pending before inviter approval. |
+| Enrollment | Both live runtimes validate the new peer. |
+| Data plane | Five ICMP packets succeed in both directions. |
 
 ## Preserve Artifacts
 
@@ -571,6 +649,14 @@ The test prints the artifact directory.
 It includes logs, generated configs, replay commands, and daemon snapshots.
 
 ## Recorded Namespace Smoke
+
+On 2026-08-22, the focused code-pairing namespace proof passed:
+
+```text
+1 passed; 0 failed; finished in 12.42s
+```
+
+It started two peerless daemons and carried five ICMP packets each way.
 
 On 2026-08-04, the ignored namespace suite passed:
 

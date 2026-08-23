@@ -26,6 +26,7 @@ Internal read-only values support evaluation tests:
 | `effectiveInterfaces` | Resolved `pvN` names |
 | `effectiveListenAddresses` | Resolved libp2p listeners |
 | `identityFiles` | Resolved identity paths |
+| `pairingStateFiles` | Resolved encrypted pairing-state paths |
 
 These values are not user configuration APIs.
 
@@ -135,56 +136,75 @@ It runs `p2p-vpn status --config` before installing the final runtime file.
 
 ## Pairing Integration
 
-### Offer
+### Running-Daemon Target
 
-`pair offer --nixos-instance <name>` resolves:
+`pair ... --instance <name>` resolves:
 
 ```text
-/run/p2p-vpn-<name>/config.json
+/run/p2p-vpn-<name>/control.sock
 ```
 
-This avoids asking a NixOS user for an internal runtime path.
+The daemon therefore reuses the active module identity.
 
-### Accept
+This includes a `privateKeyFile` delivered through a systemd credential.
 
-`pair accept --nixos-output ... --nixos-only` emits typed module options.
+### Durable State
+
+Every instance with a control socket receives:
+
+```text
+--pairing-state /var/lib/p2p-vpn/<name>/pairing-state.json
+```
+
+The daemon encrypts that state with the local identity and network context.
+
+Disabling the control socket also disables the pairing-state argument.
+
+### Native Artifact
+
+`pair artifacts` emits typed module options on both paired hosts.
 
 Default module settings are omitted from the rendered file.
 
-The renderer preserves only values needed to reproduce the paired authority:
+The renderer preserves only declarative authority:
 
 - Expected local peer ID.
 - Signed member records.
 - Optional membership-key path.
 - Assigned local address and routes.
-- Inviter peer and initial reachability hints.
-- Non-default discovery and transport values.
+- Network name when it differs from the instance.
 
-### Identity Reuse
+It deliberately omits static `peers` entries.
 
-The accept path reads the module identity before creating a joiner request.
+Static entries would bypass signed-record revocation.
 
-It rejects symlinks, non-regular files, and group/world-readable keys.
+### Secret Materialization
 
-A matching key is retained without requiring `--force`.
+When an authenticated response carries a membership key, the daemon writes:
+
+```text
+/var/lib/p2p-vpn/<name>/membership.key
+```
+
+The generated module points `membershipKeyFile` at that owner-only file.
+
+Neither secret value is rendered into Nix or runtime diagnostics.
 
 ### Restart Recovery
 
-The joiner stores the inviter-signed member record in Nix.
+Before normal runtime processing, the daemon:
 
-After inviter restart, the joiner presents that record in control capabilities.
-
-The inviter then:
-
-1. Validates the capability envelope.
-2. Verifies the record against trusted issuers, including itself.
-3. Adds the peer and route authority to live forwarding state.
-4. Installs TUN routes.
-5. Promotes the provisional connection to an overlay path.
+1. Loads and authenticates encrypted pairing state.
+2. Revalidates every durable enrollment.
+3. Applies prepared forwarding and TUN updates.
+4. Reconstructs applied membership state.
+5. Persists finalized state atomically.
 
 Incoming unknown peers are provisional membership probes.
 
 They cannot use packet, service, or route authority before validation.
+
+After generated Nix is installed, `pair acknowledge` compacts the enrollment.
 
 ## systemd Contract
 
@@ -279,6 +299,8 @@ output, JSON output, and peer-ID derivation.
 | `nixos-vm-module-lifecycle` | Identity persistence, ports, interfaces, restart isolation |
 | `nixos-vm-minimal-lan` | Two minimal native nodes carry traffic |
 | `nixos-vm-pairing` | Nix-only pairing, identity reuse, restart recovery |
+| `nixos-vm-code-pairing-lan` | Code discovery, approval, artifacts, evaluation, traffic |
+| `nixos-vm-code-pairing-relay` | DHT locator and isolated relay-only code pairing |
 | `nixos-vm-network-move` | LAN, relay fallback, and LAN promotion |
 | `nixos-vm-forced-relay` | Circuit-relay data-plane fallback |
 | QUIC VM checks | Owned QUIC datagram and stream paths |
@@ -290,6 +312,8 @@ nix build .#checks.x86_64-linux.nixos-module --no-link -L
 nix build .#checks.x86_64-linux.nixos-consumer-flake --no-link -L
 nix build .#checks.x86_64-linux.nixos-vm-module-lifecycle --no-link -L
 nix build .#checks.x86_64-linux.nixos-vm-pairing --no-link -L
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-lan --no-link -L
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-relay --no-link -L
 ```
 
 Run the complete local gate:

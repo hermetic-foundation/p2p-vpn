@@ -32,6 +32,7 @@ protocols and bounded queues.
 | --- | --- |
 | Minimal config | Operational in NixOS VM mesh tests without peer addresses. |
 | NixOS module | Operational with typed service instances and sane defaults. |
+| Code pairing | Operational with LAN-first discovery, approval, relay fallback, and native Nix artifacts. |
 | Static LAN peers | Operational in VM and recorded two-host tests. |
 | Network move recovery | Operational in VM tests with LAN-first rediscovery. |
 | Circuit relay fallback | Operational in VM and recorded forced-relay tests. |

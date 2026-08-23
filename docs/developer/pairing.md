@@ -1,199 +1,348 @@
 # Pairing Implementation
 
-This page defines the protocol, trust transition, and verification surface.
+This document defines the online code protocol and durable enrollment path.
 
-User workflows live in [../user/pairing.md](../user/pairing.md).
+User commands live in [../user/pairing.md](../user/pairing.md).
 
-## Protocol Surface
+## Protocol Surfaces
 
-| Surface | Value |
+| Surface | Version | Framing | Limit |
+| --- | --- | --- | --- |
+| Code exchange | `/p2p-vpn/pairing-code/1` | 4-byte length plus JSON | 64 KiB |
+| Offline exchange | `/p2p-vpn/pairing/1` | 2-byte length plus JSON | 32 KiB |
+| Local daemon RPC | `rpc-v1` | ASCII length header plus JSON | 64 KiB request |
+| Completion artifact | Native Nix module | Text | 256 KiB response |
+
+The code exchange uses libp2p request-response control streams.
+
+It works over direct TCP, direct QUIC, or circuit relay connections.
+
+## Local RPC Methods
+
+| Method | State Transition |
 | --- | --- |
-| Stream protocol | `/p2p-vpn/pairing/1` |
-| Offer transport | `p2pvpn:` URI |
-| Offer signer | Inviter identity |
-| Request signer | Joiner identity |
-| Response signer | Inviter identity |
-| Preferred grant | Signed membership record |
-| Optional grant | Shared membership key |
+| `pair_open` | Create inviter operation and one-time code. |
+| `pair_join` | Create joiner operation from a code. |
+| `pair_status` | Read operation phase and diagnostics. |
+| `pair_approve` | Issue and apply an authorized grant. |
+| `pair_reject` | Terminate a pending candidate. |
+| `pair_cancel` | Terminate a local operation. |
+| `pair_artifacts` | Return the applied enrollment as native Nix. |
+| `pair_acknowledge` | Compact the enrollment into a receipt. |
 
-## Exchange
+Mutation methods fail when the daemon has no durable pairing-state path.
 
-1. Inviter signs network, reachability, token, and expiry.
-2. Joiner verifies the offer and signs its requested authority.
-3. libp2p authenticates the connected joiner peer ID.
-4. Inviter compares transport identity with the signed request.
-5. Inviter signs the member record and pairing response.
-6. Both runtimes install the grant before packet forwarding.
+`Debug` output redacts the code and secret response material.
 
-The response always includes a signed member record.
+## Code and Locator
 
-This remains true when a shared membership key is also returned.
+The code contains 80 random bits.
 
-## Offer Contents
+Display format is 16 Crockford Base32 characters in four groups.
 
-| Field | Security purpose |
+```text
+ABCD-EFGH-JKLM-NPQR
+```
+
+The DHT key does not contain the code:
+
+```text
+locator = SHA-256(domain || network_name || code)
+DHT key = /p2p-vpn/pairing-code/<locator>/providers/1
+```
+
+The network name prevents cross-overlay locator reuse.
+
+An observer of the provider key cannot complete the PAKE without the code.
+
+## Discovery State Machine
+
+| Time or Event | Action |
 | --- | --- |
-| Network name | Prevent cross-overlay import |
-| Inviter peer and public key | Bind signer identity |
-| Token | Scope one acceptance window |
-| Issue and expiry times | Bound replay lifetime |
-| Address hints | Seed direct or relayed dialing |
-| Bootstrap peers | Seed public discovery |
-| Discovery settings | Reproduce compatible lookup behavior |
-| Protocol versions | Reject incompatible peers early |
+| Operation starts | Gather and try matching mDNS candidates. |
+| 3-second LAN grace passes | Begin provider publication and lookup. |
+| 8-second LAN deadline passes | Report public discovery as active. |
+| Provider result arrives | Dial the returned peer and known addresses. |
+| Relay address is selected | Carry code messages through the circuit. |
+| Transport fails | Release attempt and retry another path. |
+| Operation completes | Stop advertising the locator. |
 
-Discovery-only offers omit direct inviter addresses.
+LAN candidates are sorted by prior attempt count and peer ID.
 
-Signed relay and bootstrap hints remain available.
+This keeps first attempts deterministic while retaining jittered retries.
 
-## Request Validation
+### Provider Publication
 
-The inviter rejects a request when any check fails:
+The inviter republishes after both successful and failed `StartProviding` queries.
 
-- Offer signature, token, network, or expiry.
-- Joiner signature or public-key binding.
-- Authenticated libp2p peer differs from `joiner_peer`.
-- Requested VPN IP or route syntax is invalid.
-- Token was consumed by the current daemon process.
-- Per-peer pairing request limit was exceeded.
+One local success does not prove that later DHT peers received the record.
 
-The default rate limit is four requests per peer per second.
+| Setting | Value |
+| --- | --- |
+| Initial retry | 1 second plus deterministic jitter |
+| Maximum retry | 30 seconds plus jitter |
+| Maximum publications | 128 per operation |
+| Public lookup interval | 10 seconds |
+
+Repeated publication fixes startup races where bootstrap convergence follows open.
+
+## Authenticated Exchange
+
+### Message Sequence
+
+```text
+joiner                         inviter
+  | Hello(identity, SPAKE A)      |
+  |------------------------------>|
+  | Challenge(identity, SPAKE B,  |
+  |   encrypted signed offer)     |
+  |<------------------------------|
+  | Submit(signed request, HMAC)  |
+  |------------------------------>|
+  | Pending(opaque ticket)        |
+  |<------------------------------|
+  | Poll(ticket)                  |
+  |------------------------------>|
+  | Accepted(signed response)     |
+  |<------------------------------|
+```
+
+The inviter may return a typed rejection at any step.
+
+### Cryptographic Bindings
+
+| Material | Binding |
+| --- | --- |
+| SPAKE2 identities | Network, role, inviter peer, joiner peer. |
+| Hello signature | Joiner peer, public key, locator, time, SPAKE message. |
+| HKDF keys | Shared secret, network, locator, and both peers. |
+| Encrypted offer | ChaCha20-Poly1305 with both hello/challenge payloads as AAD. |
+| Challenge signature | Inviter peer, public key, expiry, nonce, ciphertext. |
+| Request confirmation | HMAC-SHA256 over the signed request and session. |
+| Receipt | SHA-256 of the authenticated request transcript. |
+
+libp2p transport identity must match each signed peer ID.
+
+The challenge also verifies the inviter identity expected by the hello.
+
+## Approval Boundary
+
+The PAKE authenticates code possession.
+
+It does not grant overlay authority.
+
+The inviter exposes one pending candidate through the local control socket.
+
+| Candidate Field | Operator Decision |
+| --- | --- |
+| Peer ID | Confirm the intended joining host. |
+| Public-key fingerprint | Compare through another channel when possible. |
+| Requested VPN IP | Accept or override. |
+| Requested routes | Grant explicitly or omit. |
+
+Approval IDs contain 256 random bits.
+
+Polling tickets are opaque and bound to the authenticated peer and operation.
 
 ## Grant Construction
 
-The record subject contains the joiner peer ID and public key.
+The inviter signs records for both members.
 
-Default roles:
+This gives each side the same restart-safe trust set.
 
-| Condition | Roles |
+| Condition | Record Roles |
 | --- | --- |
-| No requested custom routes | `overlay_member` |
-| Custom VPN IP or routes | `overlay_member`, `route_authority` |
+| Overlay host only | `overlay_member` |
+| Custom address or route grant | `overlay_member`, `route_authority` |
 
-A custom VPN IP becomes a host route grant.
+The peer-derived built-in host address needs no extra route grant.
 
-The peer-derived built-in address does not require an extra grant.
+A custom VPN IP becomes an explicit host route grant.
 
-## Live Installation
+Requested prefixes are not granted unless approval repeats them.
 
-After response delivery, the inviter:
+## Durable Enrollment Transaction
 
-1. Merges the signed record into bounded live state.
-2. Rebuilds peer authorization and route ownership.
-3. Synchronizes TUN routes.
-4. Removes relay-infrastructure classification for the joiner.
-5. Promotes the pairing connection to an overlay path.
-6. Starts control, service, and packet-plane negotiation.
+Runtime installation is a two-phase operation.
 
-The joiner writes the same grant into its selected config format.
-
-## Restart Recovery
-
-Inviter live state is intentionally reconstructable.
-
-The joiner advertises its stored signed record in control capabilities.
-
-An inviter that signed the record trusts its own issuer identity and can restore:
-
-- Overlay membership.
-- Route authority.
-- Kernel route state.
-- Packet-path negotiation.
-
-Unknown inbound peers begin as provisional membership probes.
-
-They gain no overlay authority until record verification succeeds.
-
-## NixOS Renderer
-
-The NixOS accept path emits typed module options.
-
-It omits module defaults for:
-
-- Network name when it equals the instance.
-- Default state identity path.
-- Default listener set.
-- Default packet plane.
-- Default `pv0` interface and MTU.
-
-The renderer includes signed records and non-default protocol settings.
-
-It never embeds private key material in Nix.
-
-## Identity File Safety
-
-NixOS accept performs these checks before identity reuse:
-
-| Check | Failure behavior |
-| --- | --- |
-| Absolute state path | Reject relative path |
-| Store boundary | Reject `/nix/store` |
-| File type | Reject symlink and non-regular file |
-| Permissions | Reject group or world access |
-| Existing content | Keep only when identity matches |
-
-Forced replacement uses a same-directory temporary file and atomic rename.
-
-## Runtime Counters
-
-| Counter | Meaning |
-| --- | --- |
-| `pairing_requests_received` | Inbound requests decoded |
-| `pairing_requests_accepted` | Signed responses installed |
-| `pairing_requests_rejected` | Requests denied before response |
-| `pairing_reject_invalid_offer` | Signature, expiry, or shape failure |
-| `pairing_reject_replayed_token` | Token already consumed |
-| `pairing_reject_rate_limited` | Per-peer rate limit reached |
-| `pairing_responses_received` | Outbound client responses seen |
-| `pairing_outbound_failures` | Request send or response failure |
-| `pairing_inbound_failures` | Response delivery failure |
-
-## Focused Tests
-
-```sh
-nix develop -c cargo test pairing_response_for_request
-nix develop -c cargo test capability_response_authorizes_peer_presenting_local_signed_record
-nix develop -c cargo test nixos_pair_accept
-nix develop -c cargo test render_pairing_nixos_module
+```text
+authenticated response
+  -> validate full next configuration
+  -> persist Prepared enrollment
+  -> apply TUN routes and forwarding authority
+  -> mark Applied
+  -> persist completion
 ```
 
-## VM Proof
+This ordering prevents an acknowledged response from being lost before application.
 
-```sh
-nix build .#checks.x86_64-linux.nixos-vm-pairing --no-link -L
-```
+### Restart Reconciliation
 
-The VM check proves:
-
-| Stage | Assertion |
+| Persisted State | Startup Action |
 | --- | --- |
-| Offer | Running NixOS instance emits a signed URI |
-| Accept | Joiner writes Nix only |
-| Identity | Existing module key is reused unchanged |
-| Defaults | Generated Nix omits redundant transport settings |
-| Evaluation | Output evaluates through the exported module |
-| Replay | Reusing the token is rejected with diagnostics |
-| Live install | Inviter learns unconfigured joiner authority |
-| Traffic | Bidirectional ICMP crosses `pv0` |
-| Restart | Inviter reconstructs authority from joiner record |
+| `Prepared` | Revalidate, apply additive routes and authority, mark `Applied`. |
+| `Applied` | Reconstruct forwarding and membership state idempotently. |
+| Receipt only | Keep replay evidence; no enrollment payload to apply. |
 
-## Public Relay Proof
+Conflicting identity, network, offer, response, or transcript data fails closed.
 
-The ignored public smoke requires an externally reachable relay:
+Reconciliation runs before normal packet forwarding begins.
 
-```sh
-P2P_VPN_LIVE_RELAY_MULTIADDR=/ip4/RELAY_IP/udp/4001/quic-v1/p2p/RELAY_ID \
-P2P_VPN_LIVE_RELAY_TIMEOUT_SECONDS=90 \
-nix develop -c cargo test \
-  live_pair_accept_uses_public_relay_for_discovery_only_offer \
-  -- --ignored --nocapture
+## State Storage
+
+NixOS stores state at:
+
+```text
+/var/lib/p2p-vpn/<instance>/pairing-state.json
 ```
 
-Public DHT-only inviter discovery remains a separate evidence target.
+The `.json` suffix names the logical payload.
 
-## Evidence
+Bytes on disk are an encrypted binary envelope.
 
-| Date | Evidence | Result |
+| Property | Implementation |
+| --- | --- |
+| Key derivation | HKDF-SHA256 from private identity, network, and local peer. |
+| Encryption | XChaCha20-Poly1305 with random 24-byte nonce. |
+| Maximum plaintext | 512 KiB. |
+| File mode | `0600`. |
+| Replacement | Same-directory temporary file, fsync, atomic rename. |
+| Parent durability | Directory sync after replacement. |
+| Unsafe path | Symlink and non-regular files are rejected. |
+
+Received membership keys use a separate owner-only `membership.key` file.
+
+Private key and membership-key contents never enter generated Nix.
+
+## Acknowledgment and Compaction
+
+`pair artifacts` is available only for an `Applied` enrollment.
+
+Both sides derive the same transcript receipt.
+
+`pair acknowledge` requires that exact digest.
+
+It then:
+
+1. Retains an expiry-bounded replay token.
+2. Removes the full offer and response enrollment payload.
+3. Stores a compact operation receipt.
+4. Removes the active terminal operation.
+
+Acknowledgment is idempotent for the same operation and receipt.
+
+A different receipt for the same operation is a conflict.
+
+## Resource Bounds
+
+| Resource | Bound |
+| --- | --- |
+| Code expiry | 1 second to 1 hour |
+| LAN candidates | 128 peers |
+| Addresses per LAN peer | 8 |
+| Inbound PAKE sessions | 8 |
+| Pending outbound code requests | 32 |
+| Attempts per peer | 16 |
+| Total peer attempts | 2,048 |
+| Durable enrollments | 256 |
+| Receipts | 256 |
+| Replay tokens | 256 |
+| Retained poll tickets | 32 |
+
+The configured per-peer pairing rate limit applies before PAKE processing.
+
+A process-wide token bucket adds a second admission boundary.
+
+## Native Nix Artifact
+
+Each side renders a local module fragment.
+
+| Included | Excluded |
+| --- | --- |
+| Expected local peer ID | Private identity material |
+| Assigned local VPN IP | Membership-key contents |
+| Approved local routes | Runtime JSON |
+| Signed member records | Static `peers` authorization |
+| Managed membership-key path | Redundant module defaults |
+
+Signed records remain revocable.
+
+Rendering static `peers` entries would bypass record revocation and is prohibited.
+
+## Observability
+
+Operation status exposes per-operation diagnostics.
+
+Daemon metrics expose aggregate behavior:
+
+| Metric | Meaning |
+| --- | --- |
+| `code_pairing_lan_candidates` | Matching mDNS candidates retained. |
+| `code_pairing_provider_advertisement_attempts` | DHT publication attempts. |
+| `code_pairing_provider_advertisement_failures` | Failed DHT publications. |
+| `code_pairing_public_lookups` | DHT provider lookups. |
+| `code_pairing_public_providers_found` | Providers returned by lookups. |
+| `code_pairing_hello_attempts` | PAKE hello attempts. |
+| `code_pairing_hello_retries` | Retried hello attempts. |
+| `code_pairing_poll_attempts` | Approval ticket polls. |
+| `code_pairing_transport_failures` | Failed request-response paths. |
+| `code_pairing_direct_messages` | Code messages on direct paths. |
+| `code_pairing_relay_messages` | Code messages on relay paths. |
+| `code_pairing_rate_limited` | Admission denied by rate limit. |
+| `code_pairing_busy` | Capacity-bound rejection. |
+| `code_pairing_completed` | Applied live enrollments. |
+
+Logs expose typed outcomes and non-secret peer or operation context.
+
+Logs must never include the pairing code, membership key, or private key.
+
+## Offline Compatibility
+
+The original signed offer workflow remains available.
+
+| Property | Code Workflow | Offline Workflow |
 | --- | --- | --- |
-| 2026-08-11 | Public relay pairing smoke | Discovery-only accept completed through relay |
-| 2026-08-12 | NixOS pairing VM | Nix-only accept, identity reuse, traffic, and restart recovery passed |
+| Human transfer | Short code | `p2pvpn:` offer file |
+| PAKE | SPAKE2 | No; offer token is a bearer secret |
+| Inviter approval | Required | Offer issuance is authorization |
+| Running joiner daemon | Required | Not required during import |
+| Native Nix artifacts | Both sides after completion | Joiner accept output |
+| JSON persistence | Not rendered | Supported by `pair accept` |
+
+Offline offer signatures, expiry, transport identity checks, and replay checks remain unchanged.
+
+## Verification Matrix
+
+| Layer | Test |
+| --- | --- |
+| Cryptography | `cargo test pairing_code` |
+| Wire codec | `cargo test runtime::pairing_code` |
+| Durable state | `cargo test runtime::pairing_sessions` |
+| Runtime mutation | `cargo test runtime::runner` |
+| Local RPC | `cargo test runtime::control_socket` |
+| CLI | `cargo test --test pair_cli` |
+| Linux namespace | `tun_namespace_code_pairing_crosses_peerless_overlay` |
+| NixOS LAN | `nixos-vm-code-pairing-lan` |
+| NixOS relay | `nixos-vm-code-pairing-relay` |
+
+Run the operational proofs:
+
+```sh
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-lan -L
+nix build .#checks.x86_64-linux.nixos-vm-code-pairing-relay -L
+nix run .#tun-e2e -- \
+  tun_namespace_code_pairing_crosses_peerless_overlay \
+  -- --ignored --exact --nocapture
+```
+
+## Proven Behavior
+
+| Proof | Assertions |
+| --- | --- |
+| LAN VM | Peerless start, mDNS, approval, traffic, restart, Nix evaluation, acknowledgment. |
+| Relay VM | Isolated edge networks, DHT locator, circuit transport, traffic, restart. |
+| Namespace | Peerless daemons, code CLI, approval gate, bidirectional five-packet ping. |
+
+The relay VM gives each edge only its local relay address.
+
+The edge nodes have no underlay route to each other.
