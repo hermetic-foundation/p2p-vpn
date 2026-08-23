@@ -1682,8 +1682,7 @@ impl CodePairingSessions {
     #[must_use]
     pub fn should_start_open_provider(&self, now: Instant) -> Option<&str> {
         let operation = self.active_open()?;
-        let due = !operation.provider_advertised
-            && operation.provider_query.is_none()
+        let due = operation.provider_query.is_none()
             && operation.provider_attempts < MAX_CODE_PAIRING_PROVIDER_ATTEMPTS
             && now.saturating_duration_since(operation.opened_at) >= CODE_PAIRING_LAN_GRACE
             && operation
@@ -1744,8 +1743,9 @@ impl CodePairingSessions {
             && operation.provider_query == Some(query_id)
         {
             operation.provider_query = None;
-            operation.provider_advertised = succeeded;
-            if !succeeded {
+            if succeeded {
+                operation.provider_advertised = true;
+            } else {
                 operation.next_provider_attempt_at = Some(
                     now + code_pairing_retry_delay(
                         operation.id.as_bytes(),
@@ -3872,6 +3872,36 @@ mod tests {
                 .expect("diagnostics")
                 .public_provider_attempts,
             1
+        );
+    }
+
+    #[test]
+    fn successful_provider_publication_repeats_after_backoff() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions
+            .open("runners", 600, 1_000, now)
+            .expect("open pairing");
+        let first_attempt = now + CODE_PAIRING_LAN_GRACE;
+        let locator = sessions
+            .should_start_open_provider(first_attempt)
+            .expect("provider locator")
+            .to_owned();
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let query_id = kademlia
+            .start_providing(kad::RecordKey::new(&locator))
+            .expect("provider query");
+        sessions.mark_open_provider_started(&locator, query_id, first_attempt);
+
+        assert!(sessions.finish_open_provider(query_id, true, first_attempt));
+        assert_eq!(sessions.should_start_open_provider(first_attempt), None);
+        assert_eq!(
+            sessions.should_start_open_provider(
+                first_attempt + CODE_PAIRING_RETRY_MAX + Duration::from_secs(1)
+            ),
+            Some(locator.as_str())
         );
     }
 
