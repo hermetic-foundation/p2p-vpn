@@ -21,12 +21,16 @@ use crate::{
 pub const DEFAULT_CODE_PAIRING_EXPIRES_IN_SECONDS: u64 = 10 * 60;
 pub const MAX_CODE_PAIRING_EXPIRES_IN_SECONDS: u64 = 60 * 60;
 pub const CODE_PAIRING_LAN_GRACE: Duration = Duration::from_secs(3);
+pub const CODE_PAIRING_LAN_HARD_DEADLINE: Duration = Duration::from_secs(8);
 pub const CODE_PAIRING_TICK: Duration = Duration::from_secs(1);
 pub const CODE_PAIRING_LAN_CANDIDATE_TTL: Duration = Duration::from_mins(2);
 pub const CODE_PAIRING_PUBLIC_LOOKUP_INTERVAL: Duration = Duration::from_secs(10);
 pub const MAX_CODE_PAIRING_LAN_CANDIDATES: usize = 128;
 pub const MAX_CODE_PAIRING_LAN_ADDRESSES_PER_PEER: usize = 8;
-pub const MAX_CODE_PAIRING_PEER_ATTEMPTS: usize = 128;
+pub const MAX_CODE_PAIRING_TRACKED_PEERS: usize = 128;
+pub const MAX_CODE_PAIRING_PEER_ATTEMPTS: usize = MAX_CODE_PAIRING_TRACKED_PEERS;
+pub const MAX_CODE_PAIRING_ATTEMPTS_PER_PEER: u16 = 16;
+pub const MAX_CODE_PAIRING_TOTAL_ATTEMPTS: u16 = 2_048;
 pub const MAX_PENDING_CODE_HELLOS: usize = 32;
 pub const MAX_INBOUND_CODE_SESSIONS: usize = 8;
 pub const CODE_PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -40,6 +44,10 @@ const APPROVAL_ID_BYTES: usize = 32;
 const PAIRING_TICKET_BYTES: usize = 16;
 const RENDEZVOUS_TOKEN_BYTES: usize = 16;
 const PERSISTED_PAIRING_STATE_VERSION: u8 = 1;
+const CODE_PAIRING_RETRY_BASE: Duration = Duration::from_secs(1);
+const CODE_PAIRING_RETRY_MAX: Duration = Duration::from_secs(30);
+const CODE_PAIRING_RETRY_JITTER_MAX_MILLIS: u64 = 1_000;
+const MAX_CODE_PAIRING_PROVIDER_ATTEMPTS: u16 = 128;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +191,9 @@ struct OpenOperation {
     opened_at: Instant,
     expires_at_unix_seconds: u64,
     expires_in_seconds: u64,
+    provider_attempts: u16,
+    provider_query: Option<kad::QueryId>,
+    next_provider_attempt_at: Option<Instant>,
     provider_advertised: bool,
     completed: Option<PairingResponse>,
     terminal: Option<TerminalStatus>,
@@ -198,13 +209,21 @@ struct JoinOperation {
     public_lookup_started: bool,
     next_public_lookup_at: Option<Instant>,
     public_lookup_query: Option<kad::QueryId>,
-    attempted_peers: HashSet<Libp2pPeerId>,
+    peer_attempts: HashMap<Libp2pPeerId, PeerAttemptState>,
+    total_peer_attempts: u16,
     selected_inviter: Option<Libp2pPeerId>,
     remote_approval: Option<RemoteApproval>,
     requested_vpn_ip: Option<String>,
     requested_routes: Vec<RouteConfig>,
     completed: Option<(PairingOffer, PairingResponse)>,
     terminal: Option<TerminalStatus>,
+}
+
+#[derive(Clone, Copy)]
+struct PeerAttemptState {
+    attempts: u16,
+    in_flight: bool,
+    next_attempt_at: Instant,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -280,6 +299,8 @@ struct RemoteApproval {
     transcript_sha256: String,
     next_poll_at: Instant,
     poll_in_flight: bool,
+    consecutive_transport_failures: u16,
+    route_recovery_started_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -479,6 +500,9 @@ impl CodePairingSessions {
             opened_at: now,
             expires_at_unix_seconds,
             expires_in_seconds,
+            provider_attempts: 0,
+            provider_query: None,
+            next_provider_attempt_at: None,
             provider_advertised: false,
             completed: None,
             terminal: None,
@@ -559,7 +583,8 @@ impl CodePairingSessions {
             public_lookup_started: false,
             next_public_lookup_at: None,
             public_lookup_query: None,
-            attempted_peers: HashSet::new(),
+            peer_attempts: HashMap::new(),
+            total_peer_attempts: 0,
             selected_inviter: None,
             remote_approval: None,
             requested_vpn_ip,
@@ -759,9 +784,9 @@ impl CodePairingSessions {
             .ok_or(CodePairingSessionError::NotFound)?;
         operation.code.take();
         operation.completed = Some(response);
-        let locator = operation
-            .provider_advertised
+        let locator = (operation.provider_advertised || operation.provider_query.is_some())
             .then(|| operation.locator.clone());
+        operation.provider_query = None;
         operation.provider_advertised = false;
         self.clear_transient_handshakes();
         Ok(PairingExpiryActions {
@@ -947,7 +972,9 @@ impl CodePairingSessions {
             .open
             .as_mut()
             .expect("operation was validated immediately above");
-        let locator = if operation.completed.is_none() && operation.provider_advertised {
+        let locator = if operation.completed.is_none()
+            && (operation.provider_advertised || operation.provider_query.is_some())
+        {
             Some(operation.locator.clone())
         } else {
             None
@@ -955,6 +982,7 @@ impl CodePairingSessions {
         operation.code.take();
         operation.completed = Some(enrollment.response.clone());
         operation.terminal = None;
+        operation.provider_query = None;
         operation.provider_advertised = false;
         self.clear_transient_handshakes();
         Ok(PairingExpiryActions {
@@ -1528,18 +1556,28 @@ impl CodePairingSessions {
     }
 
     #[must_use]
-    pub fn pending_lan_peers(&self, local_peer: Libp2pPeerId) -> Vec<Libp2pPeerId> {
+    pub fn pending_lan_peers(&self, local_peer: Libp2pPeerId, now: Instant) -> Vec<Libp2pPeerId> {
         let Some(join) = self.active_join() else {
             return Vec::new();
         };
         if join.selected_inviter.is_some() {
             return Vec::new();
         }
-        self.lan_candidates
+        let mut peers = self
+            .lan_candidates
             .keys()
-            .filter(|peer| **peer != local_peer && !join.attempted_peers.contains(peer))
+            .filter(|peer| **peer != local_peer && join.can_attempt_peer(**peer, now))
             .copied()
-            .collect()
+            .collect::<Vec<_>>();
+        peers.sort_by_key(|peer| {
+            (
+                join.peer_attempts
+                    .get(peer)
+                    .map_or(0, |attempt| attempt.attempts),
+                peer.to_bytes(),
+            )
+        });
+        peers
     }
 
     #[must_use]
@@ -1552,26 +1590,96 @@ impl CodePairingSessions {
     #[must_use]
     pub fn should_start_open_provider(&self, now: Instant) -> Option<&str> {
         let operation = self.active_open()?;
-        (!operation.provider_advertised
-            && now.saturating_duration_since(operation.opened_at) >= CODE_PAIRING_LAN_GRACE)
-            .then_some(operation.locator.as_str())
+        let due = !operation.provider_advertised
+            && operation.provider_query.is_none()
+            && operation.provider_attempts < MAX_CODE_PAIRING_PROVIDER_ATTEMPTS
+            && now.saturating_duration_since(operation.opened_at) >= CODE_PAIRING_LAN_GRACE
+            && operation
+                .next_provider_attempt_at
+                .is_none_or(|next_attempt| now >= next_attempt);
+        due.then_some(operation.locator.as_str())
     }
 
-    pub fn mark_open_provider_started(&mut self, locator: &str) {
+    pub fn mark_open_provider_started(
+        &mut self,
+        locator: &str,
+        query_id: kad::QueryId,
+        now: Instant,
+    ) {
         if let Some(operation) = self.open.as_mut()
             && operation.locator == locator
             && operation.terminal.is_none()
             && operation.completed.is_none()
         {
-            operation.provider_advertised = true;
+            operation.provider_attempts = operation.provider_attempts.saturating_add(1);
+            operation.provider_query = Some(query_id);
+            operation.next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.id.as_bytes(),
+                    operation.provider_attempts,
+                ),
+            );
         }
+    }
+
+    pub fn mark_open_provider_start_failed(&mut self, locator: &str, now: Instant) {
+        if let Some(operation) = self.open.as_mut()
+            && operation.locator == locator
+            && operation.terminal.is_none()
+            && operation.completed.is_none()
+        {
+            operation.provider_attempts = operation.provider_attempts.saturating_add(1);
+            operation.provider_query = None;
+            operation.next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.id.as_bytes(),
+                    operation.provider_attempts,
+                ),
+            );
+        }
+    }
+
+    pub fn finish_open_provider(
+        &mut self,
+        query_id: kad::QueryId,
+        succeeded: bool,
+        now: Instant,
+    ) -> bool {
+        if let Some(operation) = self
+            .open
+            .as_mut()
+            .filter(|operation| operation.terminal.is_none() && operation.completed.is_none())
+            && operation.provider_query == Some(query_id)
+        {
+            operation.provider_query = None;
+            operation.provider_advertised = succeeded;
+            if !succeeded {
+                operation.next_provider_attempt_at = Some(
+                    now + code_pairing_retry_delay(
+                        operation.id.as_bytes(),
+                        operation.provider_attempts,
+                    ),
+                );
+            }
+            return true;
+        }
+        false
     }
 
     #[must_use]
     pub fn should_start_join_lookup(&self, now: Instant) -> Option<&str> {
         let operation = self.active_join()?;
-        (operation.selected_inviter.is_none()
-            && now.saturating_duration_since(operation.started_at) >= CODE_PAIRING_LAN_GRACE
+        let discovery_started_at = operation
+            .remote_approval
+            .as_ref()
+            .and_then(|approval| approval.route_recovery_started_at)
+            .unwrap_or(operation.started_at);
+        let lan_elapsed = now.saturating_duration_since(discovery_started_at);
+        let lan_phase_complete = lan_elapsed >= CODE_PAIRING_LAN_GRACE
+            && (!operation.lan_attempt_in_flight()
+                || lan_elapsed >= CODE_PAIRING_LAN_HARD_DEADLINE);
+        ((operation.selected_inviter.is_none() || operation.route_recovery_needed())
+            && lan_phase_complete
             && operation
                 .next_public_lookup_at
                 .is_none_or(|next_lookup| now >= next_lookup)
@@ -1650,14 +1758,28 @@ impl CodePairingSessions {
         ))
     }
 
-    pub fn mark_peer_attempted(&mut self, peer: Libp2pPeerId) -> bool {
+    pub fn mark_peer_attempted(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
         let Some(operation) = self.active_join_mut() else {
             return false;
         };
-        if operation.attempted_peers.len() >= MAX_CODE_PAIRING_PEER_ATTEMPTS {
+        if operation.selected_inviter.is_some()
+            || operation.total_peer_attempts >= MAX_CODE_PAIRING_TOTAL_ATTEMPTS
+            || !operation.can_attempt_peer(peer, now)
+        {
             return false;
         }
-        operation.attempted_peers.insert(peer)
+        let state = operation
+            .peer_attempts
+            .entry(peer)
+            .or_insert(PeerAttemptState {
+                attempts: 0,
+                in_flight: false,
+                next_attempt_at: now,
+            });
+        state.attempts = state.attempts.saturating_add(1);
+        state.in_flight = true;
+        operation.total_peer_attempts = operation.total_peer_attempts.saturating_add(1);
+        true
     }
 
     pub fn select_inviter(&mut self, operation_id: &str, peer: Libp2pPeerId) -> bool {
@@ -1681,7 +1803,10 @@ impl CodePairingSessions {
     pub fn allows_pairing_probe(&self, peer: Libp2pPeerId) -> bool {
         self.active_open().is_some()
             || self.active_join().is_some_and(|join| {
-                join.attempted_peers.contains(&peer) || join.selected_inviter == Some(peer)
+                join.peer_attempts
+                    .get(&peer)
+                    .is_some_and(|attempt| attempt.in_flight)
+                    || join.selected_inviter == Some(peer)
             })
             || self
                 .inbound_sessions
@@ -1783,6 +1908,23 @@ impl CodePairingSessions {
             return Err(CodePairingSessionError::Conflict);
         }
         operation.selected_inviter = Some(peer);
+        if let Some(attempt) = operation.peer_attempts.get_mut(&peer) {
+            attempt.in_flight = false;
+        }
+        if let Some(remote) = operation.remote_approval.as_mut() {
+            if remote.peer != peer
+                || remote.ticket != ticket
+                || remote.offer != offer
+                || remote.transcript_sha256 != transcript_sha256
+            {
+                return Err(CodePairingSessionError::Conflict);
+            }
+            remote.next_poll_at = now + CODE_PAIRING_POLL_INTERVAL;
+            remote.poll_in_flight = false;
+            remote.consecutive_transport_failures = 0;
+            remote.route_recovery_started_at = None;
+            return Ok(());
+        }
         operation.remote_approval = Some(RemoteApproval {
             peer,
             ticket,
@@ -1790,6 +1932,8 @@ impl CodePairingSessions {
             transcript_sha256,
             next_poll_at: now,
             poll_in_flight: false,
+            consecutive_transport_failures: 0,
+            route_recovery_started_at: None,
         });
         Ok(())
     }
@@ -1811,7 +1955,7 @@ impl CodePairingSessions {
         })
     }
 
-    pub fn release_remote_poll(&mut self, operation_id: &str, peer: Libp2pPeerId) {
+    pub fn release_remote_poll(&mut self, operation_id: &str, peer: Libp2pPeerId, now: Instant) {
         if let Some(remote) = self
             .active_join_mut()
             .filter(|operation| operation.id == operation_id)
@@ -1819,17 +1963,43 @@ impl CodePairingSessions {
             .filter(|remote| remote.peer == peer)
         {
             remote.poll_in_flight = false;
+            remote.next_poll_at = remote.next_poll_at.max(now + CODE_PAIRING_POLL_INTERVAL);
         }
     }
 
-    pub fn release_peer_attempt(&mut self, operation_id: &str, peer: Libp2pPeerId) {
+    pub fn record_remote_poll_transport_failure(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        now: Instant,
+    ) {
+        if let Some(remote) = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+            .and_then(|operation| operation.remote_approval.as_mut())
+            .filter(|remote| remote.peer == peer)
+        {
+            remote.poll_in_flight = false;
+            remote.consecutive_transport_failures =
+                remote.consecutive_transport_failures.saturating_add(1);
+            remote.next_poll_at = now
+                + code_pairing_retry_delay(&peer.to_bytes(), remote.consecutive_transport_failures);
+            remote.route_recovery_started_at.get_or_insert(now);
+        }
+    }
+
+    pub fn release_peer_attempt(&mut self, operation_id: &str, peer: Libp2pPeerId, now: Instant) {
         let Some(operation) = self
             .active_join_mut()
             .filter(|operation| operation.id == operation_id)
         else {
             return;
         };
-        operation.attempted_peers.remove(&peer);
+        if let Some(state) = operation.peer_attempts.get_mut(&peer) {
+            state.in_flight = false;
+            state.next_attempt_at =
+                now + code_pairing_retry_delay(&peer.to_bytes(), state.attempts);
+        }
         if operation.selected_inviter == Some(peer) && operation.remote_approval.is_none() {
             operation.selected_inviter = None;
         }
@@ -1901,9 +2071,9 @@ impl CodePairingSessions {
         let operation = self.open.as_mut()?;
         operation.code.take();
         operation.terminal = Some(terminal);
-        let locator = operation
-            .provider_advertised
+        let locator = (operation.provider_advertised || operation.provider_query.is_some())
             .then(|| operation.locator.clone());
+        operation.provider_query = None;
         operation.provider_advertised = false;
         self.clear_transient_handshakes();
         locator
@@ -2000,7 +2170,7 @@ impl CodePairingSessions {
 
 impl OpenOperation {
     fn discovery_stage(&self) -> PairingDiscoveryStage {
-        if self.provider_advertised {
+        if self.provider_attempts > 0 {
             PairingDiscoveryStage::Public
         } else {
             PairingDiscoveryStage::Lan
@@ -2009,6 +2179,30 @@ impl OpenOperation {
 }
 
 impl JoinOperation {
+    fn lan_attempt_in_flight(&self) -> bool {
+        !self.public_lookup_started && self.peer_attempts.values().any(|attempt| attempt.in_flight)
+    }
+
+    fn can_attempt_peer(&self, peer: Libp2pPeerId, now: Instant) -> bool {
+        if self.total_peer_attempts >= MAX_CODE_PAIRING_TOTAL_ATTEMPTS {
+            return false;
+        }
+        match self.peer_attempts.get(&peer) {
+            Some(attempt) => {
+                !attempt.in_flight
+                    && attempt.attempts < MAX_CODE_PAIRING_ATTEMPTS_PER_PEER
+                    && now >= attempt.next_attempt_at
+            }
+            None => self.peer_attempts.len() < MAX_CODE_PAIRING_TRACKED_PEERS,
+        }
+    }
+
+    fn route_recovery_needed(&self) -> bool {
+        self.remote_approval
+            .as_ref()
+            .is_some_and(|approval| approval.route_recovery_started_at.is_some())
+    }
+
     fn discovery_stage(&self) -> PairingDiscoveryStage {
         if self.public_lookup_started {
             PairingDiscoveryStage::Public
@@ -2339,6 +2533,22 @@ fn validate_pairing_ticket(ticket: &str) -> Result<(), CodePairingSessionError> 
     }
 }
 
+fn code_pairing_retry_delay(seed: &[u8], attempt: u16) -> Duration {
+    let exponent = u32::from(attempt.saturating_sub(1).min(5));
+    let multiplier = 1_u64 << exponent;
+    let base_seconds = CODE_PAIRING_RETRY_BASE
+        .as_secs()
+        .saturating_mul(multiplier)
+        .min(CODE_PAIRING_RETRY_MAX.as_secs());
+    let mut hasher = Sha256::new();
+    hasher.update(seed);
+    hasher.update(attempt.to_be_bytes());
+    let digest = hasher.finalize();
+    let jitter = u64::from(u16::from_be_bytes([digest[0], digest[1]]))
+        % CODE_PAIRING_RETRY_JITTER_MAX_MILLIS;
+    Duration::from_secs(base_seconds) + Duration::from_millis(jitter)
+}
+
 pub fn validate_pairing_operation_id(operation_id: &str) -> Result<(), CodePairingSessionError> {
     let bytes = URL_SAFE_NO_PAD
         .decode(operation_id)
@@ -2497,6 +2707,9 @@ impl PersistedOpenOperation {
             opened_at: resumed_at,
             expires_at_unix_seconds: self.expires_at_unix_seconds,
             expires_in_seconds: self.expires_in_seconds,
+            provider_attempts: 0,
+            provider_query: None,
+            next_provider_attempt_at: None,
             provider_advertised: false,
             completed: self.completed,
             terminal: self.terminal,
@@ -2571,7 +2784,8 @@ impl PersistedJoinOperation {
             public_lookup_started: false,
             next_public_lookup_at: None,
             public_lookup_query: None,
-            attempted_peers: HashSet::new(),
+            peer_attempts: HashMap::new(),
+            total_peer_attempts: 0,
             selected_inviter,
             remote_approval,
             requested_vpn_ip: self.requested_vpn_ip,
@@ -2705,6 +2919,8 @@ impl PersistedRemoteApproval {
             transcript_sha256: self.transcript_sha256,
             next_poll_at: resumed_at,
             poll_in_flight: false,
+            consecutive_transport_failures: 0,
+            route_recovery_started_at: Some(resumed_at),
         })
     }
 }
@@ -3200,6 +3416,205 @@ mod tests {
     }
 
     #[test]
+    fn in_flight_lan_attempt_delays_public_lookup_until_hard_deadline() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        assert!(sessions.mark_peer_attempted(peer(1), now));
+
+        assert_eq!(
+            sessions.should_start_join_lookup(now + CODE_PAIRING_LAN_GRACE),
+            None
+        );
+        assert!(
+            sessions
+                .should_start_join_lookup(now + CODE_PAIRING_LAN_HARD_DEADLINE)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn failed_peer_attempts_back_off_and_stop_at_per_peer_limit() {
+        let mut sessions = CodePairingSessions::new();
+        let mut now = Instant::now();
+        let candidate = peer(1);
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                3_600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        sessions.record_lan_candidate(
+            candidate,
+            "/ip4/127.0.0.1/tcp/4001"
+                .parse()
+                .expect("candidate address"),
+            now,
+        );
+
+        for attempt in 0..MAX_CODE_PAIRING_ATTEMPTS_PER_PEER {
+            assert!(sessions.mark_peer_attempted(candidate, now));
+            sessions.release_peer_attempt(&started.operation_id, candidate, now);
+            assert!(sessions.pending_lan_peers(peer(9), now).is_empty());
+            now += CODE_PAIRING_RETRY_MAX + Duration::from_secs(1);
+            if attempt + 1 < MAX_CODE_PAIRING_ATTEMPTS_PER_PEER {
+                assert_eq!(sessions.pending_lan_peers(peer(9), now), vec![candidate]);
+            }
+        }
+
+        assert!(!sessions.mark_peer_attempted(candidate, now));
+        assert!(sessions.pending_lan_peers(peer(9), now).is_empty());
+    }
+
+    #[test]
+    fn peer_attempts_stop_at_operation_total_limit() {
+        let mut sessions = CodePairingSessions::new();
+        let mut now = Instant::now();
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                3_600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        let peers = (1..=u8::try_from(MAX_CODE_PAIRING_TRACKED_PEERS).expect("peer cap"))
+            .map(peer)
+            .collect::<Vec<_>>();
+
+        while sessions.join.as_ref().expect("join").total_peer_attempts
+            < MAX_CODE_PAIRING_TOTAL_ATTEMPTS
+        {
+            for candidate in &peers {
+                if sessions.join.as_ref().expect("join").total_peer_attempts
+                    == MAX_CODE_PAIRING_TOTAL_ATTEMPTS
+                {
+                    break;
+                }
+                assert!(sessions.mark_peer_attempted(*candidate, now));
+                sessions.release_peer_attempt(&started.operation_id, *candidate, now);
+            }
+            now += CODE_PAIRING_RETRY_MAX + Duration::from_secs(1);
+        }
+
+        assert!(!sessions.mark_peer_attempted(peers[0], now));
+    }
+
+    #[test]
+    fn failed_provider_publication_retries_after_backoff() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions
+            .open("runners", 600, 1_000, now)
+            .expect("open pairing");
+        let first_attempt = now + CODE_PAIRING_LAN_GRACE;
+        let locator = sessions
+            .should_start_open_provider(first_attempt)
+            .expect("provider locator")
+            .to_owned();
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let query_id = kademlia
+            .start_providing(kad::RecordKey::new(&locator))
+            .expect("provider query");
+        sessions.mark_open_provider_started(&locator, query_id, first_attempt);
+
+        assert_eq!(sessions.should_start_open_provider(first_attempt), None);
+        assert!(sessions.finish_open_provider(query_id, false, first_attempt));
+        assert_eq!(sessions.should_start_open_provider(first_attempt), None);
+        assert_eq!(
+            sessions.should_start_open_provider(
+                first_attempt + CODE_PAIRING_RETRY_MAX + Duration::from_secs(1)
+            ),
+            Some(locator.as_str())
+        );
+    }
+
+    #[test]
+    fn approval_poll_transport_failure_restarts_lan_first_discovery() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let inviter = peer(1);
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        let offer = test_offer(inviter);
+        let transcript = test_transcript_sha256();
+        let ticket = fresh_pairing_ticket();
+        sessions
+            .set_remote_pending(
+                &started.operation_id,
+                inviter,
+                offer.clone(),
+                transcript.clone(),
+                ticket.clone(),
+                now,
+            )
+            .expect("remote approval");
+
+        assert_eq!(
+            sessions.should_start_join_lookup(now + CODE_PAIRING_LAN_HARD_DEADLINE),
+            None
+        );
+        sessions.record_remote_poll_transport_failure(
+            &started.operation_id,
+            inviter,
+            now + Duration::from_secs(1),
+        );
+        assert_eq!(
+            sessions.should_start_join_lookup(now + Duration::from_secs(1)),
+            None
+        );
+        assert!(
+            sessions
+                .should_start_join_lookup(now + Duration::from_secs(1) + CODE_PAIRING_LAN_GRACE)
+                .is_some()
+        );
+
+        sessions
+            .set_remote_pending(
+                &started.operation_id,
+                inviter,
+                offer,
+                transcript,
+                ticket,
+                now + Duration::from_secs(5),
+            )
+            .expect("pending response recovers route");
+        assert_eq!(
+            sessions.should_start_join_lookup(now + CODE_PAIRING_LAN_HARD_DEADLINE),
+            None
+        );
+    }
+
+    #[test]
     fn lan_candidates_are_capped_and_expire() {
         let mut sessions = CodePairingSessions::new();
         let now = Instant::now();
@@ -3263,7 +3678,13 @@ mod tests {
             .should_start_open_provider(now + CODE_PAIRING_LAN_GRACE)
             .expect("provider locator")
             .to_owned();
-        sessions.mark_open_provider_started(&locator);
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let query_id = kademlia
+            .start_providing(kad::RecordKey::new(&locator))
+            .expect("query");
+        sessions.mark_open_provider_started(&locator, query_id, now);
 
         let actions = sessions.expire(1_011, now + Duration::from_secs(11));
 
@@ -3565,7 +3986,7 @@ mod tests {
                 .due_remote_poll(now + CODE_PAIRING_POLL_INTERVAL)
                 .is_none()
         );
-        sessions.release_remote_poll(&started.operation_id, inviter);
+        sessions.release_remote_poll(&started.operation_id, inviter, now);
         assert!(
             sessions
                 .due_remote_poll(now + CODE_PAIRING_POLL_INTERVAL)

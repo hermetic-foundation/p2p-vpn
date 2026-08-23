@@ -988,6 +988,7 @@ where
                     &node.identity,
                     &node.network_name,
                     &discovery,
+                    &metrics,
                 );
                 if let Err(error) = persist_code_pairing_sessions(
                     pairing_state_store.as_ref(),
@@ -1343,13 +1344,15 @@ fn drive_code_pairing_discovery(
     identity: &NodeIdentity,
     network_name: &str,
     discovery: &DiscoveryConfig,
+    metrics: &RuntimeMetrics,
 ) {
+    let now = Instant::now();
     let local_peer = *swarm.local_peer_id();
-    for peer in sessions.pending_lan_peers(local_peer) {
-        send_pairing_code_hello(swarm, sessions, identity, network_name, peer);
+    for peer in sessions.pending_lan_peers(local_peer, now) {
+        send_pairing_code_hello(swarm, sessions, identity, network_name, peer, now);
     }
 
-    if let Some(poll) = sessions.due_remote_poll(Instant::now()) {
+    if let Some(poll) = sessions.due_remote_poll(now) {
         let request_id = swarm.behaviour_mut().pairing_code.send_request(
             &poll.peer,
             PairingCodeRequest::Poll {
@@ -1368,7 +1371,7 @@ fn drive_code_pairing_discovery(
             )
             .is_err()
         {
-            sessions.release_remote_poll(&poll.operation_id, poll.peer);
+            sessions.release_remote_poll(&poll.operation_id, poll.peer, now);
         }
     }
 
@@ -1376,16 +1379,22 @@ fn drive_code_pairing_discovery(
         return;
     }
 
-    let now = Instant::now();
     if let Some(locator) = sessions.should_start_open_provider(now).map(str::to_owned) {
         let key = kademlia_pairing_code_key(&locator);
         match swarm.behaviour_mut().kad.start_providing(key) {
-            Ok(_) => sessions.mark_open_provider_started(&locator),
-            Err(error) => log_runtime_event(
-                LogLevel::Warn,
-                "pairing_code_provider_advertisement_failed",
-                &[("error", &format!("{error:?}"))],
-            ),
+            Ok(query_id) => {
+                sessions.mark_open_provider_started(&locator, query_id, now);
+                metrics.record_kademlia_provider_advertisement();
+            }
+            Err(error) => {
+                sessions.mark_open_provider_start_failed(&locator, now);
+                metrics.record_kademlia_provider_advertisement_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "pairing_code_provider_advertisement_failed",
+                    &[("error", &format!("{error:?}"))],
+                );
+            }
         }
     }
 
@@ -1395,6 +1404,7 @@ fn drive_code_pairing_discovery(
             .kad
             .get_providers(kademlia_pairing_code_key(&locator));
         sessions.mark_join_lookup_started(&locator, query_id, now);
+        metrics.record_kademlia_provider_lookup();
     }
 }
 
@@ -1404,6 +1414,7 @@ fn send_pairing_code_hello(
     identity: &NodeIdentity,
     network_name: &str,
     peer: Libp2pPeerId,
+    now: Instant,
 ) {
     if !sessions.can_start_outbound_hello() {
         return;
@@ -1414,7 +1425,7 @@ fn send_pairing_code_hello(
     else {
         return;
     };
-    if !sessions.mark_peer_attempted(peer) {
+    if !sessions.mark_peer_attempted(peer, now) {
         return;
     }
     let (hello, pending) = match start_pairing_code_hello_at(
@@ -1426,7 +1437,7 @@ fn send_pairing_code_hello(
     ) {
         Ok(started) => started,
         Err(error) => {
-            sessions.release_peer_attempt(&operation_id, peer);
+            sessions.release_peer_attempt(&operation_id, peer, now);
             log_runtime_event(
                 LogLevel::Warn,
                 "pairing_code_hello_build_failed",
@@ -1452,7 +1463,7 @@ fn send_pairing_code_hello(
         )
         .is_err()
     {
-        sessions.release_peer_attempt(&operation_id, peer);
+        sessions.release_peer_attempt(&operation_id, peer, now);
     }
 }
 
@@ -9201,19 +9212,27 @@ fn handle_pairing_code_event(
             {
                 match request {
                     OutboundCodeRequest::Hello(hello) => {
-                        context
-                            .code_pairing_sessions
-                            .release_peer_attempt(&hello.operation_id, hello.peer);
+                        context.code_pairing_sessions.release_peer_attempt(
+                            &hello.operation_id,
+                            hello.peer,
+                            Instant::now(),
+                        );
                     }
                     OutboundCodeRequest::Submit(pairing) => {
-                        context
-                            .code_pairing_sessions
-                            .release_peer_attempt(&pairing.operation_id, pairing.peer);
+                        context.code_pairing_sessions.release_peer_attempt(
+                            &pairing.operation_id,
+                            pairing.peer,
+                            Instant::now(),
+                        );
                     }
                     OutboundCodeRequest::Poll(pairing) => {
                         context
                             .code_pairing_sessions
-                            .release_remote_poll(&pairing.operation_id, pairing.peer);
+                            .record_remote_poll_transport_failure(
+                                &pairing.operation_id,
+                                pairing.peer,
+                                Instant::now(),
+                            );
                     }
                 }
             }
@@ -9444,9 +9463,11 @@ fn handle_pairing_code_response(
             let (offer, session) = match result {
                 Ok(result) => result,
                 Err(error) => {
-                    context
-                        .code_pairing_sessions
-                        .release_peer_attempt(&outbound.operation_id, peer);
+                    context.code_pairing_sessions.release_peer_attempt(
+                        &outbound.operation_id,
+                        peer,
+                        Instant::now(),
+                    );
                     log_runtime_event(
                         LogLevel::Warn,
                         "pairing_code_challenge_rejected",
@@ -9500,9 +9521,11 @@ fn handle_pairing_code_response(
                 )
                 .is_err()
             {
-                context
-                    .code_pairing_sessions
-                    .release_peer_attempt(&operation_id, peer);
+                context.code_pairing_sessions.release_peer_attempt(
+                    &operation_id,
+                    peer,
+                    Instant::now(),
+                );
                 log_runtime_event(
                     LogLevel::Warn,
                     "pairing_code_submit_untracked",
@@ -9511,7 +9534,7 @@ fn handle_pairing_code_response(
             }
         }
         (
-            OutboundCodeRequest::Submit(outbound),
+            OutboundCodeRequest::Submit(outbound) | OutboundCodeRequest::Poll(outbound),
             PairingCodeResponse::Pending {
                 ticket,
                 expires_at_unix_seconds: _,
@@ -9540,9 +9563,11 @@ fn handle_pairing_code_response(
                 context.code_pairing_sessions,
                 &context.local_capabilities.network_name,
             ) {
-                context
-                    .code_pairing_sessions
-                    .release_remote_poll(&outbound.operation_id, peer);
+                context.code_pairing_sessions.release_remote_poll(
+                    &outbound.operation_id,
+                    peer,
+                    Instant::now(),
+                );
                 log_pairing_persistence_failure("remote_approval_ticket", &error);
             }
         }
@@ -9632,9 +9657,11 @@ fn handle_pairing_code_response(
                 context.code_pairing_sessions,
                 &context.local_capabilities.network_name,
             ) {
-                context
-                    .code_pairing_sessions
-                    .release_remote_poll(&outbound.operation_id, peer);
+                context.code_pairing_sessions.release_remote_poll(
+                    &outbound.operation_id,
+                    peer,
+                    Instant::now(),
+                );
                 log_pairing_persistence_failure("joiner_prepare", &error);
                 return Ok(());
             }
@@ -9646,9 +9673,11 @@ fn handle_pairing_code_response(
             ) {
                 Ok(peer) => peer,
                 Err(error) => {
-                    context
-                        .code_pairing_sessions
-                        .release_remote_poll(&outbound.operation_id, peer);
+                    context.code_pairing_sessions.release_remote_poll(
+                        &outbound.operation_id,
+                        peer,
+                        Instant::now(),
+                    );
                     log_runtime_event(
                         LogLevel::Error,
                         "pairing_code_enrollment_commit_failed",
@@ -9698,9 +9727,11 @@ fn handle_pairing_code_response(
             }
         }
         (OutboundCodeRequest::Hello(outbound), PairingCodeResponse::Rejected { .. }) => {
-            context
-                .code_pairing_sessions
-                .release_peer_attempt(&outbound.operation_id, outbound.peer);
+            context.code_pairing_sessions.release_peer_attempt(
+                &outbound.operation_id,
+                outbound.peer,
+                Instant::now(),
+            );
         }
         (OutboundCodeRequest::Submit(outbound), PairingCodeResponse::Rejected { reason }) => {
             if matches!(
@@ -9709,9 +9740,11 @@ fn handle_pairing_code_response(
                     | PairingCodeRejectionReason::RateLimited
                     | PairingCodeRejectionReason::Busy
             ) {
-                context
-                    .code_pairing_sessions
-                    .release_peer_attempt(&outbound.operation_id, outbound.peer);
+                context.code_pairing_sessions.release_peer_attempt(
+                    &outbound.operation_id,
+                    outbound.peer,
+                    Instant::now(),
+                );
             } else {
                 fail_code_pairing_join(
                     context,
@@ -9721,9 +9754,11 @@ fn handle_pairing_code_response(
             }
         }
         (OutboundCodeRequest::Poll(outbound), PairingCodeResponse::Rejected { reason }) => {
-            context
-                .code_pairing_sessions
-                .release_remote_poll(&outbound.operation_id, outbound.peer);
+            context.code_pairing_sessions.release_remote_poll(
+                &outbound.operation_id,
+                outbound.peer,
+                Instant::now(),
+            );
             if !matches!(
                 reason,
                 PairingCodeRejectionReason::RateLimited | PairingCodeRejectionReason::Busy
@@ -9773,13 +9808,13 @@ fn release_outbound_code_request(
 ) {
     match request {
         OutboundCodeRequest::Hello(outbound) => {
-            sessions.release_peer_attempt(&outbound.operation_id, outbound.peer);
+            sessions.release_peer_attempt(&outbound.operation_id, outbound.peer, Instant::now());
         }
         OutboundCodeRequest::Submit(outbound) => {
-            sessions.release_peer_attempt(&outbound.operation_id, outbound.peer);
+            sessions.release_peer_attempt(&outbound.operation_id, outbound.peer, Instant::now());
         }
         OutboundCodeRequest::Poll(outbound) => {
-            sessions.release_remote_poll(&outbound.operation_id, outbound.peer);
+            sessions.release_remote_poll(&outbound.operation_id, outbound.peer, Instant::now());
         }
     }
 }
@@ -13222,6 +13257,9 @@ fn handle_kademlia_event(
                     .active_join_locator()
                     .is_some_and(|locator| kademlia_pairing_code_key(locator) == *key);
                 if pairing_lookup {
+                    context
+                        .metrics
+                        .record_kademlia_providers_found(providers.len());
                     for peer in providers {
                         if *peer != *swarm.local_peer_id() {
                             send_pairing_code_hello(
@@ -13230,12 +13268,36 @@ fn handle_kademlia_event(
                                 context.identity,
                                 &context.local_capabilities.network_name,
                                 *peer,
+                                Instant::now(),
                             );
                         }
                     }
                 } else {
                     dial_kademlia_providers(swarm, context.forwarder, context.metrics, providers);
                 }
+            }
+            match &result {
+                kad::QueryResult::StartProviding(Ok(_)) => {
+                    context
+                        .code_pairing_sessions
+                        .finish_open_provider(id, true, Instant::now());
+                }
+                kad::QueryResult::StartProviding(Err(error)) => {
+                    if context
+                        .code_pairing_sessions
+                        .finish_open_provider(id, false, Instant::now())
+                    {
+                        context
+                            .metrics
+                            .record_kademlia_provider_advertisement_failure();
+                        log_runtime_event(
+                            LogLevel::Warn,
+                            "pairing_code_provider_advertisement_failed",
+                            &[("error", &format!("{error:?}"))],
+                        );
+                    }
+                }
+                _ => {}
             }
             handle_kademlia_membership_record_result(&result, &mut context);
             handle_kademlia_peer_address_record_result(swarm, &mut context, &result);
