@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, HashSet},
     fs::{self, OpenOptions},
-    io::Write as _,
+    io::{self, Write as _},
     net::{IpAddr, UdpSocket},
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
@@ -8399,7 +8399,7 @@ async fn daemon_health(
     let verdict =
         wait_for_daemon_health(socket, Duration::from_secs(timeout_seconds.max(1)), options)
             .await?;
-    print_daemon_health_verdict(&verdict);
+    print_daemon_health_verdict(&verdict)?;
     if verdict.ready {
         Ok(())
     } else {
@@ -8615,15 +8615,41 @@ fn parse_metric_count(line: &str, metric: &str) -> Option<usize> {
         .and_then(|value| value.parse().ok())
 }
 
-fn print_daemon_health_verdict(verdict: &DaemonHealthVerdict) {
-    println!("daemon_health_ready {}", verdict.ready);
+fn print_daemon_health_verdict(verdict: &DaemonHealthVerdict) -> Result<(), String> {
+    let stdout = io::stdout();
+    write_daemon_health_verdict(&mut stdout.lock(), verdict)
+}
+
+fn write_daemon_health_verdict(
+    output: &mut impl io::Write,
+    verdict: &DaemonHealthVerdict,
+) -> Result<(), String> {
+    write_health_line(
+        output,
+        format_args!("daemon_health_ready {}", verdict.ready),
+    )?;
     for check in &verdict.checks {
-        println!(
-            "daemon_health_check {} {} {}",
-            check.name,
-            if check.ok { "ok" } else { "failed" },
-            check.detail
-        );
+        write_health_line(
+            output,
+            format_args!(
+                "daemon_health_check {} {} {}",
+                check.name,
+                if check.ok { "ok" } else { "failed" },
+                check.detail
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn write_health_line(
+    output: &mut impl io::Write,
+    line: std::fmt::Arguments<'_>,
+) -> Result<(), String> {
+    match writeln!(output, "{line}") {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(format!("failed to write daemon health output: {error}")),
     }
 }
 
@@ -10975,6 +11001,48 @@ mod tests {
         assert_eq!(verdict.checks.len(), 1);
         assert_eq!(verdict.checks[0].name, "daemon_running");
         assert!(verdict.checks[0].ok);
+    }
+
+    #[test]
+    fn daemon_health_output_tolerates_closed_pipeline() {
+        #[derive(Default)]
+        struct PipeAfterFirstLine {
+            bytes: Vec<u8>,
+            closed: bool,
+        }
+
+        impl std::io::Write for PipeAfterFirstLine {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.closed {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                let written = bytes
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(bytes.len(), |index| index + 1);
+                self.bytes.extend_from_slice(&bytes[..written]);
+                self.closed = written < bytes.len() || bytes[..written].ends_with(b"\n");
+                Ok(written)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let verdict = DaemonHealthVerdict {
+            ready: true,
+            checks: vec![DaemonHealthCheck {
+                name: "daemon_running",
+                ok: true,
+                detail: "state running".to_owned(),
+            }],
+        };
+        let mut output = PipeAfterFirstLine::default();
+
+        write_daemon_health_verdict(&mut output, &verdict).expect("broken pipe is normal");
+
+        assert_eq!(output.bytes, b"daemon_health_ready true\n");
     }
 
     #[test]
