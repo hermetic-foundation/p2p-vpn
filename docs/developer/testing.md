@@ -72,6 +72,10 @@ Skip VM checks during iteration:
 nix run .#check-operational -- --skip-vms
 ```
 
+Static checks build as one batch.
+
+VM checks use one Nix job so concurrent QEMU load cannot consume recovery deadlines.
+
 Coverage:
 
 | Scenario | Checks |

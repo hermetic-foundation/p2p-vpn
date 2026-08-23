@@ -154,6 +154,10 @@ USAGE
 
             if [[ "$is_linux" -eq 1 ]]; then
               checks+=("''${linux_checks[@]}")
+            fi
+
+            non_vm_checks=("''${checks[@]}")
+            if [[ "$is_linux" -eq 1 ]]; then
               if [[ "$skip_vms" -eq 0 ]]; then
                 checks+=("''${vm_checks[@]}")
               fi
@@ -173,7 +177,10 @@ USAGE
               exit 0
             fi
 
-            nix build --no-write-lock-file -L "''${checks[@]}"
+            nix build --no-link --no-write-lock-file -L "''${non_vm_checks[@]}"
+            if [[ "$is_linux" -eq 1 && "$skip_vms" -eq 0 ]]; then
+              nix build --no-link --no-write-lock-file --max-jobs 1 -L "''${vm_checks[@]}"
+            fi
           '';
         };
         namespacePreflight = pkgs.writeShellApplication {
