@@ -414,7 +414,7 @@ Coverage:
 
 ## Latest Local Gate
 
-The 2026-08-12 local operational gate passed:
+The 2026-08-23 local operational gate passed:
 
 ```sh
 nix run .#check-operational
@@ -430,7 +430,10 @@ Coverage:
 | Consumer flake | Standalone import and full system closure passed. |
 | Module lifecycle | Automatic identity and multi-instance isolation passed. |
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
-| Native pairing | Nix-only output, traffic, and restart recovery passed. |
+| Code pairing LAN | One-time code, inviter approval, traffic, and restart recovery passed. |
+| Code pairing relay | DHT discovery, relay transport, approval, and traffic passed. |
+| Pairing artifacts | Secret-free native Nix output evaluated with agenix paths. |
+| Offline pairing | Offer-file compatibility and replay rejection passed. |
 | QUIC datagram | `nixos-vm-quic-datagram` passed. |
 | QUIC stream | `nixos-vm-quic-stream` passed. |
 | Forced relay | `nixos-vm-forced-relay` passed. |
@@ -440,6 +443,13 @@ Coverage:
 Style and pedantic Clippy lints are advisory.
 
 The gate intentionally does not replace real separated-host proof.
+
+Focused network-move reruns also passed from fresh VM state:
+
+| Reservation transport | Recovery evidence |
+| --- | --- |
+| QUIC | Relay fallback completed in 25.7 seconds; LAN promotion completed in 8.3 seconds. |
+| TCP | Ping closed the stale reservation; replacement was accepted in 0.23 seconds. |
 
 ## Underlay Candidate Hygiene
 
