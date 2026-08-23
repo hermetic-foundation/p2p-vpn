@@ -214,6 +214,20 @@ pub struct RuntimeMetrics {
     pairing_responses_received: AtomicU64,
     pairing_outbound_failures: AtomicU64,
     pairing_inbound_failures: AtomicU64,
+    code_pairing_lan_candidates: AtomicU64,
+    code_pairing_provider_advertisement_attempts: AtomicU64,
+    code_pairing_provider_advertisement_failures: AtomicU64,
+    code_pairing_public_lookups: AtomicU64,
+    code_pairing_public_providers_found: AtomicU64,
+    code_pairing_hello_attempts: AtomicU64,
+    code_pairing_hello_retries: AtomicU64,
+    code_pairing_poll_attempts: AtomicU64,
+    code_pairing_transport_failures: AtomicU64,
+    code_pairing_direct_messages: AtomicU64,
+    code_pairing_relay_messages: AtomicU64,
+    code_pairing_rate_limited: AtomicU64,
+    code_pairing_busy: AtomicU64,
+    code_pairing_completed: AtomicU64,
     redial_attempts: AtomicU64,
     redial_skipped_connected: AtomicU64,
     redial_failures: AtomicU64,
@@ -905,6 +919,75 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_code_pairing_lan_candidate(&self) {
+        self.code_pairing_lan_candidates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_provider_advertisement_attempt(&self) {
+        self.code_pairing_provider_advertisement_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_provider_advertisement_failure(&self) {
+        self.code_pairing_provider_advertisement_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_public_lookup(&self) {
+        self.code_pairing_public_lookups
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_public_providers_found(&self, providers: usize) {
+        self.code_pairing_public_providers_found.fetch_add(
+            u64::try_from(providers).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_code_pairing_hello(&self, retry: bool) {
+        self.code_pairing_hello_attempts
+            .fetch_add(1, Ordering::Relaxed);
+        if retry {
+            self.code_pairing_hello_retries
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_code_pairing_poll(&self) {
+        self.code_pairing_poll_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_transport_failure(&self) {
+        self.code_pairing_transport_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_message(&self, relayed: bool) {
+        if relayed {
+            self.code_pairing_relay_messages
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.code_pairing_direct_messages
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_code_pairing_rate_limited(&self) {
+        self.code_pairing_rate_limited
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_busy(&self) {
+        self.code_pairing_busy.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_code_pairing_completed(&self) {
+        self.code_pairing_completed.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_redial_attempt(&self) {
         self.redial_attempts.fetch_add(1, Ordering::Relaxed);
     }
@@ -1361,6 +1444,34 @@ impl RuntimeMetrics {
             self.pairing_responses_received.load(Ordering::Relaxed);
         snapshot.pairing_outbound_failures = self.pairing_outbound_failures.load(Ordering::Relaxed);
         snapshot.pairing_inbound_failures = self.pairing_inbound_failures.load(Ordering::Relaxed);
+        snapshot.code_pairing_lan_candidates =
+            self.code_pairing_lan_candidates.load(Ordering::Relaxed);
+        snapshot.code_pairing_provider_advertisement_attempts = self
+            .code_pairing_provider_advertisement_attempts
+            .load(Ordering::Relaxed);
+        snapshot.code_pairing_provider_advertisement_failures = self
+            .code_pairing_provider_advertisement_failures
+            .load(Ordering::Relaxed);
+        snapshot.code_pairing_public_lookups =
+            self.code_pairing_public_lookups.load(Ordering::Relaxed);
+        snapshot.code_pairing_public_providers_found = self
+            .code_pairing_public_providers_found
+            .load(Ordering::Relaxed);
+        snapshot.code_pairing_hello_attempts =
+            self.code_pairing_hello_attempts.load(Ordering::Relaxed);
+        snapshot.code_pairing_hello_retries =
+            self.code_pairing_hello_retries.load(Ordering::Relaxed);
+        snapshot.code_pairing_poll_attempts =
+            self.code_pairing_poll_attempts.load(Ordering::Relaxed);
+        snapshot.code_pairing_transport_failures =
+            self.code_pairing_transport_failures.load(Ordering::Relaxed);
+        snapshot.code_pairing_direct_messages =
+            self.code_pairing_direct_messages.load(Ordering::Relaxed);
+        snapshot.code_pairing_relay_messages =
+            self.code_pairing_relay_messages.load(Ordering::Relaxed);
+        snapshot.code_pairing_rate_limited = self.code_pairing_rate_limited.load(Ordering::Relaxed);
+        snapshot.code_pairing_busy = self.code_pairing_busy.load(Ordering::Relaxed);
+        snapshot.code_pairing_completed = self.code_pairing_completed.load(Ordering::Relaxed);
         snapshot.redial_attempts = self.redial_attempts.load(Ordering::Relaxed);
         snapshot.redial_skipped_connected = self.redial_skipped_connected.load(Ordering::Relaxed);
         snapshot.redial_failures = self.redial_failures.load(Ordering::Relaxed);
@@ -1545,6 +1656,20 @@ pub struct RuntimeSnapshot {
     pub pairing_responses_received: u64,
     pub pairing_outbound_failures: u64,
     pub pairing_inbound_failures: u64,
+    pub code_pairing_lan_candidates: u64,
+    pub code_pairing_provider_advertisement_attempts: u64,
+    pub code_pairing_provider_advertisement_failures: u64,
+    pub code_pairing_public_lookups: u64,
+    pub code_pairing_public_providers_found: u64,
+    pub code_pairing_hello_attempts: u64,
+    pub code_pairing_hello_retries: u64,
+    pub code_pairing_poll_attempts: u64,
+    pub code_pairing_transport_failures: u64,
+    pub code_pairing_direct_messages: u64,
+    pub code_pairing_relay_messages: u64,
+    pub code_pairing_rate_limited: u64,
+    pub code_pairing_busy: u64,
+    pub code_pairing_completed: u64,
     pub redial_attempts: u64,
     pub redial_skipped_connected: u64,
     pub redial_failures: u64,
@@ -2023,6 +2148,56 @@ impl RuntimeSnapshot {
                 self.pairing_outbound_failures
             ),
             format!("pairing_inbound_failures {}", self.pairing_inbound_failures),
+            format!(
+                "code_pairing_lan_candidates {}",
+                self.code_pairing_lan_candidates
+            ),
+            format!(
+                "code_pairing_provider_advertisement_attempts {}",
+                self.code_pairing_provider_advertisement_attempts
+            ),
+            format!(
+                "code_pairing_provider_advertisement_failures {}",
+                self.code_pairing_provider_advertisement_failures
+            ),
+            format!(
+                "code_pairing_public_lookups {}",
+                self.code_pairing_public_lookups
+            ),
+            format!(
+                "code_pairing_public_providers_found {}",
+                self.code_pairing_public_providers_found
+            ),
+            format!(
+                "code_pairing_hello_attempts {}",
+                self.code_pairing_hello_attempts
+            ),
+            format!(
+                "code_pairing_hello_retries {}",
+                self.code_pairing_hello_retries
+            ),
+            format!(
+                "code_pairing_poll_attempts {}",
+                self.code_pairing_poll_attempts
+            ),
+            format!(
+                "code_pairing_transport_failures {}",
+                self.code_pairing_transport_failures
+            ),
+            format!(
+                "code_pairing_direct_messages {}",
+                self.code_pairing_direct_messages
+            ),
+            format!(
+                "code_pairing_relay_messages {}",
+                self.code_pairing_relay_messages
+            ),
+            format!(
+                "code_pairing_rate_limited {}",
+                self.code_pairing_rate_limited
+            ),
+            format!("code_pairing_busy {}", self.code_pairing_busy),
+            format!("code_pairing_completed {}", self.code_pairing_completed),
         ]);
     }
 
@@ -2467,6 +2642,20 @@ mod tests {
         metrics.record_pairing_response_received();
         metrics.record_pairing_outbound_failure();
         metrics.record_pairing_inbound_failure();
+        metrics.record_code_pairing_lan_candidate();
+        metrics.record_code_pairing_provider_advertisement_attempt();
+        metrics.record_code_pairing_provider_advertisement_failure();
+        metrics.record_code_pairing_public_lookup();
+        metrics.record_code_pairing_public_providers_found(2);
+        metrics.record_code_pairing_hello(false);
+        metrics.record_code_pairing_hello(true);
+        metrics.record_code_pairing_poll();
+        metrics.record_code_pairing_transport_failure();
+        metrics.record_code_pairing_message(false);
+        metrics.record_code_pairing_message(true);
+        metrics.record_code_pairing_rate_limited();
+        metrics.record_code_pairing_busy();
+        metrics.record_code_pairing_completed();
     }
 
     fn populate_runtime_state_metrics(metrics: &RuntimeMetrics) {
@@ -2918,6 +3107,29 @@ mod tests {
         assert_metric_line(&snapshot, "auto_relay_candidates 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_attempts 1");
         assert_metric_line(&snapshot, "auto_relay_reservation_failures 1");
+    }
+
+    #[test]
+    fn metrics_snapshot_reports_code_pairing_discovery_and_transport() {
+        let snapshot = populated_snapshot();
+
+        assert_eq!(snapshot.code_pairing_lan_candidates, 1);
+        assert_eq!(snapshot.code_pairing_provider_advertisement_attempts, 1);
+        assert_eq!(snapshot.code_pairing_provider_advertisement_failures, 1);
+        assert_eq!(snapshot.code_pairing_public_lookups, 1);
+        assert_eq!(snapshot.code_pairing_public_providers_found, 2);
+        assert_eq!(snapshot.code_pairing_hello_attempts, 2);
+        assert_eq!(snapshot.code_pairing_hello_retries, 1);
+        assert_eq!(snapshot.code_pairing_poll_attempts, 1);
+        assert_eq!(snapshot.code_pairing_transport_failures, 1);
+        assert_eq!(snapshot.code_pairing_direct_messages, 1);
+        assert_eq!(snapshot.code_pairing_relay_messages, 1);
+        assert_eq!(snapshot.code_pairing_rate_limited, 1);
+        assert_eq!(snapshot.code_pairing_busy, 1);
+        assert_eq!(snapshot.code_pairing_completed, 1);
+        assert_metric_line(&snapshot, "code_pairing_relay_messages 1");
+        assert_metric_line(&snapshot, "code_pairing_transport_failures 1");
+        assert_metric_line(&snapshot, "code_pairing_hello_retries 1");
     }
 
     #[test]

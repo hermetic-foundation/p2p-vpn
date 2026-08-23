@@ -1026,7 +1026,7 @@ fn run_dht_orchestrator() {
     let responder_log = read_log(&temp_dir.join("node-b.log"));
     let bootstrap_log = read_log(&temp_dir.join("node-bootstrap.log"));
     assert!(
-        initiator_log.contains("kademlia query progressed")
+        initiator_log.contains("event=kademlia_query_progressed")
             && initiator_log.contains("control capabilities accepted"),
         "node A did not discover and validate node B through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
     );

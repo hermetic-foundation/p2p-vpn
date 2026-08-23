@@ -9,10 +9,11 @@ use std::{
 };
 
 use p2p_vpn::runtime::control_socket::{
-    PairRpcCompletionArtifacts, PairRpcJoinStarted, PairRpcMembershipRecordPayload,
-    PairRpcMembershipRole, PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer,
-    PairRpcPhase, PairRpcReceipt, PairRpcRequest, PairRpcRequestEnvelope, PairRpcResponseEnvelope,
-    PairRpcResult, PairRpcRole, PairRpcSignedMembershipRecord,
+    PairRpcCompletionArtifacts, PairRpcDiagnostics, PairRpcDiscoveryStage, PairRpcJoinStarted,
+    PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan, PairRpcOpenStarted,
+    PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt, PairRpcRequest,
+    PairRpcRequestEnvelope, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole,
+    PairRpcSignedMembershipRecord, PairRpcTransport,
 };
 
 fn test_path(label: &str, extension: &str) -> PathBuf {
@@ -161,6 +162,7 @@ fn pair_join_cli_waits_for_daemon_completion() {
                         phase,
                         revision: u64::try_from(status_requests).expect("status revision"),
                         discovery: None,
+                        diagnostics: PairRpcDiagnostics::default(),
                         expires_at_unix_seconds: 1_700_000_010,
                         candidate: None,
                         artifacts_ready: phase == PairRpcPhase::Completed,
@@ -196,6 +198,66 @@ fn pair_join_cli_waits_for_daemon_completion() {
         serde_json::from_slice(&output.stdout).expect("completed status JSON");
     assert_eq!(status["phase"], "completed");
     assert_eq!(status["artifacts_ready"], true);
+    let _ = fs::remove_file(socket);
+}
+
+#[test]
+fn pair_status_cli_reports_relay_and_recovery_diagnostics() {
+    let (socket, server) = pair_rpc_server("status-diagnostics", |request| {
+        let PairRpcRequest::PairStatus { operation_id } = request.request else {
+            panic!("expected pair status request");
+        };
+        PairRpcResponseEnvelope::ok(PairRpcResult::OperationStatus(Box::new(
+            PairRpcOperationStatus {
+                operation_id,
+                network_name: "runner-mesh".to_owned(),
+                local_peer: "12D3KooWLocal".to_owned(),
+                role: PairRpcRole::Joiner,
+                phase: PairRpcPhase::AwaitingApproval,
+                revision: 4,
+                discovery: Some(PairRpcDiscoveryStage::Relay),
+                diagnostics: PairRpcDiagnostics {
+                    lan_candidates: 2,
+                    handshake_attempts: 5,
+                    handshake_retries: 3,
+                    public_provider_attempts: 0,
+                    public_lookups: 2,
+                    public_providers_found: 1,
+                    poll_transport_failures: 2,
+                    route_recovery_active: true,
+                    selected_transport: Some(PairRpcTransport::Relay),
+                },
+                expires_at_unix_seconds: 1_700_000_010,
+                candidate: None,
+                artifacts_ready: false,
+                failure: None,
+            },
+        )))
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_p2p-vpn"))
+        .args([
+            "pair",
+            "status",
+            "pair-operation",
+            "--socket",
+            socket.to_str().expect("socket path"),
+        ])
+        .output()
+        .expect("run pair status");
+
+    server.join().expect("pair RPC server");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("discovery: Relay"));
+    assert!(stdout.contains("LAN candidates: 2"));
+    assert!(stdout.contains("pairing attempts: 5 (retries 3)"));
+    assert!(stdout.contains("route recovery: true (transport failures 2)"));
+    assert!(stdout.contains("pairing transport: Relay"));
     let _ = fs::remove_file(socket);
 }
 

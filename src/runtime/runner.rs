@@ -61,12 +61,12 @@ use crate::{
             validate_capabilities,
         },
         control_socket::{
-            ControlSocket, PairRpcCandidate, PairRpcCompletionArtifacts, PairRpcDiscoveryStage,
-            PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode, PairRpcJoinStarted,
-            PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan,
-            PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
-            PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
-            PairRpcSignedMembershipRecord, RuntimeControlRequest,
+            ControlSocket, PairRpcCandidate, PairRpcCompletionArtifacts, PairRpcDiagnostics,
+            PairRpcDiscoveryStage, PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode,
+            PairRpcJoinStarted, PairRpcMembershipRecordPayload, PairRpcMembershipRole,
+            PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase,
+            PairRpcReceipt, PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole,
+            PairRpcRoute, PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlRequest,
         },
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
         p2p::{
@@ -87,7 +87,8 @@ use crate::{
             CODE_PAIRING_TICK, CodePairingSessionError, CodePairingSessions, InboundSession,
             OutboundCodeRequest, OutboundHello, OutboundPairing, PairingDiscoveryStage,
             PairingEnrollmentPreparation, PairingEnrollmentReceipt, PairingEnrollmentRole,
-            PairingEnrollmentState, PairingJoinStatus, PairingOpenStatus, PendingApproval,
+            PairingEnrollmentState, PairingJoinStatus, PairingOpenStatus, PairingTransport,
+            PendingApproval,
         },
         pairing_store::{PairingStateStore, PairingStateStoreError},
         pinned_packet_stream,
@@ -1082,6 +1083,7 @@ where
                             &node.identity,
                             &mut consumed_pairing_tokens,
                             &mut promote_peer,
+                            &metrics,
                         );
                         if let Some(peer) = promote_peer {
                             let mut context = SwarmEventContext {
@@ -1388,10 +1390,20 @@ fn drive_code_pairing_discovery(
     let now = Instant::now();
     let local_peer = *swarm.local_peer_id();
     for peer in sessions.pending_lan_peers(local_peer, now) {
-        send_pairing_code_hello(swarm, sessions, identity, network_name, peer, now);
+        send_pairing_code_hello(
+            swarm,
+            sessions,
+            identity,
+            network_name,
+            peer,
+            PairingDiscoveryStage::Lan,
+            metrics,
+            now,
+        );
     }
 
     if let Some(poll) = sessions.due_remote_poll(now) {
+        metrics.record_code_pairing_poll();
         let request_id = swarm.behaviour_mut().pairing_code.send_request(
             &poll.peer,
             PairingCodeRequest::Poll {
@@ -1424,14 +1436,17 @@ fn drive_code_pairing_discovery(
             Ok(query_id) => {
                 sessions.mark_open_provider_started(&locator, query_id, now);
                 metrics.record_kademlia_provider_advertisement();
+                metrics.record_code_pairing_provider_advertisement_attempt();
             }
             Err(error) => {
                 sessions.mark_open_provider_start_failed(&locator, now);
                 metrics.record_kademlia_provider_advertisement_failure();
+                metrics.record_code_pairing_provider_advertisement_attempt();
+                metrics.record_code_pairing_provider_advertisement_failure();
                 log_runtime_event(
                     LogLevel::Warn,
                     "pairing_code_provider_advertisement_failed",
-                    &[("error", &format!("{error:?}"))],
+                    &[("error", kademlia_store_error_name(&error))],
                 );
             }
         }
@@ -1444,6 +1459,7 @@ fn drive_code_pairing_discovery(
             .get_providers(kademlia_pairing_code_key(&locator));
         sessions.mark_join_lookup_started(&locator, query_id, now);
         metrics.record_kademlia_provider_lookup();
+        metrics.record_code_pairing_public_lookup();
     }
 }
 
@@ -1453,6 +1469,8 @@ fn send_pairing_code_hello(
     identity: &NodeIdentity,
     network_name: &str,
     peer: Libp2pPeerId,
+    discovery: PairingDiscoveryStage,
+    metrics: &RuntimeMetrics,
     now: Instant,
 ) {
     if !sessions.can_start_outbound_hello() {
@@ -1464,9 +1482,10 @@ fn send_pairing_code_hello(
     else {
         return;
     };
-    if !sessions.mark_peer_attempted(peer, now) {
+    let Some(attempt) = sessions.mark_peer_attempted(peer, now) else {
         return;
-    }
+    };
+    metrics.record_code_pairing_hello(attempt.retry);
     let (hello, pending) = match start_pairing_code_hello_at(
         &code,
         network_name,
@@ -1497,6 +1516,7 @@ fn send_pairing_code_hello(
             OutboundHello {
                 operation_id: operation_id.clone(),
                 peer,
+                discovery,
                 pending,
             },
         )
@@ -1903,6 +1923,7 @@ fn handle_pair_rpc_request(
     identity: &NodeIdentity,
     consumed_pairing_tokens: &mut HashSet<String>,
     promote_peer: &mut Option<Libp2pPeerId>,
+    metrics: &RuntimeMetrics,
 ) -> PairRpcResponseEnvelope {
     let network_name = local_capabilities.network_name.clone();
     let local_peer = identity.peer_id.clone();
@@ -2086,6 +2107,7 @@ fn handle_pair_rpc_request(
             if let Err(error) = persist_code_pairing_sessions(store, sessions, &network_name) {
                 log_pairing_persistence_failure("inviter_finalization", &error);
             }
+            metrics.record_code_pairing_completed();
             pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
                 .map(|status| PairRpcResult::ActionAccepted(Box::new(status)))
         })(),
@@ -2447,6 +2469,7 @@ fn pairing_rpc_status(
             false,
         )
     })?;
+    let diagnostics = pair_rpc_diagnostics(sessions, operation_id);
     if let Some(receipt) = sessions.receipt(operation_id) {
         if receipt.local_peer != local_peer {
             return Err(pair_rpc_error(
@@ -2466,6 +2489,7 @@ fn pairing_rpc_status(
             phase: PairRpcPhase::Completed,
             revision: 1,
             discovery: None,
+            diagnostics,
             expires_at_unix_seconds,
             candidate: None,
             artifacts_ready: false,
@@ -2552,6 +2576,8 @@ fn pairing_rpc_status(
                 )),
             ),
         };
+        let discovery =
+            pair_rpc_effective_discovery(sessions, operation_id, &diagnostics, discovery);
         return Ok(PairRpcOperationStatus {
             operation_id: operation_id.to_owned(),
             network_name: network_name.to_owned(),
@@ -2560,6 +2586,7 @@ fn pairing_rpc_status(
             phase,
             revision: 1,
             discovery,
+            diagnostics,
             expires_at_unix_seconds,
             candidate,
             artifacts_ready,
@@ -2608,6 +2635,7 @@ fn pairing_rpc_status(
             false,
         ),
     };
+    let discovery = pair_rpc_effective_discovery(sessions, operation_id, &diagnostics, discovery);
     Ok(PairRpcOperationStatus {
         operation_id: operation_id.to_owned(),
         network_name: network_name.to_owned(),
@@ -2616,11 +2644,53 @@ fn pairing_rpc_status(
         phase,
         revision: 1,
         discovery,
+        diagnostics,
         expires_at_unix_seconds,
         candidate: None,
         artifacts_ready,
         failure,
     })
+}
+
+fn pair_rpc_diagnostics(sessions: &CodePairingSessions, operation_id: &str) -> PairRpcDiagnostics {
+    sessions
+        .diagnostics(operation_id)
+        .map_or_else(PairRpcDiagnostics::default, |diagnostics| {
+            PairRpcDiagnostics {
+                lan_candidates: diagnostics.lan_candidates,
+                handshake_attempts: diagnostics.handshake_attempts,
+                handshake_retries: diagnostics.handshake_retries,
+                public_provider_attempts: diagnostics.public_provider_attempts,
+                public_lookups: diagnostics.public_lookups,
+                public_providers_found: diagnostics.public_providers_found,
+                poll_transport_failures: diagnostics.poll_transport_failures,
+                route_recovery_active: diagnostics.route_recovery_active,
+                selected_transport: diagnostics.selected_transport.map(pair_rpc_transport),
+            }
+        })
+}
+
+fn pair_rpc_effective_discovery(
+    sessions: &CodePairingSessions,
+    operation_id: &str,
+    diagnostics: &PairRpcDiagnostics,
+    discovery: Option<PairRpcDiscoveryStage>,
+) -> Option<PairRpcDiscoveryStage> {
+    if diagnostics.selected_transport == Some(PairRpcTransport::Relay) {
+        return Some(PairRpcDiscoveryStage::Relay);
+    }
+    discovery.or_else(|| {
+        sessions
+            .operation_discovery_stage(operation_id)
+            .map(pair_rpc_discovery_stage)
+    })
+}
+
+const fn pair_rpc_transport(transport: PairingTransport) -> PairRpcTransport {
+    match transport {
+        PairingTransport::Direct => PairRpcTransport::Direct,
+        PairingTransport::Relay => PairRpcTransport::Relay,
+    }
 }
 
 fn pair_rpc_discovery_stage(stage: PairingDiscoveryStage) -> PairRpcDiscoveryStage {
@@ -9226,26 +9296,39 @@ fn handle_pairing_code_event(
     match event {
         request_response::Event::Message {
             peer,
+            connection_id,
             message: Message::Request {
                 request, channel, ..
             },
-            ..
-        } => handle_pairing_code_request(swarm, context, peer, request, channel)?,
+        } => {
+            let transport =
+                pairing_transport_for_connection(context.active_connections, peer, connection_id);
+            record_pairing_code_message_path(context.metrics, transport);
+            handle_pairing_code_request(swarm, context, peer, transport, request, channel)?;
+        }
         request_response::Event::Message {
             peer,
+            connection_id,
             message:
                 Message::Response {
                     request_id,
                     response,
                 },
-            ..
-        } => handle_pairing_code_response(swarm, context, peer, request_id, response)?,
+        } => {
+            let transport =
+                pairing_transport_for_connection(context.active_connections, peer, connection_id);
+            record_pairing_code_message_path(context.metrics, transport);
+            handle_pairing_code_response(swarm, context, peer, transport, request_id, response)?;
+        }
         request_response::Event::OutboundFailure {
             peer,
+            connection_id,
             request_id,
             error,
-            ..
         } => {
+            let transport =
+                pairing_transport_for_connection(context.active_connections, peer, connection_id);
+            context.metrics.record_code_pairing_transport_failure();
             if let Some(request) = context
                 .code_pairing_sessions
                 .take_outbound_request(request_id)
@@ -9281,17 +9364,27 @@ fn handle_pairing_code_event(
                 "pairing_code_outbound_failure",
                 &[
                     ("peer", &peer.to_string()),
-                    ("error", &format!("{error:?}")),
+                    ("transport", pairing_transport_label(transport)),
+                    ("error", pairing_code_outbound_failure_name(&error)),
                 ],
             );
         }
-        request_response::Event::InboundFailure { peer, error, .. } => {
+        request_response::Event::InboundFailure {
+            peer,
+            connection_id,
+            error,
+            ..
+        } => {
+            let transport =
+                pairing_transport_for_connection(context.active_connections, peer, connection_id);
+            context.metrics.record_code_pairing_transport_failure();
             log_runtime_event(
                 LogLevel::Warn,
                 "pairing_code_inbound_failure",
                 &[
                     ("peer", &peer.to_string()),
-                    ("error", &format!("{error:?}")),
+                    ("transport", pairing_transport_label(transport)),
+                    ("error", pairing_code_inbound_failure_name(&error)),
                 ],
             );
         }
@@ -9300,15 +9393,71 @@ fn handle_pairing_code_event(
     Ok(())
 }
 
+fn pairing_transport_for_connection(
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    peer: Libp2pPeerId,
+    connection_id: ConnectionId,
+) -> Option<PairingTransport> {
+    active_connections
+        .get(&(peer, connection_id))
+        .map(|endpoint| {
+            if endpoint.is_relayed() {
+                PairingTransport::Relay
+            } else {
+                PairingTransport::Direct
+            }
+        })
+}
+
+fn record_pairing_code_message_path(metrics: &RuntimeMetrics, transport: Option<PairingTransport>) {
+    if let Some(transport) = transport {
+        metrics.record_code_pairing_message(transport == PairingTransport::Relay);
+    }
+}
+
+const fn pairing_transport_label(transport: Option<PairingTransport>) -> &'static str {
+    match transport {
+        Some(PairingTransport::Direct) => "direct",
+        Some(PairingTransport::Relay) => "relay",
+        None => "unknown",
+    }
+}
+
+const fn pairing_code_outbound_failure_name(
+    error: &request_response::OutboundFailure,
+) -> &'static str {
+    match error {
+        request_response::OutboundFailure::DialFailure => "dial_failure",
+        request_response::OutboundFailure::Timeout => "timeout",
+        request_response::OutboundFailure::ConnectionClosed => "connection_closed",
+        request_response::OutboundFailure::UnsupportedProtocols => "unsupported_protocols",
+        request_response::OutboundFailure::Io(_) => "io",
+    }
+}
+
+const fn pairing_code_inbound_failure_name(
+    error: &request_response::InboundFailure,
+) -> &'static str {
+    match error {
+        request_response::InboundFailure::Timeout => "timeout",
+        request_response::InboundFailure::ConnectionClosed => "connection_closed",
+        request_response::InboundFailure::UnsupportedProtocols => "unsupported_protocols",
+        request_response::InboundFailure::ResponseOmission => "response_omission",
+        request_response::InboundFailure::Io(_) => "io",
+    }
+}
+
 fn handle_pairing_code_request(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
+    transport: Option<PairingTransport>,
     request: PairingCodeRequest,
     channel: request_response::ResponseChannel<PairingCodeResponse>,
 ) -> Result<(), RunnerError> {
     let now = Instant::now();
     if !context.pairing_request_rate_limiters.allow(peer, now) {
+        context.metrics.record_code_pairing_rate_limited();
         return send_pairing_code_response(
             swarm,
             channel,
@@ -9322,6 +9471,7 @@ fn handle_pairing_code_request(
         PairingCodeRequest::Hello { .. } | PairingCodeRequest::Submit { .. }
     ) && !context.pairing_handshake_rate_limiter.allow(now)
     {
+        context.metrics.record_code_pairing_rate_limited();
         log_runtime_event(
             LogLevel::Warn,
             "pairing_code_global_rate_limited",
@@ -9359,6 +9509,7 @@ fn handle_pairing_code_request(
                 return send_pairing_code_unavailable(swarm, channel);
             }
             if !context.code_pairing_sessions.can_accept_inbound_hello() {
+                context.metrics.record_code_pairing_busy();
                 return send_pairing_code_response(
                     swarm,
                     channel,
@@ -9384,12 +9535,13 @@ fn handle_pairing_code_request(
                         .insert_inbound_session(
                             peer,
                             InboundSession {
-                                operation_id,
+                                operation_id: operation_id.clone(),
                                 session,
                             },
                         )
                         .is_err()
                     {
+                        context.metrics.record_code_pairing_busy();
                         return send_pairing_code_response(
                             swarm,
                             channel,
@@ -9398,6 +9550,9 @@ fn handle_pairing_code_request(
                             },
                         );
                     }
+                    context
+                        .code_pairing_sessions
+                        .record_open_handshake(&operation_id);
                     send_pairing_code_response(
                         swarm,
                         channel,
@@ -9418,6 +9573,7 @@ fn handle_pairing_code_request(
                 return send_pairing_code_response(swarm, channel, response);
             }
             if !context.code_pairing_sessions.can_accept_pending_approval() {
+                context.metrics.record_code_pairing_busy();
                 return send_pairing_code_response(
                     swarm,
                     channel,
@@ -9457,10 +9613,18 @@ fn handle_pairing_code_request(
             )?;
             let operation_id = approval.operation_id.clone();
             let response = match context.code_pairing_sessions.set_pending_approval(approval) {
-                Ok(response) => response,
-                Err(CodePairingSessionError::Capacity) => PairingCodeResponse::Rejected {
-                    reason: PairingCodeRejectionReason::Busy,
-                },
+                Ok(response) => {
+                    context
+                        .code_pairing_sessions
+                        .record_open_transport(&operation_id, transport);
+                    response
+                }
+                Err(CodePairingSessionError::Capacity) => {
+                    context.metrics.record_code_pairing_busy();
+                    PairingCodeResponse::Rejected {
+                        reason: PairingCodeRejectionReason::Busy,
+                    }
+                }
                 Err(error) => return Err(error.into()),
             };
             if let Err(error) = persist_code_pairing_sessions(
@@ -9499,6 +9663,7 @@ fn handle_pairing_code_response(
     swarm: &mut Swarm<Behaviour>,
     context: &mut SwarmEventContext<'_>,
     peer: Libp2pPeerId,
+    transport: Option<PairingTransport>,
     request_id: request_response::OutboundRequestId,
     response: PairingCodeResponse,
 ) -> Result<(), RunnerError> {
@@ -9556,10 +9721,12 @@ fn handle_pairing_code_response(
                     return Ok(());
                 }
             };
-            if !context
-                .code_pairing_sessions
-                .select_inviter(&outbound.operation_id, peer)
-            {
+            if !context.code_pairing_sessions.select_inviter(
+                &outbound.operation_id,
+                peer,
+                outbound.discovery,
+                transport,
+            ) {
                 return Ok(());
             }
             let Some((requested_vpn_ip, requested_routes)) = context
@@ -9620,6 +9787,11 @@ fn handle_pairing_code_response(
                 expires_at_unix_seconds: _,
             },
         ) => {
+            context.code_pairing_sessions.record_join_transport(
+                &outbound.operation_id,
+                peer,
+                transport,
+            );
             if let Err(error) = context.code_pairing_sessions.set_remote_pending(
                 &outbound.operation_id,
                 peer,
@@ -9681,6 +9853,11 @@ fn handle_pairing_code_response(
                 );
                 return Ok(());
             }
+            context.code_pairing_sessions.record_join_transport(
+                &outbound.operation_id,
+                peer,
+                transport,
+            );
             let prepared = match prepare_pairing_runtime_enrollment(
                 context.forwarder,
                 &outbound.offer,
@@ -9805,6 +9982,7 @@ fn handle_pairing_code_response(
             ) {
                 log_pairing_persistence_failure("joiner_finalization", &error);
             }
+            context.metrics.record_code_pairing_completed();
         }
         (OutboundCodeRequest::Hello(outbound), PairingCodeResponse::Rejected { .. }) => {
             context.code_pairing_sessions.release_peer_attempt(
@@ -13000,6 +13178,7 @@ fn handle_behaviour_event(
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
                 let infrastructure_address = address.clone();
+                context.metrics.record_code_pairing_lan_candidate();
                 context.code_pairing_sessions.record_lan_candidate(
                     peer,
                     address.clone(),
@@ -13353,6 +13532,12 @@ fn handle_kademlia_event(
                     context
                         .metrics
                         .record_kademlia_providers_found(providers.len());
+                    context
+                        .metrics
+                        .record_code_pairing_public_providers_found(providers.len());
+                    context
+                        .code_pairing_sessions
+                        .record_join_providers_found(id, providers.len());
                     for peer in providers {
                         if *peer != *swarm.local_peer_id() {
                             send_pairing_code_hello(
@@ -13361,6 +13546,8 @@ fn handle_kademlia_event(
                                 context.identity,
                                 &context.local_capabilities.network_name,
                                 *peer,
+                                PairingDiscoveryStage::Public,
+                                context.metrics,
                                 Instant::now(),
                             );
                         }
@@ -13383,10 +13570,13 @@ fn handle_kademlia_event(
                         context
                             .metrics
                             .record_kademlia_provider_advertisement_failure();
+                        context
+                            .metrics
+                            .record_code_pairing_provider_advertisement_failure();
                         log_runtime_event(
                             LogLevel::Warn,
                             "pairing_code_provider_advertisement_failed",
-                            &[("error", &format!("{error:?}"))],
+                            &[("error", kademlia_add_provider_error_name(error))],
                         );
                     }
                 }
@@ -13409,7 +13599,15 @@ fn handle_kademlia_event(
             if step.last {
                 context.code_pairing_sessions.finish_join_lookup(id);
             }
-            eprintln!("kademlia query progressed: {result:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "kademlia_query_progressed",
+                &[
+                    ("kind", kademlia_query_result_name(&result)),
+                    ("step", &step.count.to_string()),
+                    ("last", &step.last.to_string()),
+                ],
+            );
         }
         kad::Event::RoutingUpdated {
             peer, addresses, ..
@@ -13425,11 +13623,58 @@ fn handle_kademlia_event(
                     addresses.iter(),
                 );
             }
-            eprintln!("kademlia routing updated: {peer}");
+            log_runtime_event(
+                LogLevel::Info,
+                "kademlia_routing_updated",
+                &[("peer", &peer.to_string())],
+            );
         }
         other => {
-            eprintln!("kademlia event: {other:?}");
+            log_runtime_event(
+                LogLevel::Info,
+                "kademlia_event",
+                &[("kind", kademlia_event_name(&other))],
+            );
         }
+    }
+}
+
+const fn kademlia_query_result_name(result: &kad::QueryResult) -> &'static str {
+    match result {
+        kad::QueryResult::Bootstrap(_) => "bootstrap",
+        kad::QueryResult::GetClosestPeers(_) => "get_closest_peers",
+        kad::QueryResult::GetProviders(_) => "get_providers",
+        kad::QueryResult::StartProviding(_) => "start_providing",
+        kad::QueryResult::RepublishProvider(_) => "republish_provider",
+        kad::QueryResult::GetRecord(_) => "get_record",
+        kad::QueryResult::PutRecord(_) => "put_record",
+        kad::QueryResult::RepublishRecord(_) => "republish_record",
+    }
+}
+
+const fn kademlia_add_provider_error_name(error: &kad::AddProviderError) -> &'static str {
+    match error {
+        kad::AddProviderError::Timeout { .. } => "timeout",
+    }
+}
+
+const fn kademlia_store_error_name(error: &kad::store::Error) -> &'static str {
+    match error {
+        kad::store::Error::MaxRecords => "max_records",
+        kad::store::Error::MaxProvidedKeys => "max_provided_keys",
+        kad::store::Error::ValueTooLarge => "value_too_large",
+    }
+}
+
+const fn kademlia_event_name(event: &kad::Event) -> &'static str {
+    match event {
+        kad::Event::InboundRequest { .. } => "inbound_request",
+        kad::Event::OutboundQueryProgressed { .. } => "outbound_query_progressed",
+        kad::Event::RoutingUpdated { .. } => "routing_updated",
+        kad::Event::UnroutablePeer { .. } => "unroutable_peer",
+        kad::Event::RoutablePeer { .. } => "routable_peer",
+        kad::Event::PendingRoutablePeer { .. } => "pending_routable_peer",
+        kad::Event::ModeChanged { .. } => "mode_changed",
     }
 }
 
@@ -15813,6 +16058,44 @@ mod tests {
         );
         let serialized = serde_json::to_string(&status).expect("serialize status");
         assert!(!serialized.contains(&started.code));
+    }
+
+    #[test]
+    fn pair_rpc_status_reports_relay_selected_for_public_join() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let inviter_peer = inviter.peer_id.parse().expect("inviter peer");
+        let now = Instant::now();
+        let mut sessions = CodePairingSessions::new();
+        let started = sessions
+            .join(
+                "lab",
+                crate::pairing_code::PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        assert!(sessions.mark_peer_attempted(inviter_peer, now).is_some());
+        assert!(sessions.select_inviter(
+            &started.operation_id,
+            inviter_peer,
+            PairingDiscoveryStage::Public,
+            Some(PairingTransport::Relay),
+        ));
+
+        let status = pairing_rpc_status(&sessions, &started.operation_id, "lab", &joiner.peer_id)
+            .expect("status");
+
+        assert_eq!(status.phase, PairRpcPhase::AwaitingApproval);
+        assert_eq!(status.discovery, Some(PairRpcDiscoveryStage::Relay));
+        assert_eq!(
+            status.diagnostics.selected_transport,
+            Some(PairRpcTransport::Relay)
+        );
+        assert_eq!(status.diagnostics.handshake_attempts, 1);
     }
 
     #[test]
@@ -21475,6 +21758,45 @@ mod tests {
                 send_back_addr: "/ip4/127.0.0.1/tcp/5000".parse().expect("send back"),
             }),
             PathKind::DirectTcpStream
+        );
+    }
+
+    #[test]
+    fn pairing_transport_uses_the_request_response_connection() {
+        let peer = peer_id();
+        let direct_id = ConnectionId::new_unchecked(1);
+        let relay_id = ConnectionId::new_unchecked(2);
+        let mut connections = HashMap::new();
+        connections.insert(
+            (peer, direct_id),
+            ConnectedPoint::Dialer {
+                address: "/ip4/127.0.0.1/tcp/4001".parse().expect("direct address"),
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::Reuse,
+            },
+        );
+        connections.insert(
+            (peer, relay_id),
+            ConnectedPoint::Dialer {
+                address: "/ip4/127.0.0.1/tcp/4002/p2p-circuit"
+                    .parse()
+                    .expect("relay address"),
+                role_override: Endpoint::Dialer,
+                port_use: PortUse::Reuse,
+            },
+        );
+
+        assert_eq!(
+            pairing_transport_for_connection(&connections, peer, direct_id),
+            Some(PairingTransport::Direct)
+        );
+        assert_eq!(
+            pairing_transport_for_connection(&connections, peer, relay_id),
+            Some(PairingTransport::Relay)
+        );
+        assert_eq!(
+            pairing_transport_for_connection(&connections, peer, ConnectionId::new_unchecked(3)),
+            None
         );
     }
 

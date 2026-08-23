@@ -56,6 +56,31 @@ pub enum PairingDiscoveryStage {
     Public,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingTransport {
+    Direct,
+    Relay,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PairingSessionDiagnostics {
+    pub lan_candidates: u16,
+    pub handshake_attempts: u16,
+    pub handshake_retries: u16,
+    pub public_provider_attempts: u16,
+    pub public_lookups: u16,
+    pub public_providers_found: u16,
+    pub poll_transport_failures: u16,
+    pub route_recovery_active: bool,
+    pub selected_transport: Option<PairingTransport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PairingPeerAttempt {
+    pub retry: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PairingOpenStatus {
@@ -195,6 +220,8 @@ struct OpenOperation {
     provider_query: Option<kad::QueryId>,
     next_provider_attempt_at: Option<Instant>,
     provider_advertised: bool,
+    inbound_handshakes: u16,
+    selected_transport: Option<PairingTransport>,
     completed: Option<PairingResponse>,
     terminal: Option<TerminalStatus>,
 }
@@ -209,8 +236,13 @@ struct JoinOperation {
     public_lookup_started: bool,
     next_public_lookup_at: Option<Instant>,
     public_lookup_query: Option<kad::QueryId>,
+    public_lookup_attempts: u16,
+    public_providers_found: u16,
     peer_attempts: HashMap<Libp2pPeerId, PeerAttemptState>,
     total_peer_attempts: u16,
+    selected_discovery: Option<PairingDiscoveryStage>,
+    selected_transport: Option<PairingTransport>,
+    poll_transport_failures: u16,
     selected_inviter: Option<Libp2pPeerId>,
     remote_approval: Option<RemoteApproval>,
     requested_vpn_ip: Option<String>,
@@ -243,6 +275,7 @@ struct LanCandidate {
 pub struct OutboundHello {
     pub operation_id: String,
     pub peer: Libp2pPeerId,
+    pub discovery: PairingDiscoveryStage,
     pub pending: PendingPairingCodeHello,
 }
 
@@ -504,6 +537,8 @@ impl CodePairingSessions {
             provider_query: None,
             next_provider_attempt_at: None,
             provider_advertised: false,
+            inbound_handshakes: 0,
+            selected_transport: None,
             completed: None,
             terminal: None,
         });
@@ -583,8 +618,13 @@ impl CodePairingSessions {
             public_lookup_started: false,
             next_public_lookup_at: None,
             public_lookup_query: None,
+            public_lookup_attempts: 0,
+            public_providers_found: 0,
             peer_attempts: HashMap::new(),
             total_peer_attempts: 0,
+            selected_discovery: None,
+            selected_transport: None,
+            poll_transport_failures: 0,
             selected_inviter: None,
             remote_approval: None,
             requested_vpn_ip,
@@ -675,6 +715,58 @@ impl CodePairingSessions {
             discovery: operation.discovery_stage(),
             expires_at_unix_seconds: operation.expires_at_unix_seconds,
         })
+    }
+
+    #[must_use]
+    pub fn operation_discovery_stage(&self, operation_id: &str) -> Option<PairingDiscoveryStage> {
+        self.open
+            .as_ref()
+            .filter(|operation| operation.id == operation_id)
+            .map(OpenOperation::discovery_stage)
+            .or_else(|| {
+                self.join
+                    .as_ref()
+                    .filter(|operation| operation.id == operation_id)
+                    .map(|operation| {
+                        operation
+                            .selected_discovery
+                            .unwrap_or_else(|| operation.discovery_stage())
+                    })
+            })
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self, operation_id: &str) -> Option<PairingSessionDiagnostics> {
+        let lan_candidates = u16::try_from(self.lan_candidates.len()).unwrap_or(u16::MAX);
+        if let Some(operation) = self
+            .open
+            .as_ref()
+            .filter(|operation| operation.id == operation_id)
+        {
+            return Some(PairingSessionDiagnostics {
+                lan_candidates,
+                handshake_attempts: operation.inbound_handshakes,
+                public_provider_attempts: operation.provider_attempts,
+                selected_transport: operation.selected_transport,
+                ..PairingSessionDiagnostics::default()
+            });
+        }
+        self.join
+            .as_ref()
+            .filter(|operation| operation.id == operation_id)
+            .map(|operation| PairingSessionDiagnostics {
+                lan_candidates,
+                handshake_attempts: operation.total_peer_attempts,
+                handshake_retries: operation.total_peer_attempts.saturating_sub(
+                    u16::try_from(operation.peer_attempts.len()).unwrap_or(u16::MAX),
+                ),
+                public_lookups: operation.public_lookup_attempts,
+                public_providers_found: operation.public_providers_found,
+                poll_transport_failures: operation.poll_transport_failures,
+                route_recovery_active: operation.route_recovery_needed(),
+                selected_transport: operation.selected_transport,
+                ..PairingSessionDiagnostics::default()
+            })
     }
 
     pub fn cancel(
@@ -1699,8 +1791,19 @@ impl CodePairingSessions {
             && operation.completed.is_none()
         {
             operation.public_lookup_started = true;
+            operation.public_lookup_attempts = operation.public_lookup_attempts.saturating_add(1);
             operation.next_public_lookup_at = Some(now + CODE_PAIRING_PUBLIC_LOOKUP_INTERVAL);
             operation.public_lookup_query = Some(query_id);
+        }
+    }
+
+    pub fn record_join_providers_found(&mut self, query_id: kad::QueryId, providers: usize) {
+        if let Some(operation) = self.active_join_mut()
+            && operation.public_lookup_query == Some(query_id)
+        {
+            operation.public_providers_found = operation
+                .public_providers_found
+                .saturating_add(u16::try_from(providers).unwrap_or(u16::MAX));
         }
     }
 
@@ -1722,6 +1825,33 @@ impl CodePairingSessions {
                 operation.expires_at_unix_seconds,
             )
         })
+    }
+
+    pub fn record_open_handshake(&mut self, operation_id: &str) {
+        if let Some(operation) = self
+            .open
+            .as_mut()
+            .filter(|operation| operation.id == operation_id)
+            .filter(|operation| operation.terminal.is_none() && operation.completed.is_none())
+        {
+            operation.inbound_handshakes = operation.inbound_handshakes.saturating_add(1);
+        }
+    }
+
+    pub fn record_open_transport(
+        &mut self,
+        operation_id: &str,
+        transport: Option<PairingTransport>,
+    ) {
+        if let Some(operation) = self
+            .open
+            .as_mut()
+            .filter(|operation| operation.id == operation_id)
+            .filter(|operation| operation.terminal.is_none() && operation.completed.is_none())
+            && transport.is_some()
+        {
+            operation.selected_transport = transport;
+        }
     }
 
     #[must_use]
@@ -1768,15 +1898,19 @@ impl CodePairingSessions {
         ))
     }
 
-    pub fn mark_peer_attempted(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+    pub fn mark_peer_attempted(
+        &mut self,
+        peer: Libp2pPeerId,
+        now: Instant,
+    ) -> Option<PairingPeerAttempt> {
         let Some(operation) = self.active_join_mut() else {
-            return false;
+            return None;
         };
         if operation.selected_inviter.is_some()
             || operation.total_peer_attempts >= MAX_CODE_PAIRING_TOTAL_ATTEMPTS
             || !operation.can_attempt_peer(peer, now)
         {
-            return false;
+            return None;
         }
         let state = operation
             .peer_attempts
@@ -1786,13 +1920,20 @@ impl CodePairingSessions {
                 in_flight: false,
                 next_attempt_at: now,
             });
+        let retry = state.attempts > 0;
         state.attempts = state.attempts.saturating_add(1);
         state.in_flight = true;
         operation.total_peer_attempts = operation.total_peer_attempts.saturating_add(1);
-        true
+        Some(PairingPeerAttempt { retry })
     }
 
-    pub fn select_inviter(&mut self, operation_id: &str, peer: Libp2pPeerId) -> bool {
+    pub fn select_inviter(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        discovery: PairingDiscoveryStage,
+        transport: Option<PairingTransport>,
+    ) -> bool {
         let Some(operation) = self
             .active_join_mut()
             .filter(|operation| operation.id == operation_id)
@@ -1806,7 +1947,25 @@ impl CodePairingSessions {
             return false;
         }
         operation.selected_inviter = Some(peer);
+        operation.selected_discovery = Some(discovery);
+        operation.selected_transport = transport;
         true
+    }
+
+    pub fn record_join_transport(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        transport: Option<PairingTransport>,
+    ) {
+        if let Some(operation) = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+            && operation.selected_inviter == Some(peer)
+            && transport.is_some()
+        {
+            operation.selected_transport = transport;
+        }
     }
 
     #[must_use]
@@ -1983,12 +2142,19 @@ impl CodePairingSessions {
         peer: Libp2pPeerId,
         now: Instant,
     ) {
-        if let Some(remote) = self
+        if let Some(operation) = self
             .active_join_mut()
             .filter(|operation| operation.id == operation_id)
-            .and_then(|operation| operation.remote_approval.as_mut())
-            .filter(|remote| remote.peer == peer)
+            && operation
+                .remote_approval
+                .as_ref()
+                .is_some_and(|remote| remote.peer == peer)
         {
+            operation.poll_transport_failures = operation.poll_transport_failures.saturating_add(1);
+            let remote = operation
+                .remote_approval
+                .as_mut()
+                .expect("remote approval checked immediately above");
             remote.poll_in_flight = false;
             remote.consecutive_transport_failures =
                 remote.consecutive_transport_failures.saturating_add(1);
@@ -2597,6 +2763,12 @@ struct PersistedOpenOperation {
     locator: String,
     expires_at_unix_seconds: u64,
     expires_in_seconds: u64,
+    #[serde(default)]
+    provider_attempts: u16,
+    #[serde(default)]
+    inbound_handshakes: u16,
+    #[serde(default)]
+    selected_transport: Option<PairingTransport>,
     completed: Option<PairingResponse>,
     terminal: Option<TerminalStatus>,
 }
@@ -2608,12 +2780,32 @@ struct PersistedJoinOperation {
     locator: String,
     expires_at_unix_seconds: u64,
     expires_in_seconds: u64,
+    #[serde(default)]
+    public_lookup_attempts: u16,
+    #[serde(default)]
+    public_providers_found: u16,
+    #[serde(default)]
+    total_peer_attempts: u16,
+    #[serde(default)]
+    peer_attempts: Vec<PersistedPeerAttempt>,
+    #[serde(default)]
+    selected_discovery: Option<PairingDiscoveryStage>,
+    #[serde(default)]
+    selected_transport: Option<PairingTransport>,
+    #[serde(default)]
+    poll_transport_failures: u16,
     requested_vpn_ip: Option<String>,
     requested_routes: Vec<RouteConfig>,
     #[serde(default)]
     remote_approval: Option<PersistedRemoteApproval>,
     completed: Option<(PairingOffer, PairingResponse)>,
     terminal: Option<TerminalStatus>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedPeerAttempt {
+    peer: String,
+    attempts: u16,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2686,6 +2878,9 @@ impl PersistedOpenOperation {
             locator: operation.locator.clone(),
             expires_at_unix_seconds: operation.expires_at_unix_seconds,
             expires_in_seconds: operation.expires_in_seconds,
+            provider_attempts: operation.provider_attempts,
+            inbound_handshakes: operation.inbound_handshakes,
+            selected_transport: operation.selected_transport,
             completed: operation.completed.clone(),
             terminal: operation.terminal.clone(),
         }
@@ -2699,6 +2894,11 @@ impl PersistedOpenOperation {
     ) -> Result<OpenOperation, CodePairingSessionError> {
         validate_pairing_operation_id(&self.id)?;
         validate_expiry(self.expires_in_seconds)?;
+        if self.provider_attempts > MAX_CODE_PAIRING_PROVIDER_ATTEMPTS {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "inviter operation has too many provider attempts".to_owned(),
+            ));
+        }
         let code = self
             .code
             .map(|code| code.parse::<PairingCode>())
@@ -2717,10 +2917,12 @@ impl PersistedOpenOperation {
             opened_at: resumed_at,
             expires_at_unix_seconds: self.expires_at_unix_seconds,
             expires_in_seconds: self.expires_in_seconds,
-            provider_attempts: 0,
+            provider_attempts: self.provider_attempts,
             provider_query: None,
             next_provider_attempt_at: None,
             provider_advertised: false,
+            inbound_handshakes: self.inbound_handshakes,
+            selected_transport: self.selected_transport,
             completed: self.completed,
             terminal: self.terminal,
         };
@@ -2748,6 +2950,20 @@ impl PersistedJoinOperation {
             locator: operation.locator.clone(),
             expires_at_unix_seconds: operation.expires_at_unix_seconds,
             expires_in_seconds: operation.expires_in_seconds,
+            public_lookup_attempts: operation.public_lookup_attempts,
+            public_providers_found: operation.public_providers_found,
+            total_peer_attempts: operation.total_peer_attempts,
+            peer_attempts: operation
+                .peer_attempts
+                .iter()
+                .map(|(peer, attempt)| PersistedPeerAttempt {
+                    peer: peer.to_string(),
+                    attempts: attempt.attempts,
+                })
+                .collect(),
+            selected_discovery: operation.selected_discovery,
+            selected_transport: operation.selected_transport,
+            poll_transport_failures: operation.poll_transport_failures,
             requested_vpn_ip: operation.requested_vpn_ip.clone(),
             requested_routes: operation.requested_routes.clone(),
             remote_approval: operation
@@ -2783,6 +2999,8 @@ impl PersistedJoinOperation {
             .remote_approval
             .map(|approval| approval.into_runtime(resumed_at))
             .transpose()?;
+        let peer_attempts =
+            restore_peer_attempts(self.peer_attempts, self.total_peer_attempts, resumed_at)?;
         let selected_inviter = remote_approval.as_ref().map(|approval| approval.peer);
         let mut operation = JoinOperation {
             id: self.id,
@@ -2794,8 +3012,13 @@ impl PersistedJoinOperation {
             public_lookup_started: false,
             next_public_lookup_at: None,
             public_lookup_query: None,
-            peer_attempts: HashMap::new(),
-            total_peer_attempts: 0,
+            public_lookup_attempts: self.public_lookup_attempts,
+            public_providers_found: self.public_providers_found,
+            peer_attempts,
+            total_peer_attempts: self.total_peer_attempts,
+            selected_discovery: self.selected_discovery,
+            selected_transport: self.selected_transport,
+            poll_transport_failures: self.poll_transport_failures,
             selected_inviter,
             remote_approval,
             requested_vpn_ip: self.requested_vpn_ip,
@@ -2956,6 +3179,54 @@ fn validate_restored_operation(
         ));
     }
     Ok(())
+}
+
+fn restore_peer_attempts(
+    attempts: Vec<PersistedPeerAttempt>,
+    total_attempts: u16,
+    resumed_at: Instant,
+) -> Result<HashMap<Libp2pPeerId, PeerAttemptState>, CodePairingSessionError> {
+    if attempts.len() > MAX_CODE_PAIRING_TRACKED_PEERS {
+        return Err(CodePairingSessionError::InvalidPersistedState(
+            "join operation has too many peer attempt records".to_owned(),
+        ));
+    }
+    let mut restored = HashMap::with_capacity(attempts.len());
+    let mut restored_total = 0_u16;
+    for attempt in attempts {
+        if attempt.attempts == 0 || attempt.attempts > MAX_CODE_PAIRING_ATTEMPTS_PER_PEER {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "join operation has an invalid peer attempt count".to_owned(),
+            ));
+        }
+        let peer = attempt.peer.parse().map_err(|_| {
+            CodePairingSessionError::InvalidPersistedState(
+                "join operation has an invalid attempted peer ID".to_owned(),
+            )
+        })?;
+        restored_total = restored_total.saturating_add(attempt.attempts);
+        if restored
+            .insert(
+                peer,
+                PeerAttemptState {
+                    attempts: attempt.attempts,
+                    in_flight: false,
+                    next_attempt_at: resumed_at,
+                },
+            )
+            .is_some()
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "join operation has duplicate peer attempt records".to_owned(),
+            ));
+        }
+    }
+    if restored_total != total_attempts || total_attempts > MAX_CODE_PAIRING_TOTAL_ATTEMPTS {
+        return Err(CodePairingSessionError::InvalidPersistedState(
+            "join operation peer attempt totals do not match".to_owned(),
+        ));
+    }
+    Ok(restored)
 }
 
 fn validate_restored_approval_state(
@@ -3444,7 +3715,12 @@ mod tests {
             sessions.should_start_join_lookup(public_now + CODE_PAIRING_PUBLIC_LOOKUP_INTERVAL),
             Some(locator.as_str())
         );
-        assert!(sessions.select_inviter(&started.operation_id, peer(1)));
+        assert!(sessions.select_inviter(
+            &started.operation_id,
+            peer(1),
+            PairingDiscoveryStage::Public,
+            Some(PairingTransport::Direct),
+        ));
         assert_eq!(
             sessions.should_start_join_lookup(public_now + CODE_PAIRING_PUBLIC_LOOKUP_INTERVAL * 2),
             None
@@ -3466,7 +3742,7 @@ mod tests {
                 now,
             )
             .expect("join pairing");
-        assert!(sessions.mark_peer_attempted(peer(1), now));
+        assert!(sessions.mark_peer_attempted(peer(1), now).is_some());
 
         assert_eq!(
             sessions.should_start_join_lookup(now + CODE_PAIRING_LAN_GRACE),
@@ -3504,7 +3780,7 @@ mod tests {
         );
 
         for attempt in 0..MAX_CODE_PAIRING_ATTEMPTS_PER_PEER {
-            assert!(sessions.mark_peer_attempted(candidate, now));
+            assert!(sessions.mark_peer_attempted(candidate, now).is_some());
             sessions.release_peer_attempt(&started.operation_id, candidate, now);
             assert!(sessions.pending_lan_peers(peer(9), now).is_empty());
             now += CODE_PAIRING_RETRY_MAX + Duration::from_secs(1);
@@ -3513,7 +3789,7 @@ mod tests {
             }
         }
 
-        assert!(!sessions.mark_peer_attempted(candidate, now));
+        assert!(sessions.mark_peer_attempted(candidate, now).is_none());
         assert!(sessions.pending_lan_peers(peer(9), now).is_empty());
     }
 
@@ -3545,20 +3821,20 @@ mod tests {
                 {
                     break;
                 }
-                assert!(sessions.mark_peer_attempted(*candidate, now));
+                assert!(sessions.mark_peer_attempted(*candidate, now).is_some());
                 sessions.release_peer_attempt(&started.operation_id, *candidate, now);
             }
             now += CODE_PAIRING_RETRY_MAX + Duration::from_secs(1);
         }
 
-        assert!(!sessions.mark_peer_attempted(peers[0], now));
+        assert!(sessions.mark_peer_attempted(peers[0], now).is_none());
     }
 
     #[test]
     fn failed_provider_publication_retries_after_backoff() {
         let mut sessions = CodePairingSessions::new();
         let now = Instant::now();
-        sessions
+        let started = sessions
             .open("runners", 600, 1_000, now)
             .expect("open pairing");
         let first_attempt = now + CODE_PAIRING_LAN_GRACE;
@@ -3582,6 +3858,20 @@ mod tests {
                 first_attempt + CODE_PAIRING_RETRY_MAX + Duration::from_secs(1)
             ),
             Some(locator.as_str())
+        );
+        let restored = CodePairingSessions::restore_persisted(
+            &sessions.encode_persisted("runners").expect("encode"),
+            "runners",
+            1_010,
+            first_attempt + Duration::from_secs(1),
+        )
+        .expect("restore");
+        assert_eq!(
+            restored
+                .diagnostics(&started.operation_id)
+                .expect("diagnostics")
+                .public_provider_attempts,
+            1
         );
     }
 
@@ -3648,6 +3938,113 @@ mod tests {
             sessions.should_start_join_lookup(now + CODE_PAIRING_LAN_HARD_DEADLINE),
             None
         );
+    }
+
+    #[test]
+    fn discovery_diagnostics_survive_restart_without_in_flight_requests() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let inviter = peer(1);
+        let started = sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+        sessions.record_lan_candidate(
+            inviter,
+            "/ip4/127.0.0.1/tcp/4001"
+                .parse()
+                .expect("candidate address"),
+            now,
+        );
+        assert_eq!(
+            sessions.mark_peer_attempted(inviter, now),
+            Some(PairingPeerAttempt { retry: false })
+        );
+        sessions.release_peer_attempt(&started.operation_id, inviter, now);
+        let retry_at = now + CODE_PAIRING_RETRY_MAX + Duration::from_secs(1);
+        assert_eq!(
+            sessions.mark_peer_attempted(inviter, retry_at),
+            Some(PairingPeerAttempt { retry: true })
+        );
+        sessions.release_peer_attempt(&started.operation_id, inviter, retry_at);
+
+        let locator = sessions
+            .active_join_locator()
+            .expect("join locator")
+            .to_owned();
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let query_id = kademlia.get_providers(kad::RecordKey::new(&locator));
+        sessions.mark_join_lookup_started(&locator, query_id, retry_at);
+        sessions.record_join_providers_found(query_id, 3);
+        sessions.finish_join_lookup(query_id);
+        assert!(sessions.select_inviter(
+            &started.operation_id,
+            inviter,
+            PairingDiscoveryStage::Public,
+            Some(PairingTransport::Relay),
+        ));
+        sessions
+            .set_remote_pending(
+                &started.operation_id,
+                inviter,
+                test_offer(inviter),
+                test_transcript_sha256(),
+                fresh_pairing_ticket(),
+                retry_at,
+            )
+            .expect("remote approval");
+        sessions.record_remote_poll_transport_failure(
+            &started.operation_id,
+            inviter,
+            retry_at + Duration::from_secs(1),
+        );
+
+        let expected = PairingSessionDiagnostics {
+            lan_candidates: 1,
+            handshake_attempts: 2,
+            handshake_retries: 1,
+            public_lookups: 1,
+            public_providers_found: 3,
+            poll_transport_failures: 1,
+            route_recovery_active: true,
+            selected_transport: Some(PairingTransport::Relay),
+            ..PairingSessionDiagnostics::default()
+        };
+        assert_eq!(sessions.diagnostics(&started.operation_id), Some(expected));
+
+        let restored = CodePairingSessions::restore_persisted(
+            &sessions.encode_persisted("runners").expect("encode"),
+            "runners",
+            1_040,
+            retry_at + Duration::from_secs(2),
+        )
+        .expect("restore");
+
+        assert_eq!(
+            restored.diagnostics(&started.operation_id),
+            Some(PairingSessionDiagnostics {
+                lan_candidates: 0,
+                ..expected
+            })
+        );
+        let restored_attempt = restored
+            .join
+            .as_ref()
+            .expect("restored join")
+            .peer_attempts
+            .get(&inviter)
+            .expect("restored attempt");
+        assert_eq!(restored_attempt.attempts, 2);
+        assert!(!restored_attempt.in_flight);
     }
 
     #[test]

@@ -2984,6 +2984,24 @@ fn print_pair_status(
     if let Some(discovery) = status.discovery {
         println!("discovery: {discovery:?}");
     }
+    println!("LAN candidates: {}", status.diagnostics.lan_candidates);
+    println!(
+        "pairing attempts: {} (retries {})",
+        status.diagnostics.handshake_attempts, status.diagnostics.handshake_retries
+    );
+    println!(
+        "public discovery: providers {} lookups {} advertisements {}",
+        status.diagnostics.public_providers_found,
+        status.diagnostics.public_lookups,
+        status.diagnostics.public_provider_attempts
+    );
+    println!(
+        "route recovery: {} (transport failures {})",
+        status.diagnostics.route_recovery_active, status.diagnostics.poll_transport_failures
+    );
+    if let Some(transport) = status.diagnostics.selected_transport {
+        println!("pairing transport: {transport:?}");
+    }
     if let Some(candidate) = &status.candidate {
         println!("approval: {}", candidate.approval_id);
         println!("candidate peer: {}", candidate.peer_id);

@@ -263,12 +263,36 @@ pub struct PairRpcOperationStatus {
     pub revision: u64,
     #[serde(default)]
     pub discovery: Option<PairRpcDiscoveryStage>,
+    #[serde(default)]
+    pub diagnostics: PairRpcDiagnostics,
     pub expires_at_unix_seconds: u64,
     #[serde(default)]
     pub candidate: Option<PairRpcCandidate>,
     pub artifacts_ready: bool,
     #[serde(default)]
     pub failure: Option<PairRpcFailure>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct PairRpcDiagnostics {
+    pub lan_candidates: u16,
+    pub handshake_attempts: u16,
+    pub handshake_retries: u16,
+    pub public_provider_attempts: u16,
+    pub public_lookups: u16,
+    pub public_providers_found: u16,
+    pub poll_transport_failures: u16,
+    pub route_recovery_active: bool,
+    #[serde(default)]
+    pub selected_transport: Option<PairRpcTransport>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairRpcTransport {
+    Direct,
+    Relay,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1038,6 +1062,7 @@ mod tests {
             phase: PairRpcPhase::AwaitingApproval,
             revision: 3,
             discovery: Some(PairRpcDiscoveryStage::PublicDht),
+            diagnostics: PairRpcDiagnostics::default(),
             expires_at_unix_seconds: 1_700_000_600,
             candidate: Some(PairRpcCandidate {
                 approval_id: "approval-transcript".to_owned(),
@@ -1208,6 +1233,32 @@ mod tests {
                 serde_json::from_slice(&encoded).expect("decode response envelope");
             assert_eq!(decoded, response);
         }
+    }
+
+    #[test]
+    fn pair_rpc_status_accepts_legacy_and_partial_diagnostics() {
+        let mut legacy =
+            serde_json::to_value(operation_status("legacy-status")).expect("encode legacy status");
+        legacy
+            .as_object_mut()
+            .expect("status object")
+            .remove("diagnostics");
+        let decoded: PairRpcOperationStatus =
+            serde_json::from_value(legacy).expect("decode status without diagnostics");
+        assert_eq!(decoded.diagnostics, PairRpcDiagnostics::default());
+
+        let mut partial = serde_json::to_value(operation_status("partial-status"))
+            .expect("encode partial status");
+        partial["diagnostics"] = serde_json::json!({ "selected_transport": "relay" });
+        let decoded: PairRpcOperationStatus =
+            serde_json::from_value(partial).expect("decode partial diagnostics");
+        assert_eq!(
+            decoded.diagnostics,
+            PairRpcDiagnostics {
+                selected_transport: Some(PairRpcTransport::Relay),
+                ..PairRpcDiagnostics::default()
+            }
+        );
     }
 
     #[test]
