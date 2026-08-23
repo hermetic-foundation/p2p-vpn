@@ -86,8 +86,8 @@ use crate::{
         pairing_sessions::{
             CODE_PAIRING_TICK, CodePairingSessionError, CodePairingSessions, InboundSession,
             OutboundCodeRequest, OutboundHello, OutboundPairing, PairingDiscoveryStage,
-            PairingEnrollmentPreparation, PairingEnrollmentRole, PairingEnrollmentState,
-            PairingJoinStatus, PairingOpenStatus, PendingApproval,
+            PairingEnrollmentPreparation, PairingEnrollmentReceipt, PairingEnrollmentRole,
+            PairingEnrollmentState, PairingJoinStatus, PairingOpenStatus, PendingApproval,
         },
         pairing_store::{PairingStateStore, PairingStateStoreError},
         pinned_packet_stream,
@@ -584,8 +584,8 @@ where
     )?;
     consumed_pairing_tokens.extend(
         code_pairing_sessions
-            .enrollments()
-            .map(|enrollment| enrollment.response.payload.rendezvous_token.clone()),
+            .active_replay_tokens(current_unix_seconds_lossy())
+            .map(str::to_owned),
     );
     node.membership_tag = forwarder.config().membership_tag()?;
     node.kademlia_rendezvous_key = node.discovery.kademlia.then(|| {
@@ -974,10 +974,13 @@ where
                 expire_packet_plane_sessions(&mut expiry_context);
             }
             _ = timers.code_pairing.tick() => {
-                let actions = code_pairing_sessions.expire(
-                    current_unix_seconds_lossy(),
-                    Instant::now(),
-                );
+                let now_unix_seconds = current_unix_seconds_lossy();
+                let actions = code_pairing_sessions.expire(now_unix_seconds, Instant::now());
+                consumed_pairing_tokens.retain(|token| {
+                    code_pairing_sessions
+                        .active_replay_tokens(now_unix_seconds)
+                        .any(|active| active == token)
+                });
                 stop_code_pairing_provider(&mut node.swarm, actions.stop_providing_locator.as_deref());
                 drive_code_pairing_discovery(
                     &mut node.swarm,
@@ -2068,6 +2071,32 @@ fn handle_pair_rpc_request(
             store,
         )
         .map(|artifacts| PairRpcResult::Artifacts(Box::new(artifacts))),
+        PairRpcRequest::PairAcknowledge {
+            operation_id,
+            transcript_sha256,
+        } => (|| {
+            let receipt = sessions
+                .acknowledge_enrollment(
+                    &operation_id,
+                    &transcript_sha256,
+                    current_unix_seconds_lossy(),
+                )
+                .map_err(code_session_pair_rpc)?;
+            persist_code_pairing_sessions(store, sessions, &network_name)
+                .map_err(runner_error_pair_rpc)?;
+            log_runtime_event(
+                LogLevel::Info,
+                "pairing_enrollment_acknowledged",
+                &[
+                    ("operation_id", &operation_id),
+                    ("role", receipt_role(&receipt)),
+                ],
+            );
+            Ok(PairRpcResult::Acknowledged(pair_rpc_receipt(
+                &receipt,
+                &network_name,
+            )))
+        })(),
     };
 
     match result {
@@ -2085,6 +2114,7 @@ fn pair_rpc_requires_durable_state(request: &PairRpcRequest) -> bool {
             | PairRpcRequest::PairReject { .. }
             | PairRpcRequest::PairCancel { .. }
             | PairRpcRequest::PairArtifacts { .. }
+            | PairRpcRequest::PairAcknowledge { .. }
     )
 }
 
@@ -2095,6 +2125,13 @@ fn pairing_rpc_completion_artifacts(
     local_peer: &str,
     store: Option<&PairingStateStore>,
 ) -> Result<PairRpcCompletionArtifacts, PairRpcResponseEnvelope> {
+    if sessions.receipt(operation_id).is_some() {
+        return Err(pair_rpc_error(
+            PairRpcErrorCode::InvalidState,
+            "pairing artifacts were already acknowledged and compacted",
+            false,
+        ));
+    }
     let enrollment = sessions.enrollment(operation_id).ok_or_else(|| {
         pair_rpc_error(
             PairRpcErrorCode::NotFound,
@@ -2226,6 +2263,27 @@ fn pairing_rpc_completion_artifacts(
     })
 }
 
+fn receipt_role(receipt: &PairingEnrollmentReceipt) -> &'static str {
+    match receipt.role {
+        PairingEnrollmentRole::Inviter => "inviter",
+        PairingEnrollmentRole::Joiner => "joiner",
+    }
+}
+
+fn pair_rpc_receipt(receipt: &PairingEnrollmentReceipt, network_name: &str) -> PairRpcReceipt {
+    PairRpcReceipt {
+        network_name: network_name.to_owned(),
+        local_peer: receipt.local_peer.clone(),
+        remote_peer: receipt.remote_peer.clone(),
+        role: match receipt.role {
+            PairingEnrollmentRole::Inviter => PairRpcRole::Inviter,
+            PairingEnrollmentRole::Joiner => PairRpcRole::Joiner,
+        },
+        transcript_sha256: receipt.transcript_sha256.clone(),
+        completed_at_unix_seconds: receipt.completed_at_unix_seconds,
+    }
+}
+
 fn pairing_rpc_artifacts_ready(sessions: &CodePairingSessions, operation_id: &str) -> bool {
     sessions.enrollment(operation_id).is_some_and(|enrollment| {
         enrollment.state == PairingEnrollmentState::Applied
@@ -2339,6 +2397,31 @@ fn pairing_rpc_status(
             false,
         )
     })?;
+    if let Some(receipt) = sessions.receipt(operation_id) {
+        if receipt.local_peer != local_peer {
+            return Err(pair_rpc_error(
+                PairRpcErrorCode::Internal,
+                "pairing receipt does not match the daemon identity",
+                false,
+            ));
+        }
+        return Ok(PairRpcOperationStatus {
+            operation_id: operation_id.to_owned(),
+            network_name: network_name.to_owned(),
+            local_peer: local_peer.to_owned(),
+            role: match receipt.role {
+                PairingEnrollmentRole::Inviter => PairRpcRole::Inviter,
+                PairingEnrollmentRole::Joiner => PairRpcRole::Joiner,
+            },
+            phase: PairRpcPhase::Completed,
+            revision: 1,
+            discovery: None,
+            expires_at_unix_seconds,
+            candidate: None,
+            artifacts_ready: false,
+            failure: None,
+        });
+    }
     if let Ok(status) = sessions.open_status(operation_id) {
         let (phase, discovery, candidate, artifacts_ready, failure) = match status {
             PairingOpenStatus::Searching { discovery, .. } => (
@@ -15651,6 +15734,27 @@ mod tests {
         let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
         assert!(!serialized.contains(&membership_key));
         assert!(!serialized.contains(&inviter.private_key));
+
+        let compacted = sessions
+            .acknowledge_enrollment(&operation_id, &transcript_sha256, 1_030)
+            .expect("acknowledge artifacts");
+        assert_eq!(pair_rpc_receipt(&compacted, "lab"), artifacts.receipt);
+        let status = pairing_rpc_status(&sessions, &operation_id, "lab", &inviter.peer_id)
+            .expect("acknowledged status");
+        assert_eq!(status.phase, PairRpcPhase::Completed);
+        assert!(!status.artifacts_ready);
+        let error = pairing_rpc_completion_artifacts(
+            &sessions,
+            &operation_id,
+            "lab",
+            &inviter.peer_id,
+            Some(&store),
+        )
+        .expect_err("acknowledged artifacts are compacted");
+        let crate::runtime::control_socket::PairRpcOutcome::Error { error } = error.outcome else {
+            panic!("expected compacted artifact error");
+        };
+        assert_eq!(error.code, PairRpcErrorCode::InvalidState);
         fs::remove_dir_all(state_path.parent().expect("state directory"))
             .expect("remove test state");
     }

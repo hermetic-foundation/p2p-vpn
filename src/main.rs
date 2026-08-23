@@ -703,6 +703,16 @@ enum PairCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Compact a completed enrollment after its generated configuration is installed.
+    Acknowledge {
+        operation_id: String,
+        #[command(flatten)]
+        target: PairDaemonTarget,
+        #[arg(long = "receipt")]
+        transcript_sha256: String,
+        #[arg(long, value_enum, default_value_t = PairOutputFormat::Text)]
+        format: PairOutputFormat,
+    },
     /// Export an offline offer for file-based pairing.
     Offer {
         #[arg(short, long, conflicts_with = "nixos_instance")]
@@ -1227,6 +1237,12 @@ async fn main() -> Result<(), String> {
                 )
                 .await
             }
+            PairCommand::Acknowledge {
+                operation_id,
+                target,
+                transcript_sha256,
+                format,
+            } => pair_daemon_acknowledge(&target, &operation_id, &transcript_sha256, format).await,
             PairCommand::Offer {
                 config,
                 nixos_instance,
@@ -2784,13 +2800,45 @@ async fn pair_daemon_artifacts(
     }
     let rendered = render_pair_rpc_nixos_module(&artifacts)?;
     if output.to_string_lossy() == "-" {
+        eprintln!("pairing operation: {operation_id}");
+        eprintln!("pairing receipt: {}", artifacts.receipt.transcript_sha256);
         println!("{rendered}");
     } else {
         fs::write(output, format!("{rendered}\n"))
             .map_err(|error| format!("failed to write {}: {error}", output.display()))?;
         println!("wrote {}", output.display());
+        println!("pairing operation: {operation_id}");
         println!("pairing receipt: {}", artifacts.receipt.transcript_sha256);
     }
+    Ok(())
+}
+
+async fn pair_daemon_acknowledge(
+    target: &PairDaemonTarget,
+    operation_id: &str,
+    transcript_sha256: &str,
+    format: PairOutputFormat,
+) -> Result<(), String> {
+    let result = pair_daemon_rpc(
+        target,
+        PairRpcRequest::PairAcknowledge {
+            operation_id: operation_id.to_owned(),
+            transcript_sha256: transcript_sha256.to_owned(),
+        },
+    )
+    .await?;
+    let PairRpcResult::Acknowledged(receipt) = result else {
+        return Err("daemon returned an unexpected pairing acknowledgement response".to_owned());
+    };
+    if format == PairOutputFormat::Json {
+        return print_pair_json(&receipt, "pairing acknowledgement");
+    }
+    println!("network: {}", receipt.network_name);
+    println!("local peer: {}", receipt.local_peer);
+    println!("remote peer: {}", receipt.remote_peer);
+    println!("role: {}", pair_role_name(receipt.role));
+    println!("receipt: {}", receipt.transcript_sha256);
+    println!("enrollment state: compacted");
     Ok(())
 }
 
@@ -12823,6 +12871,36 @@ mod tests {
             Some("renamed-mesh")
         );
         assert!(force);
+
+        let acknowledge = Cli::try_parse_from([
+            "p2p-vpn",
+            "pair",
+            "acknowledge",
+            "operation",
+            "--instance",
+            "runner-mesh",
+            "--receipt",
+            "transcript-digest",
+            "--format",
+            "json",
+        ])
+        .expect("pair acknowledge CLI");
+        let Command::Pair {
+            command:
+                PairCommand::Acknowledge {
+                    operation_id,
+                    target,
+                    transcript_sha256,
+                    format,
+                },
+        } = acknowledge.command
+        else {
+            panic!("expected pair acknowledge command");
+        };
+        assert_eq!(operation_id, "operation");
+        assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
+        assert_eq!(transcript_sha256, "transcript-digest");
+        assert_eq!(format, PairOutputFormat::Json);
     }
 
     #[test]

@@ -65,7 +65,7 @@ fn pair_rpc_server_requests(
             drop(reader);
             let request = serde_json::from_slice(&body).expect("decode pair RPC request");
             let response = serde_json::to_vec(&handler(request)).expect("encode pair RPC response");
-            write!(stream, "rpc-v1 {}\n", response.len()).expect("write pair RPC response header");
+            writeln!(stream, "rpc-v1 {}", response.len()).expect("write pair RPC response header");
             stream
                 .write_all(&response)
                 .expect("write pair RPC response body");
@@ -275,6 +275,9 @@ fn pair_artifacts_cli_writes_native_nix_without_json_or_secrets() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let command_output = String::from_utf8_lossy(&output.stdout);
+    assert!(command_output.contains("pairing operation: pair-operation"));
+    assert!(command_output.contains("pairing receipt: transcript-digest"));
     let rendered = fs::read_to_string(&output_path).expect("native Nix artifact");
     assert!(rendered.contains("services.p2p-vpn.instances.\"runner-mesh\""));
     assert!(rendered.contains("localPeer = \"12D3KooWLocal\";"));
@@ -286,4 +289,54 @@ fn pair_artifacts_cli_writes_native_nix_without_json_or_secrets() {
     assert!(serde_json::from_str::<serde_json::Value>(&rendered).is_err());
     let _ = fs::remove_file(socket);
     let _ = fs::remove_file(output_path);
+}
+
+#[test]
+fn pair_acknowledge_cli_binds_and_reports_receipt() {
+    let operation_id = "pair-operation";
+    let transcript_sha256 = "transcript-digest";
+    let (socket, server) = pair_rpc_server("acknowledge", move |request| {
+        assert_eq!(
+            request.request,
+            PairRpcRequest::PairAcknowledge {
+                operation_id: operation_id.to_owned(),
+                transcript_sha256: transcript_sha256.to_owned(),
+            }
+        );
+        PairRpcResponseEnvelope::ok(PairRpcResult::Acknowledged(PairRpcReceipt {
+            network_name: "runner-mesh".to_owned(),
+            local_peer: "12D3KooWLocal".to_owned(),
+            remote_peer: "12D3KooWRemote".to_owned(),
+            role: PairRpcRole::Joiner,
+            transcript_sha256: transcript_sha256.to_owned(),
+            completed_at_unix_seconds: 1_700_000_100,
+        }))
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_p2p-vpn"))
+        .args([
+            "pair",
+            "acknowledge",
+            operation_id,
+            "--socket",
+            socket.to_str().expect("socket path"),
+            "--receipt",
+            transcript_sha256,
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run pair acknowledge");
+
+    server.join().expect("pair RPC server");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("acknowledgement JSON");
+    assert_eq!(receipt["network_name"], "runner-mesh");
+    assert_eq!(receipt["transcript_sha256"], transcript_sha256);
+    let _ = fs::remove_file(socket);
 }

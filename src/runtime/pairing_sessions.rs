@@ -31,11 +31,14 @@ pub const MAX_PENDING_CODE_HELLOS: usize = 32;
 pub const MAX_INBOUND_CODE_SESSIONS: usize = 8;
 pub const CODE_PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CODE_PAIRING_ENROLLMENTS: usize = 256;
+pub const MAX_CODE_PAIRING_RECEIPTS: usize = 256;
+pub const MAX_CODE_PAIRING_REPLAY_TOKENS: usize = 256;
 pub const MAX_RETAINED_PAIRING_TICKETS: usize = 32;
 
 const OPERATION_ID_BYTES: usize = 16;
 const APPROVAL_ID_BYTES: usize = 32;
 const PAIRING_TICKET_BYTES: usize = 16;
+const RENDEZVOUS_TOKEN_BYTES: usize = 16;
 const PERSISTED_PAIRING_STATE_VERSION: u8 = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -142,10 +145,29 @@ pub struct PairingEnrollmentPreparation {
     pub membership_key_preconfigured: Option<bool>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PairingEnrollmentReceipt {
+    pub operation_id: String,
+    pub role: PairingEnrollmentRole,
+    pub local_peer: String,
+    pub remote_peer: String,
+    pub transcript_sha256: String,
+    pub completed_at_unix_seconds: u64,
+    pub expires_at_unix_seconds: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PairingReplayToken {
+    token: String,
+    expires_at_unix_seconds: u64,
+}
+
 pub struct CodePairingSessions {
     open: Option<OpenOperation>,
     join: Option<JoinOperation>,
     enrollments: Vec<PairingEnrollment>,
+    receipts: VecDeque<PairingEnrollmentReceipt>,
+    replay_tokens: Vec<PairingReplayToken>,
     lan_candidates: HashMap<Libp2pPeerId, LanCandidate>,
     outbound_requests: HashMap<OutboundRequestId, OutboundCodeRequest>,
     inbound_sessions: HashMap<(Libp2pPeerId, String), InboundSession>,
@@ -377,6 +399,8 @@ impl CodePairingSessions {
             open: None,
             join: None,
             enrollments: Vec::new(),
+            receipts: VecDeque::new(),
+            replay_tokens: Vec::new(),
             lan_candidates: HashMap::new(),
             outbound_requests: HashMap::new(),
             inbound_sessions: HashMap::new(),
@@ -430,6 +454,8 @@ impl CodePairingSessions {
             .join
             .as_ref()
             .is_some_and(|join| join.id == operation_id)
+            || self.enrollment(&operation_id).is_some()
+            || self.receipt(&operation_id).is_some()
         {
             return Err(CodePairingSessionError::Conflict);
         }
@@ -514,6 +540,8 @@ impl CodePairingSessions {
             .open
             .as_ref()
             .is_some_and(|open| open.id == operation_id)
+            || self.enrollment(&operation_id).is_some()
+            || self.receipt(&operation_id).is_some()
         {
             return Err(CodePairingSessionError::Conflict);
         }
@@ -1041,6 +1069,10 @@ impl CodePairingSessions {
                     .filter(|operation| operation.id == operation_id)
                     .map(|operation| operation.expires_at_unix_seconds)
             })
+            .or_else(|| {
+                self.receipt(operation_id)
+                    .map(|receipt| receipt.expires_at_unix_seconds)
+            })
     }
 
     pub fn fail_join(&mut self, operation_id: &str, reason: impl Into<String>) {
@@ -1083,6 +1115,9 @@ impl CodePairingSessions {
             }
             return Err(CodePairingSessionError::Conflict);
         }
+        if self.receipt(&enrollment.operation_id).is_some() {
+            return Err(CodePairingSessionError::Conflict);
+        }
         if self.enrollments.len() >= MAX_CODE_PAIRING_ENROLLMENTS {
             return Err(CodePairingSessionError::Capacity);
         }
@@ -1103,6 +1138,140 @@ impl CodePairingSessions {
 
     pub fn enrollments(&self) -> impl ExactSizeIterator<Item = &PairingEnrollment> {
         self.enrollments.iter()
+    }
+
+    #[must_use]
+    pub fn receipt(&self, operation_id: &str) -> Option<&PairingEnrollmentReceipt> {
+        self.receipts
+            .iter()
+            .find(|receipt| receipt.operation_id == operation_id)
+    }
+
+    pub fn active_replay_tokens(&self, now_unix_seconds: u64) -> impl Iterator<Item = &str> {
+        self.enrollments
+            .iter()
+            .filter(move |enrollment| {
+                now_unix_seconds <= enrollment.response.payload.expires_at_unix_seconds
+            })
+            .map(|enrollment| enrollment.response.payload.rendezvous_token.as_str())
+            .chain(
+                self.replay_tokens
+                    .iter()
+                    .filter(move |token| now_unix_seconds <= token.expires_at_unix_seconds)
+                    .map(|token| token.token.as_str()),
+            )
+    }
+
+    pub fn acknowledge_enrollment(
+        &mut self,
+        operation_id: &str,
+        transcript_sha256: &str,
+        now_unix_seconds: u64,
+    ) -> Result<PairingEnrollmentReceipt, CodePairingSessionError> {
+        validate_pairing_operation_id(operation_id)?;
+        validate_transcript_sha256(transcript_sha256, false)?;
+        if let Some(receipt) = self.receipt(operation_id) {
+            if receipt.transcript_sha256 == transcript_sha256 {
+                return Ok(receipt.clone());
+            }
+            return Err(CodePairingSessionError::Conflict);
+        }
+
+        let enrollment_index = self
+            .enrollments
+            .iter()
+            .position(|enrollment| enrollment.operation_id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        let enrollment = &self.enrollments[enrollment_index];
+        if enrollment.state != PairingEnrollmentState::Applied
+            || enrollment.transcript_sha256 != transcript_sha256
+            || !self.enrollment_completion_matches(enrollment)
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+
+        let response = &enrollment.response.payload;
+        let (local_peer, remote_peer) = match enrollment.role {
+            PairingEnrollmentRole::Inviter => {
+                (response.inviter_peer.clone(), response.joiner_peer.clone())
+            }
+            PairingEnrollmentRole::Joiner => {
+                (response.joiner_peer.clone(), response.inviter_peer.clone())
+            }
+        };
+        let receipt = PairingEnrollmentReceipt {
+            operation_id: operation_id.to_owned(),
+            role: enrollment.role,
+            local_peer,
+            remote_peer,
+            transcript_sha256: transcript_sha256.to_owned(),
+            completed_at_unix_seconds: enrollment
+                .completed_at_unix_seconds
+                .unwrap_or(response.issued_at_unix_seconds),
+            expires_at_unix_seconds: response.expires_at_unix_seconds,
+        };
+        let replay_token = PairingReplayToken {
+            token: response.rendezvous_token.clone(),
+            expires_at_unix_seconds: response.expires_at_unix_seconds,
+        };
+
+        self.prune_replay_tokens(now_unix_seconds);
+        if now_unix_seconds <= replay_token.expires_at_unix_seconds
+            && !self
+                .replay_tokens
+                .iter()
+                .any(|existing| existing.token == replay_token.token)
+            && self.replay_tokens.len() >= MAX_CODE_PAIRING_REPLAY_TOKENS
+        {
+            return Err(CodePairingSessionError::Capacity);
+        }
+        if self
+            .inbound_ticket
+            .as_ref()
+            .is_some_and(|ticket| ticket.operation_id == operation_id)
+        {
+            self.archive_inbound_ticket(now_unix_seconds)?;
+        }
+
+        if now_unix_seconds <= replay_token.expires_at_unix_seconds
+            && !self
+                .replay_tokens
+                .iter()
+                .any(|existing| existing.token == replay_token.token)
+        {
+            self.replay_tokens.push(replay_token);
+        }
+        self.enrollments.remove(enrollment_index);
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|operation| operation.id == operation_id)
+        {
+            self.open = None;
+        }
+        if self
+            .join
+            .as_ref()
+            .is_some_and(|operation| operation.id == operation_id)
+        {
+            self.join = None;
+        }
+        while self.receipts.len() >= MAX_CODE_PAIRING_RECEIPTS {
+            self.receipts.pop_front();
+        }
+        self.receipts.push_back(receipt.clone());
+        Ok(receipt)
+    }
+
+    fn enrollment_completion_matches(&self, enrollment: &PairingEnrollment) -> bool {
+        match enrollment.role {
+            PairingEnrollmentRole::Inviter => self
+                .open_completion(&enrollment.operation_id)
+                .is_some_and(|completed| completed == &enrollment.response),
+            PairingEnrollmentRole::Joiner => self
+                .join_completion(&enrollment.operation_id)
+                .is_some_and(|(_, completed)| completed == &enrollment.response),
+        }
     }
 
     pub fn mark_enrollment_applied(
@@ -1185,6 +1354,9 @@ impl CodePairingSessions {
 
         let enrollments =
             validate_restored_enrollments(persisted.enrollments, expected_network_name)?;
+        let receipts = validate_restored_receipts(persisted.receipts, &enrollments)?;
+        let mut replay_tokens = validate_restored_replay_tokens(persisted.replay_tokens)?;
+        replay_tokens.retain(|token| now_unix_seconds <= token.expires_at_unix_seconds);
         let preserve_join_recovery = persisted.join.as_ref().is_some_and(|join| {
             enrollments.iter().any(|enrollment| {
                 enrollment.operation_id == join.id
@@ -1208,6 +1380,19 @@ impl CodePairingSessions {
                 )
             })
             .transpose()?;
+        if open.as_ref().is_some_and(|operation| {
+            receipts
+                .iter()
+                .any(|receipt| receipt.operation_id == operation.id)
+        }) || join.as_ref().is_some_and(|operation| {
+            receipts
+                .iter()
+                .any(|receipt| receipt.operation_id == operation.id)
+        }) {
+            return Err(invalid_enrollment(
+                "pairing receipt conflicts with a retained operation",
+            ));
+        }
         let mut pending_approval = persisted
             .pending_approval
             .map(PersistedPendingApproval::into_runtime)
@@ -1264,6 +1449,8 @@ impl CodePairingSessions {
             open,
             join,
             enrollments,
+            receipts,
+            replay_tokens,
             lan_candidates: HashMap::new(),
             outbound_requests: HashMap::new(),
             inbound_sessions: HashMap::new(),
@@ -1276,6 +1463,7 @@ impl CodePairingSessions {
     pub fn expire(&mut self, now_unix_seconds: u64, now: Instant) -> PairingExpiryActions {
         self.prune_lan_candidates(now);
         self.prune_retained_inbound_tickets(now_unix_seconds);
+        self.prune_replay_tokens(now_unix_seconds);
         self.inbound_sessions
             .retain(|_, inbound| inbound.session.expires_at_unix_seconds() >= now_unix_seconds);
 
@@ -1770,6 +1958,11 @@ impl CodePairingSessions {
             .retain(|ticket| now_unix_seconds <= ticket.expires_at_unix_seconds);
     }
 
+    fn prune_replay_tokens(&mut self, now_unix_seconds: u64) {
+        self.replay_tokens
+            .retain(|token| now_unix_seconds <= token.expires_at_unix_seconds);
+    }
+
     fn find_submission_ticket(
         &self,
         peer: Libp2pPeerId,
@@ -1990,6 +2183,69 @@ fn validate_restored_enrollments(
     Ok(enrollments)
 }
 
+fn validate_restored_receipts(
+    receipts: VecDeque<PairingEnrollmentReceipt>,
+    enrollments: &[PairingEnrollment],
+) -> Result<VecDeque<PairingEnrollmentReceipt>, CodePairingSessionError> {
+    if receipts.len() > MAX_CODE_PAIRING_RECEIPTS {
+        return Err(invalid_enrollment("pairing receipts exceed their capacity"));
+    }
+
+    let mut operation_ids = enrollments
+        .iter()
+        .map(|enrollment| enrollment.operation_id.as_str())
+        .collect::<HashSet<_>>();
+    for receipt in &receipts {
+        validate_pairing_operation_id(&receipt.operation_id)?;
+        validate_transcript_sha256(&receipt.transcript_sha256, false)?;
+        let local_peer = parse_enrollment_peer(&receipt.local_peer, "receipt local peer")?;
+        let remote_peer = parse_enrollment_peer(&receipt.remote_peer, "receipt remote peer")?;
+        if local_peer == remote_peer {
+            return Err(invalid_enrollment(
+                "receipt local and remote peer IDs must differ",
+            ));
+        }
+        if receipt.completed_at_unix_seconds == 0 || receipt.expires_at_unix_seconds == 0 {
+            return Err(invalid_enrollment("receipt contains an invalid timestamp"));
+        }
+        if !operation_ids.insert(receipt.operation_id.as_str()) {
+            return Err(invalid_enrollment(
+                "pairing state contains a duplicate operation ID",
+            ));
+        }
+    }
+    Ok(receipts)
+}
+
+fn validate_restored_replay_tokens(
+    replay_tokens: Vec<PairingReplayToken>,
+) -> Result<Vec<PairingReplayToken>, CodePairingSessionError> {
+    if replay_tokens.len() > MAX_CODE_PAIRING_REPLAY_TOKENS {
+        return Err(invalid_enrollment(
+            "pairing replay tokens exceed their capacity",
+        ));
+    }
+
+    let mut unique = HashSet::with_capacity(replay_tokens.len());
+    for replay_token in &replay_tokens {
+        let decoded = URL_SAFE_NO_PAD
+            .decode(&replay_token.token)
+            .map_err(|_| invalid_enrollment("pairing replay token is invalid"))?;
+        if decoded.len() != RENDEZVOUS_TOKEN_BYTES
+            || URL_SAFE_NO_PAD.encode(decoded) != replay_token.token
+            || replay_token.expires_at_unix_seconds == 0
+        {
+            return Err(invalid_enrollment("pairing replay token is invalid"));
+        }
+        if !unique.insert(replay_token.token.as_str()) {
+            return Err(invalid_enrollment(
+                "pairing state contains a duplicate replay token",
+            ));
+        }
+    }
+    Ok(replay_tokens)
+}
+
 fn parse_enrollment_peer(
     peer: &str,
     relationship: &str,
@@ -2108,6 +2364,10 @@ struct PersistedCodePairingSessions {
     retained_inbound_tickets: Vec<PersistedInboundTicket>,
     #[serde(default)]
     enrollments: Vec<PairingEnrollment>,
+    #[serde(default)]
+    receipts: VecDeque<PairingEnrollmentReceipt>,
+    #[serde(default)]
+    replay_tokens: Vec<PairingReplayToken>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2192,6 +2452,8 @@ impl PersistedCodePairingSessions {
                 .map(PersistedInboundTicket::from_runtime)
                 .collect(),
             enrollments: sessions.enrollments.clone(),
+            receipts: sessions.receipts.clone(),
+            replay_tokens: sessions.replay_tokens.clone(),
         }
     }
 }
@@ -2617,7 +2879,7 @@ mod tests {
                 network_name: "runners".to_owned(),
                 inviter_peer: inviter.to_string(),
                 inviter_public_key: "public-key".to_owned(),
-                rendezvous_token: "token".to_owned(),
+                rendezvous_token: test_rendezvous_token(),
                 issued_at_unix_seconds: 1_000,
                 expires_at_unix_seconds: 1_600,
                 acceptance_mode: PairingAcceptanceMode::CodeApproval,
@@ -2640,7 +2902,7 @@ mod tests {
                 inviter_peer: inviter.to_string(),
                 joiner_peer: joiner.to_string(),
                 joiner_public_key: "public-key".to_owned(),
-                rendezvous_token: "token".to_owned(),
+                rendezvous_token: test_rendezvous_token(),
                 offer_issued_at_unix_seconds: 1_000,
                 offer_expires_at_unix_seconds: 1_600,
                 offer_signature: "offer-signature".to_owned(),
@@ -2661,7 +2923,7 @@ mod tests {
                 inviter_peer: inviter.to_string(),
                 inviter_public_key: "public-key".to_owned(),
                 joiner_peer: joiner.to_string(),
-                rendezvous_token: "token".to_owned(),
+                rendezvous_token: test_rendezvous_token(),
                 issued_at_unix_seconds: 1_002,
                 expires_at_unix_seconds: 1_600,
                 assigned_vpn_ip: Some("10.42.0.2".to_owned()),
@@ -2684,6 +2946,10 @@ mod tests {
 
     fn test_transcript_sha256() -> String {
         URL_SAFE_NO_PAD.encode([0x42; 32])
+    }
+
+    fn test_rendezvous_token() -> String {
+        URL_SAFE_NO_PAD.encode([0x24; RENDEZVOUS_TOKEN_BYTES])
     }
 
     fn test_preparation(
@@ -3752,6 +4018,175 @@ mod tests {
             ),
             Err(CodePairingSessionError::Conflict)
         ));
+    }
+
+    #[test]
+    fn acknowledged_enrollment_compacts_and_preserves_bounded_replay_state() {
+        let (mut sessions, enrollment, _) = prepared_join_fixture(600);
+        let operation_id = enrollment.operation_id.clone();
+        let transcript_sha256 = enrollment.transcript_sha256.clone();
+        let replay_token = enrollment.response.payload.rendezvous_token.clone();
+        sessions
+            .recover_prepared_join("runners", &enrollment)
+            .expect("complete durable join");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 1_010)
+            .expect("apply enrollment");
+
+        let wrong_receipt = URL_SAFE_NO_PAD.encode([0x51; 32]);
+        assert!(matches!(
+            sessions.acknowledge_enrollment(&operation_id, &wrong_receipt, 1_020),
+            Err(CodePairingSessionError::Conflict)
+        ));
+        assert!(sessions.enrollment(&operation_id).is_some());
+
+        let receipt = sessions
+            .acknowledge_enrollment(&operation_id, &transcript_sha256, 1_020)
+            .expect("acknowledge enrollment");
+        assert_eq!(receipt.operation_id, operation_id);
+        assert_eq!(receipt.role, PairingEnrollmentRole::Joiner);
+        assert_eq!(receipt.local_peer, peer(2).to_string());
+        assert_eq!(receipt.remote_peer, peer(1).to_string());
+        assert_eq!(receipt.completed_at_unix_seconds, 1_010);
+        assert_eq!(receipt.expires_at_unix_seconds, 1_600);
+        assert!(sessions.enrollment(&operation_id).is_none());
+        assert!(matches!(
+            sessions.join_status(&operation_id),
+            Err(CodePairingSessionError::NotFound)
+        ));
+        assert_eq!(
+            sessions.active_replay_tokens(1_020).collect::<Vec<_>>(),
+            vec![replay_token.as_str()]
+        );
+        assert_eq!(
+            sessions
+                .acknowledge_enrollment(&operation_id, &transcript_sha256, 1_030)
+                .expect("idempotent acknowledgement"),
+            receipt
+        );
+
+        let encoded = sessions
+            .encode_persisted("runners")
+            .expect("persist receipt");
+        let encoded_text = String::from_utf8(encoded.clone()).expect("UTF-8 state");
+        assert!(!encoded_text.contains("response-signature"));
+        let restored =
+            CodePairingSessions::restore_persisted(&encoded, "runners", 1_100, Instant::now())
+                .expect("restore acknowledged receipt");
+        assert_eq!(restored.receipt(&operation_id), Some(&receipt));
+        assert!(restored.enrollments().next().is_none());
+        assert_eq!(
+            restored.active_replay_tokens(1_100).collect::<Vec<_>>(),
+            vec![replay_token.as_str()]
+        );
+
+        let expired =
+            CodePairingSessions::restore_persisted(&encoded, "runners", 1_601, Instant::now())
+                .expect("restore expired replay state");
+        assert_eq!(expired.receipt(&operation_id), Some(&receipt));
+        assert!(expired.active_replay_tokens(1_601).next().is_none());
+    }
+
+    #[test]
+    fn acknowledged_receipt_reserves_operation_id_and_is_restore_validated() {
+        let (mut sessions, enrollment, now) = prepared_join_fixture(600);
+        let operation_id = enrollment.operation_id.clone();
+        let transcript_sha256 = enrollment.transcript_sha256.clone();
+        sessions
+            .recover_prepared_join("runners", &enrollment)
+            .expect("complete durable join");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 1_010)
+            .expect("apply enrollment");
+        sessions
+            .acknowledge_enrollment(&operation_id, &transcript_sha256, 1_020)
+            .expect("acknowledge enrollment");
+        assert!(matches!(
+            sessions.join_with_id(
+                operation_id.clone(),
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_020,
+                now,
+            ),
+            Err(CodePairingSessionError::Conflict)
+        ));
+
+        let mut persisted: serde_json::Value = serde_json::from_slice(
+            &sessions
+                .encode_persisted("runners")
+                .expect("persist receipt"),
+        )
+        .expect("decode persisted state");
+        let local_peer = persisted["receipts"][0]["local_peer"].clone();
+        persisted["receipts"][0]["remote_peer"] = local_peer;
+        assert!(matches!(
+            restore_json(&persisted),
+            Err(CodePairingSessionError::InvalidPersistedState(_))
+        ));
+    }
+
+    #[test]
+    fn acknowledgement_prevents_permanent_enrollment_capacity_exhaustion() {
+        let inviter = peer(1);
+        let joiner = peer(2);
+        let mut sessions = CodePairingSessions::new();
+
+        for index in 0..=MAX_CODE_PAIRING_RECEIPTS {
+            let operation_id = fresh_pairing_operation_id();
+            let token =
+                URL_SAFE_NO_PAD.encode(u128::try_from(index).expect("token index").to_be_bytes());
+            let mut offer = test_offer(inviter);
+            offer.payload.rendezvous_token.clone_from(&token);
+            let mut response = test_response(inviter, joiner);
+            response.payload.rendezvous_token = token;
+            sessions
+                .join_with_id(
+                    operation_id.clone(),
+                    "runners",
+                    PairingCode::generate(),
+                    None,
+                    Vec::new(),
+                    600,
+                    1_000,
+                    Instant::now(),
+                )
+                .expect("join pairing");
+            sessions
+                .prepare_enrollment(
+                    "runners",
+                    test_preparation(
+                        operation_id.clone(),
+                        PairingEnrollmentRole::Joiner,
+                        None,
+                        Some(offer.clone()),
+                        response.clone(),
+                        test_transcript_sha256(),
+                    ),
+                )
+                .expect("prepare enrollment");
+            sessions
+                .complete_join(&operation_id, offer, response)
+                .expect("complete pairing");
+            sessions
+                .mark_enrollment_applied_at(&operation_id, 1_010)
+                .expect("apply enrollment");
+            let now = if index < MAX_CODE_PAIRING_RECEIPTS {
+                1_020
+            } else {
+                1_601
+            };
+            sessions
+                .acknowledge_enrollment(&operation_id, &test_transcript_sha256(), now)
+                .expect("compact enrollment");
+        }
+
+        assert_eq!(sessions.receipts.len(), MAX_CODE_PAIRING_RECEIPTS);
+        assert!(sessions.replay_tokens.is_empty());
+        assert!(sessions.enrollments().next().is_none());
     }
 
     #[test]

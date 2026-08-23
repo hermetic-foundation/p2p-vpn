@@ -81,6 +81,10 @@ pub enum PairRpcRequest {
     PairArtifacts {
         operation_id: String,
     },
+    PairAcknowledge {
+        operation_id: String,
+        transcript_sha256: String,
+    },
 }
 
 impl fmt::Debug for PairRpcRequest {
@@ -141,6 +145,14 @@ impl fmt::Debug for PairRpcRequest {
             Self::PairArtifacts { operation_id } => formatter
                 .debug_struct("PairArtifacts")
                 .field("operation_id", operation_id)
+                .finish(),
+            Self::PairAcknowledge {
+                operation_id,
+                transcript_sha256,
+            } => formatter
+                .debug_struct("PairAcknowledge")
+                .field("operation_id", operation_id)
+                .field("transcript_sha256", transcript_sha256)
                 .finish(),
         }
     }
@@ -208,6 +220,7 @@ pub enum PairRpcResult {
     OperationStatus(Box<PairRpcOperationStatus>),
     ActionAccepted(Box<PairRpcOperationStatus>),
     Artifacts(Box<PairRpcCompletionArtifacts>),
+    Acknowledged(PairRpcReceipt),
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -1009,6 +1022,10 @@ mod tests {
             PairRpcRequest::PairArtifacts {
                 operation_id: "artifacts-operation".to_owned(),
             },
+            PairRpcRequest::PairAcknowledge {
+                operation_id: "acknowledge-operation".to_owned(),
+                transcript_sha256: "transcript-digest".to_owned(),
+            },
         ]
     }
 
@@ -1175,6 +1192,9 @@ mod tests {
                 "approve-operation",
             )))),
             PairRpcResponseEnvelope::ok(PairRpcResult::Artifacts(Box::new(completion_artifacts()))),
+            PairRpcResponseEnvelope::ok(PairRpcResult::Acknowledged(
+                completion_artifacts().receipt,
+            )),
             PairRpcResponseEnvelope::error(
                 PairRpcErrorCode::InvalidState,
                 "operation is not awaiting approval",
