@@ -44,6 +44,7 @@ const INVITE_RELAY_TEST_NAME: &str = "tun_namespace_invite_import_crosses_relay_
 const PAIRING_TEST_NAME: &str = "tun_namespace_pair_accept_crosses_live_pairing_overlay";
 const PAIRING_RELAY_TEST_NAME: &str =
     "tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay";
+const CODE_PAIRING_TEST_NAME: &str = "tun_namespace_code_pairing_crosses_peerless_overlay";
 const RELAY_PROMOTION_TEST_NAME: &str = "tun_namespace_relay_overlay_promotes_to_direct_path";
 const NETWORK_MOVE_TEST_NAME: &str = "tun_namespace_recovers_relay_and_direct_after_network_move";
 const DHT_TEST_NAME: &str = "tun_namespace_ping_crosses_dht_discovered_overlay";
@@ -117,6 +118,16 @@ fn tun_namespace_pair_accept_crosses_relayed_live_pairing_overlay() {
         Ok("orchestrator") => run_pairing_relay_orchestrator(),
         Ok("node") => run_node_child(),
         _ => reexec_orchestrator(PAIRING_RELAY_TEST_NAME),
+    }
+}
+
+#[test]
+#[ignore = "requires Linux user and network namespaces plus /dev/net/tun"]
+fn tun_namespace_code_pairing_crosses_peerless_overlay() {
+    match env::var(CHILD_ENV).as_deref() {
+        Ok("orchestrator") => run_code_pairing_orchestrator(),
+        Ok("node") => run_node_child(),
+        _ => reexec_orchestrator(CODE_PAIRING_TEST_NAME),
     }
 }
 
@@ -1351,6 +1362,197 @@ fn run_pairing_relay_orchestrator() {
     cleanup_temp_dir(temp_dir);
 }
 
+fn run_code_pairing_orchestrator() {
+    let identity_a = NodeIdentity::generate_ed25519().expect("node A identity");
+    let identity_b = NodeIdentity::generate_ed25519().expect("node B identity");
+    let temp_dir = env::temp_dir().join(format!(
+        "p2p-vpn-code-pairing-tun-e2e-{}",
+        std::process::id()
+    ));
+    init_namespace_temp_dir(&temp_dir, CODE_PAIRING_TEST_NAME);
+    let start_a = temp_dir.join("start-a");
+    let start_b = temp_dir.join("start-b");
+
+    let config_a = code_pairing_overlay_config("a", &identity_a, &identity_b);
+    let config_b = code_pairing_overlay_config("b", &identity_b, &identity_a);
+    let address_a = TunRuntimeConfig::from_config(&config_a)
+        .expect("node A TUN config")
+        .addresses
+        .ipv4;
+    let address_b = TunRuntimeConfig::from_config(&config_b)
+        .expect("node B TUN config")
+        .addresses
+        .ipv4;
+    write_child_config(&temp_dir, "a", &config_a);
+    write_child_config(&temp_dir, "b", &config_b);
+
+    let mut node_a = spawn_node(
+        CODE_PAIRING_TEST_NAME,
+        "a",
+        &identity_a,
+        None,
+        None,
+        &temp_dir,
+        &start_a,
+    );
+    let mut node_b = spawn_node(
+        CODE_PAIRING_TEST_NAME,
+        "b",
+        &identity_b,
+        None,
+        None,
+        &temp_dir,
+        &start_b,
+    );
+    wait_for_child_namespace(node_a.id());
+    wait_for_child_namespace(node_b.id());
+    configure_underlay(node_a.id(), node_b.id());
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.250.0.2"]);
+
+    fs::write(&start_b, b"start").expect("write node B start file");
+    wait_for_file(&temp_dir.join("ready-b"));
+    wait_for_daemon_running(&temp_dir, "b");
+    fs::write(&start_a, b"start").expect("write node A start file");
+    wait_for_file(&temp_dir.join("ready-a"));
+    wait_for_daemon_running(&temp_dir, "a");
+
+    let socket_b = node_control_socket(&temp_dir, "b")
+        .to_string_lossy()
+        .into_owned();
+    let open = pair_cli_json(
+        "pair open",
+        &[
+            "pair",
+            "open",
+            "--socket",
+            &socket_b,
+            "--expires-in-seconds",
+            "120",
+            "--format",
+            "json",
+        ],
+    );
+    let code = open["code"].as_str().expect("pairing code").to_owned();
+    let open_operation = open["operation_id"]
+        .as_str()
+        .expect("open operation")
+        .to_owned();
+
+    let socket_a = node_control_socket(&temp_dir, "a")
+        .to_string_lossy()
+        .into_owned();
+    let requested_vpn_ip = address_a.to_string();
+    let join = pair_cli_json(
+        "pair join",
+        &[
+            "pair",
+            "join",
+            &code,
+            "--socket",
+            &socket_a,
+            "--vpn-ip",
+            &requested_vpn_ip,
+            "--timeout-seconds",
+            "60",
+            "--no-wait",
+            "--format",
+            "json",
+        ],
+    );
+    let join_operation = join["operation_id"]
+        .as_str()
+        .expect("join operation")
+        .to_owned();
+
+    let inviter_status = wait_for_pair_status_json(
+        &temp_dir,
+        "b",
+        &open_operation,
+        Duration::from_secs(30),
+        |status| status["phase"] == "awaiting_approval",
+    );
+    let approval_id = inviter_status["candidate"]["approval_id"]
+        .as_str()
+        .expect("approval ID")
+        .to_owned();
+    let joiner_status = wait_for_pair_status_json(
+        &temp_dir,
+        "a",
+        &join_operation,
+        Duration::from_secs(10),
+        |status| {
+            status["phase"] == "awaiting_approval"
+                && status["discovery"] == "lan"
+                && status["diagnostics"]["lan_candidates"]
+                    .as_u64()
+                    .is_some_and(|count| count >= 1)
+        },
+    );
+    assert_eq!(joiner_status["artifacts_ready"], false);
+
+    let approved = pair_cli_json(
+        "pair approve",
+        &[
+            "pair",
+            "approve",
+            &open_operation,
+            &approval_id,
+            "--socket",
+            &socket_b,
+            "--vpn-ip",
+            &requested_vpn_ip,
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(approved["phase"], "completed");
+    assert_eq!(approved["diagnostics"]["selected_transport"], "direct");
+    wait_for_pair_status_json(
+        &temp_dir,
+        "a",
+        &join_operation,
+        Duration::from_secs(30),
+        |status| status["phase"] == "completed" && status["artifacts_ready"] == true,
+    );
+    wait_for_peer_ready(&temp_dir, "a");
+    wait_for_peer_ready(&temp_dir, "b");
+
+    let ping_a_to_b = ping_from_namespace(node_a.id(), "hse2ea", address_b);
+    let ping_b_to_a = ping_from_namespace(node_b.id(), "hse2eb", address_a);
+    let addresses_a = ns_command_output(node_a.id(), "ip", &["addr", "show"]);
+    let routes_a = ns_command_output(node_a.id(), "ip", &["route", "show", "table", "all"]);
+    let addresses_b = ns_command_output(node_b.id(), "ip", &["addr", "show"]);
+    let routes_b = ns_command_output(node_b.id(), "ip", &["route", "show", "table", "all"]);
+
+    stop_child(&mut node_a);
+    stop_child(&mut node_b);
+    assert_ping_success(
+        "code-paired overlay A-to-B ping",
+        &ping_a_to_b,
+        &temp_dir,
+        &addresses_a,
+        &routes_a,
+        &addresses_b,
+        &routes_b,
+    );
+    assert_ping_success(
+        "code-paired overlay B-to-A ping",
+        &ping_b_to_a,
+        &temp_dir,
+        &addresses_b,
+        &routes_b,
+        &addresses_a,
+        &routes_a,
+    );
+    let inviter_log = read_log(&temp_dir.join("node-b.log"));
+    assert!(
+        inviter_log.contains("authenticated_overlay_connection_promoted")
+            && inviter_log.contains("reason=pairing_approval_applied"),
+        "inviter did not promote the approved peer\nnode-b log:\n{inviter_log}",
+    );
+    cleanup_temp_dir(temp_dir);
+}
+
 fn assert_live_pairing_config(config: &Config, joiner: &NodeIdentity, inviter: &NodeIdentity) {
     assert_eq!(
         config.local_peer().expect("resolved local peer"),
@@ -2296,43 +2498,45 @@ fn run_node_child() {
         return;
     }
 
-    let config =
-        if is_invite_relay_test_child() || is_pairing_test_child() || is_pairing_relay_test_child()
-        {
-            read_child_config(&temp_dir, &role)
-        } else {
-            let remote = NodeIdentity {
-                peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
-                private_key: String::new(),
-            };
-            let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
-                .ok()
-                .map(|peer_id| NodeIdentity {
-                    peer_id,
-                    private_key: String::new(),
-                });
-            if let Some(infra) = relay.as_ref() {
-                match role.as_str() {
-                    "a" | "b" if is_dht_test_child() => {
-                        dht_overlay_config(&role, &local, &remote, infra)
-                    }
-                    "a" | "b" if is_relay_promotion_test_child() => {
-                        relay_promotion_overlay_config(&role, &local, &remote, infra)
-                    }
-                    "a" | "b" if is_network_move_test_child() => {
-                        network_move_overlay_config(&role, &local, &remote, infra)
-                    }
-                    "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
-                    other => panic!("unknown node role {other}"),
-                }
-            } else if is_direct_quic_test_child() {
-                direct_quic_overlay_config(&role, &local, &remote)
-            } else if is_mdns_test_child() {
-                mdns_overlay_config(&role, &local, &remote)
-            } else {
-                direct_overlay_config(&role, &local, &remote)
-            }
+    let config = if is_invite_relay_test_child()
+        || is_pairing_test_child()
+        || is_pairing_relay_test_child()
+        || is_code_pairing_test_child()
+    {
+        read_child_config(&temp_dir, &role)
+    } else {
+        let remote = NodeIdentity {
+            peer_id: required_env("P2P_VPN_TUN_E2E_REMOTE_PEER"),
+            private_key: String::new(),
         };
+        let relay = env::var("P2P_VPN_TUN_E2E_RELAY_PEER")
+            .ok()
+            .map(|peer_id| NodeIdentity {
+                peer_id,
+                private_key: String::new(),
+            });
+        if let Some(infra) = relay.as_ref() {
+            match role.as_str() {
+                "a" | "b" if is_dht_test_child() => {
+                    dht_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" if is_relay_promotion_test_child() => {
+                    relay_promotion_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" if is_network_move_test_child() => {
+                    network_move_overlay_config(&role, &local, &remote, infra)
+                }
+                "a" | "b" => relay_overlay_config(&role, &local, &remote, infra),
+                other => panic!("unknown node role {other}"),
+            }
+        } else if is_direct_quic_test_child() {
+            direct_quic_overlay_config(&role, &local, &remote)
+        } else if is_mdns_test_child() {
+            mdns_overlay_config(&role, &local, &remote)
+        } else {
+            direct_overlay_config(&role, &local, &remote)
+        }
+    };
     let interface = config.interface.name.clone();
     let runtime = TunRuntimeConfig::from_config(&config).expect("TUN config");
     let effective_mtu = runtime.mtu;
@@ -2656,6 +2860,15 @@ fn mdns_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) 
     config
 }
 
+fn code_pairing_overlay_config(role: &str, local: &NodeIdentity, remote: &NodeIdentity) -> Config {
+    let mut config = mdns_overlay_config(role, local, remote);
+    config.peers.clear();
+    config.network.routes.clear();
+    config.network.membership_key =
+        (role == "b").then(|| "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=".to_owned());
+    config
+}
+
 fn dht_overlay_config(
     role: &str,
     local: &NodeIdentity,
@@ -2748,6 +2961,8 @@ async fn run_ready_node(
     };
     let forwarder = Forwarder::from_config(&config)?;
     let membership = runner::OverlayMembership::from_config(&config)?;
+    let pairing_state_path =
+        is_code_pairing_test_child().then(|| control_socket.with_extension("pairing-state.json"));
     Box::pin(runner::run_node_until(
         node,
         forwarder,
@@ -2759,7 +2974,7 @@ async fn run_ready_node(
         config.resources,
         Some(Duration::from_secs(1)),
         Some(control_socket),
-        None,
+        pairing_state_path,
         packet_plane,
         packet_plane_quic,
         config.packet_plane_quic_endpoint_candidates()?,
@@ -3121,6 +3336,10 @@ fn is_pairing_relay_test_child() -> bool {
     env::args().any(|argument| argument == PAIRING_RELAY_TEST_NAME)
 }
 
+fn is_code_pairing_test_child() -> bool {
+    env::args().any(|argument| argument == CODE_PAIRING_TEST_NAME)
+}
+
 fn peer_config(
     identity: &NodeIdentity,
     address: Option<&str>,
@@ -3184,6 +3403,87 @@ fn run_command(program: &str, args: &[&str]) {
     )
     .unwrap_or_else(|error| panic!("failed to execute `{program}`: {error}"));
     assert_output_success(program, &output);
+}
+
+fn pair_cli_json(context: &str, args: &[&str]) -> serde_json::Value {
+    let output = command_output(
+        current_test_binary(),
+        args,
+        &[],
+        scaled_wait_timeout(Duration::from_secs(10)),
+    )
+    .unwrap_or_else(|error| panic!("failed to execute {context}: {error}"));
+    assert_output_success(context, &output);
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "failed to parse {context} JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    })
+}
+
+fn wait_for_pair_status_json<F>(
+    temp_dir: &Path,
+    role: &str,
+    operation_id: &str,
+    timeout: Duration,
+    mut predicate: F,
+) -> serde_json::Value
+where
+    F: FnMut(&serde_json::Value) -> bool,
+{
+    let socket = node_control_socket(temp_dir, role)
+        .to_string_lossy()
+        .into_owned();
+    let deadline = Instant::now() + scaled_wait_timeout(timeout);
+    let mut last_status = serde_json::Value::Null;
+    let mut last_error = None;
+
+    loop {
+        match command_output(
+            current_test_binary(),
+            &[
+                "pair",
+                "status",
+                operation_id,
+                "--socket",
+                &socket,
+                "--format",
+                "json",
+            ],
+            &[],
+            scaled_wait_timeout(Duration::from_secs(3)),
+        ) {
+            Ok(output) if output.status.success() => match serde_json::from_slice(&output.stdout) {
+                Ok(status) => {
+                    if predicate(&status) {
+                        return status;
+                    }
+                    last_status = status;
+                }
+                Err(error) => {
+                    last_error = Some(format!(
+                        "invalid JSON: {error}; stdout={}",
+                        String::from_utf8_lossy(&output.stdout)
+                    ));
+                }
+            },
+            Ok(output) => last_error = Some(format_snapshot_output(&output)),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if Instant::now() >= deadline {
+            capture_daemon_snapshots(temp_dir, &[role]);
+            panic!(
+                "timed out waiting for pairing operation {operation_id} on node {role}\nlast_error: {}\nlast_status:\n{}\ndaemon snapshots:\n{}\nnode log tail:\n{}",
+                last_error.unwrap_or_else(|| "none".to_owned()),
+                serde_json::to_string_pretty(&last_status).expect("render last pairing status"),
+                daemon_snapshot_summary(temp_dir, &[role]),
+                log_tail(&read_log(&temp_dir.join(format!("node-{role}.log"))), 100),
+            );
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn command_output(
