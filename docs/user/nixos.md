@@ -48,29 +48,42 @@ It does not trust another overlay member until you pair or configure one.
 On an existing member:
 
 ```sh
-sudo p2p-vpn pair offer \
-  --nixos-instance runners \
-  --output /tmp/runners.pair \
-  --force
+sudo p2p-vpn pair open --instance runners
 ```
 
-Move `/tmp/runners.pair` to the joining host over a trusted channel.
+Record the operation ID and pairing code.
 
 On the joining host:
 
 ```sh
-sudo systemctl stop p2p-vpn-runners.service
-sudo p2p-vpn pair accept /tmp/runners.pair \
-  --nixos-output /etc/nixos/p2p-vpn-runners.nix \
-  --nixos-instance runners \
-  --nixos-only
+sudo p2p-vpn pair join CODE \
+  --instance runners \
+  --no-wait
 ```
 
-Import the generated file:
+Inspect and approve the candidate on the existing member:
+
+```sh
+sudo p2p-vpn pair status OPEN_OPERATION --instance runners
+sudo p2p-vpn pair approve \
+  OPEN_OPERATION APPROVAL_ID \
+  --instance runners
+```
+
+Render a local Nix fragment on each host:
+
+```sh
+sudo p2p-vpn pair artifacts LOCAL_OPERATION \
+  --instance runners \
+  --output /etc/nixos/p2p-vpn-runners-paired.nix \
+  --force
+```
+
+Import the local generated file:
 
 ```nix
 {
-  imports = [ ./p2p-vpn-runners.nix ];
+  imports = [ ./p2p-vpn-runners-paired.nix ];
 }
 ```
 
@@ -80,9 +93,9 @@ Apply it:
 sudo nixos-rebuild switch
 ```
 
-The inviter does not need a Nix change.
+Both receipt digests must match.
 
-See [Pairing](pairing.md) for expiry, inspection, and recovery details.
+See [Pairing](pairing.md) for verification, acknowledgment, and offline fallback.
 
 ## Default Profile
 
@@ -92,6 +105,7 @@ Defaults are assigned by the sorted native instance index `N`.
 | --- | --- |
 | Network name | Instance name |
 | Identity | `/var/lib/p2p-vpn/<instance>/private.key` |
+| Pairing state | `/var/lib/p2p-vpn/<instance>/pairing-state.json` |
 | Interface | `pvN` |
 | TUN MTU | `1280` |
 | libp2p TCP | `0.0.0.0:4001+N` |
@@ -179,6 +193,23 @@ The module passes this file through a systemd credential.
 
 It does not copy the key into the Nix store.
 
+With agenix:
+
+```nix
+{ config, ... }:
+{
+  age.secrets.p2p-vpn-lab-identity.file =
+    ./secrets/p2p-vpn-lab-identity.age;
+
+  services.p2p-vpn.instances.lab.privateKeyFile =
+    config.age.secrets.p2p-vpn-lab-identity.path;
+}
+```
+
+Code pairing reuses the daemon's active agenix-backed identity.
+
+No private key is copied into the generated pairing fragment.
+
 ### Membership Key
 
 The shared membership key is optional:
@@ -209,12 +240,12 @@ Set `vpnIp` when services need a memorable address:
 Request the joining address during pairing:
 
 ```sh
-sudo p2p-vpn pair accept lab.pair \
-  --nixos-output /etc/nixos/p2p-vpn-lab.nix \
-  --nixos-instance lab \
-  --nixos-only \
+sudo p2p-vpn pair join CODE \
+  --instance lab \
   --vpn-ip 10.44.0.2
 ```
+
+The inviter sees the request before approval.
 
 For static authorization, assign both sides explicitly:
 

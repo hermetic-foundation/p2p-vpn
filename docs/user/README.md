@@ -6,10 +6,10 @@ Use these docs when you want to run `p2p-vpn`.
 
 | Document | Use It For |
 | --- | --- |
-| [Quick Start](quick-start.md) | Start a small JSON-managed overlay. |
+| [Quick Start](quick-start.md) | Start and code-pair a minimal NixOS overlay. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
-| [Pairing](pairing.md) | Authorize a peer and generate native Nix or JSON output. |
+| [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
 
@@ -34,6 +34,8 @@ Use these docs when you want to run `p2p-vpn`.
 
 Continue with [NixOS Module](nixos.md).
 
+The default pairing workflow transfers only a one-time human-readable code.
+
 ## JSON First Command
 
 ```sh
@@ -54,4 +56,4 @@ Start with:
 Leave listen addresses, public relays, and peer multiaddrs unset unless you need
 an override for a controlled network or test.
 
-Use [Quick Start](quick-start.md) for the full JSON two-node flow.
+Use [Quick Start](quick-start.md) for NixOS code pairing and the JSON fallback.

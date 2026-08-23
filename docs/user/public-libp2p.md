@@ -16,6 +16,37 @@ It must not be treated as VPN membership or route authority.
 | Authorize VPN routes | no |
 | Authorize VPN membership | no |
 
+## Code Pairing Over Public Paths
+
+The default code workflow can use public routing and relays.
+
+It does not require a public peer to know the pairing code.
+
+| Step | Public infrastructure sees |
+| --- | --- |
+| Inviter advertisement | A network-scoped derived locator. |
+| Joiner lookup | The same derived locator. |
+| Relay transport | Encrypted libp2p traffic between peer identities. |
+| Approval | Local daemon RPC only. |
+| Membership grant | End-to-end authenticated pairing exchange. |
+
+Start with normal defaults on both hosts:
+
+```sh
+sudo p2p-vpn pair open --instance lab
+sudo p2p-vpn pair join CODE --instance lab --no-wait
+```
+
+Inspect the selected discovery and transport path:
+
+```sh
+sudo p2p-vpn pair status OPERATION --instance lab
+```
+
+Expected public fields include `discovery: Relay` or public lookup counters.
+
+Relay availability still depends on each public relay's reservation policy.
+
 ## Create A Public Profile Config
 
 ```sh

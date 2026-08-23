@@ -49,6 +49,31 @@ sudo p2p-vpn instance show monarchic-runners --format json
 NixOS runtime configurations are root-only because they contain injected
 credentials. These commands emit public identity metadata only.
 
+## Pairing Operations
+
+Use `--instance NAME` to target a NixOS daemon.
+
+| Command | Purpose |
+| --- | --- |
+| `pair open` | Create a one-time code on an inviter. |
+| `pair join CODE` | Discover and authenticate the inviter. |
+| `pair status OPERATION` | Show progress, candidate, and path diagnostics. |
+| `pair approve OPERATION APPROVAL` | Grant membership and selected routes. |
+| `pair reject OPERATION APPROVAL` | Reject a pending candidate. |
+| `pair cancel OPERATION` | Stop a local unfinished operation. |
+| `pair artifacts OPERATION` | Render secret-free native Nix. |
+| `pair acknowledge OPERATION` | Compact installed durable enrollment state. |
+
+Example:
+
+```sh
+sudo p2p-vpn pair status OPERATION --instance monarchic-runners
+```
+
+Pairing diagnostics identify LAN, public routing, and relay recovery stages.
+
+See [Pairing](pairing.md) for the complete approval and persistence workflow.
+
 ### Daemon Views
 
 | Command | Output |
