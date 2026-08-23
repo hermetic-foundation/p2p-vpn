@@ -241,7 +241,7 @@ impl Forwarder {
             &trusted_issuers,
             MAX_RETAINED_MEMBERSHIP_RECORDS,
         )?;
-        if stats.accepted == 0 && stats.removed_expired == 0 {
+        if stats.accepted == 0 && stats.removed_expired == 0 && stats.removed_untrusted == 0 {
             return Ok(stats);
         }
 

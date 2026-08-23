@@ -10427,7 +10427,7 @@ fn install_pairing_response_membership(
     let now_unix_seconds = current_unix_seconds_lossy();
     let stats =
         forwarder.merge_membership_records(&response.payload.member_records, now_unix_seconds)?;
-    if stats.accepted == 0 && stats.removed_expired == 0 {
+    if stats.accepted == 0 && stats.removed_expired == 0 && stats.removed_untrusted == 0 {
         return Ok(());
     }
 
@@ -10443,6 +10443,7 @@ fn install_pairing_response_membership(
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
     let removed_expired = stats.removed_expired.to_string();
+    let removed_untrusted = stats.removed_untrusted.to_string();
     log_runtime_event(
         LogLevel::Info,
         "pairing_membership_records_installed",
@@ -10450,6 +10451,7 @@ fn install_pairing_response_membership(
             ("accepted", &accepted),
             ("ignored_stale_or_equal", &ignored),
             ("removed_expired", &removed_expired),
+            ("removed_untrusted", &removed_untrusted),
         ],
     );
 
@@ -11262,7 +11264,7 @@ fn learn_membership_records_from_capabilities(
     let now_unix_seconds = current_unix_seconds_lossy();
     let stats =
         forwarder.merge_membership_records(&capabilities.member_records, now_unix_seconds)?;
-    if stats.accepted > 0 || stats.removed_expired > 0 {
+    if stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0 {
         membership.replace_record_members(
             forwarder.config(),
             forwarder.member_records(),
@@ -11271,6 +11273,7 @@ fn learn_membership_records_from_capabilities(
         let accepted = stats.accepted.to_string();
         let ignored = stats.ignored_stale_or_equal.to_string();
         let removed_expired = stats.removed_expired.to_string();
+        let removed_untrusted = stats.removed_untrusted.to_string();
         log_runtime_event(
             LogLevel::Info,
             "membership_records_merged",
@@ -11278,6 +11281,7 @@ fn learn_membership_records_from_capabilities(
                 ("accepted", &accepted),
                 ("ignored_stale_or_equal", &ignored),
                 ("removed_expired", &removed_expired),
+                ("removed_untrusted", &removed_untrusted),
             ],
         );
     }
@@ -11366,7 +11370,7 @@ fn learn_membership_records_from_kademlia_value(
     let stats = forwarder
         .merge_membership_records(&bundle.records, now_unix_seconds)
         .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
-    if stats.accepted > 0 || stats.removed_expired > 0 {
+    if stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0 {
         membership
             .replace_record_members(
                 forwarder.config(),
@@ -11379,6 +11383,7 @@ fn learn_membership_records_from_kademlia_value(
         let accepted = stats.accepted.to_string();
         let ignored = stats.ignored_stale_or_equal.to_string();
         let removed_expired = stats.removed_expired.to_string();
+        let removed_untrusted = stats.removed_untrusted.to_string();
         log_runtime_event(
             LogLevel::Info,
             "kademlia_membership_records_merged",
@@ -11386,6 +11391,7 @@ fn learn_membership_records_from_kademlia_value(
                 ("accepted", &accepted),
                 ("ignored_stale_or_equal", &ignored),
                 ("removed_expired", &removed_expired),
+                ("removed_untrusted", &removed_untrusted),
             ],
         );
     }
@@ -11413,7 +11419,7 @@ fn prune_expired_membership_records(
 ) -> Result<(), ForwardError> {
     let now_unix_seconds = current_unix_seconds_lossy();
     let stats = forwarder.prune_membership_records(now_unix_seconds)?;
-    if stats.removed_expired == 0 {
+    if stats.removed_expired == 0 && stats.removed_untrusted == 0 {
         return Ok(());
     }
 
@@ -11424,10 +11430,14 @@ fn prune_expired_membership_records(
     )?;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
     let removed_expired = stats.removed_expired.to_string();
+    let removed_untrusted = stats.removed_untrusted.to_string();
     log_runtime_event(
         LogLevel::Info,
         "membership_records_pruned",
-        &[("removed_expired", &removed_expired)],
+        &[
+            ("removed_expired", &removed_expired),
+            ("removed_untrusted", &removed_untrusted),
+        ],
     );
 
     Ok(())
