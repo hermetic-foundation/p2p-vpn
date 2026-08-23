@@ -113,6 +113,10 @@ impl RouteTable {
     }
 
     pub fn insert_authorized(&mut self, route: Route) -> Result<(), RouteError> {
+        if self.routes.contains(&route) {
+            return Ok(());
+        }
+
         for existing in &self.routes {
             if existing.owner != route.owner && existing.prefix.overlaps(route.prefix) {
                 return Err(RouteError::ConflictingOwnership {
@@ -354,6 +358,21 @@ mod tests {
                 metric: 0,
             })
             .expect("same owner more-specific route");
+    }
+
+    #[test]
+    fn authorized_route_insertion_is_idempotent() {
+        let mut table = RouteTable::new();
+        let route = Route {
+            owner: peer(7),
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 0)), 16).unwrap(),
+            metric: 10,
+        };
+
+        table.insert_authorized(route).expect("first route");
+        table.insert_authorized(route).expect("duplicate route");
+
+        assert_eq!(table.routes(), &[route]);
     }
 
     #[test]

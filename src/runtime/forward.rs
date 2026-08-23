@@ -623,6 +623,7 @@ fn transport_peers_from_config_and_records(
     member_records: &[SignedMembershipRecord],
     now_unix_seconds: u64,
 ) -> Result<HashMap<PeerId, Libp2pPeerId>, ConfigError> {
+    let local_peer = config.local_peer_id()?;
     let mut peers: HashMap<PeerId, Libp2pPeerId> = config
         .peers
         .iter()
@@ -634,7 +635,9 @@ fn transport_peers_from_config_and_records(
     for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
         .overlay_members()
     {
-        peers.insert(member.peer, member.transport_peer);
+        if member.peer != local_peer {
+            peers.insert(member.peer, member.transport_peer);
+        }
     }
     Ok(peers)
 }
@@ -644,11 +647,14 @@ fn authorized_peers_from_config_and_records(
     member_records: &[SignedMembershipRecord],
     now_unix_seconds: u64,
 ) -> Result<AuthorizedPeers, ConfigError> {
+    let local_peer = config.local_peer_id()?;
     let mut authorized = AuthorizedPeers::from_config(config);
     for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
         .overlay_members()
     {
-        authorized.insert(member.transport_peer);
+        if member.peer != local_peer {
+            authorized.insert(member.transport_peer);
+        }
     }
     Ok(authorized)
 }
@@ -1140,6 +1146,41 @@ mod tests {
             forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
         );
+    }
+
+    #[test]
+    fn local_membership_record_is_not_a_transport_peer() {
+        let local = NodeIdentity::generate_ed25519().expect("local");
+        let local_transport = local
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("local transport peer");
+        let mut config = config_for(Keypair::generate_ed25519().public().to_peer_id());
+        config.peers.clear();
+        config.network.local_peer = local.peer_id.clone();
+        config.network.private_key = Some(local.private_key.clone());
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &local,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: local.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("local member record"),
+        ];
+
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(!forwarder.is_configured_transport_peer(local_transport));
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        assert_eq!(forwarder.local_advertised_routes().len(), 2);
     }
 
     #[test]

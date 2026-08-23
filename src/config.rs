@@ -2152,6 +2152,19 @@ mod tests {
     }
 
     #[test]
+    fn compile_routes_deduplicates_local_member_record_builtin_routes() {
+        let local = NodeIdentity::generate_ed25519().expect("local");
+        let local_peer = PeerId::from_str(&local.peer_id).expect("local peer");
+        let mut config = runtime_config_for_identity(local.clone());
+        config.network.member_records =
+            vec![signed_member_record_for(&local, local.clone(), "lab")];
+
+        let routes = config.compile_routes().expect("routes");
+
+        assert_eq!(routes.routes_for(local_peer).count(), 2);
+    }
+
+    #[test]
     fn compile_routes_includes_member_record_route_grants() {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
