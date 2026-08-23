@@ -7845,6 +7845,7 @@ async fn handle_swarm_event(
                 "connection_established",
                 &[
                     ("peer", &peer_id.to_string()),
+                    ("connection_id", &connection_id.to_string()),
                     ("relayed", &endpoint.is_relayed().to_string()),
                     ("endpoint", &format!("{endpoint:?}")),
                 ],
@@ -7928,6 +7929,7 @@ async fn handle_swarm_event(
                 "connection_closed",
                 &[
                     ("peer", &peer_id.to_string()),
+                    ("connection_id", &connection_id.to_string()),
                     ("relayed", &endpoint.is_relayed().to_string()),
                     ("endpoint", &format!("{endpoint:?}")),
                 ],
@@ -8519,9 +8521,9 @@ fn handle_pinned_packet_stream_event(
         }
         pinned_packet_stream::Event::OutboundFailure {
             peer,
+            connection_id,
             request_id,
             error,
-            ..
         } => {
             let in_flight = context
                 .packet_in_flight
@@ -8533,6 +8535,8 @@ fn handle_pinned_packet_stream_event(
                     context.metrics,
                     request.peer,
                     request.path,
+                    request.relay_peer,
+                    connection_id,
                     &error,
                 );
                 if let Some(peer) = context.forwarder.transport_peer_for_overlay(request.peer) {
@@ -12967,15 +12971,42 @@ fn maybe_demote_pinned_stream_fallback_path(
     metrics: &RuntimeMetrics,
     peer: PeerId,
     path: PathKind,
+    relay_peer: Option<PeerId>,
+    connection_id: ConnectionId,
     error: &pinned_packet_stream::Failure,
 ) -> bool {
-    if matches!(path, PathKind::CircuitRelay) {
+    let failure = paths.record_failed_connection(peer, path, relay_peer, connection_id);
+    if !failure.connection_was_tracked {
+        return false;
+    }
+    record_path_selection_change(metrics, failure.selection_change);
+
+    if failure.path_healthy {
+        log_runtime_event(
+            LogLevel::Warn,
+            "pinned_stream_connection_failed_over",
+            &[
+                ("peer", &peer.to_string()),
+                ("path", path.wire_name()),
+                ("failed_connection_id", &connection_id.to_string()),
+                (
+                    "next_connection_id",
+                    &failure.latest_connection_id.map_or_else(
+                        || "none".to_owned(),
+                        |connection_id| connection_id.to_string(),
+                    ),
+                ),
+                (
+                    "remaining_connections",
+                    &failure.remaining_connections.to_string(),
+                ),
+                ("reason", pinned_stream_failure_name(error)),
+            ],
+        );
         return false;
     }
 
-    let change = paths.mark_unhealthy(peer, path);
     metrics.record_stream_fallback_path_demotion();
-    record_path_selection_change(metrics, change);
 
     let peer = peer.to_string();
     log_runtime_event(
@@ -12984,6 +13015,7 @@ fn maybe_demote_pinned_stream_fallback_path(
         &[
             ("peer", &peer),
             ("path", path.wire_name()),
+            ("failed_connection_id", &connection_id.to_string()),
             ("reason", pinned_stream_failure_name(error)),
         ],
     );
@@ -19269,7 +19301,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_peer_keeps_supported_path_after_transient_relay_connection_closes() {
+    fn configured_peer_loses_supported_path_after_last_relay_connection_closes() {
         let peer = peer_id();
         let overlay = PeerId::from_libp2p(peer);
         let mut paths = PathSet::new();
@@ -19285,15 +19317,6 @@ mod tests {
         ));
 
         paths.record_closed(overlay, PathKind::CircuitRelay);
-        assert!(!peer_lacks_supported_packet_path(
-            &mut paths,
-            &peer_capabilities,
-            None,
-            None,
-            peer
-        ));
-
-        paths.mark_unhealthy(overlay, PathKind::CircuitRelay);
         assert!(peer_lacks_supported_packet_path(
             &mut paths,
             &peer_capabilities,
@@ -22159,6 +22182,58 @@ mod tests {
         );
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.stream_fallback_path_demotions, 0);
+    }
+
+    #[test]
+    fn pinned_stream_failure_rotates_relay_connections_before_demoting_path() {
+        let peer = PeerId::from_bytes([13; 32]);
+        let relay = PeerId::from_bytes([14; 32]);
+        let first_connection = ConnectionId::new_unchecked(7);
+        let failed_connection = ConnectionId::new_unchecked(8);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        for connection_id in [first_connection, failed_connection] {
+            paths.record_established_with_details(
+                peer,
+                PathKind::CircuitRelay,
+                Some(relay),
+                Some(1200),
+                PathOrigin::RelayCircuit,
+                PathConnectionRole::Dialer,
+                true,
+                Some(connection_id),
+                Some(1),
+            );
+        }
+
+        let selected = paths.best_for(peer).expect("selected relay path");
+        assert!(!maybe_demote_pinned_stream_fallback_path(
+            &mut paths,
+            &metrics,
+            peer,
+            selected.kind,
+            selected.relay_peer,
+            failed_connection,
+            &pinned_packet_stream::Failure::StreamUpgrade("timeout".to_owned()),
+        ));
+        let selected = paths.best_for(peer).expect("fallback relay connection");
+        assert_eq!(selected.latest_connection_id, Some(first_connection));
+        assert_eq!(selected.established_connections, 1);
+
+        assert!(maybe_demote_pinned_stream_fallback_path(
+            &mut paths,
+            &metrics,
+            peer,
+            selected.kind,
+            selected.relay_peer,
+            first_connection,
+            &pinned_packet_stream::Failure::StreamUpgrade("timeout".to_owned()),
+        ));
+        assert_eq!(paths.best_for(peer), None);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.stream_fallback_path_demotions, 1);
     }
 
     #[tokio::test]

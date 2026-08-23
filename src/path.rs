@@ -160,12 +160,31 @@ impl PathCandidate {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PathConnectionInventoryUpdate {
+    latest_connection_id: Option<ConnectionId>,
+    tracked_connections: u32,
+    connection_was_tracked: bool,
+}
+
+fn connection_inventory_update(
+    connection_ids: &[Option<ConnectionId>; MAX_TRACKED_PATH_CONNECTION_IDS],
+    connection_was_tracked: bool,
+) -> PathConnectionInventoryUpdate {
+    PathConnectionInventoryUpdate {
+        latest_connection_id: connection_ids.iter().flatten().last().copied(),
+        tracked_connections: u32::try_from(connection_ids.iter().flatten().count())
+            .unwrap_or(u32::MAX),
+        connection_was_tracked,
+    }
+}
+
 fn record_connection_id(
     connection_ids: &mut [Option<ConnectionId>; MAX_TRACKED_PATH_CONNECTION_IDS],
     connection_id: Option<ConnectionId>,
-) -> Option<ConnectionId> {
+) -> PathConnectionInventoryUpdate {
     let Some(connection_id) = connection_id else {
-        return connection_ids.iter().flatten().last().copied();
+        return connection_inventory_update(connection_ids, false);
     };
 
     let mut compacted = [None; MAX_TRACKED_PATH_CONNECTION_IDS];
@@ -183,17 +202,21 @@ fn record_connection_id(
     }
     compacted[len] = Some(connection_id);
     *connection_ids = compacted;
-    Some(connection_id)
+    connection_inventory_update(connection_ids, true)
 }
 
 fn forget_connection_id(
     connection_ids: &mut [Option<ConnectionId>; MAX_TRACKED_PATH_CONNECTION_IDS],
     connection_id: Option<ConnectionId>,
-) -> Option<ConnectionId> {
+) -> PathConnectionInventoryUpdate {
     let Some(connection_id) = connection_id else {
-        return connection_ids.iter().flatten().last().copied();
+        return connection_inventory_update(connection_ids, false);
     };
 
+    let connection_was_tracked = connection_ids
+        .iter()
+        .flatten()
+        .any(|existing| *existing == connection_id);
     let mut compacted = [None; MAX_TRACKED_PATH_CONNECTION_IDS];
     let mut len = 0;
     for existing in connection_ids.iter().flatten().copied() {
@@ -203,7 +226,7 @@ fn forget_connection_id(
         }
     }
     *connection_ids = compacted;
-    compacted.iter().flatten().last().copied()
+    connection_inventory_update(connection_ids, connection_was_tracked)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -250,6 +273,15 @@ pub struct PathSelectionChange {
     pub peer: PeerId,
     pub previous: Option<PathCandidate>,
     pub current: Option<PathCandidate>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PathConnectionFailure {
+    pub selection_change: Option<PathSelectionChange>,
+    pub connection_was_tracked: bool,
+    pub remaining_connections: u32,
+    pub latest_connection_id: Option<ConnectionId>,
+    pub path_healthy: bool,
 }
 
 impl PathSelectionChange {
@@ -311,7 +343,7 @@ impl PathSet {
         kind: PathKind,
         relay_peer: Option<PeerId>,
         connection_id: Option<ConnectionId>,
-    ) -> Option<ConnectionId> {
+    ) -> PathConnectionInventoryUpdate {
         if let Some(inventory) = self
             .connection_inventories
             .iter_mut()
@@ -326,10 +358,9 @@ impl PathSet {
             relay_peer,
             connection_ids: [None; MAX_TRACKED_PATH_CONNECTION_IDS],
         };
-        let latest_connection_id =
-            record_connection_id(&mut inventory.connection_ids, connection_id);
+        let update = record_connection_id(&mut inventory.connection_ids, connection_id);
         self.connection_inventories.push(inventory);
-        latest_connection_id
+        update
     }
 
     fn forget_connection_inventory(
@@ -338,11 +369,11 @@ impl PathSet {
         kind: PathKind,
         relay_peer: Option<PeerId>,
         connection_id: Option<ConnectionId>,
-    ) -> Option<ConnectionId> {
+    ) -> PathConnectionInventoryUpdate {
         self.connection_inventories
             .iter_mut()
             .find(|inventory| path_inventory_matches(inventory, peer, kind, relay_peer))
-            .and_then(|inventory| {
+            .map_or_else(PathConnectionInventoryUpdate::default, |inventory| {
                 forget_connection_id(&mut inventory.connection_ids, connection_id)
             })
     }
@@ -461,7 +492,7 @@ impl PathSet {
         now_unix_seconds: Option<u64>,
     ) -> Option<PathSelectionChange> {
         let previous = self.best_for(peer);
-        let latest_connection_id =
+        let connection_update =
             self.record_connection_inventory(peer, kind, relay_peer, connection_id);
         if let Some(candidate) = self
             .candidates
@@ -476,12 +507,16 @@ impl PathSet {
             candidate.origin = origin;
             candidate.connection_role = connection_role;
             candidate.established_as_relayed = established_as_relayed;
-            candidate.latest_connection_id = latest_connection_id;
+            candidate.latest_connection_id = connection_update.latest_connection_id;
             if candidate.first_seen_unix_seconds.is_none() {
                 candidate.first_seen_unix_seconds = now_unix_seconds;
             }
             candidate.last_established_unix_seconds = now_unix_seconds;
-            candidate.established_connections = candidate.established_connections.saturating_add(1);
+            candidate.established_connections = if connection_id.is_some() {
+                connection_update.tracked_connections
+            } else {
+                candidate.established_connections.saturating_add(1)
+            };
         } else {
             let mut candidate = PathCandidate::new(peer, kind);
             candidate.relay_peer = relay_peer;
@@ -489,10 +524,14 @@ impl PathSet {
             candidate.origin = origin;
             candidate.connection_role = connection_role;
             candidate.established_as_relayed = established_as_relayed;
-            candidate.latest_connection_id = latest_connection_id;
+            candidate.latest_connection_id = connection_update.latest_connection_id;
             candidate.first_seen_unix_seconds = now_unix_seconds;
             candidate.last_established_unix_seconds = now_unix_seconds;
-            candidate.established_connections = 1;
+            candidate.established_connections = if connection_id.is_some() {
+                connection_update.tracked_connections
+            } else {
+                1
+            };
             self.candidates.push(candidate);
         }
         self.selection_change(peer, previous)
@@ -580,23 +619,68 @@ impl PathSet {
         relay_peer: Option<PeerId>,
         connection_id: Option<ConnectionId>,
     ) -> Option<PathSelectionChange> {
+        self.record_connection_lost(peer, kind, relay_peer, connection_id)
+            .selection_change
+    }
+
+    pub(crate) fn record_failed_connection(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+        connection_id: ConnectionId,
+    ) -> PathConnectionFailure {
+        self.record_connection_lost(peer, kind, relay_peer, Some(connection_id))
+    }
+
+    fn record_connection_lost(
+        &mut self,
+        peer: PeerId,
+        kind: PathKind,
+        relay_peer: Option<PeerId>,
+        connection_id: Option<ConnectionId>,
+    ) -> PathConnectionFailure {
         let previous = self.best_for(peer);
-        let latest_connection_id =
+        let connection_update =
             self.forget_connection_inventory(peer, kind, relay_peer, connection_id);
+        let mut clear_inventory = false;
+        let mut path_healthy = false;
+        let mut remaining_connections = 0;
+        let mut latest_connection_id = None;
         if let Some(candidate) = self
             .candidates
             .iter_mut()
             .find(|candidate| path_candidate_matches(candidate, peer, kind, relay_peer))
         {
-            candidate.established_connections = candidate.established_connections.saturating_sub(1);
-            candidate.latest_connection_id = latest_connection_id;
-            if candidate.established_connections == 0 && !candidate.is_relay() {
+            if connection_id.is_none() {
+                candidate.established_connections =
+                    candidate.established_connections.saturating_sub(1);
+            } else if connection_update.connection_was_tracked {
+                candidate.established_connections = connection_update.tracked_connections;
+            }
+            if connection_id.is_none() || connection_update.connection_was_tracked {
+                candidate.latest_connection_id = connection_update.latest_connection_id;
+            }
+            if candidate.established_connections == 0 {
                 candidate.healthy = false;
                 candidate.latest_connection_id = None;
-                self.clear_connection_inventory(peer, kind, relay_peer);
+                clear_inventory = true;
             }
+            path_healthy = candidate.healthy;
+            remaining_connections = candidate.established_connections;
+            latest_connection_id = candidate.latest_connection_id;
         }
-        self.selection_change(peer, previous)
+        if clear_inventory {
+            self.clear_connection_inventory(peer, kind, relay_peer);
+        }
+        PathConnectionFailure {
+            selection_change: self.selection_change(peer, previous),
+            connection_was_tracked: connection_id.is_none()
+                || connection_update.connection_was_tracked,
+            remaining_connections,
+            latest_connection_id,
+            path_healthy,
+        }
     }
 
     pub fn lower_path_mtu(&mut self, peer: PeerId, kind: PathKind, mtu: u16) -> bool {
@@ -910,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_paths_remain_healthy_across_transient_stream_closes() {
+    fn relay_paths_become_unhealthy_without_live_connections() {
         let mut paths = PathSet::new();
 
         paths.record_established(peer(1), PathKind::CircuitRelay);
@@ -919,38 +1003,70 @@ mod tests {
         let relay = paths
             .candidates_for(peer(1))
             .find(|candidate| candidate.kind == PathKind::CircuitRelay)
-            .expect("relay remains available for redial");
+            .expect("relay remains recorded for diagnostics");
         assert_eq!(relay.kind, PathKind::CircuitRelay);
         assert_eq!(relay.established_connections, 0);
-        assert!(relay.healthy);
-        assert_eq!(
-            paths.best_for(peer(1)).map(|candidate| candidate.kind),
-            Some(PathKind::CircuitRelay)
-        );
+        assert!(!relay.healthy);
+        assert_eq!(paths.best_for(peer(1)), None);
     }
 
     #[test]
-    fn confirmed_relay_paths_remain_selectable_across_transient_stream_closes() {
+    fn failed_relay_connection_rotates_to_another_tracked_connection() {
         let mut paths = PathSet::new();
+        let relay = peer(10);
+        let first_connection = ConnectionId::new_unchecked(7);
+        let failed_connection = ConnectionId::new_unchecked(8);
 
-        paths.record_established(peer(1), PathKind::CircuitRelay);
-        paths.record_rtt(peer(1), PathKind::CircuitRelay, 250);
-        paths.record_closed(peer(1), PathKind::CircuitRelay);
+        for connection_id in [first_connection, failed_connection] {
+            paths.record_established_with_details(
+                peer(1),
+                PathKind::CircuitRelay,
+                Some(relay),
+                Some(1200),
+                PathOrigin::RelayCircuit,
+                PathConnectionRole::Dialer,
+                true,
+                Some(connection_id),
+                Some(1),
+            );
+        }
+
+        let failure = paths.record_failed_connection(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(relay),
+            failed_connection,
+        );
 
         let relay = paths
             .candidates_for(peer(1))
             .find(|candidate| candidate.kind == PathKind::CircuitRelay)
-            .expect("relay remains available for redial");
+            .expect("remaining relay connection");
+        assert!(failure.connection_was_tracked);
+        assert_eq!(failure.remaining_connections, 1);
+        assert_eq!(failure.latest_connection_id, Some(first_connection));
+        assert!(failure.path_healthy);
         assert_eq!(relay.kind, PathKind::CircuitRelay);
-        assert_eq!(relay.established_connections, 0);
+        assert_eq!(relay.established_connections, 1);
+        assert_eq!(relay.latest_connection_id, Some(first_connection));
         assert!(relay.healthy);
-        assert!(relay.is_selectable());
         assert_eq!(
             paths
                 .best_supported_for(peer(1), PathTransportSupport::stream_fallback())
                 .map(|path| path.kind),
             Some(PathKind::CircuitRelay)
         );
+
+        let stale_failure = paths.record_failed_connection(
+            peer(1),
+            PathKind::CircuitRelay,
+            Some(peer(10)),
+            failed_connection,
+        );
+        assert!(!stale_failure.connection_was_tracked);
+        assert_eq!(stale_failure.remaining_connections, 1);
+        assert_eq!(stale_failure.latest_connection_id, Some(first_connection));
+        assert!(stale_failure.path_healthy);
     }
 
     #[test]
@@ -1500,9 +1616,9 @@ mod tests {
                 healthy_direct_quic_datagram_paths: 1,
                 healthy_direct_quic_stream_paths: 1,
                 healthy_direct_tcp_stream_paths: 0,
-                healthy_relay_paths: 1,
-                peers_with_supported_path: 3,
-                peers_without_supported_path: 1,
+                healthy_relay_paths: 0,
+                peers_with_supported_path: 2,
+                peers_without_supported_path: 2,
             }
         );
     }
