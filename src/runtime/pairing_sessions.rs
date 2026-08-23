@@ -1745,6 +1745,16 @@ impl CodePairingSessions {
     }
 
     #[must_use]
+    pub fn can_accept_inbound_hello(&self) -> bool {
+        self.inbound_sessions.len() < MAX_INBOUND_CODE_SESSIONS
+    }
+
+    #[must_use]
+    pub fn can_accept_pending_approval(&self) -> bool {
+        self.pending_approval.is_none()
+    }
+
+    #[must_use]
     pub fn join_request_options(
         &self,
         operation_id: &str,
@@ -3357,6 +3367,32 @@ mod tests {
             ),
             Err(CodePairingSessionError::Busy)
         ));
+    }
+
+    #[test]
+    fn pending_approval_capacity_can_be_checked_before_authentication() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let inviter = peer(1);
+        let joiner = peer(2);
+        let started = sessions
+            .open("runners", 600, 1_000, now)
+            .expect("open pairing");
+        assert!(sessions.can_accept_pending_approval());
+
+        sessions
+            .set_pending_approval(
+                PendingApproval::new(
+                    started.operation_id,
+                    joiner,
+                    started.expires_at_unix_seconds,
+                    test_request(inviter, joiner),
+                )
+                .expect("approval"),
+            )
+            .expect("set approval");
+
+        assert!(!sessions.can_accept_pending_approval());
     }
 
     #[test]

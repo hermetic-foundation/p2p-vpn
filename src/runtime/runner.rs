@@ -106,6 +106,7 @@ use crate::{
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
+const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
 const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
@@ -305,31 +306,61 @@ impl PeerRateLimiters {
             tokens: limit,
             refilled_at: now,
         });
-
-        let elapsed = now.saturating_duration_since(bucket.refilled_at);
-        let refill = elapsed
-            .as_secs()
-            .saturating_mul(u64::from(limit))
-            .saturating_add(
-                u64::from(elapsed.subsec_nanos()).saturating_mul(u64::from(limit)) / 1_000_000_000,
-            );
-        if refill > 0 {
-            let refill = u32::try_from(refill).unwrap_or(u32::MAX);
-            bucket.tokens = bucket.tokens.saturating_add(refill).min(limit);
-            bucket.refilled_at = now;
-        }
-
-        if bucket.tokens == 0 {
-            return false;
-        }
-
-        bucket.tokens -= 1;
-        true
+        take_rate_limit_token(bucket, limit, now)
     }
 
     fn remove(&mut self, peer: Libp2pPeerId) {
         self.buckets.remove(&peer);
     }
+}
+
+#[derive(Debug)]
+struct GlobalRateLimiter {
+    limit_per_second: u32,
+    bucket: PacketRateBucket,
+}
+
+impl GlobalRateLimiter {
+    fn new(limit_per_second: u32, now: Instant) -> Self {
+        let limit_per_second = limit_per_second.max(1);
+        Self {
+            limit_per_second,
+            bucket: PacketRateBucket {
+                tokens: limit_per_second,
+                refilled_at: now,
+            },
+        }
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        take_rate_limit_token(&mut self.bucket, self.limit_per_second, now)
+    }
+
+    const fn limit_per_second(&self) -> u32 {
+        self.limit_per_second
+    }
+}
+
+fn take_rate_limit_token(bucket: &mut PacketRateBucket, limit: u32, now: Instant) -> bool {
+    let elapsed = now.saturating_duration_since(bucket.refilled_at);
+    let refill = elapsed
+        .as_secs()
+        .saturating_mul(u64::from(limit))
+        .saturating_add(
+            u64::from(elapsed.subsec_nanos()).saturating_mul(u64::from(limit)) / 1_000_000_000,
+        );
+    if refill > 0 {
+        let refill = u32::try_from(refill).unwrap_or(u32::MAX);
+        bucket.tokens = bucket.tokens.saturating_add(refill).min(limit);
+        bucket.refilled_at = now;
+    }
+
+    if bucket.tokens == 0 {
+        return false;
+    }
+
+    bucket.tokens -= 1;
+    true
 }
 
 pub async fn run_config(
@@ -557,6 +588,12 @@ where
         PeerRateLimiters::new(resources.inbound_packet_rate_limit());
     let mut pairing_request_rate_limiters =
         PeerRateLimiters::new(resources.pairing_request_rate_limit());
+    let mut pairing_handshake_rate_limiter = GlobalRateLimiter::new(
+        resources
+            .pairing_request_rate_limit()
+            .saturating_mul(PAIRING_GLOBAL_RATE_MULTIPLIER),
+        Instant::now(),
+    );
     let mut consumed_pairing_tokens = HashSet::new();
     let pairing_state_store = pairing_state_path
         .map(|path| {
@@ -765,6 +802,7 @@ where
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
+                        pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                         metrics: &metrics,
                         local_capabilities: &mut local_capabilities,
                         previous_membership_tags: &previous_membership_tags,
@@ -1063,6 +1101,7 @@ where
                                 packet_in_flight: &mut queue_runtime.packet_in_flight,
                                 inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                                 pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
+                                pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                                 metrics: &metrics,
                                 local_capabilities: &mut local_capabilities,
                                 previous_membership_tags: &previous_membership_tags,
@@ -7482,6 +7521,7 @@ struct SwarmEventContext<'a> {
     packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerRateLimiters,
     pairing_request_rate_limiters: &'a mut PeerRateLimiters,
+    pairing_handshake_rate_limiter: &'a mut GlobalRateLimiter,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a mut ControlCapabilities,
     previous_membership_tags: &'a [String],
@@ -9267,10 +9307,32 @@ fn handle_pairing_code_request(
     request: PairingCodeRequest,
     channel: request_response::ResponseChannel<PairingCodeResponse>,
 ) -> Result<(), RunnerError> {
-    if !context
-        .pairing_request_rate_limiters
-        .allow(peer, Instant::now())
+    let now = Instant::now();
+    if !context.pairing_request_rate_limiters.allow(peer, now) {
+        return send_pairing_code_response(
+            swarm,
+            channel,
+            PairingCodeResponse::Rejected {
+                reason: PairingCodeRejectionReason::RateLimited,
+            },
+        );
+    }
+    if matches!(
+        &request,
+        PairingCodeRequest::Hello { .. } | PairingCodeRequest::Submit { .. }
+    ) && !context.pairing_handshake_rate_limiter.allow(now)
     {
+        log_runtime_event(
+            LogLevel::Warn,
+            "pairing_code_global_rate_limited",
+            &[(
+                "limit_per_second",
+                &context
+                    .pairing_handshake_rate_limiter
+                    .limit_per_second()
+                    .to_string(),
+            )],
+        );
         return send_pairing_code_response(
             swarm,
             channel,
@@ -9295,6 +9357,15 @@ fn handle_pairing_code_request(
             let expires_in_seconds = expires_at_unix_seconds.saturating_sub(now);
             if expires_in_seconds == 0 {
                 return send_pairing_code_unavailable(swarm, channel);
+            }
+            if !context.code_pairing_sessions.can_accept_inbound_hello() {
+                return send_pairing_code_response(
+                    swarm,
+                    channel,
+                    PairingCodeResponse::Rejected {
+                        reason: PairingCodeRejectionReason::Busy,
+                    },
+                );
             }
             match answer_pairing_code_hello_at(
                 context.forwarder.config(),
@@ -9345,6 +9416,15 @@ fn handle_pairing_code_request(
                 .response_for_existing_submission(peer, &request, now)?
             {
                 return send_pairing_code_response(swarm, channel, response);
+            }
+            if !context.code_pairing_sessions.can_accept_pending_approval() {
+                return send_pairing_code_response(
+                    swarm,
+                    channel,
+                    PairingCodeResponse::Rejected {
+                        reason: PairingCodeRejectionReason::Busy,
+                    },
+                );
             }
             let Some(inbound) = context
                 .code_pairing_sessions
@@ -9896,10 +9976,8 @@ fn handle_pairing_request_event(
     channel: request_response::ResponseChannel<PairingResponse>,
 ) -> Result<(), RunnerError> {
     context.metrics.record_pairing_request_received();
-    if !context
-        .pairing_request_rate_limiters
-        .allow(peer, Instant::now())
-    {
+    let now = Instant::now();
+    if !context.pairing_request_rate_limiters.allow(peer, now) {
         context
             .metrics
             .record_pairing_request_rejection(PairingRejectionReason::RateLimited);
@@ -9909,6 +9987,21 @@ fn handle_pairing_request_event(
             &format!(
                 "rate_limited limit_per_second={}",
                 context.pairing_request_rate_limiters.limit_per_second()
+            ),
+        );
+        drop(channel);
+        return Ok(());
+    }
+    if !context.pairing_handshake_rate_limiter.allow(now) {
+        context
+            .metrics
+            .record_pairing_request_rejection(PairingRejectionReason::RateLimited);
+        log_pairing_request_rejection(
+            peer,
+            request,
+            &format!(
+                "global_rate_limited limit_per_second={}",
+                context.pairing_handshake_rate_limiter.limit_per_second()
             ),
         );
         drop(channel);
@@ -16863,6 +16956,19 @@ mod tests {
         assert!(!packet_limiters.allow(peer, now));
         assert!(pairing_limiters.allow(peer, now));
         assert!(!pairing_limiters.allow(peer, now));
+    }
+
+    #[test]
+    fn global_pairing_rate_limiter_cannot_be_bypassed_with_new_peers() {
+        let now = Instant::now();
+        let mut limiter = GlobalRateLimiter::new(2, now);
+
+        assert!(limiter.allow(now));
+        assert!(limiter.allow(now));
+        assert!(!limiter.allow(now));
+        assert!(limiter.allow(now + Duration::from_millis(500)));
+        assert!(!limiter.allow(now + Duration::from_millis(500)));
+        assert!(limiter.allow(now + Duration::from_secs(1)));
     }
 
     #[test]
