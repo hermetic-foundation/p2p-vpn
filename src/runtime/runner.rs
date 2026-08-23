@@ -595,7 +595,7 @@ where
             .saturating_mul(PAIRING_GLOBAL_RATE_MULTIPLIER),
         Instant::now(),
     );
-    let mut consumed_pairing_tokens = HashSet::new();
+    let mut pairing_replay_tokens = PairingReplayTokens::default();
     let pairing_state_store = pairing_state_path
         .map(|path| {
             PairingStateStore::encrypted(
@@ -620,7 +620,7 @@ where
         &mut membership,
         &node.identity,
     )?;
-    consumed_pairing_tokens.extend(
+    pairing_replay_tokens.replace_code_approval(
         code_pairing_sessions
             .active_replay_tokens(current_unix_seconds_lossy())
             .map(str::to_owned),
@@ -815,7 +815,7 @@ where
                         path_probe_tracker: &mut path_probe_tracker,
                         packet_plane_session_ttl,
                         packet_plane_replay_windows_per_session,
-                        consumed_pairing_tokens: &mut consumed_pairing_tokens,
+                        pairing_replay_tokens: &mut pairing_replay_tokens,
                         code_pairing_sessions: &mut code_pairing_sessions,
                         pairing_state_store: pairing_state_store.as_ref(),
                         active_connections: &mut active_connections,
@@ -1015,11 +1015,11 @@ where
             _ = timers.code_pairing.tick() => {
                 let now_unix_seconds = current_unix_seconds_lossy();
                 let actions = code_pairing_sessions.expire(now_unix_seconds, Instant::now());
-                consumed_pairing_tokens.retain(|token| {
+                pairing_replay_tokens.replace_code_approval(
                     code_pairing_sessions
                         .active_replay_tokens(now_unix_seconds)
-                        .any(|active| active == token)
-                });
+                        .map(str::to_owned),
+                );
                 stop_code_pairing_provider(&mut node.swarm, actions.stop_providing_locator.as_deref());
                 drive_code_pairing_discovery(
                     &mut node.swarm,
@@ -1081,7 +1081,7 @@ where
                             &mut membership,
                             &mut local_capabilities,
                             &node.identity,
-                            &mut consumed_pairing_tokens,
+                            &mut pairing_replay_tokens.code_approval,
                             &mut promote_peer,
                             &metrics,
                         );
@@ -1115,7 +1115,7 @@ where
                                 path_probe_tracker: &mut path_probe_tracker,
                                 packet_plane_session_ttl,
                                 packet_plane_replay_windows_per_session,
-                                consumed_pairing_tokens: &mut consumed_pairing_tokens,
+                                pairing_replay_tokens: &mut pairing_replay_tokens,
                                 code_pairing_sessions: &mut code_pairing_sessions,
                                 pairing_state_store: pairing_state_store.as_ref(),
                                 active_connections: &mut active_connections,
@@ -1921,7 +1921,7 @@ fn handle_pair_rpc_request(
     membership: &mut OverlayMembership,
     local_capabilities: &mut ControlCapabilities,
     identity: &NodeIdentity,
-    consumed_pairing_tokens: &mut HashSet<String>,
+    consumed_code_pairing_tokens: &mut HashSet<String>,
     promote_peer: &mut Option<Libp2pPeerId>,
     metrics: &RuntimeMetrics,
 ) -> PairRpcResponseEnvelope {
@@ -2051,7 +2051,7 @@ fn handle_pair_rpc_request(
                 pairing_offer_and_response_for_request_with_grants(
                     forwarder.config(),
                     identity,
-                    consumed_pairing_tokens,
+                    consumed_code_pairing_tokens,
                     approval.peer,
                     &approval.request,
                     now,
@@ -2096,7 +2096,7 @@ fn handle_pair_rpc_request(
             )
             .map_err(runner_error_pair_rpc)?;
             *promote_peer = Some(remote_peer);
-            consumed_pairing_tokens.insert(approval.request.payload.rendezvous_token.clone());
+            consumed_code_pairing_tokens.insert(approval.request.payload.rendezvous_token.clone());
             let actions = sessions
                 .complete_open(&operation_id, &approval_id, response)
                 .map_err(code_session_pair_rpc)?;
@@ -7603,10 +7603,23 @@ struct SwarmEventContext<'a> {
     path_probe_tracker: &'a mut PathProbeTracker,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
-    consumed_pairing_tokens: &'a mut HashSet<String>,
+    pairing_replay_tokens: &'a mut PairingReplayTokens,
     code_pairing_sessions: &'a mut CodePairingSessions,
     pairing_state_store: Option<&'a PairingStateStore>,
     active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+}
+
+#[derive(Debug, Default)]
+struct PairingReplayTokens {
+    file_bearer: HashSet<String>,
+    code_approval: HashSet<String>,
+}
+
+impl PairingReplayTokens {
+    fn replace_code_approval(&mut self, tokens: impl IntoIterator<Item = String>) {
+        self.code_approval.clear();
+        self.code_approval.extend(tokens);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -9593,7 +9606,7 @@ fn handle_pairing_code_request(
                     pairing_response_for_request_with_mode(
                         context.forwarder.config(),
                         context.identity,
-                        context.consumed_pairing_tokens,
+                        &mut context.pairing_replay_tokens.code_approval,
                         peer,
                         &request,
                         now,
@@ -10189,7 +10202,7 @@ fn handle_pairing_request_event(
     match pairing_response_for_request(
         context.forwarder.config(),
         context.identity,
-        context.consumed_pairing_tokens,
+        &mut context.pairing_replay_tokens.file_bearer,
         peer,
         request,
         current_unix_seconds_lossy(),
@@ -10227,7 +10240,8 @@ fn handle_pairing_request_event(
                 &response_for_membership,
             );
             context
-                .consumed_pairing_tokens
+                .pairing_replay_tokens
+                .file_bearer
                 .insert(request.payload.rendezvous_token.clone());
             context.metrics.record_pairing_request_accepted();
             log_runtime_event(
@@ -16376,6 +16390,21 @@ mod tests {
         assert_eq!(request.offer, Some(offer.clone()));
         assert_eq!(response.payload.joiner_peer, joiner.peer_id);
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn code_replay_refresh_preserves_file_bearer_tokens() {
+        let mut tokens = PairingReplayTokens::default();
+        tokens.file_bearer.insert("file-token".to_owned());
+        tokens.replace_code_approval(["file-token".to_owned(), "expired-code".to_owned()]);
+
+        tokens.replace_code_approval(["active-code".to_owned()]);
+
+        assert!(tokens.file_bearer.contains("file-token"));
+        assert_eq!(
+            tokens.code_approval,
+            HashSet::from(["active-code".to_owned()])
+        );
     }
 
     #[test]
