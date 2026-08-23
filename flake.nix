@@ -40,6 +40,7 @@
             ./Cargo.toml
             ./Cargo.lock
             ./src
+            ./tests/pair_cli.rs
             ./tests/tun_namespace.rs
           ];
         };
@@ -143,6 +144,7 @@ USAGE
               ".#checks.$system.nixos-vm-module-lifecycle"
               ".#checks.$system.nixos-vm-minimal-lan"
               ".#checks.$system.nixos-vm-pairing"
+              ".#checks.$system.nixos-vm-code-pairing-lan"
               ".#checks.$system.nixos-vm-quic-datagram"
               ".#checks.$system.nixos-vm-quic-stream"
               ".#checks.$system.nixos-vm-forced-relay"
@@ -3366,6 +3368,9 @@ EOF
         nixosVmPairing = import ./tests/nixos/pairing.nix {
           inherit self pkgs package;
         };
+        nixosVmCodePairingLan = import ./tests/nixos/code-pairing-lan.nix {
+          inherit self pkgs package;
+        };
         nixosVmQuicDatagram = import ./tests/nixos/quic-datagram.nix {
           inherit self pkgs package;
         };
@@ -3944,6 +3949,7 @@ EOF
           nixos-vm-minimal-lan = nixosVmMesh;
           nixos-vm-mesh = nixosVmMesh;
           nixos-vm-pairing = nixosVmPairing;
+          nixos-vm-code-pairing-lan = nixosVmCodePairingLan;
           nixos-vm-quic-datagram = nixosVmQuicDatagram;
           nixos-vm-quic-stream = nixosVmQuicStream;
           nixos-vm-forced-relay = nixosVmForcedRelay;
