@@ -3138,6 +3138,7 @@ EOF
                   networkName = "nixos-module-file-secret";
                   localPeer = "4444444444444444444444444444444444444444444444444444444444444444";
                   privateKeyFile = "/run/secrets/p2p-vpn/node-a.key";
+                  membershipKeyFile = "/run/secrets/p2p-vpn/node-a.membership-key";
                   peers."9999999999999999999999999999999999999999999999999999999999999999" = { };
                   metricsIntervalSeconds = 10;
                   openFirewall = true;
@@ -3697,13 +3698,15 @@ EOF
             execStart = consumerEval.config.systemd.services.p2p-vpn-lab.serviceConfig.ExecStart;
             generatedConfig = builtins.toJSON consumerEval.config.services.p2p-vpn.generatedConfigs.lab;
             identityFile = consumerEval.config.services.p2p-vpn.identityFiles.lab;
+            pairingStateFile = consumerEval.config.services.p2p-vpn.pairingStateFiles.lab;
             stateDirectory = builtins.head consumerEval.config.systemd.services.p2p-vpn-lab.serviceConfig.StateDirectory;
           } ''
             test -e "$consumerToplevel"
             test "$identityFile" = /var/lib/p2p-vpn/lab/private.key
+            test "$pairingStateFile" = /var/lib/p2p-vpn/lab/pairing-state.json
             test "$stateDirectory" = p2p-vpn/lab
             case "$execStart" in
-              *"p2p-vpn up --config /run/p2p-vpn-lab/config.json --control-socket /run/p2p-vpn-lab/control.sock"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-lab/config.json --control-socket /run/p2p-vpn-lab/control.sock --pairing-state /var/lib/p2p-vpn/lab/pairing-state.json"*) ;;
               *) echo "unexpected consumer ExecStart: $execStart" >&2; exit 1 ;;
             esac
 
@@ -3746,11 +3749,13 @@ EOF
             );
             loadCredential = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.LoadCredential;
             stateDirectory = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.StateDirectory;
+            stateDirectoryJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.StateDirectory;
             execStop = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStop;
             execStopNoSocket = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-b.serviceConfig.ExecStop;
             generatedSettings = builtins.toJSON moduleEval.config.services.p2p-vpn.generatedConfigs.node-c;
             generatedMinimalSettings = builtins.toJSON moduleEval.config.services.p2p-vpn.generatedConfigs.node-e;
             identityFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.identityFiles;
+            pairingStateFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.pairingStateFiles;
             effectiveInterfaces = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveInterfaces;
             effectiveListenAddresses = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveListenAddresses;
             failedAssertions = builtins.toJSON (
@@ -3789,7 +3794,7 @@ EOF
             tmpfilesRules = builtins.toJSON moduleEval.config.systemd.tmpfiles.rules;
           } ''
             case "$execStart" in
-              *"p2p-vpn up --config /run/p2p-vpn-node-a/config.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-a/config.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock --pairing-state /var/lib/p2p-vpn/node-a/pairing-state.json"*) ;;
               *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
             esac
             case "$execStartPreFileSecret" in
@@ -3797,17 +3802,18 @@ EOF
               *) echo "unexpected file-secret ExecStartPre: $execStartPreFileSecret" >&2; exit 1 ;;
             esac
             case "$execStartPreFileSecretScript" in
-              *'private_key_file="$CREDENTIALS_DIRECTORY/private.key"'*'--rawfile private_key "$private_key_file"'*'/run/p2p-vpn-node-a/config.json'*) ;;
+              *'private_key_file="$CREDENTIALS_DIRECTORY/private.key"'*'--rawfile private_key "$private_key_file"'*'membership_key_file="$CREDENTIALS_DIRECTORY/membership.key"'*'--rawfile membership_key "$membership_key_file"'*'/run/p2p-vpn-node-a/config.json'*) ;;
               *) echo "unexpected file-secret ExecStartPre script: $execStartPreFileSecretScript" >&2; exit 1 ;;
             esac
-            test "$loadCredential" = '["private.key:/run/secrets/p2p-vpn/node-a.key"]'
+            test "$loadCredential" = '["private.key:/run/secrets/p2p-vpn/node-a.key","membership.key:/run/secrets/p2p-vpn/node-a.membership-key"]'
             case "$execStartNoSocket" in
               *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
+              *"--pairing-state"*) echo "disabled control socket still has pairing state: $execStartNoSocket" >&2; exit 1 ;;
               *"p2p-vpn up --config /run/p2p-vpn-node-b/config.json"*) ;;
               *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
             esac
             case "$execStartStateBacked" in
-              *"p2p-vpn up --config /run/p2p-vpn-node-f/config.json --control-socket /run/p2p-vpn-node-f/control.sock"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-f/config.json --control-socket /run/p2p-vpn-node-f/control.sock --pairing-state /var/lib/p2p-vpn/node-f/pairing-state.json"*) ;;
               *) echo "unexpected state-backed ExecStart: $execStartStateBacked" >&2; exit 1 ;;
             esac
             test "$stateDirectory" = '["p2p-vpn/node-f"]'
@@ -3820,9 +3826,10 @@ EOF
               *) echo "unexpected state-backed ExecStartPre script: $execStartPreStateBackedScript" >&2; exit 1 ;;
             esac
             case "$execStartJson" in
-              *"p2p-vpn up --config /run/secrets/p2p-vpn/node-g.json --control-socket /run/p2p-vpn-node-g/control.sock"*) ;;
+              *"p2p-vpn up --config /run/secrets/p2p-vpn/node-g.json --control-socket /run/p2p-vpn-node-g/control.sock --pairing-state /var/lib/p2p-vpn/node-g/pairing-state.json"*) ;;
               *) echo "unexpected JSON ExecStart: $execStartJson" >&2; exit 1 ;;
             esac
+            test "$stateDirectoryJson" = '["p2p-vpn/node-g"]'
             case "$execStartPreJsonScript" in
               *'status --config /run/secrets/p2p-vpn/node-g.json'*) ;;
               *'jq'*|*'private_key'*) echo "JSON mode unexpectedly generates config: $execStartPreJsonScript" >&2; exit 1 ;;
@@ -3870,6 +3877,12 @@ EOF
               .["node-a"] == "/run/secrets/p2p-vpn/node-a.key"
               and .["node-f"] == "/var/lib/p2p-vpn/node-f/private.key"
               and has("node-g") == false
+            ' >/dev/null
+            printf '%s' "$pairingStateFiles" | jq -e '
+              .["node-a"] == "/var/lib/p2p-vpn/node-a/pairing-state.json"
+              and .["node-f"] == "/var/lib/p2p-vpn/node-f/pairing-state.json"
+              and .["node-g"] == "/var/lib/p2p-vpn/node-g/pairing-state.json"
+              and has("node-b") == false
             ' >/dev/null
             test "$effectiveInterfaces" = '{"node-a":"pv0","node-b":"pv1","node-c":"pv2","node-d":"pv3","node-e":"pv4","node-f":"pv5"}'
             printf '%s' "$effectiveListenAddresses" | jq -e '

@@ -40,8 +40,10 @@ let
   runtimeConfigFile = name: "${runtimeDirectory name}/config.json";
   instanceStateDirectory = name: instance: "${instance.stateDirectory}/${name}";
   defaultPrivateKeyFile = name: instance: "${instanceStateDirectory name instance}/private.key";
+  pairingStateFile = name: instance: "${instanceStateDirectory name instance}/pairing-state.json";
   nixMode = instance: instance.configFile == null;
   automaticIdentity = instance: nixMode instance && instance.privateKeyFile == null;
+  persistentState = instance: nixMode instance || instance.controlSocket != null;
   effectiveConfigFile =
     name: instance: if nixMode instance then runtimeConfigFile name else instance.configFile;
   effectiveInterfaceName =
@@ -1017,9 +1019,9 @@ let
             "--control-socket"
             instance.controlSocket
           ]
-          ++ optionals (nixMode instance && instance.controlSocket != null) [
+          ++ optionals (instance.controlSocket != null) [
             "--pairing-state"
-            "${instanceStateDirectory name instance}/pairing-state.json"
+            (pairingStateFile name instance)
           ]
           ++ instance.extraArgs
         );
@@ -1078,11 +1080,11 @@ let
         SystemCallArchitectures = "native";
         UMask = "0077";
       }
-      // optionalAttrs (nixMode instance && defaultState) {
+      // optionalAttrs (persistentState instance && defaultState) {
         StateDirectory = [ "p2p-vpn/${name}" ];
         StateDirectoryMode = "0700";
       }
-      // optionalAttrs (nixMode instance && !defaultState) {
+      // optionalAttrs (persistentState instance && !defaultState) {
         ReadWritePaths = [ (instanceStateDirectory name instance) ];
       };
     };
@@ -1127,6 +1129,11 @@ in
       readOnly = true;
       internal = true;
       description = "Effective native-mode identity paths.";
+    };
+    pairingStateFiles = mkOption {
+      type = types.attrsOf types.str;
+      readOnly = true;
+      description = "Encrypted pairing-state paths for instances with control sockets.";
     };
   };
 
@@ -1291,13 +1298,16 @@ in
       else
         defaultPrivateKeyFile name instance
     ) nativeInstances;
+    services.p2p-vpn.pairingStateFiles = mapAttrs pairingStateFile (
+      filterAttrs (_: instance: instance.controlSocket != null) enabledInstances
+    );
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
     systemd.tmpfiles.rules = concatMap (
       name:
       let
         instance = enabledInstances.${name};
       in
-      optionals (nixMode instance && instance.stateDirectory != "/var/lib/p2p-vpn") [
+      optionals (persistentState instance && instance.stateDirectory != "/var/lib/p2p-vpn") [
         "d ${instanceStateDirectory name instance} 0700 root root -"
       ]
     ) enabledNames;
