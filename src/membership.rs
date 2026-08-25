@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libp2p::{PeerId as Libp2pPeerId, identity::PublicKey};
@@ -264,6 +264,13 @@ pub fn merge_membership_records_at(
 
     let authorized_issuers = authorized_membership_issuers(&merged, trusted_issuers);
     for record in incoming {
+        if record.payload.issuer_peer == record.payload.member_peer
+            && !trusted_issuers.contains(&record.payload.issuer_peer)
+        {
+            return Err(MembershipRecordError::UntrustedIssuer {
+                issuer: record.payload.issuer_peer.clone(),
+            });
+        }
         if !authorized_issuers.contains(&record.payload.issuer_peer) {
             return Err(MembershipRecordError::UntrustedIssuer {
                 issuer: record.payload.issuer_peer.clone(),
@@ -271,8 +278,13 @@ pub fn merge_membership_records_at(
         }
     }
 
+    let active_trusted_issuers = active_trusted_membership_issuers(&merged, trusted_issuers);
+    let authorized_issuers = authorized_membership_issuers(&merged, &active_trusted_issuers);
     let before_trust_filter = merged.len();
-    merged.retain(|record| authorized_issuers.contains(&record.payload.issuer_peer));
+    merged.retain(|record| {
+        authorized_issuers.contains(&record.payload.issuer_peer)
+            || record.payload.issuer_peer == record.payload.member_peer
+    });
     stats.removed_untrusted = before_trust_filter - merged.len();
     *records = merged;
 
@@ -318,7 +330,12 @@ pub fn trusted_membership_issuers_at(
         issuers.extend(
             valid_records
                 .iter()
-                .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+                .filter(|record| {
+                    let payload = &record.payload;
+                    payload.issuer_peer == payload.member_peer
+                        && !payload.revoked
+                        && payload.roles.contains(&MembershipRole::OverlayMember)
+                })
                 .map(|record| record.payload.issuer_peer.clone()),
         );
     } else {
@@ -412,6 +429,93 @@ fn canonical_membership_records(
         .into_iter()
         .map(|index| records[index].clone())
         .collect())
+}
+
+pub(crate) fn overlay_membership_trust_path(
+    records: &[SignedMembershipRecord],
+    member_peer: &str,
+) -> Result<Option<Vec<SignedMembershipRecord>>, MembershipRecordError> {
+    let records = canonical_membership_records(records)?;
+    let roots = records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| {
+            let payload = &record.payload;
+            payload.issuer_peer == payload.member_peer
+                && !payload.revoked
+                && payload.roles.contains(&MembershipRole::OverlayMember)
+        })
+        .map(|(index, record)| (record.payload.member_peer.clone(), index))
+        .collect::<HashMap<_, _>>();
+    if roots.is_empty() {
+        return Ok(None);
+    }
+
+    let mut authorized = HashSet::new();
+    let mut queue = VecDeque::new();
+    for record in &records {
+        let peer = &record.payload.member_peer;
+        if roots.contains_key(peer) && authorized.insert(peer.clone()) {
+            queue.push_back(peer.clone());
+        }
+    }
+    let mut predecessor = HashMap::<String, usize>::new();
+    while let Some(issuer_peer) = queue.pop_front() {
+        for (index, record) in records.iter().enumerate() {
+            let payload = &record.payload;
+            if payload.issuer_peer == issuer_peer
+                && !payload.revoked
+                && payload.roles.contains(&MembershipRole::OverlayMember)
+                && authorized.insert(payload.member_peer.clone())
+            {
+                predecessor.insert(payload.member_peer.clone(), index);
+                queue.push_back(payload.member_peer.clone());
+            }
+        }
+    }
+    if !authorized.contains(member_peer) {
+        return Ok(None);
+    }
+
+    let mut path = Vec::new();
+    let mut current = member_peer.to_owned();
+    while let Some(index) = predecessor.get(&current).copied() {
+        let record = records[index].clone();
+        current.clone_from(&record.payload.issuer_peer);
+        path.push(record);
+    }
+    let root_index =
+        roots
+            .get(&current)
+            .copied()
+            .ok_or_else(|| MembershipRecordError::UntrustedIssuer {
+                issuer: current.clone(),
+            })?;
+    path.push(records[root_index].clone());
+    path.reverse();
+    Ok(Some(path))
+}
+
+fn active_trusted_membership_issuers(
+    records: &[SignedMembershipRecord],
+    trusted_issuers: &TrustedMembershipIssuers,
+) -> TrustedMembershipIssuers {
+    let mut active = TrustedMembershipIssuers::default();
+    for issuer in &trusted_issuers.issuers {
+        let self_record = records.iter().find(|record| {
+            record.payload.issuer_peer == *issuer && record.payload.member_peer == *issuer
+        });
+        if self_record.is_none_or(|record| {
+            !record.payload.revoked
+                && record
+                    .payload
+                    .roles
+                    .contains(&MembershipRole::OverlayMember)
+        }) {
+            active.insert(issuer.clone());
+        }
+    }
+    active
 }
 
 fn authorized_membership_issuers(
@@ -1159,6 +1263,79 @@ mod tests {
     }
 
     #[test]
+    fn merge_membership_records_cascades_trust_root_revocation() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let delegate_record = overlay_record(&root, &delegate, 1, 1_000, None);
+        let member_record = overlay_record(&delegate, &member, 1, 1_000, None);
+        let root_revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&root).expect("root subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("root revocation");
+        let mut records = vec![root_record, delegate_record, member_record];
+        let trusted_issuers =
+            trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted root");
+
+        let stats = merge_membership_records_at(
+            &mut records,
+            &[root_revocation],
+            "lab",
+            1_100,
+            &trusted_issuers,
+            8,
+        )
+        .expect("root revocation merge");
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(stats.removed_untrusted, 2);
+        assert_eq!(records.len(), 1);
+        assert!(records[0].payload.revoked);
+        assert_eq!(records[0].payload.member_peer, root.peer_id);
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        assert_eq!(effective.overlay_members().count(), 0);
+    }
+
+    #[test]
+    fn merge_membership_records_rejects_delegate_self_promotion() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let delegate_record = overlay_record(&root, &delegate, 1, 1_000, None);
+        let delegate_self_root = overlay_record(&delegate, &delegate, 2, 1_100, None);
+        let mut records = vec![root_record, delegate_record];
+        let original = records.clone();
+        let trusted_issuers =
+            trusted_membership_issuers_at(&records, "lab", 1_100).expect("trusted root");
+
+        assert!(matches!(
+            merge_membership_records_at(
+                &mut records,
+                &[delegate_self_root],
+                "lab",
+                1_100,
+                &trusted_issuers,
+                8,
+            ),
+            Err(MembershipRecordError::UntrustedIssuer { issuer })
+                if issuer == delegate.peer_id
+        ));
+        assert_eq!(records, original);
+    }
+
+    #[test]
     fn merge_membership_records_cascades_delegate_expiry() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
@@ -1178,6 +1355,65 @@ mod tests {
         assert_eq!(stats.removed_untrusted, 1);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].payload.member_peer, root.peer_id);
+    }
+
+    #[test]
+    fn overlay_trust_path_rejects_a_revoked_root_and_its_descendants() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let delegate_record = overlay_record(&root, &delegate, 1, 1_000, None);
+        let root_revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&root).expect("root subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("root revocation");
+
+        let path = overlay_membership_trust_path(
+            &[root_record, delegate_record, root_revocation],
+            &delegate.peer_id,
+        )
+        .expect("trust graph");
+
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn overlay_trust_path_selects_the_shortest_authorized_chain() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let intermediate = NodeIdentity::generate_ed25519().expect("intermediate");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let intermediate_record = overlay_record(&root, &intermediate, 1, 1_000, None);
+        let long_member_record = overlay_record(&intermediate, &member, 1, 1_000, None);
+        let direct_member_record = overlay_record(&root, &member, 2, 1_000, None);
+
+        let path = overlay_membership_trust_path(
+            &[
+                root_record,
+                intermediate_record,
+                long_member_record,
+                direct_member_record,
+            ],
+            &member.peer_id,
+        )
+        .expect("trust graph")
+        .expect("member trust path");
+
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0].payload.member_peer, root.peer_id);
+        assert_eq!(path[1].payload.issuer_peer, root.peer_id);
+        assert_eq!(path[1].payload.member_peer, member.peer_id);
     }
 
     #[test]

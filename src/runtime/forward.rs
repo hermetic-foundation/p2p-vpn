@@ -232,7 +232,15 @@ impl Forwarder {
             &self.config.network.name,
             now_unix_seconds,
         )?;
-        trusted_issuers.insert(self.config.local_peer()?);
+        let has_explicit_root_record = self
+            .config
+            .network
+            .member_records
+            .iter()
+            .any(|record| record.payload.issuer_peer == record.payload.member_peer);
+        if trusted_issuers.is_empty() && !has_explicit_root_record {
+            trusted_issuers.insert(self.config.local_peer()?);
+        }
         let stats = merge_membership_records_at(
             &mut member_records,
             records,
@@ -825,7 +833,10 @@ mod tests {
             InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig, RouteConfig,
         },
         identity::NodeIdentity,
-        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
+        membership::{
+            MembershipRecordIssueOptions, MembershipRecordOptions, MembershipRecordSubject,
+            MembershipRole, issue_membership_record_at, issue_membership_record_for_subject_at,
+        },
         route::{builtin_ipv4, builtin_ipv6},
         runtime::p2p::{HostConfig, build_node},
         wire::Header,
@@ -1146,6 +1157,160 @@ mod tests {
             forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
         );
+    }
+
+    #[test]
+    fn merge_membership_records_does_not_promote_a_local_delegate_to_root() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let delegate_peer = delegate
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("delegate peer");
+        let mut config = config_for(delegate_peer);
+        config.peers.clear();
+        config.network.local_peer = delegate.peer_id.clone();
+        config.network.private_key = Some(delegate.private_key.clone());
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: root.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("root record"),
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: delegate.clone(),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("delegate record"),
+        ];
+        let delegate_self_root = issue_membership_record_at(
+            &delegate,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: delegate.clone(),
+                membership_epoch: 1,
+                sequence: 3,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("delegate self root");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(matches!(
+            forwarder.merge_membership_records(&[delegate_self_root], 1_001),
+            Err(ForwardError::MembershipRecord(
+                MembershipRecordError::UntrustedIssuer { issuer }
+            )) if issuer == delegate.peer_id
+        ));
+    }
+
+    #[test]
+    fn pruning_a_revoked_root_retains_its_explicit_tombstone() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let candidate = NodeIdentity::generate_ed25519().expect("candidate");
+        let delegate_peer = delegate
+            .peer_id
+            .parse::<Libp2pPeerId>()
+            .expect("delegate peer");
+        let mut config = config_for(delegate_peer);
+        config.peers.clear();
+        config.network.local_peer = delegate.peer_id.clone();
+        config.network.private_key = Some(delegate.private_key.clone());
+        let root_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: root.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("root record");
+        let delegate_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: delegate.clone(),
+                membership_epoch: 1,
+                sequence: 2,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("delegate record");
+        let root_revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&root).expect("root subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("root revocation");
+        config.network.member_records = vec![root_record, delegate_record, root_revocation];
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        let stats = forwarder
+            .prune_membership_records(1_100)
+            .expect("prune revoked trust graph");
+
+        assert_eq!(stats.removed_untrusted, 1);
+        assert_eq!(forwarder.member_records().len(), 1);
+        assert!(forwarder.member_records()[0].payload.revoked);
+        let delegated_grant = issue_membership_record_at(
+            &delegate,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: candidate,
+                membership_epoch: 1,
+                sequence: 4,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("delegated grant");
+        assert!(matches!(
+            forwarder.merge_membership_records(&[delegated_grant], 1_100),
+            Err(ForwardError::MembershipRecord(
+                MembershipRecordError::UntrustedIssuer { issuer }
+            )) if issuer == delegate.peer_id
+        ));
     }
 
     #[test]

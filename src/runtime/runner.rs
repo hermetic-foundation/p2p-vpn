@@ -36,14 +36,15 @@ use crate::{
     membership::{
         MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
         SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
+        overlay_membership_trust_path,
     },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
         RuntimeMetrics, RuntimeSnapshot,
     },
     pairing::{
-        PairingOffer, PairingRequest, PairingRequestOptions, PairingResponse,
-        apply_pairing_response_to_config_at, build_pairing_request_at,
+        MAX_PAIRING_MEMBERSHIP_RECORDS, PairingOffer, PairingRequest, PairingRequestOptions,
+        PairingResponse, apply_pairing_response_to_config_at, build_pairing_request_at,
     },
     pairing_code::{
         answer_pairing_code_hello_at, authenticate_pairing_request, open_pairing_code_challenge_at,
@@ -2051,6 +2052,7 @@ fn handle_pair_rpc_request(
             } else {
                 pairing_offer_and_response_for_request_with_grants(
                     forwarder.config(),
+                    forwarder.member_records(),
                     identity,
                     consumed_code_pairing_tokens,
                     approval.peer,
@@ -2141,6 +2143,7 @@ fn handle_pair_rpc_request(
             &operation_id,
             &network_name,
             &local_peer,
+            forwarder.member_records(),
             store,
         )
         .map(|artifacts| PairRpcResult::Artifacts(Box::new(artifacts))),
@@ -2196,6 +2199,7 @@ fn pairing_rpc_completion_artifacts(
     operation_id: &str,
     network_name: &str,
     local_peer: &str,
+    current_member_records: &[SignedMembershipRecord],
     store: Option<&PairingStateStore>,
 ) -> Result<PairRpcCompletionArtifacts, PairRpcResponseEnvelope> {
     if sessions.receipt(operation_id).is_some() {
@@ -2264,8 +2268,18 @@ fn pairing_rpc_completion_artifacts(
         ));
     }
 
-    let local_routes = pairing_rpc_member_routes(&response.member_records, local_peer);
-    let remote_routes = pairing_rpc_member_routes(&response.member_records, &remote_peer);
+    let mut artifact_member_records = current_member_records.to_vec();
+    for record in &response.member_records {
+        upsert_pairing_snapshot_record(&mut artifact_member_records, record).map_err(|error| {
+            pair_rpc_error(
+                PairRpcErrorCode::Internal,
+                format!("pairing membership snapshot conflicts: {error:?}"),
+                false,
+            )
+        })?;
+    }
+    let local_routes = pairing_rpc_member_routes(&artifact_member_records, local_peer);
+    let remote_routes = pairing_rpc_member_routes(&artifact_member_records, &remote_peer);
     let remote_vpn_ip = (enrollment.role == PairingEnrollmentRole::Inviter)
         .then(|| response.assigned_vpn_ip.clone())
         .flatten();
@@ -2326,8 +2340,7 @@ fn pairing_rpc_completion_artifacts(
                 vpn_ip: remote_vpn_ip.clone(),
                 routes: pairing_rpc_routes_without_host(remote_routes, remote_vpn_ip.as_deref()),
             },
-            member_records: response
-                .member_records
+            member_records: artifact_member_records
                 .iter()
                 .map(pairing_rpc_membership_record)
                 .collect(),
@@ -9753,8 +9766,9 @@ fn handle_pairing_code_request(
             };
             let valid = verify_pairing_request_code_authentication(&request, &inbound.session)
                 .and_then(|()| {
-                    pairing_response_for_request_with_mode(
+                    pairing_response_for_request_with_mode_and_records(
                         context.forwarder.config(),
+                        context.forwarder.member_records(),
                         context.identity,
                         &mut context.pairing_replay_tokens.code_approval,
                         peer,
@@ -10349,8 +10363,9 @@ fn handle_pairing_request_event(
         return Ok(());
     }
 
-    match pairing_response_for_request(
+    match pairing_response_for_request_with_records(
         context.forwarder.config(),
+        context.forwarder.member_records(),
         context.identity,
         &mut context.pairing_replay_tokens.file_bearer,
         peer,
@@ -10473,8 +10488,10 @@ fn prepare_pairing_runtime_enrollment(
     identity: &NodeIdentity,
     now_unix_seconds: u64,
 ) -> Result<PreparedPairingRuntimeEnrollment, RunnerError> {
+    let mut current_config = forwarder.config().clone();
+    current_config.network.member_records = forwarder.member_records().to_vec();
     let next_config = apply_pairing_response_to_config_at(
-        forwarder.config(),
+        &current_config,
         offer,
         response,
         identity,
@@ -10494,7 +10511,7 @@ fn prepare_pairing_runtime_enrollment(
             .map_err(crate::pairing::PairingError::from)?
     };
     let membership = OverlayMembership::from_config(&next_config)?;
-    let current_tun = TunRuntimeConfig::from_config(forwarder.config())?;
+    let current_tun = TunRuntimeConfig::from_config(&current_config)?;
     let next_tun = TunRuntimeConfig::from_config(&next_config)?;
     let tun_update = next_tun.additive_update_from(&current_tun)?;
     let membership_tag = next_config.membership_tag()?;
@@ -10762,6 +10779,7 @@ fn pairing_rejection_reason(error: &crate::pairing::PairingError) -> PairingReje
     }
 }
 
+#[cfg(test)]
 fn pairing_response_for_request(
     config: &Config,
     identity: &NodeIdentity,
@@ -10770,8 +10788,29 @@ fn pairing_response_for_request(
     request: &PairingRequest,
     now_unix_seconds: u64,
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
-    pairing_response_for_request_with_mode(
+    pairing_response_for_request_with_records(
         config,
+        &config.network.member_records,
+        identity,
+        consumed_tokens,
+        transport_peer,
+        request,
+        now_unix_seconds,
+    )
+}
+
+fn pairing_response_for_request_with_records(
+    config: &Config,
+    member_records: &[SignedMembershipRecord],
+    identity: &NodeIdentity,
+    consumed_tokens: &mut HashSet<String>,
+    transport_peer: Libp2pPeerId,
+    request: &PairingRequest,
+    now_unix_seconds: u64,
+) -> Result<PairingResponse, crate::pairing::PairingError> {
+    pairing_response_for_request_with_mode_and_records(
+        config,
+        member_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -10781,8 +10820,10 @@ fn pairing_response_for_request(
     )
 }
 
-fn pairing_response_for_request_with_mode(
+#[allow(clippy::too_many_arguments)]
+fn pairing_response_for_request_with_mode_and_records(
     config: &Config,
+    member_records: &[SignedMembershipRecord],
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -10792,6 +10833,7 @@ fn pairing_response_for_request_with_mode(
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
     pairing_offer_and_response_for_request_with_grants(
         config,
+        member_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -10819,6 +10861,7 @@ fn pairing_response_for_request_with_grants(
 ) -> Result<PairingResponse, crate::pairing::PairingError> {
     pairing_offer_and_response_for_request_with_grants(
         config,
+        &config.network.member_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -10834,6 +10877,7 @@ fn pairing_response_for_request_with_grants(
 #[allow(clippy::too_many_arguments)]
 fn pairing_offer_and_response_for_request_with_grants(
     config: &Config,
+    current_member_records: &[SignedMembershipRecord],
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -10912,13 +10956,25 @@ fn pairing_offer_and_response_for_request_with_grants(
     if !inviter_route_grants.is_empty() {
         inviter_roles.push(MembershipRole::RouteAuthority);
     }
+    let (inviter_membership_epoch, inviter_sequence) = next_pairing_membership_version(
+        current_member_records,
+        &identity.peer_id,
+        &identity.peer_id,
+        now_unix_seconds,
+    )?;
+    let (joiner_membership_epoch, joiner_sequence) = next_pairing_membership_version(
+        current_member_records,
+        &identity.peer_id,
+        &request.payload.joiner_peer,
+        now_unix_seconds,
+    )?;
     let inviter_record = issue_membership_record_for_subject_at(
         identity,
         MembershipRecordIssueOptions {
             network_name: config.network.name.clone(),
             member: MembershipRecordSubject::from_identity(identity)?,
-            membership_epoch: 1,
-            sequence: now_unix_seconds,
+            membership_epoch: inviter_membership_epoch,
+            sequence: inviter_sequence,
             revoked: false,
             roles: inviter_roles,
             route_grants: inviter_route_grants,
@@ -10934,8 +10990,8 @@ fn pairing_offer_and_response_for_request_with_grants(
                 peer_id: request.payload.joiner_peer.clone(),
                 public_key: request.payload.joiner_public_key.clone(),
             },
-            membership_epoch: 1,
-            sequence: now_unix_seconds,
+            membership_epoch: joiner_membership_epoch,
+            sequence: joiner_sequence,
             revoked: false,
             roles,
             route_grants,
@@ -10943,12 +10999,14 @@ fn pairing_offer_and_response_for_request_with_grants(
         },
         now_unix_seconds,
     )?;
-    let member_records =
-        if expected_acceptance_mode == crate::pairing::PairingAcceptanceMode::CodeApproval {
-            vec![inviter_record, joiner_record]
-        } else {
-            vec![joiner_record]
-        };
+    let member_records = pairing_response_membership_snapshot(
+        current_member_records,
+        inviter_record,
+        joiner_record,
+        &config.network.name,
+        &identity.peer_id,
+        now_unix_seconds,
+    )?;
 
     let response = crate::pairing::build_pairing_response_at(
         config,
@@ -10964,6 +11022,123 @@ fn pairing_offer_and_response_for_request_with_grants(
     )?;
 
     Ok((offer, response))
+}
+
+fn next_pairing_membership_version(
+    records: &[SignedMembershipRecord],
+    issuer_peer: &str,
+    member_peer: &str,
+    now_unix_seconds: u64,
+) -> Result<(u64, u64), crate::pairing::PairingError> {
+    let latest = records
+        .iter()
+        .filter(|record| {
+            record.payload.issuer_peer == issuer_peer && record.payload.member_peer == member_peer
+        })
+        .max_by_key(|record| (record.payload.membership_epoch, record.payload.sequence));
+    let Some(latest) = latest else {
+        return Ok((1, now_unix_seconds));
+    };
+    if let Some(next_sequence) = latest.payload.sequence.checked_add(1) {
+        return Ok((
+            latest.payload.membership_epoch,
+            now_unix_seconds.max(next_sequence),
+        ));
+    }
+    let next_epoch = latest
+        .payload
+        .membership_epoch
+        .checked_add(1)
+        .ok_or_else(|| crate::pairing::PairingError::MembershipVersionOverflow {
+            issuer: issuer_peer.to_owned(),
+            member: member_peer.to_owned(),
+        })?;
+    Ok((next_epoch, now_unix_seconds))
+}
+
+fn pairing_response_membership_snapshot(
+    current_records: &[SignedMembershipRecord],
+    inviter_record: SignedMembershipRecord,
+    joiner_record: SignedMembershipRecord,
+    network_name: &str,
+    inviter_peer: &str,
+    now_unix_seconds: u64,
+) -> Result<Vec<SignedMembershipRecord>, crate::pairing::PairingError> {
+    let mut records = Vec::with_capacity(current_records.len().saturating_add(2));
+    let mut has_explicit_root_record = false;
+    for record in current_records {
+        if record.payload.network_name != network_name {
+            return Err(crate::membership::MembershipRecordError::NetworkMismatch {
+                expected: network_name.to_owned(),
+                actual: record.payload.network_name.clone(),
+            }
+            .into());
+        }
+        has_explicit_root_record |= record.payload.issuer_peer == record.payload.member_peer;
+        match record.verify_at(now_unix_seconds) {
+            Ok(()) => {}
+            Err(crate::membership::MembershipRecordError::Expired { .. }) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        upsert_pairing_snapshot_record(&mut records, record)?;
+    }
+
+    let trust_path = overlay_membership_trust_path(&records, inviter_peer)?;
+    if has_explicit_root_record && trust_path.is_none() {
+        return Err(crate::pairing::PairingError::MissingInviterTrustRoot);
+    }
+    if !has_explicit_root_record
+        && records
+            .iter()
+            .any(|record| record.payload.issuer_peer != inviter_peer)
+    {
+        return Err(
+            crate::pairing::PairingError::LegacyMembershipMigrationRequired {
+                inviter: inviter_peer.to_owned(),
+            },
+        );
+    }
+    let inviter_is_root = trust_path
+        .as_ref()
+        .is_some_and(|path| path.len() == 1 && path[0].payload.issuer_peer == inviter_peer);
+
+    let mut minimal = trust_path.unwrap_or_else(|| vec![inviter_record.clone()]);
+    if inviter_is_root {
+        upsert_pairing_snapshot_record(&mut minimal, &inviter_record)?;
+    }
+    upsert_pairing_snapshot_record(&mut minimal, &joiner_record)?;
+    if minimal.len() > MAX_PAIRING_MEMBERSHIP_RECORDS {
+        return Err(crate::pairing::PairingError::TooManyMembershipRecords {
+            actual: minimal.len(),
+            max: MAX_PAIRING_MEMBERSHIP_RECORDS,
+        });
+    }
+    Ok(minimal)
+}
+
+fn upsert_pairing_snapshot_record(
+    records: &mut Vec<SignedMembershipRecord>,
+    incoming: &SignedMembershipRecord,
+) -> Result<(), crate::pairing::PairingError> {
+    let Some(index) = records.iter().position(|record| {
+        record.payload.issuer_peer == incoming.payload.issuer_peer
+            && record.payload.member_peer == incoming.payload.member_peer
+    }) else {
+        records.push(incoming.clone());
+        return Ok(());
+    };
+    let current = &records[index];
+    let current_version = (current.payload.membership_epoch, current.payload.sequence);
+    let incoming_version = (incoming.payload.membership_epoch, incoming.payload.sequence);
+    if incoming_version > current_version {
+        records[index] = incoming.clone();
+    } else if incoming_version == current_version && current != incoming {
+        return Err(crate::pairing::PairingError::ConflictingMembershipRecord {
+            issuer: incoming.payload.issuer_peer.clone(),
+            member: incoming.payload.member_peer.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn pairing_inviter_route_grants(
@@ -15228,7 +15403,10 @@ mod tests {
             RelayConfig, ResourceConfig, RouteConfig,
         },
         identity::NodeIdentity,
-        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
+        membership::{
+            MembershipRecordIssueOptions, MembershipRecordOptions, MembershipRecordSubject,
+            MembershipRole, issue_membership_record_at, issue_membership_record_for_subject_at,
+        },
         pairing::{
             PairingAcceptanceMode, PairingOfferOptions, PairingRequestOptions,
             build_pairing_request_at, export_code_pairing_offer_at,
@@ -15579,6 +15757,7 @@ mod tests {
         .expect("pairing request");
         let (_, response) = pairing_offer_and_response_for_request_with_grants(
             &config,
+            &config.network.member_records,
             &inviter,
             &mut HashSet::new(),
             joiner_peer,
@@ -15735,6 +15914,117 @@ mod tests {
         );
         fs::remove_dir_all(state_path.parent().expect("state directory"))
             .expect("remove test state");
+    }
+
+    #[test]
+    fn runtime_pairing_commit_preserves_live_records_beyond_response_limit() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &inviter,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: inviter.clone(),
+                    membership_epoch: 1,
+                    sequence: 900,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                900,
+            )
+            .expect("root record"),
+        ];
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("pairing request");
+        let existing_count = MAX_PAIRING_MEMBERSHIP_RECORDS + 2;
+        let existing_members = (0..existing_count)
+            .map(|offset| {
+                let member = NodeIdentity::generate_ed25519().expect("existing member");
+                let record = issue_membership_record_at(
+                    &inviter,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member: member.clone(),
+                        membership_epoch: 1,
+                        sequence: 901 + u64::try_from(offset).expect("bounded offset"),
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: None,
+                    },
+                    901 + u64::try_from(offset).expect("bounded offset"),
+                )
+                .expect("existing member record");
+                (member, record)
+            })
+            .collect::<Vec<_>>();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        forwarder
+            .merge_membership_records(
+                &existing_members
+                    .iter()
+                    .map(|(_, record)| record.clone())
+                    .collect::<Vec<_>>(),
+                1_000,
+            )
+            .expect("merge converged records");
+        let (_, response) = pairing_offer_and_response_for_request_with_grants(
+            &config,
+            forwarder.member_records(),
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_010,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("pairing response");
+        assert_eq!(response.payload.member_records.len(), 2);
+
+        let mut live_config = config.clone();
+        live_config.network.member_records = forwarder.member_records().to_vec();
+        let mut membership = OverlayMembership::from_config(&live_config).expect("membership");
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        let prepared =
+            prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
+                .expect("runtime enrollment");
+        commit_pairing_runtime_enrollment_with(
+            &mut forwarder,
+            &mut membership,
+            &mut capabilities,
+            prepared,
+            |_| Ok(()),
+        )
+        .expect("runtime commit");
+
+        assert_eq!(forwarder.member_records().len(), existing_count + 2);
+        for (member, _) in existing_members {
+            assert!(
+                forwarder
+                    .member_records()
+                    .iter()
+                    .any(|record| { record.payload.member_peer == member.peer_id })
+            );
+        }
+        assert!(forwarder.member_records().iter().any(|record| {
+            record.payload.member_peer == joiner.peer_id && !record.payload.revoked
+        }));
     }
 
     #[tokio::test]
@@ -16106,23 +16396,372 @@ mod tests {
             Some(requested_vpn_ip.as_str())
         );
         assert!(response.payload.membership_key.is_none());
-        assert_eq!(response.payload.member_records.len(), 1);
+        assert_eq!(response.payload.member_records.len(), 2);
+        let joiner_record = response
+            .payload
+            .member_records
+            .iter()
+            .find(|record| record.payload.member_peer == joiner.peer_id)
+            .expect("joiner membership record");
+        assert_eq!(joiner_record.payload.member_peer, joiner.peer_id);
+        assert_eq!(joiner_record.payload.route_grants, requested_routes);
         assert_eq!(
-            response.payload.member_records[0].payload.member_peer,
-            joiner.peer_id
-        );
-        assert_eq!(
-            response.payload.member_records[0].payload.route_grants,
-            requested_routes
-        );
-        assert_eq!(
-            response.payload.member_records[0].payload.roles,
+            joiner_record.payload.roles,
             vec![
                 MembershipRole::OverlayMember,
                 MembershipRole::RouteAuthority
             ]
         );
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+    }
+
+    #[test]
+    fn code_pairing_response_preserves_delegated_inviter_trust_chain() {
+        let root = NodeIdentity::generate_ed25519().expect("root identity");
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        let root_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: root.clone(),
+                membership_epoch: 1,
+                sequence: 900,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("root record");
+        let inviter_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: inviter.clone(),
+                membership_epoch: 1,
+                sequence: 901,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            901,
+        )
+        .expect("inviter grant");
+        config.network.member_records = vec![root_record, inviter_record];
+        for offset in 0..MAX_PAIRING_MEMBERSHIP_RECORDS {
+            let member = NodeIdentity::generate_ed25519().expect("existing member");
+            config.network.member_records.push(
+                issue_membership_record_at(
+                    &root,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member,
+                        membership_epoch: 1,
+                        sequence: 902 + u64::try_from(offset).expect("bounded offset"),
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: None,
+                    },
+                    902 + u64::try_from(offset).expect("bounded offset"),
+                )
+                .expect("existing member record"),
+            );
+        }
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("pairing request");
+
+        let response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_002,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("delegated pairing response");
+
+        assert_eq!(response.payload.member_records.len(), 3);
+        let roots = response
+            .payload
+            .member_records
+            .iter()
+            .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+            .collect::<Vec<_>>();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].payload.member_peer, root.peer_id);
+        assert!(response.payload.member_records.iter().any(|record| {
+            record.payload.issuer_peer == root.peer_id
+                && record.payload.member_peer == inviter.peer_id
+        }));
+        assert!(response.payload.member_records.iter().any(|record| {
+            record.payload.issuer_peer == inviter.peer_id
+                && record.payload.member_peer == joiner.peer_id
+        }));
+        assert!(!response.payload.member_records.iter().any(|record| {
+            record.payload.issuer_peer == inviter.peer_id
+                && record.payload.member_peer == inviter.peer_id
+        }));
+    }
+
+    #[test]
+    fn code_pairing_response_omits_unrelated_expired_membership_records() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let expired_member = NodeIdentity::generate_ed25519().expect("expired member");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        let now = current_unix_seconds_lossy();
+        config.network.member_records.push(
+            issue_membership_record_at(
+                &inviter,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: expired_member.clone(),
+                    membership_epoch: 1,
+                    sequence: 900,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: Some(now + 60),
+                },
+                now,
+            )
+            .expect("expired member record"),
+        );
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), now)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            now + 1,
+        )
+        .expect("pairing request");
+
+        let response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            now + 61,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("pairing response");
+
+        assert_eq!(response.payload.member_records.len(), 2);
+        assert!(
+            !response
+                .payload
+                .member_records
+                .iter()
+                .any(|record| { record.payload.member_peer == expired_member.peer_id })
+        );
+    }
+
+    #[test]
+    fn code_pairing_response_supersedes_prior_joiner_revocation() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        let root_record = issue_membership_record_at(
+            &inviter,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: inviter.clone(),
+                membership_epoch: 7,
+                sequence: 5_000,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("root record");
+        let joiner_revocation = issue_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&joiner).expect("joiner subject"),
+                membership_epoch: 7,
+                sequence: 5_000,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("joiner revocation");
+        config.network.member_records = vec![root_record, joiner_revocation];
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("pairing request");
+
+        let response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_002,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("pairing response");
+        let joiner_record = response
+            .payload
+            .member_records
+            .iter()
+            .find(|record| {
+                record.payload.issuer_peer == inviter.peer_id
+                    && record.payload.member_peer == joiner.peer_id
+            })
+            .expect("replacement joiner grant");
+
+        assert_eq!(joiner_record.payload.membership_epoch, 7);
+        assert_eq!(joiner_record.payload.sequence, 5_001);
+        assert!(!joiner_record.payload.revoked);
+        assert!(
+            joiner_record
+                .payload
+                .roles
+                .contains(&MembershipRole::OverlayMember)
+        );
+    }
+
+    #[test]
+    fn pairing_membership_version_reports_epoch_and_sequence_exhaustion() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: u64::MAX,
+                sequence: u64::MAX,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("maximum-version record");
+
+        assert!(matches!(
+            next_pairing_membership_version(
+                &[record],
+                &issuer.peer_id,
+                &member.peer_id,
+                1_000,
+            ),
+            Err(crate::pairing::PairingError::MembershipVersionOverflow {
+                issuer: exhausted_issuer,
+                member: exhausted_member,
+            }) if exhausted_issuer == issuer.peer_id && exhausted_member == member.peer_id
+        ));
+    }
+
+    #[test]
+    fn pairing_rejects_implicit_legacy_multi_issuer_migration() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let other_issuer = NodeIdentity::generate_ed25519().expect("other issuer");
+        let existing_a = NodeIdentity::generate_ed25519().expect("existing member a");
+        let existing_b = NodeIdentity::generate_ed25519().expect("existing member b");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &inviter,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: existing_a,
+                    membership_epoch: 1,
+                    sequence: 900,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                900,
+            )
+            .expect("inviter-issued legacy record"),
+            issue_membership_record_at(
+                &other_issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: existing_b,
+                    membership_epoch: 1,
+                    sequence: 900,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                900,
+            )
+            .expect("other legacy issuer record"),
+        ];
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("pairing request");
+
+        assert!(matches!(
+            pairing_response_for_request_with_grants(
+                &config,
+                &inviter,
+                &mut HashSet::new(),
+                joiner_peer,
+                &request,
+                1_002,
+                PairingAcceptanceMode::CodeApproval,
+                None,
+                Some(Vec::new()),
+            ),
+            Err(crate::pairing::PairingError::LegacyMembershipMigrationRequired {
+                inviter: legacy_inviter,
+            }) if legacy_inviter == inviter.peer_id
+        ));
     }
 
     #[test]
@@ -16326,7 +16965,7 @@ mod tests {
     }
 
     #[test]
-    fn pair_rpc_artifacts_emit_native_trust_without_secret_material() {
+    fn pair_rpc_artifacts_preserve_converged_native_trust_without_secret_material() {
         let membership_key = STANDARD.encode([9_u8; 32]);
         let (_, inviter, joiner, offer, request, response) =
             code_pairing_runtime_fixture_with_membership_key(Some(membership_key.clone()));
@@ -16362,6 +17001,23 @@ mod tests {
                 },
             )
             .expect("prepare enrollment");
+        let existing_member = NodeIdentity::generate_ed25519().expect("existing member");
+        let existing_record = issue_membership_record_at(
+            &inviter,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: existing_member.clone(),
+                membership_epoch: 1,
+                sequence: 1_015,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_015,
+        )
+        .expect("existing member record");
+        let mut response_member_records = response.payload.member_records.clone();
+        response_member_records.push(existing_record);
         sessions
             .complete_open(&operation_id, &approval_id, response)
             .expect("complete pairing");
@@ -16376,6 +17032,7 @@ mod tests {
             &operation_id,
             "lab",
             &inviter.peer_id,
+            &response_member_records,
             Some(&store),
         )
         .expect("completion artifacts");
@@ -16389,7 +17046,14 @@ mod tests {
         assert_eq!(artifacts.nix.peer.id, artifacts.receipt.remote_peer);
         assert_eq!(artifacts.nix.peer.vpn_ip.as_deref(), Some("10.42.0.2"));
         assert!(artifacts.nix.peer.routes.is_empty());
-        assert_eq!(artifacts.nix.member_records.len(), 2);
+        assert_eq!(artifacts.nix.member_records.len(), 3);
+        assert!(
+            artifacts
+                .nix
+                .member_records
+                .iter()
+                .any(|record| { record.payload.member_peer == existing_member.peer_id })
+        );
         assert!(artifacts.nix.membership_key_file.is_none());
         assert!(
             pairing_rpc_status(&sessions, &operation_id, "lab", &inviter.peer_id)
@@ -16413,6 +17077,7 @@ mod tests {
             &operation_id,
             "lab",
             &inviter.peer_id,
+            &response_member_records,
             Some(&store),
         )
         .expect_err("acknowledged artifacts are compacted");
@@ -16477,6 +17142,7 @@ mod tests {
             &operation_id,
             "lab",
             &joiner.peer_id,
+            &response.payload.member_records,
             Some(&store),
         )
         .expect("joiner artifacts");
@@ -16510,6 +17176,7 @@ mod tests {
             &preconfigured_operation_id,
             "lab",
             &joiner.peer_id,
+            &response.payload.member_records,
             Some(&preconfigured_store),
         )
         .expect("preconfigured joiner artifacts");
@@ -16561,10 +17228,17 @@ mod tests {
         .expect("response");
 
         assert_eq!(response.payload.membership_key, Some(membership_key));
-        assert_eq!(response.payload.member_records.len(), 1);
+        assert_eq!(response.payload.member_records.len(), 2);
         assert_eq!(
-            response.payload.member_records[0].payload.member_peer,
-            joiner.peer_id
+            response
+                .payload
+                .member_records
+                .iter()
+                .find(|record| record.payload.member_peer == joiner.peer_id)
+                .expect("joiner membership record")
+                .payload
+                .member_peer,
+            joiner.peer_id,
         );
     }
 
@@ -16734,16 +17408,22 @@ mod tests {
             1_002,
         )
         .expect("response");
+        let joiner_record = response
+            .payload
+            .member_records
+            .iter()
+            .find(|record| record.payload.member_peer == joiner.peer_id)
+            .expect("joiner membership record");
 
         assert_eq!(
-            response.payload.member_records[0].payload.roles,
+            joiner_record.payload.roles,
             vec![
                 MembershipRole::OverlayMember,
                 MembershipRole::RouteAuthority
             ]
         );
         assert_eq!(
-            response.payload.member_records[0].payload.route_grants,
+            joiner_record.payload.route_grants,
             vec![RouteConfig {
                 prefix: "10.42.0.77/32".to_owned(),
                 metric: 0,
