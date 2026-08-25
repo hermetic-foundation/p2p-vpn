@@ -203,6 +203,10 @@ impl PairRpcResponseEnvelope {
             },
         }
     }
+
+    pub(crate) fn encoded_len(&self) -> Result<usize, serde_json::Error> {
+        serde_json::to_vec(self).map(|body| body.len())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

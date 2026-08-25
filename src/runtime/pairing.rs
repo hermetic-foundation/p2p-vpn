@@ -5,10 +5,9 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{StreamProtocol, request_response};
 use serde::{Deserialize, Serialize};
 
-use crate::pairing::{PairingRequest, PairingResponse};
+use crate::pairing::{MAX_PAIRING_MESSAGE_LEN, PairingRequest, PairingResponse};
 
 pub const PAIRING_PROTOCOL: &str = "/p2p-vpn/pairing/1";
-const MAX_PAIRING_MESSAGE_LEN: usize = 32_768;
 
 #[derive(Clone, Debug, Default)]
 pub struct PairingCodec;

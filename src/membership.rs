@@ -9,6 +9,7 @@ use crate::{PeerId, config::RouteConfig, identity::NodeIdentity};
 pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
 pub const MAX_MEMBERSHIP_RECORD_INTEGER: u64 = i64::MAX as u64;
 pub const MAX_MEMBERSHIP_RECORDS: usize = 256;
+pub const MAX_MEMBERSHIP_RECORD_ENCODED_LEN: usize = 12 * 1024;
 
 const SIGNING_DOMAIN: &[u8] = b"p2p-vpn membership record v1\n";
 
@@ -35,6 +36,7 @@ impl SignedMembershipRecord {
     }
 
     fn verify_with_time(&self, now_unix_seconds: Option<u64>) -> Result<(), MembershipRecordError> {
+        validate_encoded_record_len(self)?;
         validate_payload(&self.payload)?;
         if let Some(now_unix_seconds) = now_unix_seconds {
             validate_payload_time(&self.payload, now_unix_seconds)?;
@@ -755,6 +757,19 @@ fn signing_message(payload: &MembershipRecordPayload) -> Result<Vec<u8>, Members
     Ok(message)
 }
 
+fn validate_encoded_record_len(
+    record: &SignedMembershipRecord,
+) -> Result<(), MembershipRecordError> {
+    let actual = serde_json::to_vec(record)?.len();
+    if actual <= MAX_MEMBERSHIP_RECORD_ENCODED_LEN {
+        return Ok(());
+    }
+    Err(MembershipRecordError::EncodedRecordTooLarge {
+        actual,
+        max: MAX_MEMBERSHIP_RECORD_ENCODED_LEN,
+    })
+}
+
 fn decode_public_key(encoded: &str) -> Result<PublicKey, MembershipRecordError> {
     let bytes = STANDARD.decode(encoded)?;
     Ok(PublicKey::try_decode_protobuf(&bytes)?)
@@ -810,6 +825,10 @@ pub enum MembershipRecordError {
     TooManyRecords {
         max: usize,
         actual: usize,
+    },
+    EncodedRecordTooLarge {
+        actual: usize,
+        max: usize,
     },
     Expired {
         expired_at: u64,
@@ -1029,6 +1048,42 @@ mod tests {
                 }) if actual == field && value == MAX_MEMBERSHIP_RECORD_INTEGER + 1
             ));
         }
+    }
+
+    #[test]
+    fn membership_record_rejects_an_oversized_signed_encoding() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let route = RouteConfig {
+            prefix: "2001:db8::/32".to_owned(),
+            metric: 10,
+        };
+
+        let error = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![route; 512],
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect_err("oversized record");
+
+        assert!(matches!(
+            error,
+            MembershipRecordError::EncodedRecordTooLarge {
+                actual,
+                max: MAX_MEMBERSHIP_RECORD_ENCODED_LEN,
+            } if actual > MAX_MEMBERSHIP_RECORD_ENCODED_LEN
+        ));
     }
 
     #[test]

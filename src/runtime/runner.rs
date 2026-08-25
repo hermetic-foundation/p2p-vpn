@@ -62,12 +62,13 @@ use crate::{
             validate_capabilities,
         },
         control_socket::{
-            ControlSocket, PairRpcCandidate, PairRpcCompletionArtifacts, PairRpcDiagnostics,
-            PairRpcDiscoveryStage, PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode,
-            PairRpcJoinStarted, PairRpcMembershipRecordPayload, PairRpcMembershipRole,
-            PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase,
-            PairRpcReceipt, PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole,
-            PairRpcRoute, PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlRequest,
+            ControlSocket, MAX_PAIR_RPC_RESPONSE_LEN, PairRpcCandidate, PairRpcCompletionArtifacts,
+            PairRpcDiagnostics, PairRpcDiscoveryStage, PairRpcErrorCode, PairRpcFailure,
+            PairRpcFailureCode, PairRpcJoinStarted, PairRpcMembershipRecordPayload,
+            PairRpcMembershipRole, PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus,
+            PairRpcPeer, PairRpcPhase, PairRpcReceipt, PairRpcRequest, PairRpcResponseEnvelope,
+            PairRpcResult, PairRpcRole, PairRpcRoute, PairRpcSignedMembershipRecord,
+            PairRpcTransport, RuntimeControlRequest,
         },
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
         p2p::{
@@ -2175,10 +2176,11 @@ fn handle_pair_rpc_request(
         })(),
     };
 
-    match result {
+    let response = match result {
         Ok(result) => PairRpcResponseEnvelope::ok(result),
         Err(error) => error,
-    }
+    };
+    bounded_pair_rpc_response(response)
 }
 
 fn pair_rpc_requires_durable_state(request: &PairRpcRequest) -> bool {
@@ -2789,6 +2791,24 @@ fn pair_rpc_error(
     retryable: bool,
 ) -> PairRpcResponseEnvelope {
     PairRpcResponseEnvelope::error(code, message, retryable)
+}
+
+fn bounded_pair_rpc_response(response: PairRpcResponseEnvelope) -> PairRpcResponseEnvelope {
+    match response.encoded_len() {
+        Ok(actual) if actual <= MAX_PAIR_RPC_RESPONSE_LEN => response,
+        Ok(actual) => pair_rpc_error(
+            PairRpcErrorCode::ResponseTooLarge,
+            format!(
+                "pair RPC response is {actual} bytes and exceeds the {MAX_PAIR_RPC_RESPONSE_LEN}-byte limit; reduce retained membership history or route grants"
+            ),
+            false,
+        ),
+        Err(error) => pair_rpc_error(
+            PairRpcErrorCode::Internal,
+            format!("pair RPC response encoding failed: {error}"),
+            false,
+        ),
+    }
 }
 
 struct RuntimeControlContext<'a> {
@@ -16924,6 +16944,26 @@ mod tests {
         );
         let serialized = serde_json::to_string(&status).expect("serialize status");
         assert!(!serialized.contains(&started.code));
+    }
+
+    #[test]
+    fn pair_rpc_reports_oversized_responses_before_socket_framing() {
+        let response = PairRpcResponseEnvelope::error(
+            PairRpcErrorCode::Internal,
+            "X".repeat(MAX_PAIR_RPC_RESPONSE_LEN + 1),
+            false,
+        );
+
+        let bounded = bounded_pair_rpc_response(response);
+        let crate::runtime::control_socket::PairRpcOutcome::Error { error } = &bounded.outcome
+        else {
+            panic!("expected response-too-large error");
+        };
+
+        assert_eq!(error.code, PairRpcErrorCode::ResponseTooLarge);
+        assert!(error.message.contains("bytes"));
+        assert!(error.message.contains("reduce retained membership history"));
+        assert!(bounded.encoded_len().expect("bounded response") <= MAX_PAIR_RPC_RESPONSE_LEN);
     }
 
     #[test]

@@ -30,6 +30,7 @@ use crate::{
 pub const PAIRING_OFFER_VERSION: u8 = 1;
 pub const DEFAULT_PAIRING_EXPIRES_IN_SECONDS: u64 = 600;
 pub const MAX_PAIRING_MEMBERSHIP_RECORDS: usize = 16;
+pub const MAX_PAIRING_MESSAGE_LEN: usize = 32 * 1024;
 
 const PAIRING_URI_PREFIX: &str = "p2pvpn:";
 const SIGNING_DOMAIN: &[u8] = b"p2p-vpn pairing offer v1\n";
@@ -45,6 +46,7 @@ pub struct PairingOffer {
 
 impl PairingOffer {
     pub fn verify_at(&self, now_unix_seconds: u64) -> Result<(), PairingError> {
+        validate_encoded_pairing_message("offer", self)?;
         validate_payload(&self.payload, now_unix_seconds)?;
         let public_key = decode_public_key(&self.payload.inviter_public_key)?;
         let inviter_peer = self.payload.inviter_peer.parse::<Libp2pPeerId>()?;
@@ -63,6 +65,7 @@ impl PairingOffer {
     }
 
     pub fn to_uri(&self) -> Result<String, PairingError> {
+        validate_encoded_pairing_message("offer", self)?;
         let bytes = serde_json::to_vec(self)?;
         Ok(format!(
             "{PAIRING_URI_PREFIX}{}",
@@ -75,7 +78,16 @@ impl PairingOffer {
             .strip_prefix(PAIRING_URI_PREFIX)
             .ok_or(PairingError::InvalidUriScheme)?;
         let bytes = URL_SAFE_NO_PAD.decode(encoded)?;
-        Ok(serde_json::from_slice(&bytes)?)
+        if bytes.len() > MAX_PAIRING_MESSAGE_LEN {
+            return Err(PairingError::EncodedMessageTooLarge(
+                "offer",
+                bytes.len(),
+                MAX_PAIRING_MESSAGE_LEN,
+            ));
+        }
+        let offer = serde_json::from_slice(&bytes)?;
+        validate_encoded_pairing_message("offer", &offer)?;
+        Ok(offer)
     }
 }
 
@@ -159,6 +171,7 @@ impl PairingRequest {
         now_unix_seconds: u64,
     ) -> Result<(), PairingError> {
         offer.verify_at(now_unix_seconds)?;
+        validate_encoded_pairing_message("request", self)?;
         validate_request_payload(&self.payload, offer, now_unix_seconds)?;
         let public_key = decode_public_key(&self.payload.joiner_public_key)?;
         let joiner_peer = self.payload.joiner_peer.parse::<Libp2pPeerId>()?;
@@ -212,6 +225,7 @@ impl PairingResponse {
         now_unix_seconds: u64,
     ) -> Result<(), PairingError> {
         offer.verify_at(now_unix_seconds)?;
+        validate_encoded_pairing_message("response", self)?;
         validate_response_payload(&self.payload, offer, joiner_identity, now_unix_seconds)?;
         let public_key = decode_public_key(&self.payload.inviter_public_key)?;
         let inviter_peer = self.payload.inviter_peer.parse::<Libp2pPeerId>()?;
@@ -1164,6 +1178,21 @@ fn response_signing_message(payload: &PairingResponsePayload) -> Result<Vec<u8>,
     Ok(message)
 }
 
+fn validate_encoded_pairing_message<M: Serialize>(
+    message: &'static str,
+    value: &M,
+) -> Result<(), PairingError> {
+    let actual = serde_json::to_vec(value)?.len();
+    if actual <= MAX_PAIRING_MESSAGE_LEN {
+        return Ok(());
+    }
+    Err(PairingError::EncodedMessageTooLarge(
+        message,
+        actual,
+        MAX_PAIRING_MESSAGE_LEN,
+    ))
+}
+
 fn decode_public_key(encoded: &str) -> Result<PublicKey, PairingError> {
     Ok(PublicKey::try_decode_protobuf(&STANDARD.decode(encoded)?)?)
 }
@@ -1201,6 +1230,7 @@ pub enum PairingError {
     UnexpectedInviterTrustRoot { expected: String, actual: String },
     LegacyMembershipMigrationRequired { inviter: String },
     TooManyMembershipRecords { actual: usize, max: usize },
+    EncodedMessageTooLarge(&'static str, usize, usize),
     MembershipIssuerMismatch { expected: String, actual: String },
     ConflictingMembershipRecord { issuer: String, member: String },
     MembershipVersionOverflow { issuer: String, member: String },
@@ -1358,6 +1388,44 @@ mod tests {
         );
         assert!(parsed.payload.bootstrap_peers.is_empty());
         assert!(parsed.payload.discovery.kademlia);
+    }
+
+    #[test]
+    fn pairing_request_rejects_an_encoding_larger_than_the_transport_frame() {
+        let offer = export_pairing_offer_at(
+            &config(),
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: Some(URL_SAFE_NO_PAD.encode([7_u8; RENDEZVOUS_TOKEN_LEN])),
+            },
+            1_000,
+        )
+        .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let route = RouteConfig {
+            prefix: "2001:db8::/32".to_owned(),
+            metric: 10,
+        };
+
+        let error = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: vec![route; 1_024],
+            },
+            1_001,
+        )
+        .expect_err("oversized request");
+
+        assert!(matches!(
+            error,
+            PairingError::EncodedMessageTooLarge(
+                "request",
+                actual,
+                MAX_PAIRING_MESSAGE_LEN,
+            ) if actual > MAX_PAIRING_MESSAGE_LEN
+        ));
     }
 
     #[test]
