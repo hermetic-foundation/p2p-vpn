@@ -34,9 +34,9 @@ use crate::{
     },
     identity::NodeIdentity,
     membership::{
-        MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
-        SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
-        overlay_membership_trust_path,
+        MAX_MEMBERSHIP_RECORD_INTEGER, MembershipRecordIssueOptions, MembershipRecordSubject,
+        MembershipRole, SignedMembershipRecord, effective_membership_at,
+        issue_membership_record_for_subject_at, overlay_membership_trust_path_at,
     },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
@@ -11039,7 +11039,8 @@ fn next_pairing_membership_version(
     let Some(latest) = latest else {
         return Ok((1, now_unix_seconds));
     };
-    if let Some(next_sequence) = latest.payload.sequence.checked_add(1) {
+    if latest.payload.sequence < MAX_MEMBERSHIP_RECORD_INTEGER {
+        let next_sequence = latest.payload.sequence + 1;
         return Ok((
             latest.payload.membership_epoch,
             now_unix_seconds.max(next_sequence),
@@ -11049,6 +11050,7 @@ fn next_pairing_membership_version(
         .payload
         .membership_epoch
         .checked_add(1)
+        .filter(|epoch| *epoch <= MAX_MEMBERSHIP_RECORD_INTEGER)
         .ok_or_else(|| crate::pairing::PairingError::MembershipVersionOverflow {
             issuer: issuer_peer.to_owned(),
             member: member_peer.to_owned(),
@@ -11075,15 +11077,14 @@ fn pairing_response_membership_snapshot(
             .into());
         }
         has_explicit_root_record |= record.payload.issuer_peer == record.payload.member_peer;
-        match record.verify_at(now_unix_seconds) {
-            Ok(()) => {}
-            Err(crate::membership::MembershipRecordError::Expired { .. }) => continue,
-            Err(error) => return Err(error.into()),
+        record.verify()?;
+        if record.is_expired_at(now_unix_seconds) {
+            continue;
         }
         upsert_pairing_snapshot_record(&mut records, record)?;
     }
 
-    let trust_path = overlay_membership_trust_path(&records, inviter_peer)?;
+    let trust_path = overlay_membership_trust_path_at(&records, inviter_peer, now_unix_seconds)?;
     if has_explicit_root_record && trust_path.is_none() {
         return Err(crate::pairing::PairingError::MissingInviterTrustRoot);
     }
@@ -11593,8 +11594,8 @@ fn prune_expired_membership_records(
     local_capabilities: &mut ControlCapabilities,
 ) -> Result<(), ForwardError> {
     let now_unix_seconds = current_unix_seconds_lossy();
-    let stats = forwarder.prune_membership_records(now_unix_seconds)?;
-    if stats.removed_expired == 0 && stats.removed_untrusted == 0 {
+    let (stats, effective_changed) = forwarder.refresh_membership_records(now_unix_seconds)?;
+    if !effective_changed && stats.removed_untrusted == 0 {
         return Ok(());
     }
 
@@ -11604,13 +11605,12 @@ fn prune_expired_membership_records(
         now_unix_seconds,
     )?;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
-    let removed_expired = stats.removed_expired.to_string();
     let removed_untrusted = stats.removed_untrusted.to_string();
     log_runtime_event(
         LogLevel::Info,
-        "membership_records_pruned",
+        "membership_authorization_refreshed",
         &[
-            ("removed_expired", &removed_expired),
+            ("effective_changed", &effective_changed.to_string()),
             ("removed_untrusted", &removed_untrusted),
         ],
     );
@@ -16670,8 +16670,8 @@ mod tests {
             MembershipRecordOptions {
                 network_name: "lab".to_owned(),
                 member: member.clone(),
-                membership_epoch: u64::MAX,
-                sequence: u64::MAX,
+                membership_epoch: MAX_MEMBERSHIP_RECORD_INTEGER,
+                sequence: MAX_MEMBERSHIP_RECORD_INTEGER,
                 roles: vec![MembershipRole::OverlayMember],
                 route_grants: Vec::new(),
                 expires_at_unix_seconds: None,
@@ -24423,7 +24423,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarder_prunes_expired_member_records_from_live_authorization() {
+    fn forwarder_deactivates_and_retains_expired_member_records() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -24488,15 +24488,21 @@ mod tests {
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.88.0.0/24", 1)])
         );
 
-        let stats = forwarder
-            .prune_membership_records(now + 2)
-            .expect("pruned member records");
+        let first_stats = forwarder
+            .merge_membership_records(&[], now + 2)
+            .expect("stale control merge observed expiry");
+        assert_eq!(first_stats.removed_expired, 0);
+        let (stats, effective_changed) = forwarder
+            .refresh_membership_records(now + 2)
+            .expect("refreshed member records");
         membership
             .replace_record_members(forwarder.config(), forwarder.member_records(), now + 2)
             .expect("membership rebuilt");
 
-        assert_eq!(stats.removed_expired, 1);
-        assert_eq!(forwarder.member_record_count(), 0);
+        assert!(effective_changed);
+        assert_eq!(stats.removed_expired, 0);
+        assert_eq!(forwarder.member_record_count(), 1);
+        assert!(forwarder.member_records()[0].is_expired_at(now + 2));
         assert!(!membership.allows(member_peer));
         assert!(!forwarder.is_configured_transport_peer(member_peer));
         assert!(

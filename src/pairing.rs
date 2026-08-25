@@ -19,7 +19,7 @@ use crate::{
     },
     identity::NodeIdentity,
     membership::{
-        MembershipRole, SignedMembershipRecord, overlay_membership_trust_path,
+        MembershipRole, SignedMembershipRecord, overlay_membership_trust_path_at,
         validate_membership_records_at,
     },
     route::{builtin_ipv4, builtin_ipv6},
@@ -579,7 +579,7 @@ pub fn apply_pairing_response_to_config_at(
     };
     response.verify_for_offer_at(offer, &joiner_identity, now_unix_seconds)?;
     validate_pairing_membership_record_count(&response.payload.member_records)?;
-    validate_response_trust_root_against_existing_config(base, offer, response)?;
+    validate_response_trust_root_against_existing_config(base, offer, response, now_unix_seconds)?;
     let mut next = base.clone();
     adopt_optional_value(
         &mut next.network.membership_key,
@@ -604,6 +604,7 @@ pub fn apply_pairing_response_to_config_at(
 fn validate_code_pairing_membership_records(
     offer: &PairingOffer,
     payload: &PairingResponsePayload,
+    now_unix_seconds: u64,
 ) -> Result<(), PairingError> {
     if offer.payload.acceptance_mode != PairingAcceptanceMode::CodeApproval {
         return Ok(());
@@ -617,8 +618,9 @@ fn validate_code_pairing_membership_records(
     {
         return Err(PairingError::MissingInviterTrustRoot);
     }
-    let trust_path = overlay_membership_trust_path(records, &payload.inviter_peer)?
-        .ok_or(PairingError::MissingInviterTrustRoot)?;
+    let trust_path =
+        overlay_membership_trust_path_at(records, &payload.inviter_peer, now_unix_seconds)?
+            .ok_or(PairingError::MissingInviterTrustRoot)?;
     let trust_root = &trust_path[0].payload.member_peer;
     if let Some(unexpected) = records.iter().find(|record| {
         record.payload.issuer_peer == record.payload.member_peer
@@ -683,6 +685,7 @@ fn validate_response_trust_root_against_existing_config(
     base: &Config,
     offer: &PairingOffer,
     response: &PairingResponse,
+    now_unix_seconds: u64,
 ) -> Result<(), PairingError> {
     if offer.payload.acceptance_mode != PairingAcceptanceMode::CodeApproval {
         return Ok(());
@@ -705,13 +708,15 @@ fn validate_response_trust_root_against_existing_config(
         }
         return Ok(());
     }
-    let existing_roots = latest_active_pairing_trust_roots(&base.network.member_records);
+    let existing_roots =
+        latest_active_pairing_trust_roots(&base.network.member_records, now_unix_seconds);
     if existing_roots.is_empty() {
         return Err(PairingError::MissingInviterTrustRoot);
     }
-    let response_root = overlay_membership_trust_path(
+    let response_root = overlay_membership_trust_path_at(
         &response.payload.member_records,
         &response.payload.inviter_peer,
+        now_unix_seconds,
     )?
     .and_then(|path| path.first().cloned())
     .ok_or(PairingError::MissingInviterTrustRoot)?;
@@ -724,7 +729,10 @@ fn validate_response_trust_root_against_existing_config(
     })
 }
 
-fn latest_active_pairing_trust_roots(records: &[SignedMembershipRecord]) -> Vec<String> {
+fn latest_active_pairing_trust_roots(
+    records: &[SignedMembershipRecord],
+    now_unix_seconds: u64,
+) -> Vec<String> {
     let mut roots = records
         .iter()
         .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
@@ -736,7 +744,8 @@ fn latest_active_pairing_trust_roots(records: &[SignedMembershipRecord]) -> Vec<
             ) == Some(*record)
         })
         .filter(|record| {
-            !record.payload.revoked
+            !record.is_expired_at(now_unix_seconds)
+                && !record.payload.revoked
                 && record
                     .payload
                     .roles
@@ -966,7 +975,7 @@ fn validate_response_payload(
         &payload.network_name,
         now_unix_seconds,
     )?;
-    validate_code_pairing_membership_records(offer, payload)?;
+    validate_code_pairing_membership_records(offer, payload, now_unix_seconds)?;
     if payload.membership_key.is_none() && !has_joiner_membership_record(payload) {
         return Err(PairingError::MissingMembershipGrant);
     }

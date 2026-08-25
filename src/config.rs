@@ -15,7 +15,7 @@ use crate::{
     identity::NodeIdentity,
     membership::{
         EffectiveMembership, MembershipRecordError, MembershipRole, SignedMembershipRecord,
-        effective_membership_at, validate_membership_records_at,
+        effective_membership_at, validate_membership_record_history,
     },
     path::PathSet,
     route::{IpCidr, Route, RouteError, RouteTable, builtin_ipv4, builtin_ipv6},
@@ -80,6 +80,14 @@ impl Config {
         &self,
         member_records: &[SignedMembershipRecord],
     ) -> Result<RouteTable, ConfigError> {
+        self.compile_routes_with_member_records_at(member_records, current_unix_seconds()?)
+    }
+
+    pub fn compile_routes_with_member_records_at(
+        &self,
+        member_records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<RouteTable, ConfigError> {
         let mut table = RouteTable::new();
         let local_peer = self.local_peer_id()?;
         table.insert_authorized(Route {
@@ -137,7 +145,7 @@ impl Config {
         }
 
         let effective_membership =
-            effective_membership_at(member_records, &self.network.name, current_unix_seconds()?)?;
+            effective_membership_at(member_records, &self.network.name, now_unix_seconds)?;
         for member in effective_membership.overlay_members() {
             table.insert_authorized(Route {
                 owner: member.peer,
@@ -366,11 +374,7 @@ impl Config {
     }
 
     pub fn validate_membership_records(&self) -> Result<(), ConfigError> {
-        validate_membership_records_at(
-            &self.network.member_records,
-            &self.network.name,
-            current_unix_seconds()?,
-        )?;
+        validate_membership_record_history(&self.network.member_records, &self.network.name)?;
         Ok(())
     }
 
@@ -2096,6 +2100,41 @@ mod tests {
         config.network.member_records = vec![signed_member_record_for(&issuer, member, "lab")];
 
         config.validate_runtime().expect("runtime config");
+    }
+
+    #[test]
+    fn runtime_validation_accepts_expired_signed_history_without_installing_routes() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_str(&member.peer_id).expect("member peer");
+        let now = current_unix_seconds().expect("clock");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.network.member_records = vec![
+            crate::membership::issue_membership_record_at(
+                &issuer,
+                crate::membership::MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![crate::membership::MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: Some(now - 1),
+                },
+                now - 2,
+            )
+            .expect("expired signed history"),
+        ];
+        let persisted = serde_json::to_vec(&config).expect("persisted config");
+        let restarted: Config = serde_json::from_slice(&persisted).expect("restarted config");
+
+        restarted.validate_runtime().expect("runtime config");
+        let routes = restarted.compile_routes().expect("routes");
+        assert!(!routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(builtin_ipv4(member_peer)), 32).expect("cidr")
+        ));
     }
 
     #[test]

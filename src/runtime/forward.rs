@@ -10,8 +10,9 @@ use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError, RouteConfig},
     membership::{
-        MembershipRecordError, MembershipRecordMergeStats, SignedMembershipRecord,
-        effective_membership_at, merge_membership_records_at, trusted_membership_issuers_at,
+        MAX_MEMBERSHIP_RECORDS, MembershipRecordError, MembershipRecordMergeStats,
+        SignedMembershipRecord, effective_membership_at, membership_trust_anchors,
+        merge_membership_records_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
     route::{IpCidr, RouteError, RouteTable},
@@ -31,6 +32,7 @@ pub struct Forwarder {
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
+    membership_effective_refresh_pending: bool,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
     replay_session_ttl: Duration,
     max_replay_windows: usize,
@@ -52,7 +54,7 @@ pub struct ForwarderUpdate {
 const REPLAY_WINDOW_BITS: u64 = 64;
 const DEFAULT_REPLAY_SESSION_TTL: Duration = Duration::from_mins(15);
 const MAX_REPLAY_WINDOWS: usize = 4096;
-pub const MAX_RETAINED_MEMBERSHIP_RECORDS: usize = 256;
+pub const MAX_RETAINED_MEMBERSHIP_RECORDS: usize = MAX_MEMBERSHIP_RECORDS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReplayWindow {
@@ -126,7 +128,8 @@ impl Forwarder {
             local_peer,
             config: config.clone(),
             member_records: member_records.clone(),
-            routes: config.compile_routes_with_member_records(&member_records)?,
+            routes: config
+                .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?,
             peers: transport_peers_from_config_and_records(
                 config,
                 &member_records,
@@ -137,6 +140,7 @@ impl Forwarder {
                 &member_records,
                 now_unix_seconds,
             )?,
+            membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
             max_replay_windows: MAX_REPLAY_WINDOWS,
@@ -227,10 +231,9 @@ impl Forwarder {
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
         let mut member_records = self.member_records.clone();
-        let mut trusted_issuers = trusted_membership_issuers_at(
+        let mut trusted_issuers = membership_trust_anchors(
             &self.config.network.member_records,
             &self.config.network.name,
-            now_unix_seconds,
         )?;
         let has_explicit_root_record = self
             .config
@@ -249,23 +252,24 @@ impl Forwarder {
             &trusted_issuers,
             MAX_RETAINED_MEMBERSHIP_RECORDS,
         )?;
-        if stats.accepted == 0 && stats.removed_expired == 0 && stats.removed_untrusted == 0 {
-            return Ok(stats);
-        }
-
         let routes = self
             .config
-            .compile_routes_with_member_records(&member_records)?;
+            .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
         let authorized_peers = authorized_peers_from_config_and_records(
             &self.config,
             &member_records,
             now_unix_seconds,
         )?;
-        self.peers = transport_peers_from_config_and_records(
+        let peers = transport_peers_from_config_and_records(
             &self.config,
             &member_records,
             now_unix_seconds,
         )?;
+        let effective_changed = routes != self.routes
+            || peers != self.peers
+            || authorized_peers != self.authorized_peers;
+        self.membership_effective_refresh_pending |= effective_changed;
+        self.peers = peers;
         self.routes = routes;
         self.authorized_peers = authorized_peers;
         self.member_records = member_records;
@@ -286,7 +290,8 @@ impl Forwarder {
         }
 
         let member_records = config.network.member_records.clone();
-        let routes = config.compile_routes_with_member_records(&member_records)?;
+        let routes =
+            config.compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
         let peers =
             transport_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
         let authorized_peers =
@@ -309,6 +314,7 @@ impl Forwarder {
         self.routes = update.routes;
         self.peers = update.peers;
         self.authorized_peers = update.authorized_peers;
+        self.membership_effective_refresh_pending = false;
         self.mtu = update.mtu;
     }
 
@@ -317,6 +323,19 @@ impl Forwarder {
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
         self.merge_membership_records(&[], now_unix_seconds)
+    }
+
+    pub(crate) fn refresh_membership_records(
+        &mut self,
+        now_unix_seconds: u64,
+    ) -> Result<(MembershipRecordMergeStats, bool), ForwardError> {
+        let stats = self.prune_membership_records(now_unix_seconds)?;
+        let effective_changed = self.take_membership_effective_refresh_pending();
+        Ok((stats, effective_changed))
+    }
+
+    pub(crate) fn take_membership_effective_refresh_pending(&mut self) -> bool {
+        std::mem::take(&mut self.membership_effective_refresh_pending)
     }
 
     #[must_use]

@@ -34,9 +34,10 @@ use p2p_vpn::{
         import_invite_config,
     },
     membership::{
-        MembershipRecordIssueOptions, MembershipRecordMergeStats, MembershipRecordPayload,
-        MembershipRecordSubject, MembershipRole, SignedMembershipRecord,
-        issue_membership_record_for_subject_at, validate_membership_records_at,
+        MAX_MEMBERSHIP_RECORD_INTEGER, MembershipRecordIssueOptions, MembershipRecordMergeStats,
+        MembershipRecordPayload, MembershipRecordSubject, MembershipRole, SignedMembershipRecord,
+        issue_membership_record_for_subject_at, validate_membership_record_history,
+        validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
@@ -2281,7 +2282,7 @@ fn membership_record_list(config_path: &Path) -> Result<(), String> {
 
 fn membership_record_lines(config: &Config) -> Result<Vec<String>, String> {
     let now = current_unix_seconds_lossy();
-    validate_membership_records_at(&config.network.member_records, &config.network.name, now)
+    validate_membership_record_history(&config.network.member_records, &config.network.name)
         .map_err(|error| format!("membership record invalid: {error:?}"))?;
     let mut issuers = BTreeSet::new();
     for record in &config.network.member_records {
@@ -2294,6 +2295,15 @@ fn membership_record_lines(config: &Config) -> Result<Vec<String>, String> {
         config.network.member_records.len()
     ));
     lines.push("membership records valid: true".to_owned());
+    lines.push(format!(
+        "membership records expired: {}",
+        config
+            .network
+            .member_records
+            .iter()
+            .filter(|record| record.is_expired_at(now))
+            .count()
+    ));
     lines.push(format!("trusted issuers: {}", issuers.len()));
     for issuer in issuers {
         lines.push(format!("trusted issuer: {issuer}"));
@@ -2316,7 +2326,7 @@ fn membership_record_lines(config: &Config) -> Result<Vec<String>, String> {
         config.network.member_records.len()
     ));
     for record in records {
-        push_membership_record_line(&mut lines, record);
+        push_membership_record_line(&mut lines, record, now);
     }
 
     let effective = config
@@ -2348,9 +2358,19 @@ fn membership_record_lines(config: &Config) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-fn push_membership_record_line(lines: &mut Vec<String>, record: &SignedMembershipRecord) {
+fn push_membership_record_line(
+    lines: &mut Vec<String>,
+    record: &SignedMembershipRecord,
+    now_unix_seconds: u64,
+) {
     let payload = &record.payload;
-    let state = if payload.revoked { "revoked" } else { "active" };
+    let state = if payload.revoked {
+        "revoked"
+    } else if record.is_expired_at(now_unix_seconds) {
+        "expired"
+    } else {
+        "active"
+    };
     let trust_root = payload.issuer_peer == payload.member_peer;
     let expires_at = payload
         .expires_at_unix_seconds
@@ -3946,6 +3966,16 @@ fn push_nixos_member_records(
     lines.push("    memberRecords = [".to_owned());
     for record in records {
         let payload = &record.payload;
+        for (field, value) in [
+            ("membershipEpoch", payload.membership_epoch),
+            ("sequence", payload.sequence),
+            ("issuedAtUnixSeconds", payload.issued_at_unix_seconds),
+        ] {
+            validate_nix_membership_integer(payload, field, value)?;
+        }
+        if let Some(expires_at) = payload.expires_at_unix_seconds {
+            validate_nix_membership_integer(payload, "expiresAtUnixSeconds", expires_at)?;
+        }
         lines.push("      {".to_owned());
         lines.push("        payload = {".to_owned());
         lines.push(format!("          version = {};", payload.version));
@@ -4004,6 +4034,20 @@ fn push_nixos_member_records(
     }
     lines.push("    ];".to_owned());
     Ok(())
+}
+
+fn validate_nix_membership_integer(
+    payload: &MembershipRecordPayload,
+    field: &str,
+    value: u64,
+) -> Result<(), String> {
+    if value <= MAX_MEMBERSHIP_RECORD_INTEGER {
+        return Ok(());
+    }
+    Err(format!(
+        "membership record {} -> {} field {field} value {value} exceeds the native Nix integer limit {MAX_MEMBERSHIP_RECORD_INTEGER}",
+        payload.issuer_peer, payload.member_peer,
+    ))
 }
 
 fn push_nixos_relay(lines: &mut Vec<String>, relay: &RelayConfig) -> Result<(), String> {
@@ -13763,6 +13807,20 @@ mod tests {
         assert!(!rendered.contains("network_name"));
         assert!(!rendered.contains("member_peer"));
         assert!(!rendered.contains(&identity.private_key));
+
+        config.network.member_records[0].payload.sequence = MAX_MEMBERSHIP_RECORD_INTEGER + 1;
+        let error = render_pairing_nixos_module(
+            "lab",
+            &config,
+            &PairingNixosSecretPaths {
+                private_key_file: None,
+                membership_key_file: None,
+                membership_key_file_is_default: false,
+            },
+        )
+        .expect_err("native Nix cannot represent unsigned 64-bit overflow");
+        assert!(error.contains("sequence"));
+        assert!(error.contains("native Nix integer limit"));
     }
 
     #[test]

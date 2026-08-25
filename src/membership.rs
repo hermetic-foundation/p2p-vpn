@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{PeerId, config::RouteConfig, identity::NodeIdentity};
 
 pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
+pub const MAX_MEMBERSHIP_RECORD_INTEGER: u64 = i64::MAX as u64;
+pub const MAX_MEMBERSHIP_RECORDS: usize = 256;
 
 const SIGNING_DOMAIN: &[u8] = b"p2p-vpn membership record v1\n";
 
@@ -17,8 +19,26 @@ pub struct SignedMembershipRecord {
 }
 
 impl SignedMembershipRecord {
+    pub fn verify(&self) -> Result<(), MembershipRecordError> {
+        self.verify_with_time(None)
+    }
+
     pub fn verify_at(&self, now_unix_seconds: u64) -> Result<(), MembershipRecordError> {
-        validate_payload(&self.payload, now_unix_seconds)?;
+        self.verify_with_time(Some(now_unix_seconds))
+    }
+
+    #[must_use]
+    pub fn is_expired_at(&self, now_unix_seconds: u64) -> bool {
+        self.payload
+            .expires_at_unix_seconds
+            .is_some_and(|expires_at| now_unix_seconds > expires_at)
+    }
+
+    fn verify_with_time(&self, now_unix_seconds: Option<u64>) -> Result<(), MembershipRecordError> {
+        validate_payload(&self.payload)?;
+        if let Some(now_unix_seconds) = now_unix_seconds {
+            validate_payload_time(&self.payload, now_unix_seconds)?;
+        }
         let issuer_public_key = decode_public_key(&self.payload.issuer_public_key)?;
         let issuer_peer = self.payload.issuer_peer.parse::<Libp2pPeerId>()?;
         if issuer_public_key.to_peer_id() != issuer_peer {
@@ -191,7 +211,8 @@ pub fn issue_membership_record_for_subject_at(
         issued_at_unix_seconds,
         expires_at_unix_seconds: options.expires_at_unix_seconds,
     };
-    validate_payload(&payload, issued_at_unix_seconds)?;
+    validate_payload(&payload)?;
+    validate_payload_time(&payload, issued_at_unix_seconds)?;
     let signature = STANDARD.encode(issuer.sign(&signing_message(&payload)?)?);
     let record = SignedMembershipRecord { payload, signature };
     record.verify_at(issued_at_unix_seconds)?;
@@ -210,11 +231,8 @@ pub fn merge_membership_records_at(
     let mut merged = Vec::with_capacity(records.len().saturating_add(incoming.len()));
     for record in records.iter() {
         ensure_record_network(record, network_name)?;
-        match record.verify_at(now_unix_seconds) {
-            Ok(()) => merged.push(record.clone()),
-            Err(MembershipRecordError::Expired { .. }) => stats.removed_expired += 1,
-            Err(error) => return Err(error),
-        }
+        record.verify()?;
+        merged.push(record.clone());
     }
     merged = canonical_membership_records(&merged)?;
 
@@ -262,24 +280,29 @@ pub fn merge_membership_records_at(
         });
     }
 
-    let authorized_issuers = authorized_membership_issuers(&merged, trusted_issuers);
+    let active_records = active_membership_records(&merged, now_unix_seconds);
+    let active_trusted_issuers =
+        active_trusted_membership_issuers(&merged, trusted_issuers, now_unix_seconds);
+    let authorized_issuers =
+        authorized_membership_issuers(&active_records, &active_trusted_issuers);
     for record in incoming {
-        if record.payload.issuer_peer == record.payload.member_peer
-            && !trusted_issuers.contains(&record.payload.issuer_peer)
-        {
+        let self_transition = record.payload.issuer_peer == record.payload.member_peer;
+        if self_transition && !trusted_issuers.contains(&record.payload.issuer_peer) {
             return Err(MembershipRecordError::UntrustedIssuer {
                 issuer: record.payload.issuer_peer.clone(),
             });
         }
-        if !authorized_issuers.contains(&record.payload.issuer_peer) {
+        let issuer_authorized = authorized_issuers.contains(&record.payload.issuer_peer)
+            || self_transition && trusted_issuers.contains(&record.payload.issuer_peer);
+        if !issuer_authorized {
             return Err(MembershipRecordError::UntrustedIssuer {
                 issuer: record.payload.issuer_peer.clone(),
             });
         }
     }
 
-    let active_trusted_issuers = active_trusted_membership_issuers(&merged, trusted_issuers);
-    let authorized_issuers = authorized_membership_issuers(&merged, &active_trusted_issuers);
+    let authorized_issuers =
+        authorized_membership_issuers(&active_records, &active_trusted_issuers);
     let before_trust_filter = merged.len();
     merged.retain(|record| {
         authorized_issuers.contains(&record.payload.issuer_peer)
@@ -296,9 +319,27 @@ pub fn validate_membership_records_at(
     network_name: &str,
     now_unix_seconds: u64,
 ) -> Result<(), MembershipRecordError> {
+    validate_membership_record_history(records, network_name)?;
+    for record in records {
+        validate_payload_time(&record.payload, now_unix_seconds)?;
+    }
+
+    Ok(())
+}
+
+pub fn validate_membership_record_history(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+) -> Result<(), MembershipRecordError> {
+    if records.len() > MAX_MEMBERSHIP_RECORDS {
+        return Err(MembershipRecordError::TooManyRecords {
+            max: MAX_MEMBERSHIP_RECORDS,
+            actual: records.len(),
+        });
+    }
     for record in records {
         ensure_record_network(record, network_name)?;
-        record.verify_at(now_unix_seconds)?;
+        record.verify()?;
     }
     latest_membership_record_indices(records)?;
 
@@ -310,29 +351,23 @@ pub fn trusted_membership_issuers_at(
     network_name: &str,
     now_unix_seconds: u64,
 ) -> Result<TrustedMembershipIssuers, MembershipRecordError> {
-    let mut valid_records = Vec::with_capacity(records.len());
-    let mut has_explicit_root_record = false;
-    for record in records {
-        ensure_record_network(record, network_name)?;
-        has_explicit_root_record |= record.payload.issuer_peer == record.payload.member_peer;
-        if let Err(error) = record.verify_at(now_unix_seconds) {
-            if matches!(error, MembershipRecordError::Expired { .. }) {
-                continue;
-            }
-            return Err(error);
-        }
-        valid_records.push(record.clone());
-    }
-    let valid_records = canonical_membership_records(&valid_records)?;
+    let anchors = membership_trust_anchors(records, network_name)?;
+    let latest_records = canonical_membership_records(records)?;
+    let has_explicit_root_record = latest_records
+        .iter()
+        .any(|record| record.payload.issuer_peer == record.payload.member_peer);
+    let active_records = latest_records
+        .iter()
+        .filter(|record| !record.is_expired_at(now_unix_seconds));
 
     let mut issuers = HashSet::new();
     if has_explicit_root_record {
         issuers.extend(
-            valid_records
-                .iter()
+            active_records
                 .filter(|record| {
                     let payload = &record.payload;
                     payload.issuer_peer == payload.member_peer
+                        && anchors.contains(&payload.issuer_peer)
                         && !payload.revoked
                         && payload.roles.contains(&MembershipRole::OverlayMember)
                 })
@@ -340,12 +375,32 @@ pub fn trusted_membership_issuers_at(
         );
     } else {
         // Legacy configurations treated every explicitly configured issuer as a root.
-        issuers.extend(
-            valid_records
-                .iter()
-                .map(|record| record.payload.issuer_peer.clone()),
-        );
+        issuers.extend(active_records.map(|record| record.payload.issuer_peer.clone()));
     }
+    Ok(TrustedMembershipIssuers { issuers })
+}
+
+pub(crate) fn membership_trust_anchors(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+) -> Result<TrustedMembershipIssuers, MembershipRecordError> {
+    validate_membership_record_history(records, network_name)?;
+    let latest_records = canonical_membership_records(records)?;
+    let has_explicit_root_record = latest_records
+        .iter()
+        .any(|record| record.payload.issuer_peer == record.payload.member_peer);
+    let issuers = if has_explicit_root_record {
+        latest_records
+            .iter()
+            .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+            .map(|record| record.payload.issuer_peer.clone())
+            .collect()
+    } else {
+        latest_records
+            .iter()
+            .map(|record| record.payload.issuer_peer.clone())
+            .collect()
+    };
     Ok(TrustedMembershipIssuers { issuers })
 }
 
@@ -354,10 +409,11 @@ pub fn effective_membership_at(
     network_name: &str,
     now_unix_seconds: u64,
 ) -> Result<EffectiveMembership, MembershipRecordError> {
-    validate_membership_records_at(records, network_name, now_unix_seconds)?;
+    validate_membership_record_history(records, network_name)?;
     let latest_records = latest_membership_record_indices(records)?
         .into_iter()
         .map(|index| records[index].clone())
+        .filter(|record| !record.is_expired_at(now_unix_seconds))
         .collect::<Vec<_>>();
     let trusted_issuers = trusted_membership_issuers_at(records, network_name, now_unix_seconds)?;
     let authorized_issuers = authorized_membership_issuers(&latest_records, &trusted_issuers);
@@ -431,11 +487,15 @@ fn canonical_membership_records(
         .collect())
 }
 
-pub(crate) fn overlay_membership_trust_path(
+pub(crate) fn overlay_membership_trust_path_at(
     records: &[SignedMembershipRecord],
     member_peer: &str,
+    now_unix_seconds: u64,
 ) -> Result<Option<Vec<SignedMembershipRecord>>, MembershipRecordError> {
-    let records = canonical_membership_records(records)?;
+    let records = canonical_membership_records(records)?
+        .into_iter()
+        .filter(|record| !record.is_expired_at(now_unix_seconds))
+        .collect::<Vec<_>>();
     let roots = records
         .iter()
         .enumerate()
@@ -499,6 +559,7 @@ pub(crate) fn overlay_membership_trust_path(
 fn active_trusted_membership_issuers(
     records: &[SignedMembershipRecord],
     trusted_issuers: &TrustedMembershipIssuers,
+    now_unix_seconds: u64,
 ) -> TrustedMembershipIssuers {
     let mut active = TrustedMembershipIssuers::default();
     for issuer in &trusted_issuers.issuers {
@@ -506,7 +567,8 @@ fn active_trusted_membership_issuers(
             record.payload.issuer_peer == *issuer && record.payload.member_peer == *issuer
         });
         if self_record.is_none_or(|record| {
-            !record.payload.revoked
+            !record.is_expired_at(now_unix_seconds)
+                && !record.payload.revoked
                 && record
                     .payload
                     .roles
@@ -516,6 +578,17 @@ fn active_trusted_membership_issuers(
         }
     }
     active
+}
+
+fn active_membership_records(
+    records: &[SignedMembershipRecord],
+    now_unix_seconds: u64,
+) -> Vec<SignedMembershipRecord> {
+    records
+        .iter()
+        .filter(|record| !record.is_expired_at(now_unix_seconds))
+        .cloned()
+        .collect()
 }
 
 fn authorized_membership_issuers(
@@ -607,10 +680,7 @@ impl EffectiveMember {
     }
 }
 
-fn validate_payload(
-    payload: &MembershipRecordPayload,
-    now_unix_seconds: u64,
-) -> Result<(), MembershipRecordError> {
+fn validate_payload(payload: &MembershipRecordPayload) -> Result<(), MembershipRecordError> {
     if payload.version != MEMBERSHIP_RECORD_VERSION {
         return Err(MembershipRecordError::UnsupportedVersion(payload.version));
     }
@@ -620,6 +690,9 @@ fn validate_payload(
     if payload.membership_epoch == 0 {
         return Err(MembershipRecordError::InvalidMembershipEpoch);
     }
+    validate_portable_integer("membership_epoch", payload.membership_epoch)?;
+    validate_portable_integer("sequence", payload.sequence)?;
+    validate_portable_integer("issued_at_unix_seconds", payload.issued_at_unix_seconds)?;
     if payload.revoked {
         if !payload.roles.is_empty() || !payload.route_grants.is_empty() {
             return Err(MembershipRecordError::RevocationCarriesAuthority);
@@ -631,14 +704,9 @@ fn validate_payload(
         return Err(MembershipRecordError::MissingRoles);
     }
     if let Some(expires_at) = payload.expires_at_unix_seconds {
+        validate_portable_integer("expires_at_unix_seconds", expires_at)?;
         if expires_at <= payload.issued_at_unix_seconds {
             return Err(MembershipRecordError::ExpiredBeforeIssued);
-        }
-        if now_unix_seconds > expires_at {
-            return Err(MembershipRecordError::Expired {
-                expired_at: expires_at,
-                now: now_unix_seconds,
-            });
         }
     }
     for route in &payload.route_grants {
@@ -651,6 +719,32 @@ fn validate_payload(
     }
 
     Ok(())
+}
+
+fn validate_payload_time(
+    payload: &MembershipRecordPayload,
+    now_unix_seconds: u64,
+) -> Result<(), MembershipRecordError> {
+    if let Some(expires_at) = payload.expires_at_unix_seconds
+        && now_unix_seconds > expires_at
+    {
+        return Err(MembershipRecordError::Expired {
+            expired_at: expires_at,
+            now: now_unix_seconds,
+        });
+    }
+    Ok(())
+}
+
+fn validate_portable_integer(field: &'static str, value: u64) -> Result<(), MembershipRecordError> {
+    if value <= MAX_MEMBERSHIP_RECORD_INTEGER {
+        return Ok(());
+    }
+    Err(MembershipRecordError::IntegerOutOfRange {
+        field,
+        value,
+        max: MAX_MEMBERSHIP_RECORD_INTEGER,
+    })
 }
 
 fn signing_message(payload: &MembershipRecordPayload) -> Result<Vec<u8>, MembershipRecordError> {
@@ -686,6 +780,11 @@ pub enum MembershipRecordError {
     UnsupportedVersion(u8),
     EmptyNetworkName,
     InvalidMembershipEpoch,
+    IntegerOutOfRange {
+        field: &'static str,
+        value: u64,
+        max: u64,
+    },
     MissingRoles,
     RevocationCarriesAuthority,
     RevocationExpires,
@@ -870,6 +969,7 @@ mod tests {
     fn membership_record_rejects_expired_or_wrong_network_records() {
         let (_issuer, _member, record) = test_record();
 
+        record.verify().expect("signed history remains valid");
         assert!(matches!(
             record.verify_at(2_001),
             Err(MembershipRecordError::Expired {
@@ -880,6 +980,66 @@ mod tests {
         assert!(matches!(
             validate_membership_records_at(&[record], "other", 1_500),
             Err(MembershipRecordError::NetworkMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn membership_record_rejects_integers_that_native_nix_cannot_represent() {
+        type PayloadMutation = fn(&mut MembershipRecordPayload);
+
+        let (issuer, _member, record) = test_record();
+        let cases: [(&str, PayloadMutation); 4] = [
+            (
+                "membership_epoch",
+                |payload: &mut MembershipRecordPayload| {
+                    payload.membership_epoch = MAX_MEMBERSHIP_RECORD_INTEGER + 1;
+                },
+            ),
+            ("sequence", |payload: &mut MembershipRecordPayload| {
+                payload.sequence = MAX_MEMBERSHIP_RECORD_INTEGER + 1;
+            }),
+            (
+                "issued_at_unix_seconds",
+                |payload: &mut MembershipRecordPayload| {
+                    payload.issued_at_unix_seconds = MAX_MEMBERSHIP_RECORD_INTEGER + 1;
+                },
+            ),
+            (
+                "expires_at_unix_seconds",
+                |payload: &mut MembershipRecordPayload| {
+                    payload.expires_at_unix_seconds = Some(MAX_MEMBERSHIP_RECORD_INTEGER + 1);
+                },
+            ),
+        ];
+        for (field, mutate) in cases {
+            let mut candidate = record.clone();
+            mutate(&mut candidate.payload);
+            candidate.signature = STANDARD.encode(
+                issuer
+                    .sign(&signing_message(&candidate.payload).expect("message"))
+                    .expect("signature"),
+            );
+
+            assert!(matches!(
+                candidate.verify(),
+                Err(MembershipRecordError::IntegerOutOfRange {
+                    field: actual,
+                    value,
+                    max: MAX_MEMBERSHIP_RECORD_INTEGER,
+                }) if actual == field && value == MAX_MEMBERSHIP_RECORD_INTEGER + 1
+            ));
+        }
+    }
+
+    #[test]
+    fn membership_history_enforces_the_persisted_record_limit() {
+        let (_issuer, _member, record) = test_record();
+        let records = vec![record; MAX_MEMBERSHIP_RECORDS + 1];
+
+        assert!(matches!(
+            validate_membership_record_history(&records, "lab"),
+            Err(MembershipRecordError::TooManyRecords { max, actual })
+                if max == MAX_MEMBERSHIP_RECORDS && actual == MAX_MEMBERSHIP_RECORDS + 1
         ));
     }
 
@@ -965,6 +1125,44 @@ mod tests {
         assert_eq!(members[0].sequence, 2);
         assert!(!members[0].has_role(MembershipRole::RouteAuthority));
         assert!(members[0].route_grants.is_empty());
+    }
+
+    #[test]
+    fn effective_membership_does_not_revive_an_older_grant_after_restart() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let older = overlay_record(&root, &member, 1, 1_000, None);
+        let newer = overlay_record(&root, &member, 2, 1_010, Some(1_050));
+        let mut records = vec![root_record, older.clone(), newer.clone()];
+
+        validate_membership_record_history(&records, "lab").expect("restart-safe history");
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        assert!(
+            !effective
+                .overlay_members()
+                .any(|candidate| { candidate.transport_peer.to_string() == member.peer_id })
+        );
+
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_100).expect("trusted root");
+        let stats = merge_membership_records_at(&mut records, &[older], "lab", 1_100, &trusted, 8)
+            .expect("stale replay");
+        assert_eq!(stats.ignored_stale_or_equal, 1);
+        assert!(records.iter().any(|record| record == &newer));
+    }
+
+    #[test]
+    fn expired_newer_root_does_not_reactivate_an_older_root_record() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let older = overlay_record(&root, &root, 1, 1_000, None);
+        let newer = overlay_record(&root, &root, 2, 1_010, Some(1_050));
+        let records = vec![older, newer];
+
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_100).expect("trusted roots");
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+
+        assert!(trusted.is_empty());
+        assert_eq!(effective.overlay_members().count(), 0);
     }
 
     #[test]
@@ -1336,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_membership_records_cascades_delegate_expiry() {
+    fn merge_membership_records_retains_expired_delegate_tombstone() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -1351,10 +1549,18 @@ mod tests {
             merge_membership_records_at(&mut records, &[], "lab", 1_100, &trusted_issuers, 8)
                 .expect("expiry merge");
 
-        assert_eq!(stats.removed_expired, 1);
+        assert_eq!(stats.removed_expired, 0);
         assert_eq!(stats.removed_untrusted, 1);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].payload.member_peer, root.peer_id);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().any(|record| {
+            record.payload.member_peer == delegate.peer_id && record.is_expired_at(1_100)
+        }));
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        assert!(
+            effective
+                .overlay_members()
+                .all(|member| member.transport_peer.to_string() == root.peer_id)
+        );
     }
 
     #[test]
@@ -1379,9 +1585,10 @@ mod tests {
         )
         .expect("root revocation");
 
-        let path = overlay_membership_trust_path(
+        let path = overlay_membership_trust_path_at(
             &[root_record, delegate_record, root_revocation],
             &delegate.peer_id,
+            1_100,
         )
         .expect("trust graph");
 
@@ -1398,7 +1605,7 @@ mod tests {
         let long_member_record = overlay_record(&intermediate, &member, 1, 1_000, None);
         let direct_member_record = overlay_record(&root, &member, 2, 1_000, None);
 
-        let path = overlay_membership_trust_path(
+        let path = overlay_membership_trust_path_at(
             &[
                 root_record,
                 intermediate_record,
@@ -1406,6 +1613,7 @@ mod tests {
                 direct_member_record,
             ],
             &member.peer_id,
+            1_100,
         )
         .expect("trust graph")
         .expect("member trust path");
@@ -1572,7 +1780,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_membership_records_accepts_newer_and_discards_stale_or_expired() {
+    fn merge_membership_records_accepts_newer_and_retains_expired_tombstone() {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
         let old = issue_membership_record_at(
@@ -1641,12 +1849,13 @@ mod tests {
             MembershipRecordMergeStats {
                 accepted: 1,
                 ignored_stale_or_equal: 1,
-                removed_expired: 1,
+                removed_expired: 0,
                 removed_untrusted: 0,
             }
         );
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].payload.sequence, 2);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().any(|record| record.payload.sequence == 2));
+        assert!(records.iter().any(|record| record.is_expired_at(1_100)));
     }
 
     #[test]
