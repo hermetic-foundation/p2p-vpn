@@ -627,6 +627,10 @@ where
             .active_replay_tokens(current_unix_seconds_lossy())
             .map(str::to_owned),
     );
+    let mut tun_runtime = TunRuntimeConfig::from_config_with_member_records(
+        forwarder.config(),
+        forwarder.member_records(),
+    )?;
     node.membership_tag = forwarder.config().membership_tag()?;
     node.kademlia_rendezvous_key = node.discovery.kademlia.then(|| {
         crate::runtime::p2p::kademlia_rendezvous_key(
@@ -791,6 +795,7 @@ where
                     SwarmEventContext {
                         forwarder: &mut forwarder,
                         membership: &mut membership,
+                        tun_runtime: &mut tun_runtime,
                         infrastructure_peers: &mut infrastructure_peers,
                         writer: &mut writer,
                         paths: &mut paths,
@@ -999,6 +1004,7 @@ where
                     &mut forwarder,
                     &mut membership,
                     &mut local_capabilities,
+                    &mut tun_runtime,
                 )?;
                 let mut expiry_context = PacketPlaneExpiryContext {
                     swarm: &mut node.swarm,
@@ -1082,6 +1088,7 @@ where
                             pairing_state_store.as_ref(),
                             &mut forwarder,
                             &mut membership,
+                            &mut tun_runtime,
                             &mut local_capabilities,
                             &node.identity,
                             &mut pairing_replay_tokens.code_approval,
@@ -1092,6 +1099,7 @@ where
                             let mut context = SwarmEventContext {
                                 forwarder: &mut forwarder,
                                 membership: &mut membership,
+                                tun_runtime: &mut tun_runtime,
                                 infrastructure_peers: &mut infrastructure_peers,
                                 writer: &mut writer,
                                 paths: &mut paths,
@@ -1922,6 +1930,7 @@ fn handle_pair_rpc_request(
     store: Option<&PairingStateStore>,
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     local_capabilities: &mut ControlCapabilities,
     identity: &NodeIdentity,
     consumed_code_pairing_tokens: &mut HashSet<String>,
@@ -2095,6 +2104,7 @@ fn handle_pair_rpc_request(
             let remote_peer = commit_pairing_runtime_enrollment(
                 forwarder,
                 membership,
+                tun_runtime,
                 local_capabilities,
                 prepared,
             )
@@ -7717,6 +7727,7 @@ fn peer_has_healthy_supported_path(
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
+    tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
@@ -7818,6 +7829,7 @@ async fn handle_swarm_event(
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
                 membership: context.membership,
+                tun_runtime: context.tun_runtime,
                 infrastructure_peers: context.infrastructure_peers,
                 relay_readiness: context.relay_readiness,
                 auto_relay: context.auto_relay,
@@ -8551,6 +8563,7 @@ async fn handle_control_event(
             message: Message::Response { response, .. },
             ..
         } => {
+            let records_before = context.forwarder.member_records().to_vec();
             let validation_scope = MembershipValidationScope::from_capabilities(
                 context.local_capabilities,
                 context.previous_membership_tags,
@@ -8574,6 +8587,11 @@ async fn handle_control_event(
                 context.paths,
                 context.discovery,
             );
+            if context.forwarder.member_records() != records_before {
+                *context.local_capabilities =
+                    refreshed_local_capabilities(context.local_capabilities, context.forwarder);
+                sync_live_tun_routes(context.forwarder, context.tun_runtime)?;
+            }
         }
         request_response::Event::OutboundFailure { peer, error, .. } => {
             context.metrics.record_control_failure();
@@ -9289,7 +9307,7 @@ async fn handle_control_request(
             if membership_changed {
                 *context.local_capabilities =
                     refreshed_local_capabilities(context.local_capabilities, context.forwarder);
-                sync_live_tun_routes(context.forwarder)?;
+                sync_live_tun_routes(context.forwarder, context.tun_runtime)?;
             }
             match &response {
                 ControlResponse::CapabilitiesAccepted(_) => {
@@ -10122,6 +10140,7 @@ fn handle_pairing_code_response(
             let remote_peer = match commit_pairing_runtime_enrollment(
                 context.forwarder,
                 context.membership,
+                context.tun_runtime,
                 context.local_capabilities,
                 prepared,
             ) {
@@ -10414,6 +10433,7 @@ fn handle_pairing_request_event(
             install_pairing_response_membership(
                 context.forwarder,
                 context.membership,
+                context.tun_runtime,
                 context.local_capabilities,
                 &response_for_membership,
             )?;
@@ -10452,6 +10472,7 @@ fn handle_pairing_request_event(
 fn install_pairing_response_membership(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     local_capabilities: &mut ControlCapabilities,
     response: &PairingResponse,
 ) -> Result<(), RunnerError> {
@@ -10474,7 +10495,7 @@ fn install_pairing_response_membership(
     *local_capabilities = local_capabilities
         .clone()
         .with_member_records(advertised_member_records(forwarder));
-    sync_live_tun_routes(forwarder)?;
+    sync_live_tun_routes_at(forwarder, tun_runtime, now_unix_seconds)?;
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
     let removed_expired = stats.removed_expired.to_string();
@@ -10497,6 +10518,7 @@ struct PreparedPairingRuntimeEnrollment {
     forwarder: ForwarderUpdate,
     membership: OverlayMembership,
     tun_update: TunRouteUpdate,
+    tun_runtime: TunRuntimeConfig,
     membership_tag: Option<String>,
     remote_peer: Libp2pPeerId,
 }
@@ -10541,6 +10563,7 @@ fn prepare_pairing_runtime_enrollment(
         forwarder: update,
         membership,
         tun_update,
+        tun_runtime: next_tun,
         membership_tag,
         remote_peer,
     })
@@ -10549,12 +10572,14 @@ fn prepare_pairing_runtime_enrollment(
 fn commit_pairing_runtime_enrollment(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     local_capabilities: &mut ControlCapabilities,
     prepared: PreparedPairingRuntimeEnrollment,
 ) -> Result<Libp2pPeerId, RunnerError> {
     commit_pairing_runtime_enrollment_with(
         forwarder,
         membership,
+        tun_runtime,
         local_capabilities,
         prepared,
         execute_ip_command,
@@ -10564,6 +10589,7 @@ fn commit_pairing_runtime_enrollment(
 fn commit_pairing_runtime_enrollment_with(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     local_capabilities: &mut ControlCapabilities,
     prepared: PreparedPairingRuntimeEnrollment,
     execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
@@ -10573,6 +10599,7 @@ fn commit_pairing_runtime_enrollment_with(
     let remote_peer = prepared.remote_peer;
     forwarder.commit_reconfigure(prepared.forwarder);
     *membership = prepared.membership;
+    *tun_runtime = prepared.tun_runtime;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
     local_capabilities.membership_tag = prepared.membership_tag;
     log_runtime_event(
@@ -10760,19 +10787,42 @@ fn promote_all_authenticated_overlay_connections(
     );
 }
 
-fn sync_live_tun_routes(forwarder: &Forwarder) -> Result<(), RunnerError> {
-    let runtime = TunRuntimeConfig::from_config_with_member_records(
+fn sync_live_tun_routes(
+    forwarder: &Forwarder,
+    installed: &mut TunRuntimeConfig,
+) -> Result<(), RunnerError> {
+    sync_live_tun_routes_at(forwarder, installed, current_unix_seconds_lossy())
+}
+
+fn sync_live_tun_routes_at(
+    forwarder: &Forwarder,
+    installed: &mut TunRuntimeConfig,
+    now_unix_seconds: u64,
+) -> Result<(), RunnerError> {
+    sync_live_tun_routes_with(forwarder, installed, now_unix_seconds, execute_ip_command)
+}
+
+fn sync_live_tun_routes_with(
+    forwarder: &Forwarder,
+    installed: &mut TunRuntimeConfig,
+    now_unix_seconds: u64,
+    execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
+) -> Result<(), RunnerError> {
+    let next = TunRuntimeConfig::from_config_with_member_records_at(
         forwarder.config(),
         forwarder.member_records(),
+        now_unix_seconds,
     )?;
-    for command in runtime.route_commands() {
-        let status = command.execute().map_err(TunRuntimeError::Io)?;
-        if !status.success() {
-            return Err(RunnerError::TunRouteCommand {
-                command: command.to_string(),
-                status,
-            });
-        }
+    let update = next.route_reconciliation_from(installed)?;
+    let changed = update.apply_commands().len();
+    execute_tun_route_update(&update, execute)?;
+    *installed = next;
+    if changed > 0 {
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_tun_routes_reconciled",
+            &[("commands", &changed.to_string())],
+        );
     }
 
     Ok(())
@@ -11612,9 +11662,11 @@ fn prune_expired_membership_records(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
     local_capabilities: &mut ControlCapabilities,
-) -> Result<(), ForwardError> {
+    tun_runtime: &mut TunRuntimeConfig,
+) -> Result<(), RunnerError> {
     let now_unix_seconds = current_unix_seconds_lossy();
     let (stats, effective_changed) = forwarder.refresh_membership_records(now_unix_seconds)?;
+    sync_live_tun_routes_at(forwarder, tun_runtime, now_unix_seconds)?;
     if !effective_changed && stats.removed_untrusted == 0 {
         return Ok(());
     }
@@ -13549,6 +13601,7 @@ fn path_connection_role_for_endpoint(endpoint: &ConnectedPoint) -> PathConnectio
 struct BehaviourEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
+    tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
@@ -13668,6 +13721,7 @@ fn handle_behaviour_event(
                 KademliaEventContext {
                     forwarder: context.forwarder,
                     membership: context.membership,
+                    tun_runtime: context.tun_runtime,
                     infrastructure_peers: context.infrastructure_peers,
                     auto_relay: context.auto_relay,
                     discovered_peer_addresses: context.discovered_peer_addresses,
@@ -13915,6 +13969,7 @@ impl AutoNatReachability {
 struct KademliaEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
+    tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
     auto_relay: &'a mut AutoRelayState,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
@@ -14121,6 +14176,13 @@ fn handle_kademlia_membership_record_result(
                 context
                     .metrics
                     .record_kademlia_membership_records_accepted(accepted);
+                if let Err(error) = sync_live_tun_routes(context.forwarder, context.tun_runtime) {
+                    log_runtime_event(
+                        LogLevel::Error,
+                        "membership_tun_reconciliation_failed",
+                        &[("source", "kademlia"), ("reason", &format!("{error:?}"))],
+                    );
+                }
             }
             Err(error) => {
                 context.metrics.record_kademlia_membership_record_invalid();
@@ -15893,9 +15955,11 @@ mod tests {
 
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         let before_config = forwarder.config().clone();
         let before_membership = membership.clone();
+        let before_tun_runtime = tun_runtime.clone();
         let before_capabilities = capabilities.clone();
         let prepared =
             prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
@@ -15904,6 +15968,7 @@ mod tests {
         let result = commit_pairing_runtime_enrollment_with(
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &mut capabilities,
             prepared,
             |_| {
@@ -15917,6 +15982,7 @@ mod tests {
         assert_eq!(forwarder.config(), &before_config);
         assert!(!forwarder.is_configured_transport_peer(joiner_peer));
         assert_eq!(membership, before_membership);
+        assert_eq!(tun_runtime, before_tun_runtime);
         assert_eq!(capabilities, before_capabilities);
         let restored = CodePairingSessions::restore_persisted(
             &store.load().expect("load state").expect("state bytes"),
@@ -16020,6 +16086,12 @@ mod tests {
         let mut live_config = config.clone();
         live_config.network.member_records = forwarder.member_records().to_vec();
         let mut membership = OverlayMembership::from_config(&live_config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config_with_member_records_at(
+            forwarder.config(),
+            forwarder.member_records(),
+            1_011,
+        )
+        .expect("TUN runtime");
         let mut capabilities = ControlCapabilities::local("lab", None, 1280);
         let prepared =
             prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, 1_011)
@@ -16027,6 +16099,7 @@ mod tests {
         commit_pairing_runtime_enrollment_with(
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &mut capabilities,
             prepared,
             |_| Ok(()),
@@ -24520,6 +24593,12 @@ mod tests {
         };
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config_with_member_records_at(
+            &config,
+            &config.network.member_records,
+            now,
+        )
+        .expect("installed TUN routes");
 
         assert!(membership.allows(member_peer));
         assert!(forwarder.is_configured_transport_peer(member_peer));
@@ -24538,6 +24617,21 @@ mod tests {
         membership
             .replace_record_members(forwarder.config(), forwarder.member_records(), now + 2)
             .expect("membership rebuilt");
+        let installed_before = tun_runtime.clone();
+        let mut failed_runtime = tun_runtime.clone();
+        assert!(
+            sync_live_tun_routes_with(&forwarder, &mut failed_runtime, now + 2, |_| Err(
+                RunnerError::ControlSocket(io::Error::other("injected failure"))
+            ),)
+            .is_err()
+        );
+        assert_eq!(failed_runtime, installed_before);
+        let mut commands = Vec::new();
+        sync_live_tun_routes_with(&forwarder, &mut tun_runtime, now + 2, |command| {
+            commands.push(command.to_string());
+            Ok(())
+        })
+        .expect("expired routes removed");
 
         assert!(effective_changed);
         assert_eq!(stats.removed_expired, 0);
@@ -24548,6 +24642,18 @@ mod tests {
         assert!(
             !forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.88.0.0/24", 1)])
+        );
+        assert!(tun_runtime.routes.is_empty());
+        assert_eq!(commands.len(), installed_before.routes.len());
+        assert!(
+            commands
+                .iter()
+                .all(|command| command.contains(" route del "))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.contains("10.88.0.0/24"))
         );
     }
 

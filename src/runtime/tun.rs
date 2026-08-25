@@ -83,6 +83,30 @@ impl TunRuntimeConfig {
         })
     }
 
+    pub fn from_config_with_member_records_at(
+        config: &Config,
+        member_records: &[crate::membership::SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<Self, TunRuntimeError> {
+        let local_peer = config.local_peer_id()?;
+        let additional_addresses = local_tun_addresses(config)?;
+        let routes = config
+            .compile_routes_with_member_records_at(member_records, now_unix_seconds)?
+            .routes()
+            .iter()
+            .copied()
+            .filter(|route| route.owner != local_peer)
+            .collect();
+
+        Ok(Self {
+            name: config.interface.name.clone(),
+            mtu: effective_packet_mtu(config.interface.mtu),
+            addresses: TunAddresses::for_peer(local_peer),
+            additional_addresses,
+            routes,
+        })
+    }
+
     #[must_use]
     pub fn sysctl_commands(&self) -> Vec<SysctlCommand> {
         vec![
@@ -176,6 +200,68 @@ impl TunRuntimeConfig {
                 .iter()
                 .map(|route| IpCommand::route_delete(self.name.clone(), route.prefix)),
         );
+
+        Ok(TunRouteUpdate { apply, rollback })
+    }
+
+    pub fn route_reconciliation_from(
+        &self,
+        current: &Self,
+    ) -> Result<TunRouteUpdate, TunRuntimeError> {
+        if self.name != current.name
+            || self.mtu != current.mtu
+            || self.addresses != current.addresses
+            || self.additional_addresses != current.additional_addresses
+        {
+            return Err(TunRuntimeError::NonAdditiveUpdate(
+                "live membership reconciliation cannot change the running TUN identity, MTU, or local addresses",
+            ));
+        }
+
+        let mut apply = Vec::new();
+        let mut rollback = Vec::new();
+        for route in &self.routes {
+            let previous = current
+                .routes
+                .iter()
+                .find(|candidate| candidate.prefix == route.prefix);
+            if previous == Some(route) {
+                continue;
+            }
+            apply.push(IpCommand::route_replace(
+                self.name.clone(),
+                route.prefix,
+                self.route_source(route.prefix),
+                self.mtu,
+            ));
+            rollback.push(previous.map_or_else(
+                || IpCommand::route_delete(self.name.clone(), route.prefix),
+                |previous| {
+                    IpCommand::route_replace(
+                        current.name.clone(),
+                        previous.prefix,
+                        current.route_source(previous.prefix),
+                        current.mtu,
+                    )
+                },
+            ));
+        }
+        for route in &current.routes {
+            if self
+                .routes
+                .iter()
+                .any(|candidate| candidate.prefix == route.prefix)
+            {
+                continue;
+            }
+            apply.push(IpCommand::route_delete(current.name.clone(), route.prefix));
+            rollback.push(IpCommand::route_replace(
+                current.name.clone(),
+                route.prefix,
+                current.route_source(route.prefix),
+                current.mtu,
+            ));
+        }
 
         Ok(TunRouteUpdate { apply, rollback })
     }
@@ -686,6 +772,66 @@ mod tests {
             renamed.additive_update_from(&current),
             Err(TunRuntimeError::NonAdditiveUpdate(_))
         ));
+    }
+
+    #[test]
+    fn route_reconciliation_adds_and_removes_routes_with_matching_rollback() {
+        let local = PeerId::from_bytes([1; 32]);
+        let first_remote = PeerId::from_bytes([2; 32]);
+        let second_remote = PeerId::from_bytes([3; 32]);
+        let first_route = Route {
+            owner: first_remote,
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 2)), 32).expect("first route"),
+            metric: 0,
+        };
+        let second_route = Route {
+            owner: second_remote,
+            prefix: IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 42, 0, 3)), 32).expect("second route"),
+            metric: 0,
+        };
+        let current = TunRuntimeConfig {
+            name: "pv0".to_owned(),
+            mtu: 1280,
+            addresses: TunAddresses::for_peer(local),
+            additional_addresses: Vec::new(),
+            routes: vec![first_route],
+        };
+        let next = TunRuntimeConfig {
+            routes: vec![second_route],
+            ..current.clone()
+        };
+        let source = builtin_ipv4(local);
+
+        let update = next
+            .route_reconciliation_from(&current)
+            .expect("route reconciliation");
+
+        assert_eq!(
+            update
+                .apply_commands()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![
+                format!(
+                    "ip route replace 10.42.0.3/32 dev pv0 src {source} metric 3000 mtu 1280 advmss 1240"
+                ),
+                "ip route del 10.42.0.2/32 dev pv0 metric 3000".to_owned(),
+            ]
+        );
+        assert_eq!(
+            update
+                .rollback_commands()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![
+                "ip route del 10.42.0.3/32 dev pv0 metric 3000".to_owned(),
+                format!(
+                    "ip route replace 10.42.0.2/32 dev pv0 src {source} metric 3000 mtu 1280 advmss 1240"
+                ),
+            ]
+        );
     }
 
     #[test]
