@@ -1923,9 +1923,15 @@ mod tests {
         let trusted =
             trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted issuer");
 
-        let stats =
-            merge_membership_records_at(&mut records, &[newer.clone()], "lab", 1_100, &trusted, 8)
-                .expect("expired tombstone merged");
+        let stats = merge_membership_records_at(
+            &mut records,
+            std::slice::from_ref(&newer),
+            "lab",
+            1_100,
+            &trusted,
+            8,
+        )
+        .expect("expired tombstone merged");
         let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
 
         assert_eq!(stats.accepted, 1);
