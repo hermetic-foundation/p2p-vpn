@@ -240,7 +240,7 @@ pub fn merge_membership_records_at(
 
     for record in incoming {
         ensure_record_network(record, network_name)?;
-        record.verify_at(now_unix_seconds)?;
+        record.verify()?;
     }
 
     for incoming_record in incoming {
@@ -1911,6 +1911,26 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records.iter().any(|record| record.payload.sequence == 2));
         assert!(records.iter().any(|record| record.is_expired_at(1_100)));
+    }
+
+    #[test]
+    fn merge_membership_records_accepts_an_expired_newer_tombstone_from_a_peer() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let older = overlay_record(&issuer, &member, 1, 1_000, None);
+        let newer = overlay_record(&issuer, &member, 2, 1_010, Some(1_050));
+        let mut records = vec![older];
+        let trusted =
+            trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted issuer");
+
+        let stats =
+            merge_membership_records_at(&mut records, &[newer.clone()], "lab", 1_100, &trusted, 8)
+                .expect("expired tombstone merged");
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(records, vec![newer]);
+        assert_eq!(effective.overlay_members().count(), 0);
     }
 
     #[test]
