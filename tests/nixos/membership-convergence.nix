@@ -184,26 +184,26 @@ pkgs.testers.nixosTest {
     node_c.wait_for_file("${socket}")
     node_c.succeed("ip link set eth2 down")
 
-    def pair_with_root(joiner, expected_peer, vpn_ip, label):
+    def pair_with_inviter(inviter, joiner, expected_peer, vpn_ip, label):
         open_file = "/tmp/open-%s.json" % label
         join_file = "/tmp/join-%s.json" % label
         open_status = "/tmp/open-status-%s.json" % label
-        node_a.succeed("${pair "open"} --expires-in-seconds 900 --format json > " + open_file)
-        code = node_a.succeed("jq -r .code " + open_file).strip()
-        open_operation = node_a.succeed("jq -r .operation_id " + open_file).strip()
+        inviter.succeed("${pair "open"} --expires-in-seconds 900 --format json > " + open_file)
+        code = inviter.succeed("jq -r .code " + open_file).strip()
+        open_operation = inviter.succeed("jq -r .operation_id " + open_file).strip()
         joiner.succeed(
             "${pair "join"} " + repr(code) + " --vpn-ip " + vpn_ip
             + " --timeout-seconds 900 --no-wait --format json > " + join_file
         )
         join_operation = joiner.succeed("jq -r .operation_id " + join_file).strip()
-        node_a.wait_until_succeeds(
+        inviter.wait_until_succeeds(
             "${pair "status"} " + open_operation + " --format json | tee " + open_status
             + " | jq -e '.phase == \"awaiting_approval\" and .candidate.peer_id == \""
             + expected_peer + "\"'",
             timeout=120,
         )
-        approval = node_a.succeed("jq -r .candidate.approval_id " + open_status).strip()
-        node_a.succeed(
+        approval = inviter.succeed("jq -r .candidate.approval_id " + open_status).strip()
+        inviter.succeed(
             "${pair "approve"} " + open_operation + " " + approval
             + " --vpn-ip " + vpn_ip + " --format json > /tmp/approve-" + label + ".json"
         )
@@ -219,6 +219,13 @@ pkgs.testers.nixosTest {
             timeout=120,
         )
 
+    def assert_metric_never_exceeds(node, metric, maximum):
+        node.succeed(
+            "journalctl -u p2p-vpn-${instance}.service -b --no-pager"
+            " | awk '/  " + metric + " / { found=1; if ($NF > maximum) maximum=$NF }"
+            " END { exit !(found && maximum <= " + str(maximum) + ") }'"
+        )
+
     with subtest("all edge configs are peerless and use durable state"):
         for node in [node_a, node_b, node_c]:
             node.succeed("jq -e '.peers == []' /run/p2p-vpn-${instance}/config.json")
@@ -228,9 +235,13 @@ pkgs.testers.nixosTest {
                 " > /tmp/config.sha256"
             )
 
-    with subtest("two independent pairings admit B and C through root A"):
-        pair_with_root(node_b, "${nodeB.peerId}", "${nodeB.vpnIp}", "b")
-        pair_with_root(node_c, "${nodeC.peerId}", "${nodeC.vpnIp}", "c")
+    with subtest("root A admits B, then delegated member B admits C"):
+        pair_with_inviter(node_a, node_b, "${nodeB.peerId}", "${nodeB.vpnIp}", "b")
+        node_b.wait_until_succeeds(
+            "${capabilities} | grep -q '^local capability membership record count: 2$'",
+            timeout=120,
+        )
+        pair_with_inviter(node_b, node_c, "${nodeC.peerId}", "${nodeC.vpnIp}", "c")
 
     with subtest("B and C converge without pairwise pairing"):
         for node in [node_a, node_b, node_c]:
@@ -334,5 +345,15 @@ pkgs.testers.nixosTest {
                 "test \"$(sha256sum /run/p2p-vpn-${instance}/config.json | awk '{print $1}')\""
                 " = \"$(cat /tmp/config.sha256)\""
             )
+
+    with subtest("relay and peer recovery stay bounded under failure pressure"):
+        relay.fail(
+            "journalctl -u p2p-vpn-relay.service -b --no-pager"
+            " | grep -q 'ResourceLimitExceeded'"
+        )
+        for node in [node_a, node_b, node_c]:
+            assert_metric_never_exceeds(node, "packet_plane_path_recovery_dial_attempts", 128)
+            assert_metric_never_exceeds(node, "kademlia_provider_lookups", 128)
+            assert_metric_never_exceeds(node, "redial_attempts", 128)
   '';
 }
