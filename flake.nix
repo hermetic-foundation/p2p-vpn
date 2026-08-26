@@ -3305,6 +3305,13 @@ EOF
               stateDirectory = "/var/lib/p2p vpn";
             };
           };
+          unsafeJsonState = moduleAssertionMessages {
+            unsafe-json = {
+              enable = true;
+              configFile = "/run/secrets/p2p-vpn/unsafe.json";
+              stateDirectory = "relative";
+            };
+          };
         };
         nixosVmSmoke = pkgs.testers.nixosTest {
           name = "p2p-vpn-nixos-module-smoke";
@@ -3715,15 +3722,21 @@ EOF
             generatedConfig = builtins.toJSON consumerEval.config.services.p2p-vpn.generatedConfigs.lab;
             identityFile = consumerEval.config.services.p2p-vpn.identityFiles.lab;
             pairingStateFile = consumerEval.config.services.p2p-vpn.pairingStateFiles.lab;
+            membershipStateFile = consumerEval.config.services.p2p-vpn.membershipStateFiles.lab;
             stateDirectory = builtins.head consumerEval.config.systemd.services.p2p-vpn-lab.serviceConfig.StateDirectory;
           } ''
             test -e "$consumerToplevel"
             test "$identityFile" = /var/lib/p2p-vpn/lab/private.key
             test "$pairingStateFile" = /var/lib/p2p-vpn/lab/pairing-state.json
+            test "$membershipStateFile" = /var/lib/p2p-vpn/lab/membership-state.json
             test "$stateDirectory" = p2p-vpn/lab
             case "$execStart" in
               *"p2p-vpn up --config /run/p2p-vpn-lab/config.json --control-socket /run/p2p-vpn-lab/control.sock --pairing-state /var/lib/p2p-vpn/lab/pairing-state.json"*) ;;
               *) echo "unexpected consumer ExecStart: $execStart" >&2; exit 1 ;;
+            esac
+            case "$execStart" in
+              *"--membership-state /var/lib/p2p-vpn/lab/membership-state.json"*) ;;
+              *) echo "consumer ExecStart lacks membership state: $execStart" >&2; exit 1 ;;
             esac
 
             printf '%s' "$generatedConfig" | jq -e '
@@ -3772,6 +3785,7 @@ EOF
             generatedMinimalSettings = builtins.toJSON moduleEval.config.services.p2p-vpn.generatedConfigs.node-e;
             identityFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.identityFiles;
             pairingStateFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.pairingStateFiles;
+            membershipStateFiles = builtins.toJSON moduleEval.config.services.p2p-vpn.membershipStateFiles;
             effectiveInterfaces = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveInterfaces;
             effectiveListenAddresses = builtins.toJSON moduleEval.config.services.p2p-vpn.effectiveListenAddresses;
             failedAssertions = builtins.toJSON (
@@ -3825,7 +3839,7 @@ EOF
             case "$execStartNoSocket" in
               *"--control-socket"*) echo "disabled control socket still in ExecStart: $execStartNoSocket" >&2; exit 1 ;;
               *"--pairing-state"*) echo "disabled control socket still has pairing state: $execStartNoSocket" >&2; exit 1 ;;
-              *"p2p-vpn up --config /run/p2p-vpn-node-b/config.json"*) ;;
+              *"p2p-vpn up --config /run/p2p-vpn-node-b/config.json --membership-state /var/lib/p2p-vpn/node-b/membership-state.json"*) ;;
               *) echo "unexpected no-socket ExecStart: $execStartNoSocket" >&2; exit 1 ;;
             esac
             case "$execStartStateBacked" in
@@ -3900,6 +3914,12 @@ EOF
               and .["node-g"] == "/var/lib/p2p-vpn/node-g/pairing-state.json"
               and has("node-b") == false
             ' >/dev/null
+            printf '%s' "$membershipStateFiles" | jq -e '
+              .["node-a"] == "/var/lib/p2p-vpn/node-a/membership-state.json"
+              and .["node-b"] == "/var/lib/p2p-vpn/node-b/membership-state.json"
+              and .["node-f"] == "/var/lib/p2p-vpn/node-f/membership-state.json"
+              and .["node-g"] == "/var/lib/p2p-vpn/node-g/membership-state.json"
+            ' >/dev/null
             test "$effectiveInterfaces" = '{"node-a":"pv0","node-b":"pv1","node-c":"pv2","node-d":"pv3","node-e":"pv4","node-f":"pv5"}'
             printf '%s' "$effectiveListenAddresses" | jq -e '
               .["node-a"] == ["/ip4/0.0.0.0/tcp/4001", "/ip4/0.0.0.0/udp/4001/quic-v1"]
@@ -3919,6 +3939,7 @@ EOF
               and (.duplicatePeerAddresses | index("services.p2p-vpn.instances.duplicate.peers.1111111111111111111111111111111111111111111111111111111111111111.addresses must not contain duplicates.")) != null
               and (.storeConfig | index("services.p2p-vpn.instances.stored.configFile must be an absolute runtime path outside the Nix store.")) != null
               and (.unsafeState | index("services.p2p-vpn.instances.unsafe.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
+              and (.unsafeJsonState | index("services.p2p-vpn.instances.unsafe-json.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
             ' >/dev/null
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;

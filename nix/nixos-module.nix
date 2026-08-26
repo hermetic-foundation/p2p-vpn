@@ -41,9 +41,9 @@ let
   instanceStateDirectory = name: instance: "${instance.stateDirectory}/${name}";
   defaultPrivateKeyFile = name: instance: "${instanceStateDirectory name instance}/private.key";
   pairingStateFile = name: instance: "${instanceStateDirectory name instance}/pairing-state.json";
+  membershipStateFile = name: instance: "${instanceStateDirectory name instance}/membership-state.json";
   nixMode = instance: instance.configFile == null;
   automaticIdentity = instance: nixMode instance && instance.privateKeyFile == null;
-  persistentState = instance: nixMode instance || instance.controlSocket != null;
   effectiveConfigFile =
     name: instance: if nixMode instance then runtimeConfigFile name else instance.configFile;
   effectiveInterfaceName =
@@ -1023,6 +1023,10 @@ let
             "--pairing-state"
             (pairingStateFile name instance)
           ]
+          ++ [
+            "--membership-state"
+            (membershipStateFile name instance)
+          ]
           ++ instance.extraArgs
         );
         ExecStop = optionals (instance.controlSocket != null) [
@@ -1080,11 +1084,11 @@ let
         SystemCallArchitectures = "native";
         UMask = "0077";
       }
-      // optionalAttrs (persistentState instance && defaultState) {
+      // optionalAttrs defaultState {
         StateDirectory = [ "p2p-vpn/${name}" ];
         StateDirectoryMode = "0700";
       }
-      // optionalAttrs (persistentState instance && !defaultState) {
+      // optionalAttrs (!defaultState) {
         ReadWritePaths = [ (instanceStateDirectory name instance) ];
       };
     };
@@ -1134,6 +1138,11 @@ in
       type = types.attrsOf types.str;
       readOnly = true;
       description = "Encrypted pairing-state paths for instances with control sockets.";
+    };
+    membershipStateFiles = mkOption {
+      type = types.attrsOf types.str;
+      readOnly = true;
+      description = "Persistent signed membership-history paths for enabled instances.";
     };
   };
 
@@ -1210,11 +1219,8 @@ in
         }
         {
           assertion =
-            !nixMode instance
-            || (
-              builtins.match "^/[A-Za-z0-9._+/-]+$" instance.stateDirectory != null
-              && !(lib.elem ".." (lib.splitString "/" instance.stateDirectory))
-            );
+            builtins.match "^/[A-Za-z0-9._+/-]+$" instance.stateDirectory != null
+            && !(lib.elem ".." (lib.splitString "/" instance.stateDirectory));
           message = "services.p2p-vpn.instances.${name}.stateDirectory must be an absolute path with safe path characters and no `..`.";
         }
         {
@@ -1301,13 +1307,14 @@ in
     services.p2p-vpn.pairingStateFiles = mapAttrs pairingStateFile (
       filterAttrs (_: instance: instance.controlSocket != null) enabledInstances
     );
+    services.p2p-vpn.membershipStateFiles = mapAttrs membershipStateFile enabledInstances;
     systemd.services = mapAttrs' serviceForInstance enabledInstances;
     systemd.tmpfiles.rules = concatMap (
       name:
       let
         instance = enabledInstances.${name};
       in
-      optionals (persistentState instance && instance.stateDirectory != "/var/lib/p2p-vpn") [
+      optionals (instance.stateDirectory != "/var/lib/p2p-vpn") [
         "d ${instanceStateDirectory name instance} 0700 root root -"
       ]
     ) enabledNames;
