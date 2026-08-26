@@ -3144,6 +3144,7 @@ EOF
               { ... }:
               {
                 system.stateVersion = "25.11";
+                networking.hostName = "module-host";
                 services.p2p-vpn.instances.node-a = {
                   enable = true;
                   networkName = "nixos-module-file-secret";
@@ -3166,6 +3167,7 @@ EOF
                 services.p2p-vpn.instances.node-c = {
                   enable = true;
                   networkName = "nixos-module";
+                  dns.enable = true;
                   localPeer = "0000000000000000000000000000000000000000000000000000000000000000";
                   privateKeyFile = "/run/secrets/p2p-vpn/node-c.key";
                   vpnIp = "10.44.0.1";
@@ -3311,6 +3313,83 @@ EOF
               enable = true;
               configFile = "/run/secrets/p2p-vpn/unsafe.json";
               stateDirectory = "relative";
+            };
+          };
+          dnsWithoutControlSocket = moduleAssertionMessages {
+            dns-no-control = {
+              enable = true;
+              controlSocket = null;
+              dns.enable = true;
+            };
+          };
+          dnsWithoutResolved = moduleAssertionMessages {
+            dns-without-resolved = {
+              enable = true;
+              controlSocket = null;
+              dns.enable = true;
+              resolvedIntegration = false;
+            };
+          };
+          invalidDnsHostname = moduleAssertionMessages {
+            invalid-dns-hostname = {
+              enable = true;
+              dns = {
+                enable = true;
+                hostname = "not.a.label";
+              };
+            };
+          };
+          invalidDnsNetwork = moduleAssertionMessages {
+            invalid-dns-network = {
+              enable = true;
+              networkName = "not.a.label";
+              dns.enable = true;
+            };
+          };
+          invalidDnsListener = moduleAssertionMessages {
+            invalid-dns-listener = {
+              enable = true;
+              dns = {
+                enable = true;
+                listen = "0.0.0.0:5353";
+              };
+            };
+          };
+          invalidDnsTtl = moduleAssertionMessages {
+            invalid-dns-ttl = {
+              enable = true;
+              dns = {
+                enable = true;
+                ttlSeconds = 301;
+              };
+            };
+          };
+          duplicateDnsNetworks = moduleAssertionMessages {
+            dns-first = {
+              enable = true;
+              networkName = "shared-dns";
+              dns.enable = true;
+            };
+            dns-second = {
+              enable = true;
+              networkName = "SHARED-DNS";
+              dns.enable = true;
+            };
+          };
+          duplicateDnsListeners = moduleAssertionMessages {
+            dns-listener-first = {
+              enable = true;
+              dns = {
+                enable = true;
+                listen = "127.0.0.1:5533";
+              };
+            };
+            dns-listener-second = {
+              enable = true;
+              dns = {
+                enable = true;
+                listen = "127.0.0.1:5533";
+              };
             };
           };
         };
@@ -3784,6 +3863,22 @@ EOF
             execStartPreJsonScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPre
             );
+            execStartPostDisabled = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPost;
+            execStartPostDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStartPost;
+            execStartPostDnsScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStartPost
+            );
+            execStartPostJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPost;
+            execStartPostJsonScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPost
+            );
+            execStopPostDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost;
+            execStopPostDnsScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost
+            );
+            dnsAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.after;
+            dnsWants = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.wants;
+            resolvedEnabled = builtins.toJSON moduleEval.config.services.resolved.enable;
             loadCredential = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.LoadCredential;
             stateDirectory = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.StateDirectory;
             stateDirectoryJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.StateDirectory;
@@ -3873,10 +3968,44 @@ EOF
               *'jq'*|*'private_key'*) echo "JSON mode unexpectedly generates config: $execStartPreJsonScript" >&2; exit 1 ;;
               *) echo "unexpected JSON config check: $execStartPreJsonScript" >&2; exit 1 ;;
             esac
+            test "$execStartPostDisabled" = '[]'
+            case "$execStartPostDns" in
+              *'p2p-vpn-node-c-configure-resolved'*) ;;
+              *) echo "unexpected DNS ExecStartPost: $execStartPostDns" >&2; exit 1 ;;
+            esac
+            case "$execStartPostDnsScript" in
+              *'dns status'*'--socket /run/p2p-vpn-node-c/control.sock --format json'*'resolvectl dns "$interface" "$listener"'*'resolvectl domain "$interface" "$zone"'*'~64.100.in-addr.arpa'*'resolvectl default-route "$interface" no'*) ;;
+              *) echo "unexpected DNS resolver setup script: $execStartPostDnsScript" >&2; exit 1 ;;
+            esac
+            case "$execStartPostJson" in
+              *'p2p-vpn-node-g-configure-resolved'*) ;;
+              *) echo "unexpected JSON DNS ExecStartPost: $execStartPostJson" >&2; exit 1 ;;
+            esac
+            case "$execStartPostJsonScript" in
+              *'.interface.name // "pv0"'*'/run/secrets/p2p-vpn/node-g.json'*) ;;
+              *) echo "JSON DNS setup does not honor the minimal interface default: $execStartPostJsonScript" >&2; exit 1 ;;
+            esac
+            case "$execStopPostDns" in
+              *'p2p-vpn-node-c-cleanup-resolved'*) ;;
+              *) echo "unexpected DNS ExecStopPost: $execStopPostDns" >&2; exit 1 ;;
+            esac
+            case "$execStopPostDnsScript" in
+              *'resolved-interface'*'resolvectl revert "$interface"'*) ;;
+              *) echo "unexpected DNS resolver cleanup script: $execStopPostDnsScript" >&2; exit 1 ;;
+            esac
+            test "$dnsAfter" = '["network-online.target","systemd-resolved.service"]'
+            test "$dnsWants" = '["network-online.target","systemd-resolved.service"]'
+            test "$resolvedEnabled" = true
             printf '%s' "$generatedSettings" > generated-settings.json
             jq -e '
               (.network | has("private_key") | not)
               and .network.name == "nixos-module"
+              and .network.dns == {
+                "enabled": true,
+                "hostname": "module-host",
+                "listen": "127.0.0.1:0",
+                "ttl_seconds": 30
+              }
               and .network.vpn_ip == "10.44.0.1"
               and .network.listen_addresses == [
                 "/ip4/0.0.0.0/tcp/4003",
@@ -3948,6 +4077,14 @@ EOF
               and (.storeConfig | index("services.p2p-vpn.instances.stored.configFile must be an absolute runtime path outside the Nix store.")) != null
               and (.unsafeState | index("services.p2p-vpn.instances.unsafe.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
               and (.unsafeJsonState | index("services.p2p-vpn.instances.unsafe-json.stateDirectory must be an absolute path with safe path characters and no `..`.")) != null
+              and (.dnsWithoutControlSocket | index("services.p2p-vpn.instances.dns-no-control.resolvedIntegration requires a control socket.")) != null
+              and .dnsWithoutResolved == []
+              and (.invalidDnsHostname | index("services.p2p-vpn.instances.invalid-dns-hostname.dns.hostname must be a valid DNS label.")) != null
+              and (.invalidDnsNetwork | index("services.p2p-vpn.instances.invalid-dns-network.networkName must be a valid DNS label when DNS is enabled.")) != null
+              and (.invalidDnsListener | index("services.p2p-vpn.instances.invalid-dns-listener.dns.listen must be a numeric loopback socket address.")) != null
+              and (.invalidDnsTtl | index("services.p2p-vpn.instances.invalid-dns-ttl.dns.ttlSeconds cannot exceed 300.")) != null
+              and (.duplicateDnsNetworks | index("services.p2p-vpn DNS-enabled native instances must use unique networkName values.")) != null
+              and (.duplicateDnsListeners | index("services.p2p-vpn DNS-enabled native instances must use unique fixed DNS listeners.")) != null
             ' >/dev/null
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;

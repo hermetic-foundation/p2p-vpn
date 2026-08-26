@@ -33,6 +33,10 @@ let
   enabledNames = attrNames enabledInstances;
   nativeInstances = filterAttrs (_: instance: nixMode instance) enabledInstances;
   nativeNames = attrNames nativeInstances;
+  resolvedIntegrationEnabled =
+    instance: instance.resolvedIntegration && (!nixMode instance || instance.dns.enable);
+  resolvedInstances = filterAttrs (_: instance: resolvedIntegrationEnabled instance) enabledInstances;
+  nativeResolvedInstances = filterAttrs (_: instance: nixMode instance) resolvedInstances;
   instanceIndex = name: lib.lists.findFirstIndex (candidate: candidate == name) 0 nativeNames;
   instancePort = name: 4001 + instanceIndex name;
   instancePacketPort = name: 51820 + instanceIndex name;
@@ -85,6 +89,19 @@ let
     instance:
     optional (instance.vpnIp != null) instance.vpnIp
     ++ concatMap (peer: optional (peer.vpnIp != null) peer.vpnIp) (builtins.attrValues instance.peers);
+  dnsListenIsLoopback =
+    listener:
+    let
+      ipv4 = builtins.match "^127\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3}):([0-9]{1,5})$" listener;
+      ipv6 = builtins.match "^[[]::1[]]:([0-9]{1,5})$" listener;
+      validPort = port: lib.toInt port <= 65535;
+    in
+    (
+      ipv4 != null
+      && builtins.all (octet: lib.toInt octet <= 255) (lib.take 3 ipv4)
+      && validPort (builtins.elemAt ipv4 3)
+    )
+    || (ipv6 != null && validPort (builtins.head ipv6));
 
   routeType = types.oneOf [
     types.str
@@ -290,6 +307,11 @@ let
     max_established_connections_per_peer = resources.maxEstablishedConnectionsPerPeer;
     max_established_connections = resources.maxEstablishedConnections;
   };
+  dnsSettings = dns: {
+    enabled = true;
+    inherit (dns) hostname listen;
+    ttl_seconds = dns.ttlSeconds;
+  };
 
   generatedSettings =
     name: instance:
@@ -311,6 +333,7 @@ let
         // optionalAttrs (instance.memberRecords != [ ]) {
           member_records = map membershipRecordObject instance.memberRecords;
         }
+        // optionalAttrs instance.dns.enable { dns = dnsSettings instance.dns; }
         // optionalAttrs (instance.bootstrapPeers != [ ]) {
           bootstrap_peers = map bootstrapPeerObject instance.bootstrapPeers;
         }
@@ -448,6 +471,88 @@ let
       ${cfg.package}/bin/p2p-vpn status --config ${lib.escapeShellArg instance.configFile} >/dev/null
     '';
 
+  resolvedStateFile = name: "${runtimeDirectory name}/resolved-interface";
+  resolvedSetupScript =
+    name: instance:
+    let
+      socket = instance.controlSocket;
+      configFile = effectiveConfigFile name instance;
+      stateFile = resolvedStateFile name;
+      reverseDomains = [
+        "~64.100.in-addr.arpa"
+        "~0.0.5.6.3.6.1.6.0.7.3.7.2.7.0.7.9.7.8.6.0.0.d.f.ip6.arpa"
+      ];
+    in
+    pkgs.writeShellScript "p2p-vpn-${name}-configure-resolved" ''
+      set -eu
+      status_json=""
+      attempt=0
+      while [ "$attempt" -lt 100 ]; do
+        if status_json="$(${cfg.package}/bin/p2p-vpn dns status \
+          --socket ${lib.escapeShellArg socket} --format json 2>/dev/null)"; then
+          break
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.1
+      done
+      if [ -z "$status_json" ]; then
+        echo "p2p-vpn DNS status did not become available for instance ${name}" >&2
+        exit 1
+      fi
+
+      summary="$(printf '%s' "$status_json" | ${pkgs.jq}/bin/jq -er \
+        '.lines[] | select(startswith("dns enabled="))')"
+      if [ "$summary" = "dns enabled=false" ]; then
+        exit 0
+      fi
+
+      listener=""
+      zone=""
+      for field in $summary; do
+        case "$field" in
+          listener=*) listener="''${field#listener=}" ;;
+          zone=*) zone="''${field#zone=}" ;;
+        esac
+      done
+      zone="''${zone%.}"
+      if [ -z "$listener" ] || [ -z "$zone" ]; then
+        echo "p2p-vpn DNS status omitted its listener or zone for instance ${name}" >&2
+        exit 1
+      fi
+
+      interface="$(${pkgs.jq}/bin/jq -er '.interface.name // "pv0"' ${lib.escapeShellArg configFile})"
+      ${pkgs.iproute2}/bin/ip link show dev "$interface" >/dev/null
+      cleanup() {
+        ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
+        rm -f ${lib.escapeShellArg stateFile}
+      }
+      trap cleanup EXIT HUP INT TERM
+
+      ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
+      ${pkgs.systemd}/bin/resolvectl dns "$interface" "$listener"
+      ${pkgs.systemd}/bin/resolvectl domain "$interface" "$zone" ${lib.escapeShellArgs reverseDomains}
+      ${pkgs.systemd}/bin/resolvectl default-route "$interface" no
+      ${pkgs.systemd}/bin/resolvectl llmnr "$interface" no
+      ${pkgs.systemd}/bin/resolvectl mdns "$interface" no
+      ${pkgs.systemd}/bin/resolvectl dnssec "$interface" no
+      ${pkgs.systemd}/bin/resolvectl dnsovertls "$interface" no
+      printf '%s\n' "$interface" > ${lib.escapeShellArg stateFile}
+      trap - EXIT HUP INT TERM
+    '';
+  resolvedCleanupScript =
+    name:
+    let
+      stateFile = resolvedStateFile name;
+    in
+    pkgs.writeShellScript "p2p-vpn-${name}-cleanup-resolved" ''
+      set -u
+      if [ -r ${lib.escapeShellArg stateFile} ] && IFS= read -r interface < ${lib.escapeShellArg stateFile}; then
+        ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
+      fi
+      rm -f ${lib.escapeShellArg stateFile}
+      exit 0
+    '';
+
   packetPlaneOptions = {
     listen = mkOption {
       type = types.nullOr (types.listOf types.str);
@@ -518,6 +623,41 @@ let
           type = types.str;
           default = name;
           description = "Overlay name. Peers in one overlay use the same value.";
+        };
+        dns = mkOption {
+          type = types.submodule {
+            options = {
+              enable = mkEnableOption "authenticated overlay DNS for this instance";
+              hostname = mkOption {
+                type = types.str;
+                default = config.networking.hostName;
+                defaultText = "config.networking.hostName";
+                description = "Local hostname claimed in signed overlay membership records.";
+              };
+              listen = mkOption {
+                type = types.str;
+                default = "127.0.0.1:0";
+                description = "Loopback DNS listener. Port zero selects an ephemeral port.";
+              };
+              ttlSeconds = mkOption {
+                type = types.ints.positive;
+                default = 30;
+                description = "Authoritative overlay DNS TTL, capped at 300 seconds.";
+              };
+            };
+          };
+          default = { };
+          description = "Native Nix overlay DNS configuration.";
+        };
+        resolvedIntegration = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            Attach enabled overlay DNS to its TUN link through systemd-resolved.
+
+            Native mode applies this when dns.enable is true. JSON mode probes
+            the daemon and applies it when JSON enables DNS.
+          '';
         };
         localPeer = mkOption {
           type = types.nullOr types.str;
@@ -916,6 +1056,10 @@ let
     && instance.membershipKey == null
     && instance.previousMembershipTags == [ ]
     && instance.memberRecords == [ ]
+    && !instance.dns.enable
+    && instance.dns.hostname == config.networking.hostName
+    && instance.dns.listen == "127.0.0.1:0"
+    && instance.dns.ttlSeconds == 30
     && instance.vpnIp == null
     && instance.routes == [ ]
     && instance.listenAddresses == null
@@ -1004,14 +1148,27 @@ let
     in
     nameValuePair "p2p-vpn-${name}" {
       description = "p2p-vpn mesh VPN instance ${name}";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
+      after = [
+        "network-online.target"
+      ]
+      ++ optionals (resolvedIntegrationEnabled instance) [
+        "systemd-resolved.service"
+      ];
+      wants = [
+        "network-online.target"
+      ]
+      ++ optionals (resolvedIntegrationEnabled instance) [
+        "systemd-resolved.service"
+      ];
       wantedBy = [ "multi-user.target" ];
       path = [ pkgs.iproute2 ];
 
       serviceConfig = {
         Type = "simple";
         ExecStartPre = [ configPreparation ];
+        ExecStartPost = optionals (resolvedIntegrationEnabled instance) [
+          (resolvedSetupScript name instance)
+        ];
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/p2p-vpn"
@@ -1044,6 +1201,9 @@ let
             "--socket"
             instance.controlSocket
           ])
+        ];
+        ExecStopPost = optionals (resolvedIntegrationEnabled instance) [
+          (resolvedCleanupScript name)
         ];
         LoadCredential =
           optionals (nixMode instance && instance.privateKeyFile != null) [
@@ -1191,6 +1351,24 @@ in
           builtins.length nativePacketPlaneListeners == builtins.length (unique nativePacketPlaneListeners);
         message = "services.p2p-vpn native instances must use unique packet-plane listener endpoints.";
       }
+      {
+        assertion =
+          let
+            listeners = builtins.filter (listener: builtins.match ".*:0$" listener == null) (
+              mapAttrsToList (_: instance: instance.dns.listen) nativeResolvedInstances
+            );
+          in
+          builtins.length listeners == builtins.length (unique listeners);
+        message = "services.p2p-vpn DNS-enabled native instances must use unique fixed DNS listeners.";
+      }
+      {
+        assertion =
+          let
+            zones = mapAttrsToList (_: instance: lib.toLower instance.networkName) nativeResolvedInstances;
+          in
+          builtins.length zones == builtins.length (unique zones);
+        message = "services.p2p-vpn DNS-enabled native instances must use unique networkName values.";
+      }
     ]
     ++ concatMap (
       name:
@@ -1268,6 +1446,30 @@ in
           message = "services.p2p-vpn.instances.${name}.controlSocket must be absolute or null.";
         }
         {
+          assertion = !resolvedIntegrationEnabled instance || instance.controlSocket != null;
+          message = "services.p2p-vpn.instances.${name}.resolvedIntegration requires a control socket.";
+        }
+        {
+          assertion =
+            !instance.dns.enable
+            || builtins.match "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$" instance.dns.hostname != null;
+          message = "services.p2p-vpn.instances.${name}.dns.hostname must be a valid DNS label.";
+        }
+        {
+          assertion = !instance.dns.enable || instance.dns.ttlSeconds <= 300;
+          message = "services.p2p-vpn.instances.${name}.dns.ttlSeconds cannot exceed 300.";
+        }
+        {
+          assertion = !instance.dns.enable || dnsListenIsLoopback instance.dns.listen;
+          message = "services.p2p-vpn.instances.${name}.dns.listen must be a numeric loopback socket address.";
+        }
+        {
+          assertion =
+            !instance.dns.enable
+            || builtins.match "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$" instance.networkName != null;
+          message = "services.p2p-vpn.instances.${name}.networkName must be a valid DNS label when DNS is enabled.";
+        }
+        {
           assertion =
             instance.autoRelay == null
             || instance.autoRelay.maxReservations <= instance.autoRelay.maxCandidates;
@@ -1302,6 +1504,7 @@ in
     ) enabledNames;
 
     environment.systemPackages = [ cfg.package ];
+    services.resolved.enable = mkIf (resolvedInstances != { }) true;
     services.p2p-vpn.generatedConfigs = mapAttrs generatedSettings nativeInstances;
     services.p2p-vpn.effectiveInterfaces = mapAttrs effectiveInterfaceName nativeInstances;
     services.p2p-vpn.effectiveListenAddresses = mapAttrs effectiveListenAddresses nativeInstances;
