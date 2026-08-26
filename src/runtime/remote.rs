@@ -14,10 +14,12 @@ use crate::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
             MembershipRecordsRejectionReason, accepted_capabilities_response,
-            rejected_capabilities_response, validate_capabilities,
+            build_membership_records_page_for_snapshot, rejected_capabilities_response,
+            validate_capabilities,
         },
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, P2pBuildError, build_node},
+        runner::advertised_member_records,
         service::{
             ServiceRejectionReason, ServiceRequest, ServiceResponse, ServiceStatusRequest,
             ServiceStatusResponse, validate_status_request, validate_status_response,
@@ -54,7 +56,9 @@ pub async fn query_peer_status(
     )
     .with_packet_endpoint_candidates(node.packet_endpoint_candidates.clone())
     .with_owned_quic_packet_endpoint_candidates(config.packet_plane_quic_endpoint_candidates()?)
-    .with_advertised_routes(forwarder.local_advertised_routes());
+    .with_advertised_routes(forwarder.local_advertised_routes())
+    .with_member_records(advertised_member_records(&forwarder))
+    .with_membership_record_inventory(forwarder.member_records());
     let expected_network = local_capabilities.network_name.clone();
     let expected_membership_tag = local_capabilities.membership_tag.clone();
     let packet_plane_session_ttl = config.network.packet_plane.session_ttl();
@@ -375,9 +379,31 @@ fn inbound_capability_response(
         ControlRequest::PacketPlaneHello(_) => {
             ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath)
         }
-        ControlRequest::MembershipRecords(_) => ControlResponse::MembershipRecordsRejected(
-            MembershipRecordsRejectionReason::UnsupportedVersion,
-        ),
+        ControlRequest::MembershipRecords(request) => {
+            if !forwarder.is_configured_transport_peer(peer) {
+                return ControlResponse::MembershipRecordsRejected(
+                    MembershipRecordsRejectionReason::UnauthorizedPeer,
+                );
+            }
+            let page = local_capabilities
+                .membership_records_snapshot
+                .as_deref()
+                .ok_or(MembershipRecordsRejectionReason::InvalidSnapshot)
+                .and_then(|snapshot| {
+                    build_membership_records_page_for_snapshot(
+                        &request,
+                        forwarder.member_records(),
+                        snapshot,
+                        &local_capabilities.network_name,
+                        local_capabilities.membership_tag.as_deref(),
+                        previous_membership_tags,
+                    )
+                });
+            match page {
+                Ok(page) => ControlResponse::MembershipRecordsPage(page),
+                Err(reason) => ControlResponse::MembershipRecordsRejected(reason),
+            }
+        }
     }
 }
 
@@ -583,7 +609,9 @@ mod tests {
             config.network.packet_plane.replay_window_limit();
         let local_capabilities =
             ControlCapabilities::local(&node.network_name, None, config.effective_packet_mtu())
-                .with_advertised_routes(forwarder.local_advertised_routes());
+                .with_advertised_routes(forwarder.local_advertised_routes())
+                .with_member_records(advertised_member_records(&forwarder))
+                .with_membership_record_inventory(forwarder.member_records());
 
         loop {
             match node.swarm.select_next_some().await {

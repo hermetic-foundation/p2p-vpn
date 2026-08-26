@@ -34,9 +34,10 @@ use crate::{
     },
     identity::NodeIdentity,
     membership::{
-        MAX_MEMBERSHIP_RECORD_INTEGER, MembershipRecordIssueOptions, MembershipRecordSubject,
-        MembershipRole, SignedMembershipRecord, effective_membership_at,
-        issue_membership_record_for_subject_at, overlay_membership_trust_path_at,
+        MAX_MEMBERSHIP_RECORD_ENCODED_LEN, MAX_MEMBERSHIP_RECORD_INTEGER, MAX_MEMBERSHIP_RECORDS,
+        MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+        SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
+        overlay_membership_trust_path_at,
     },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
@@ -58,8 +59,10 @@ use crate::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
             MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES, MAX_CONTROL_MEMBERSHIP_RECORDS,
-            PeerCapabilities, accepted_capabilities_response, rejected_capabilities_response,
-            validate_capabilities,
+            MembershipRecordsRejectionReason, MembershipRecordsRequest, PeerCapabilities,
+            accepted_capabilities_response, build_membership_records_page_for_snapshot,
+            membership_records_snapshot, rejected_capabilities_response, validate_capabilities,
+            validate_membership_records_page,
         },
         control_socket::{
             ControlSocket, MAX_PAIR_RPC_RESPONSE_LEN, PairRpcCandidate, PairRpcCompletionArtifacts,
@@ -110,6 +113,11 @@ const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
+const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
+const MAX_CONCURRENT_MEMBERSHIP_SYNCS: usize = 4;
+const MAX_MEMBERSHIP_SYNC_RESTARTS: u8 = 3;
+const MEMBERSHIP_SYNC_RETRY_DELAY: Duration = Duration::from_secs(30);
+const MAX_MEMBERSHIP_SYNC_BYTES: usize = MAX_MEMBERSHIP_RECORDS * MAX_MEMBERSHIP_RECORD_ENCODED_LEN;
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
 const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
@@ -314,6 +322,121 @@ impl PeerRateLimiters {
 
     fn remove(&mut self, peer: Libp2pPeerId) {
         self.buckets.remove(&peer);
+    }
+}
+
+#[derive(Debug)]
+struct PendingMembershipRecordSync {
+    peer: Libp2pPeerId,
+    request: MembershipRecordsRequest,
+    expected_total_records: Option<u16>,
+    snapshot: Option<String>,
+    total_records: Option<u16>,
+    records: Vec<SignedMembershipRecord>,
+    encoded_bytes: usize,
+    restarts: u8,
+}
+
+impl PendingMembershipRecordSync {
+    fn first(
+        peer: Libp2pPeerId,
+        local_capabilities: &ControlCapabilities,
+        remote_capabilities: &ControlCapabilities,
+    ) -> Self {
+        let mut request = MembershipRecordsRequest::first(
+            &local_capabilities.network_name,
+            local_capabilities.membership_tag.clone(),
+        );
+        request
+            .snapshot
+            .clone_from(&remote_capabilities.membership_records_snapshot);
+        Self {
+            peer,
+            request,
+            expected_total_records: Some(remote_capabilities.membership_record_count),
+            snapshot: None,
+            total_records: None,
+            records: Vec::new(),
+            encoded_bytes: 0,
+            restarts: 0,
+        }
+    }
+
+    fn restart(mut self) -> Self {
+        self.request = MembershipRecordsRequest::first(
+            &self.request.network_name,
+            self.request.membership_tag.clone(),
+        );
+        self.expected_total_records = None;
+        self.snapshot = None;
+        self.total_records = None;
+        self.records.clear();
+        self.encoded_bytes = 0;
+        self.restarts = self.restarts.saturating_add(1);
+        self
+    }
+}
+
+#[derive(Debug, Default)]
+struct MembershipRecordSyncs {
+    pending: HashMap<request_response::OutboundRequestId, PendingMembershipRecordSync>,
+    active_by_peer: HashMap<Libp2pPeerId, request_response::OutboundRequestId>,
+    completed_snapshots: HashMap<Libp2pPeerId, String>,
+    retry_after: HashMap<Libp2pPeerId, Instant>,
+}
+
+impl MembershipRecordSyncs {
+    fn contains(&self, request_id: request_response::OutboundRequestId) -> bool {
+        self.pending.contains_key(&request_id)
+    }
+
+    fn can_start(&self, peer: Libp2pPeerId, snapshot: &str, now: Instant) -> bool {
+        self.pending.len() < MAX_CONCURRENT_MEMBERSHIP_SYNCS
+            && !self.active_by_peer.contains_key(&peer)
+            && self
+                .completed_snapshots
+                .get(&peer)
+                .is_none_or(|completed| completed != snapshot)
+            && self
+                .retry_after
+                .get(&peer)
+                .is_none_or(|retry_after| now >= *retry_after)
+    }
+
+    fn insert(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        pending: PendingMembershipRecordSync,
+    ) {
+        self.active_by_peer.insert(pending.peer, request_id);
+        self.pending.insert(request_id, pending);
+    }
+
+    fn take(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+    ) -> Option<PendingMembershipRecordSync> {
+        let pending = self.pending.remove(&request_id)?;
+        if self.active_by_peer.get(&pending.peer) == Some(&request_id) {
+            self.active_by_peer.remove(&pending.peer);
+        }
+        Some(pending)
+    }
+
+    fn mark_completed(&mut self, peer: Libp2pPeerId, snapshot: String) {
+        self.completed_snapshots.insert(peer, snapshot);
+        self.retry_after.remove(&peer);
+    }
+
+    fn mark_failed(&mut self, peer: Libp2pPeerId, now: Instant) {
+        self.retry_after
+            .insert(peer, now + MEMBERSHIP_SYNC_RETRY_DELAY);
+    }
+
+    fn remove_peer(&mut self, peer: Libp2pPeerId) {
+        if let Some(request_id) = self.active_by_peer.remove(&peer) {
+            self.pending.remove(&request_id);
+        }
     }
 }
 
@@ -591,6 +714,9 @@ where
         PeerRateLimiters::new(resources.inbound_packet_rate_limit());
     let mut pairing_request_rate_limiters =
         PeerRateLimiters::new(resources.pairing_request_rate_limit());
+    let mut membership_page_rate_limiters =
+        PeerRateLimiters::new(MEMBERSHIP_PAGE_REQUESTS_PER_SECOND);
+    let mut membership_record_syncs = MembershipRecordSyncs::default();
     let mut pairing_handshake_rate_limiter = GlobalRateLimiter::new(
         resources
             .pairing_request_rate_limit()
@@ -709,6 +835,7 @@ where
         local_capabilities = local_capabilities
             .with_owned_quic_packet_plane(local_data_plane.owned_quic_packet_plane);
     }
+    local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
     timers.prime().await;
     let discovery = node.discovery.clone();
     let (control_socket_guard, mut control_rx) = match control_socket {
@@ -810,6 +937,8 @@ where
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
                         inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                         pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
+                        membership_page_rate_limiters: &mut membership_page_rate_limiters,
+                        membership_record_syncs: &mut membership_record_syncs,
                         pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                         metrics: &metrics,
                         local_capabilities: &mut local_capabilities,
@@ -939,6 +1068,14 @@ where
                     public_discovery_quiet,
                     &metrics,
                 );
+                start_connected_membership_record_syncs(
+                    &mut node.swarm,
+                    &forwarder,
+                    &peer_capabilities,
+                    &local_capabilities,
+                    &mut membership_record_syncs,
+                    &metrics,
+                );
             }
             () = async {
                 timers.kademlia_refresh
@@ -1000,12 +1137,19 @@ where
                     let count = expired_replay_sessions.to_string();
                     log_runtime_event(LogLevel::Info, "replay_sessions_expired", &[("count", &count)]);
                 }
-                prune_expired_membership_records(
+                if prune_expired_membership_records(
                     &mut forwarder,
                     &mut membership,
                     &mut local_capabilities,
                     &mut tun_runtime,
-                )?;
+                )? {
+                    send_control_capabilities_to_connected_peers(
+                        &mut node.swarm,
+                        &forwarder,
+                        &local_capabilities,
+                        &metrics,
+                    );
+                }
                 let mut expiry_context = PacketPlaneExpiryContext {
                     swarm: &mut node.swarm,
                     forwarder: &forwarder,
@@ -1114,6 +1258,8 @@ where
                                 packet_in_flight: &mut queue_runtime.packet_in_flight,
                                 inbound_packet_rate_limiters: &mut inbound_packet_rate_limiters,
                                 pairing_request_rate_limiters: &mut pairing_request_rate_limiters,
+                                membership_page_rate_limiters: &mut membership_page_rate_limiters,
+                                membership_record_syncs: &mut membership_record_syncs,
                                 pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                                 metrics: &metrics,
                                 local_capabilities: &mut local_capabilities,
@@ -1136,6 +1282,12 @@ where
                                 &mut context,
                                 peer,
                                 "pairing_approval_applied",
+                            );
+                            send_control_capabilities_to_connected_peers(
+                                &mut node.swarm,
+                                context.forwarder,
+                                context.local_capabilities,
+                                context.metrics,
                             );
                         }
                         reconcile_runtime_kademlia_scope(
@@ -7742,6 +7894,8 @@ struct SwarmEventContext<'a> {
     packet_in_flight: &'a mut PacketInFlight,
     inbound_packet_rate_limiters: &'a mut PeerRateLimiters,
     pairing_request_rate_limiters: &'a mut PeerRateLimiters,
+    membership_page_rate_limiters: &'a mut PeerRateLimiters,
+    membership_record_syncs: &'a mut MembershipRecordSyncs,
     pairing_handshake_rate_limiter: &'a mut GlobalRateLimiter,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a mut ControlCapabilities,
@@ -8034,6 +8188,8 @@ async fn handle_swarm_event(
             if num_established == 0 {
                 context.inbound_packet_rate_limiters.remove(peer_id);
                 context.pairing_request_rate_limiters.remove(peer_id);
+                context.membership_page_rate_limiters.remove(peer_id);
+                context.membership_record_syncs.remove_peer(peer_id);
                 let overlay_peer = PeerId::from_libp2p(peer_id);
                 if !has_active_packet_plane_session(
                     Some(context.packet_plane),
@@ -8560,41 +8716,102 @@ async fn handle_control_event(
         }
         request_response::Event::Message {
             peer,
-            message: Message::Response { response, .. },
+            message:
+                Message::Response {
+                    request_id,
+                    response,
+                },
             ..
         } => {
-            let records_before = context.forwarder.member_records().to_vec();
             let validation_scope = MembershipValidationScope::from_capabilities(
                 context.local_capabilities,
                 context.previous_membership_tags,
             );
-            handle_control_response_event(
-                swarm,
-                context.forwarder,
-                context.membership,
-                context.peer_capabilities,
-                context.discovered_peer_addresses,
-                context.metrics,
-                peer,
-                response,
-                validation_scope,
-                context.local_capabilities,
-                context.packet_plane,
-                context.packet_plane_quic.as_deref_mut(),
-                context.packet_plane_negotiator,
-                context.path_probe_tracker,
-                context.identity,
-                context.paths,
-                context.discovery,
-            );
-            if context.forwarder.member_records() != records_before {
+            let membership_changed = if context.membership_record_syncs.contains(request_id)
+                || matches!(
+                    &response,
+                    ControlResponse::MembershipRecordsPage(_)
+                        | ControlResponse::MembershipRecordsRejected(_)
+                ) {
+                context.metrics.record_control_response_received();
+                handle_membership_record_sync_response(
+                    swarm,
+                    context.forwarder,
+                    context.membership,
+                    context.membership_record_syncs,
+                    context.metrics,
+                    peer,
+                    request_id,
+                    response,
+                    validation_scope,
+                )
+            } else {
+                handle_control_response_event(
+                    swarm,
+                    context.forwarder,
+                    context.membership,
+                    context.peer_capabilities,
+                    context.discovered_peer_addresses,
+                    context.metrics,
+                    peer,
+                    response,
+                    validation_scope,
+                    context.local_capabilities,
+                    context.packet_plane,
+                    context.packet_plane_quic.as_deref_mut(),
+                    context.packet_plane_negotiator,
+                    context.path_probe_tracker,
+                    context.identity,
+                    context.paths,
+                    context.discovery,
+                )
+            };
+            if membership_changed {
                 *context.local_capabilities =
                     refreshed_local_capabilities(context.local_capabilities, context.forwarder);
                 sync_live_tun_routes(context.forwarder, context.tun_runtime)?;
+                send_control_capabilities_to_connected_peers(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+            }
+            if let Some(remote_capabilities) = context
+                .peer_capabilities
+                .get(PeerId::from_libp2p(peer))
+                .cloned()
+            {
+                maybe_start_membership_record_sync(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.membership_record_syncs,
+                    context.metrics,
+                    peer,
+                    &remote_capabilities,
+                );
             }
         }
-        request_response::Event::OutboundFailure { peer, error, .. } => {
-            context.metrics.record_control_failure();
+        request_response::Event::OutboundFailure {
+            peer,
+            request_id,
+            error,
+            ..
+        } => {
+            let membership_sync_failed = context.membership_record_syncs.contains(request_id);
+            if membership_sync_failed {
+                context.membership_record_syncs.take(request_id);
+                fail_membership_record_sync(
+                    context.membership_record_syncs,
+                    context.metrics,
+                    peer,
+                    "transport_failure",
+                );
+            }
+            if !membership_sync_failed {
+                context.metrics.record_control_failure();
+            }
             eprintln!("control request to {peer} failed: {error}");
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
@@ -9294,20 +9511,25 @@ async fn handle_control_request(
             context.metrics.record_control_request_received();
             eprintln!("control capabilities from {peer}: {capabilities:?}");
             let was_authorized = context.forwarder.is_configured_transport_peer(peer);
-            let records_before = context.forwarder.member_records().to_vec();
-            let response = capability_response_for_peer_with_membership_records(
-                context.forwarder,
-                context.membership,
-                peer,
-                &capabilities,
-                context.local_capabilities,
-                context.previous_membership_tags,
-            );
-            let membership_changed = context.forwarder.member_records() != records_before;
+            let (response, membership_changed) =
+                capability_response_for_peer_with_membership_records_result(
+                    context.forwarder,
+                    context.membership,
+                    peer,
+                    &capabilities,
+                    context.local_capabilities,
+                    context.previous_membership_tags,
+                );
             if membership_changed {
                 *context.local_capabilities =
                     refreshed_local_capabilities(context.local_capabilities, context.forwarder);
                 sync_live_tun_routes(context.forwarder, context.tun_runtime)?;
+                send_control_capabilities_to_connected_peers(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.metrics,
+                );
             }
             match &response {
                 ControlResponse::CapabilitiesAccepted(_) => {
@@ -9350,6 +9572,15 @@ async fn handle_control_request(
                         &capabilities,
                         context.metrics,
                     );
+                    maybe_start_membership_record_sync(
+                        swarm,
+                        context.forwarder,
+                        context.local_capabilities,
+                        context.membership_record_syncs,
+                        context.metrics,
+                        peer,
+                        &capabilities,
+                    );
                 }
                 ControlResponse::CapabilitiesRejected(reason) => {
                     context.metrics.record_control_capability_rejection(*reason);
@@ -9361,11 +9592,7 @@ async fn handle_control_request(
                 | ControlResponse::MembershipRecordsPage(_)
                 | ControlResponse::MembershipRecordsRejected(_) => {}
             }
-            swarm
-                .behaviour_mut()
-                .control
-                .send_response(channel, response)
-                .map_err(|_| RunnerError::ControlResponseDropped)?;
+            send_control_response_nonfatal(swarm, context.metrics, peer, channel, response);
         }
         ControlRequest::PacketPlaneHello(handshake) => {
             context.metrics.record_control_request_received();
@@ -9388,28 +9615,105 @@ async fn handle_control_request(
             if matches!(response, ControlResponse::PacketPlaneRejected(_)) {
                 context.metrics.record_control_failure();
             }
-            swarm
-                .behaviour_mut()
-                .control
-                .send_response(channel, response)
-                .map_err(|_| RunnerError::ControlResponseDropped)?;
+            send_control_response_nonfatal(swarm, context.metrics, peer, channel, response);
         }
-        ControlRequest::MembershipRecords(_) => {
+        ControlRequest::MembershipRecords(request) => {
             context.metrics.record_control_request_received();
-            swarm
-                .behaviour_mut()
-                .control
-                .send_response(
-                    channel,
-                    ControlResponse::MembershipRecordsRejected(
-                        crate::runtime::control::MembershipRecordsRejectionReason::UnsupportedVersion,
-                    ),
-                )
-                .map_err(|_| RunnerError::ControlResponseDropped)?;
+            context
+                .metrics
+                .record_membership_record_page_request_received();
+            let response = if !context.forwarder.is_configured_transport_peer(peer) {
+                Err(MembershipRecordsRejectionReason::UnauthorizedPeer)
+            } else if !context
+                .membership_page_rate_limiters
+                .allow(peer, Instant::now())
+            {
+                Err(MembershipRecordsRejectionReason::RateLimited)
+            } else {
+                context
+                    .local_capabilities
+                    .membership_records_snapshot
+                    .as_deref()
+                    .ok_or(MembershipRecordsRejectionReason::InvalidSnapshot)
+                    .and_then(|snapshot| {
+                        build_membership_records_page_for_snapshot(
+                            &request,
+                            context.forwarder.member_records(),
+                            snapshot,
+                            &context.local_capabilities.network_name,
+                            context.local_capabilities.membership_tag.as_deref(),
+                            context.previous_membership_tags,
+                        )
+                    })
+            };
+            match response {
+                Ok(page) => {
+                    context.metrics.record_membership_record_page_served();
+                    send_control_response_nonfatal(
+                        swarm,
+                        context.metrics,
+                        peer,
+                        channel,
+                        ControlResponse::MembershipRecordsPage(page),
+                    );
+                }
+                Err(reason) => {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "membership_record_page_rejected",
+                        &[
+                            ("peer", &peer.to_string()),
+                            ("reason", membership_record_rejection_name(reason)),
+                        ],
+                    );
+                    send_control_response_nonfatal(
+                        swarm,
+                        context.metrics,
+                        peer,
+                        channel,
+                        ControlResponse::MembershipRecordsRejected(reason),
+                    );
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+fn send_control_response_nonfatal(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    channel: request_response::ResponseChannel<ControlResponse>,
+    response: ControlResponse,
+) {
+    if let Err(response) = swarm
+        .behaviour_mut()
+        .control
+        .send_response(channel, response)
+    {
+        metrics.record_control_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "control_response_dropped",
+            &[
+                ("peer", &peer.to_string()),
+                ("response", control_response_name(&response)),
+            ],
+        );
+    }
+}
+
+const fn control_response_name(response: &ControlResponse) -> &'static str {
+    match response {
+        ControlResponse::CapabilitiesAccepted(_) => "capabilities_accepted",
+        ControlResponse::CapabilitiesRejected(_) => "capabilities_rejected",
+        ControlResponse::PacketPlaneAccepted(_) => "packet_plane_accepted",
+        ControlResponse::PacketPlaneRejected(_) => "packet_plane_rejected",
+        ControlResponse::MembershipRecordsPage(_) => "membership_records_page",
+        ControlResponse::MembershipRecordsRejected(_) => "membership_records_rejected",
+    }
 }
 
 fn handle_service_request(
@@ -10183,6 +10487,12 @@ fn handle_pairing_code_response(
                 remote_peer,
                 "pairing_acceptance_applied",
             );
+            send_control_capabilities_to_connected_peers(
+                swarm,
+                context.forwarder,
+                context.local_capabilities,
+                context.metrics,
+            );
             if let Err(error) = context.code_pairing_sessions.complete_join(
                 &outbound.operation_id,
                 outbound.offer,
@@ -10459,6 +10769,12 @@ fn handle_pairing_request_event(
                 connection_id,
                 &response_for_membership,
             );
+            send_control_capabilities_to_connected_peers(
+                swarm,
+                context.forwarder,
+                context.local_capabilities,
+                context.metrics,
+            );
             context
                 .pairing_replay_tokens
                 .file_bearer
@@ -10507,9 +10823,7 @@ fn install_pairing_response_membership(
         forwarder.member_records(),
         now_unix_seconds,
     )?;
-    *local_capabilities = local_capabilities
-        .clone()
-        .with_member_records(advertised_member_records(forwarder));
+    *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
     sync_live_tun_routes_at(forwarder, tun_runtime, now_unix_seconds)?;
     let accepted = stats.accepted.to_string();
     let ignored = stats.ignored_stale_or_equal.to_string();
@@ -11332,11 +11646,11 @@ fn handle_control_response_event(
     identity: &NodeIdentity,
     paths: &mut PathSet,
     discovery: &DiscoveryConfig,
-) {
+) -> bool {
     metrics.record_control_response_received();
     match response {
         ControlResponse::CapabilitiesAccepted(capabilities) => {
-            if let Some(reason) = validate_peer_capabilities(
+            let (rejection, membership_changed) = validate_peer_capabilities(
                 forwarder,
                 membership,
                 peer,
@@ -11344,7 +11658,8 @@ fn handle_control_response_event(
                 validation.network,
                 validation.current_tag,
                 validation.previous_tags,
-            ) {
+            );
+            if let Some(reason) = rejection {
                 metrics.record_control_capability_rejection(reason);
                 metrics.record_control_failure();
                 eprintln!("ignoring incompatible control acceptance from {peer}: {reason:?}");
@@ -11376,11 +11691,13 @@ fn handle_control_response_event(
                     metrics,
                 );
             }
+            membership_changed
         }
         ControlResponse::CapabilitiesRejected(reason) => {
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("control capabilities rejected by {peer}: {reason:?}");
+            false
         }
         ControlResponse::PacketPlaneAccepted(handshake) => {
             if let Err(error) = complete_packet_plane_hello(
@@ -11405,17 +11722,27 @@ fn handle_control_response_event(
                     error.describe()
                 );
             }
+            false
         }
         ControlResponse::PacketPlaneRejected(reason) => {
             packet_plane_negotiator.remove_peer(PeerId::from_libp2p(peer));
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
+            false
         }
         ControlResponse::MembershipRecordsPage(_)
         | ControlResponse::MembershipRecordsRejected(_) => {
             metrics.record_control_failure();
-            eprintln!("unexpected membership record response from {peer}");
+            log_runtime_event(
+                LogLevel::Warn,
+                "membership_record_page_unexpected",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("reason", "uncorrelated_response"),
+                ],
+            );
+            false
         }
     }
 }
@@ -11474,6 +11801,7 @@ fn handle_control_response(
     }
 }
 
+#[cfg(test)]
 fn capability_response_for_peer_with_membership_records(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
@@ -11482,7 +11810,26 @@ fn capability_response_for_peer_with_membership_records(
     local_capabilities: &ControlCapabilities,
     previous_membership_tags: &[String],
 ) -> ControlResponse {
-    if let Some(reason) = validate_peer_capabilities(
+    capability_response_for_peer_with_membership_records_result(
+        forwarder,
+        membership,
+        peer,
+        capabilities,
+        local_capabilities,
+        previous_membership_tags,
+    )
+    .0
+}
+
+fn capability_response_for_peer_with_membership_records_result(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+    local_capabilities: &ControlCapabilities,
+    previous_membership_tags: &[String],
+) -> (ControlResponse, bool) {
+    let (rejection, membership_changed) = validate_peer_capabilities(
         forwarder,
         membership,
         peer,
@@ -11490,11 +11837,20 @@ fn capability_response_for_peer_with_membership_records(
         &local_capabilities.network_name,
         local_capabilities.membership_tag.as_deref(),
         previous_membership_tags,
-    ) {
-        return rejected_capabilities_response(reason);
+    );
+    if let Some(reason) = rejection {
+        return (rejected_capabilities_response(reason), membership_changed);
     }
 
-    accepted_capabilities_response(&refreshed_local_capabilities(local_capabilities, forwarder))
+    let capabilities = if membership_changed {
+        refreshed_local_capabilities(local_capabilities, forwarder)
+    } else {
+        local_capabilities.clone()
+    };
+    (
+        accepted_capabilities_response(&capabilities),
+        membership_changed,
+    )
 }
 
 #[cfg(test)]
@@ -11531,11 +11887,12 @@ fn learn_membership_records_from_capabilities(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
     capabilities: &ControlCapabilities,
-) -> Result<(), ForwardError> {
+) -> Result<bool, ForwardError> {
     let now_unix_seconds = current_unix_seconds_lossy();
     let stats =
         forwarder.merge_membership_records(&capabilities.member_records, now_unix_seconds)?;
-    if stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0 {
+    let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    if changed {
         membership.replace_record_members(
             forwarder.config(),
             forwarder.member_records(),
@@ -11556,7 +11913,7 @@ fn learn_membership_records_from_capabilities(
             ],
         );
     }
-    Ok(())
+    Ok(changed)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -11614,7 +11971,7 @@ fn learn_membership_records_from_kademlia_value(
     current_membership_tag: Option<&str>,
     previous_membership_tags: &[String],
     value: &[u8],
-) -> Result<usize, KademliaMembershipRecordError> {
+) -> Result<(usize, bool), KademliaMembershipRecordError> {
     if value.len() > MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES {
         return Err(KademliaMembershipRecordError::TooLarge);
     }
@@ -11641,7 +11998,8 @@ fn learn_membership_records_from_kademlia_value(
     let stats = forwarder
         .merge_membership_records(&bundle.records, now_unix_seconds)
         .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
-    if stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0 {
+    let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    if changed {
         membership
             .replace_record_members(
                 forwarder.config(),
@@ -11666,7 +12024,7 @@ fn learn_membership_records_from_kademlia_value(
             ],
         );
     }
-    Ok(stats.accepted)
+    Ok((stats.accepted, changed))
 }
 
 fn membership_tag_allowed(
@@ -11688,12 +12046,12 @@ fn prune_expired_membership_records(
     membership: &mut OverlayMembership,
     local_capabilities: &mut ControlCapabilities,
     tun_runtime: &mut TunRuntimeConfig,
-) -> Result<(), RunnerError> {
+) -> Result<bool, RunnerError> {
     let now_unix_seconds = current_unix_seconds_lossy();
     let (stats, effective_changed) = forwarder.refresh_membership_records(now_unix_seconds)?;
     sync_live_tun_routes_at(forwarder, tun_runtime, now_unix_seconds)?;
     if !effective_changed && stats.removed_untrusted == 0 {
-        return Ok(());
+        return Ok(false);
     }
 
     membership.replace_record_members(
@@ -11712,16 +12070,34 @@ fn prune_expired_membership_records(
         ],
     );
 
-    Ok(())
+    Ok(true)
 }
 
-fn advertised_member_records(forwarder: &Forwarder) -> Vec<SignedMembershipRecord> {
-    forwarder
-        .member_records()
-        .iter()
-        .take(MAX_CONTROL_MEMBERSHIP_RECORDS)
-        .cloned()
-        .collect()
+pub(crate) fn advertised_member_records(forwarder: &Forwarder) -> Vec<SignedMembershipRecord> {
+    let mut records = forwarder
+        .config()
+        .local_peer()
+        .ok()
+        .and_then(|local_peer| {
+            overlay_membership_trust_path_at(
+                forwarder.member_records(),
+                &local_peer,
+                current_unix_seconds_lossy(),
+            )
+            .ok()
+            .flatten()
+        })
+        .unwrap_or_default();
+    records.truncate(MAX_CONTROL_MEMBERSHIP_RECORDS);
+    for record in forwarder.member_records() {
+        if records.len() >= MAX_CONTROL_MEMBERSHIP_RECORDS {
+            break;
+        }
+        if !records.contains(record) {
+            records.push(record.clone());
+        }
+    }
+    records
 }
 
 fn refreshed_local_capabilities(
@@ -11731,6 +12107,11 @@ fn refreshed_local_capabilities(
     let mut capabilities = local_capabilities.clone();
     capabilities.advertised_routes = forwarder.local_advertised_routes();
     capabilities.member_records = advertised_member_records(forwarder);
+    capabilities.supports_membership_record_pages = true;
+    capabilities.membership_records_snapshot =
+        Some(membership_records_snapshot(forwarder.member_records()));
+    capabilities.membership_record_count = u16::try_from(forwarder.member_records().len())
+        .expect("validated membership history is bounded");
     capabilities
 }
 
@@ -11739,8 +12120,9 @@ fn refreshed_local_capabilities_for_swarm(
     local_capabilities: &ControlCapabilities,
     forwarder: &Forwarder,
 ) -> ControlCapabilities {
-    refreshed_local_capabilities(local_capabilities, forwarder)
-        .with_direct_address_candidates(local_direct_address_candidates(swarm, forwarder))
+    let mut capabilities = local_capabilities.clone();
+    capabilities.advertised_routes = forwarder.local_advertised_routes();
+    capabilities.with_direct_address_candidates(local_direct_address_candidates(swarm, forwarder))
 }
 
 fn local_direct_address_candidates(swarm: &Swarm<Behaviour>, forwarder: &Forwarder) -> Vec<String> {
@@ -12035,29 +12417,37 @@ fn validate_peer_capabilities(
     expected_network: &str,
     expected_membership_tag: Option<&str>,
     previous_membership_tags: &[String],
-) -> Option<ControlRejectionReason> {
+) -> (Option<ControlRejectionReason>, bool) {
     if let Some(reason) = validate_capabilities(
         capabilities,
         expected_network,
         expected_membership_tag,
         previous_membership_tags,
     ) {
-        return Some(reason);
+        return (Some(reason), false);
     }
 
-    if learn_membership_records_from_capabilities(forwarder, membership, capabilities).is_err() {
-        return Some(ControlRejectionReason::InvalidMembershipRecord);
-    }
+    let membership_changed =
+        match learn_membership_records_from_capabilities(forwarder, membership, capabilities) {
+            Ok(changed) => changed,
+            Err(_) => return (Some(ControlRejectionReason::InvalidMembershipRecord), false),
+        };
 
     if !forwarder.is_configured_transport_peer(peer) {
-        return Some(ControlRejectionReason::UnauthorizedPeer);
+        return (
+            Some(ControlRejectionReason::UnauthorizedPeer),
+            membership_changed,
+        );
     }
 
     if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
-        return Some(ControlRejectionReason::UnauthorizedRouteAdvertisement);
+        return (
+            Some(ControlRejectionReason::UnauthorizedRouteAdvertisement),
+            membership_changed,
+        );
     }
 
-    None
+    (None, membership_changed)
 }
 
 fn record_peer_capabilities(
@@ -13120,6 +13510,300 @@ fn invalidate_peer_capabilities(
     }
 }
 
+fn start_connected_membership_record_syncs(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    peer_capabilities: &PeerCapabilities,
+    local_capabilities: &ControlCapabilities,
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+) {
+    let peers = swarm.connected_peers().copied().collect::<Vec<_>>();
+    for peer in peers {
+        let Some(remote_capabilities) = peer_capabilities.get(PeerId::from_libp2p(peer)) else {
+            continue;
+        };
+        maybe_start_membership_record_sync(
+            swarm,
+            forwarder,
+            local_capabilities,
+            syncs,
+            metrics,
+            peer,
+            remote_capabilities,
+        );
+    }
+}
+
+fn maybe_start_membership_record_sync(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    local_capabilities: &ControlCapabilities,
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    remote_capabilities: &ControlCapabilities,
+) {
+    if !forwarder.is_configured_transport_peer(peer)
+        || !remote_capabilities.supports_membership_record_pages
+    {
+        return;
+    }
+    let Some(remote_snapshot) = remote_capabilities.membership_records_snapshot.as_deref() else {
+        return;
+    };
+    if local_capabilities.membership_records_snapshot.as_deref() == Some(remote_snapshot) {
+        syncs.mark_completed(peer, remote_snapshot.to_owned());
+        return;
+    }
+    if !syncs.can_start(peer, remote_snapshot, Instant::now()) {
+        return;
+    }
+
+    send_membership_record_sync_request(
+        swarm,
+        syncs,
+        metrics,
+        PendingMembershipRecordSync::first(peer, local_capabilities, remote_capabilities),
+    );
+}
+
+fn send_membership_record_sync_request(
+    swarm: &mut Swarm<Behaviour>,
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+    pending: PendingMembershipRecordSync,
+) {
+    let peer = pending.peer;
+    let cursor = pending.request.cursor.to_string();
+    let restarts = pending.restarts.to_string();
+    let request_id = swarm.behaviour_mut().control.send_request(
+        &peer,
+        ControlRequest::MembershipRecords(pending.request.clone()),
+    );
+    syncs.insert(request_id, pending);
+    metrics.record_control_request_sent();
+    metrics.record_membership_record_page_request_sent();
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_record_page_requested",
+        &[
+            ("peer", &peer.to_string()),
+            ("cursor", &cursor),
+            ("restarts", &restarts),
+        ],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_membership_record_sync_response(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    request_id: request_response::OutboundRequestId,
+    response: ControlResponse,
+    validation: MembershipValidationScope<'_>,
+) -> bool {
+    let Some(mut pending) = syncs.take(request_id) else {
+        metrics.record_control_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "membership_record_page_unexpected",
+            &[("peer", &peer.to_string()), ("reason", "unknown_request")],
+        );
+        return false;
+    };
+    if pending.peer != peer {
+        fail_membership_record_sync(syncs, metrics, pending.peer, "response_peer_mismatch");
+        return false;
+    }
+
+    let page = match response {
+        ControlResponse::MembershipRecordsPage(page) => page,
+        ControlResponse::MembershipRecordsRejected(
+            MembershipRecordsRejectionReason::SnapshotChanged,
+        ) if pending.restarts < MAX_MEMBERSHIP_SYNC_RESTARTS => {
+            metrics.record_membership_record_sync_restarted();
+            log_runtime_event(
+                LogLevel::Info,
+                "membership_record_sync_restarted",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("attempt", &pending.restarts.saturating_add(1).to_string()),
+                ],
+            );
+            send_membership_record_sync_request(swarm, syncs, metrics, pending.restart());
+            return false;
+        }
+        ControlResponse::MembershipRecordsRejected(reason) => {
+            fail_membership_record_sync(
+                syncs,
+                metrics,
+                peer,
+                membership_record_rejection_name(reason),
+            );
+            return false;
+        }
+        _ => {
+            fail_membership_record_sync(syncs, metrics, peer, "unexpected_response_type");
+            return false;
+        }
+    };
+    metrics.record_membership_record_page_received();
+
+    if let Err(reason) = validate_membership_records_page(
+        &page,
+        &pending.request,
+        validation.network,
+        validation.current_tag,
+        validation.previous_tags,
+    ) {
+        fail_membership_record_sync(
+            syncs,
+            metrics,
+            peer,
+            membership_record_rejection_name(reason),
+        );
+        return false;
+    }
+    if pending
+        .expected_total_records
+        .is_some_and(|expected| expected != page.total_records)
+        || pending
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot != page.snapshot)
+        || pending
+            .total_records
+            .is_some_and(|total| total != page.total_records)
+        || pending.records.len() != usize::from(page.cursor)
+    {
+        fail_membership_record_sync(syncs, metrics, peer, "inconsistent_page_sequence");
+        return false;
+    }
+
+    let page_bytes = page.records.iter().fold(0_usize, |total, record| {
+        total.saturating_add(
+            serde_json::to_vec(record)
+                .expect("membership records contain only JSON-serializable fields")
+                .len(),
+        )
+    });
+    if pending.records.len().saturating_add(page.records.len()) > usize::from(page.total_records)
+        || pending.encoded_bytes.saturating_add(page_bytes) > MAX_MEMBERSHIP_SYNC_BYTES
+    {
+        fail_membership_record_sync(syncs, metrics, peer, "membership_snapshot_too_large");
+        return false;
+    }
+
+    pending.snapshot = Some(page.snapshot.clone());
+    pending.total_records = Some(page.total_records);
+    pending.encoded_bytes = pending.encoded_bytes.saturating_add(page_bytes);
+    pending.records.extend(page.records);
+    if let Some(next_cursor) = page.next_cursor {
+        pending.request = pending.request.next(page.snapshot, next_cursor);
+        send_membership_record_sync_request(swarm, syncs, metrics, pending);
+        return false;
+    }
+
+    if pending.records.len() != usize::from(page.total_records)
+        || membership_records_snapshot(&pending.records) != page.snapshot
+    {
+        fail_membership_record_sync(syncs, metrics, peer, "snapshot_digest_mismatch");
+        return false;
+    }
+
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats = match forwarder.merge_membership_records(&pending.records, now_unix_seconds) {
+        Ok(stats) => stats,
+        Err(error) => {
+            fail_membership_record_sync(syncs, metrics, peer, "invalid_membership_record");
+            log_runtime_event(
+                LogLevel::Warn,
+                "membership_record_sync_merge_failed",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("reason", &format!("{error:?}")),
+                ],
+            );
+            return false;
+        }
+    };
+    let membership_changed =
+        stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    if membership_changed {
+        if let Err(error) = membership.replace_record_members(
+            forwarder.config(),
+            forwarder.member_records(),
+            now_unix_seconds,
+        ) {
+            fail_membership_record_sync(syncs, metrics, peer, "membership_rebuild_failed");
+            log_runtime_event(
+                LogLevel::Warn,
+                "membership_record_sync_merge_failed",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("reason", &format!("{error:?}")),
+                ],
+            );
+            return true;
+        }
+    }
+
+    syncs.mark_completed(peer, page.snapshot.clone());
+    metrics.record_membership_record_sync_completed(stats.accepted);
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_record_sync_completed",
+        &[
+            ("peer", &peer.to_string()),
+            ("snapshot", &page.snapshot),
+            ("records", &pending.records.len().to_string()),
+            ("accepted", &stats.accepted.to_string()),
+            (
+                "ignored_stale_or_equal",
+                &stats.ignored_stale_or_equal.to_string(),
+            ),
+        ],
+    );
+    membership_changed
+}
+
+fn fail_membership_record_sync(
+    syncs: &mut MembershipRecordSyncs,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    reason: &str,
+) {
+    syncs.mark_failed(peer, Instant::now());
+    metrics.record_membership_record_sync_failure();
+    metrics.record_control_failure();
+    log_runtime_event(
+        LogLevel::Warn,
+        "membership_record_sync_failed",
+        &[("peer", &peer.to_string()), ("reason", reason)],
+    );
+}
+
+const fn membership_record_rejection_name(
+    reason: MembershipRecordsRejectionReason,
+) -> &'static str {
+    match reason {
+        MembershipRecordsRejectionReason::UnauthorizedPeer => "unauthorized_peer",
+        MembershipRecordsRejectionReason::RateLimited => "rate_limited",
+        MembershipRecordsRejectionReason::WrongNetwork => "wrong_network",
+        MembershipRecordsRejectionReason::MembershipMismatch => "membership_mismatch",
+        MembershipRecordsRejectionReason::UnsupportedVersion => "unsupported_version",
+        MembershipRecordsRejectionReason::InvalidSnapshot => "invalid_snapshot",
+        MembershipRecordsRejectionReason::InvalidCursor => "invalid_cursor",
+        MembershipRecordsRejectionReason::SnapshotChanged => "snapshot_changed",
+        MembershipRecordsRejectionReason::PageTooLarge => "page_too_large",
+    }
+}
+
 fn send_control_capabilities(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
@@ -14080,7 +14764,14 @@ fn handle_kademlia_event(
                 }
                 _ => {}
             }
-            handle_kademlia_membership_record_result(&result, &mut context);
+            if handle_kademlia_membership_record_result(&result, &mut context) {
+                send_control_capabilities_to_connected_peers(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+            }
             handle_kademlia_peer_address_record_result(swarm, &mut context, &result);
             handle_kademlia_closest_peer_result(
                 swarm,
@@ -14179,10 +14870,11 @@ const fn kademlia_event_name(event: &kad::Event) -> &'static str {
 fn handle_kademlia_membership_record_result(
     result: &kad::QueryResult,
     context: &mut KademliaEventContext<'_>,
-) {
+) -> bool {
     if kademlia_query_result_key(result).is_some_and(kademlia_key_is_peer_address_record) {
-        return;
+        return false;
     }
+    let mut membership_changed = false;
     if let kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(peer_record))) = result {
         let value = peer_record.record.value.as_slice();
         let expected_network_name = context.local_capabilities.network_name.clone();
@@ -14196,7 +14888,8 @@ fn handle_kademlia_membership_record_result(
             context.previous_membership_tags,
             value,
         ) {
-            Ok(accepted) => {
+            Ok((accepted, changed)) => {
+                membership_changed = changed;
                 context.metrics.record_kademlia_membership_records_found();
                 context
                     .metrics
@@ -14227,6 +14920,7 @@ fn handle_kademlia_membership_record_result(
         );
     }
     handle_kademlia_put_record_result(context.metrics, result);
+    membership_changed
 }
 
 fn handle_kademlia_peer_address_record_result(
@@ -15520,7 +16214,7 @@ mod tests {
             export_discovery_only_pairing_offer_at, export_pairing_offer_at,
         },
         route::builtin_ipv4,
-        runtime::control::ControlRoute,
+        runtime::control::{ControlRoute, build_membership_records_page},
         runtime::packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeKind,
             PacketPlaneHandshakeParams, PacketPlaneSessionSnapshot, VerifiedPacketPlaneHandshake,
@@ -18777,7 +19471,7 @@ mod tests {
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut capabilities = ControlCapabilities::local("lab", Some("current".to_owned()), 1280);
 
-        let accepted = learn_membership_records_from_kademlia_value(
+        let (accepted, changed) = learn_membership_records_from_kademlia_value(
             &mut forwarder,
             &mut membership,
             &mut capabilities,
@@ -18789,6 +19483,7 @@ mod tests {
         .expect("trusted bundle");
 
         assert_eq!(accepted, 1);
+        assert!(changed);
         assert!(membership.allows(member_peer));
         assert_eq!(capabilities.member_records.len(), 2);
     }
@@ -24680,6 +25375,475 @@ mod tests {
                 .iter()
                 .any(|command| command.contains("10.88.0.0/24"))
         );
+    }
+
+    fn membership_record_sync_records(
+        record_count: u64,
+    ) -> (NodeIdentity, NodeIdentity, Vec<SignedMembershipRecord>) {
+        assert!(record_count >= 3);
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let local = NodeIdentity::generate_ed25519().expect("local member");
+        let remote = NodeIdentity::generate_ed25519().expect("remote member");
+        let mut records = vec![
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: root.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("root record"),
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: local.clone(),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_001,
+            )
+            .expect("local record"),
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: remote.clone(),
+                    membership_epoch: 1,
+                    sequence: 3,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_002,
+            )
+            .expect("remote record"),
+        ];
+        for sequence in 4..=record_count {
+            let member = NodeIdentity::generate_ed25519().expect("additional member");
+            records.push(
+                issue_membership_record_at(
+                    &root,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member,
+                        membership_epoch: 1,
+                        sequence,
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: None,
+                    },
+                    1_000 + sequence,
+                )
+                .expect("additional member record"),
+            );
+        }
+
+        (local, remote, records)
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_merges_a_verified_multi_page_snapshot() {
+        let (local, remote, records) = membership_record_sync_records(12);
+        let mut config = config_with_peer(
+            &local,
+            remote.peer_id.parse().expect("remote transport peer"),
+        );
+        config.peers.clear();
+        config.network.member_records = records[..2].to_vec();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut node = build_node(&HostConfig {
+            identity: local,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(&records);
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        send_membership_record_sync_request(
+            &mut node.swarm,
+            &mut syncs,
+            &metrics,
+            PendingMembershipRecordSync::first(
+                remote_peer,
+                &local_capabilities,
+                &remote_capabilities,
+            ),
+        );
+        let pending = syncs.pending.values().next().expect("pending request");
+        assert_eq!(
+            pending.request.snapshot,
+            remote_capabilities.membership_records_snapshot
+        );
+        assert_eq!(
+            pending.expected_total_records,
+            Some(remote_capabilities.membership_record_count)
+        );
+
+        let mut pages = 0;
+        while let Some((request_id, request)) = syncs
+            .pending
+            .iter()
+            .next()
+            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+        {
+            let page = build_membership_records_page(&request, &records, "lab", None, &[])
+                .expect("membership page");
+            pages += 1;
+            if page.next_cursor.is_some() {
+                assert_eq!(forwarder.member_records().len(), 2);
+            }
+            handle_membership_record_sync_response(
+                &mut node.swarm,
+                &mut forwarder,
+                &mut membership,
+                &mut syncs,
+                &metrics,
+                remote_peer,
+                request_id,
+                ControlResponse::MembershipRecordsPage(page),
+                MembershipValidationScope {
+                    network: "lab",
+                    current_tag: None,
+                    previous_tags: &[],
+                },
+            );
+        }
+
+        assert_eq!(pages, 2);
+        assert_eq!(forwarder.member_records().len(), records.len());
+        assert_eq!(membership.len(), records.len());
+        assert!(membership.allows(remote_peer));
+        assert_eq!(
+            syncs.completed_snapshots.get(&remote_peer),
+            Some(&membership_records_snapshot(&records))
+        );
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_record_page_requests_sent, 2);
+        assert_eq!(snapshot.membership_record_pages_received, 2);
+        assert_eq!(snapshot.membership_record_syncs_completed, 1);
+        assert_eq!(snapshot.membership_records_accepted, 10);
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_rejects_a_tampered_snapshot_without_partial_merge() {
+        let (local, remote, records) = membership_record_sync_records(12);
+        let mut config = config_with_peer(
+            &local,
+            remote.peer_id.parse().expect("remote transport peer"),
+        );
+        config.peers.clear();
+        config.network.member_records = records[..2].to_vec();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut node = build_node(&HostConfig {
+            identity: local,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(&records);
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        send_membership_record_sync_request(
+            &mut node.swarm,
+            &mut syncs,
+            &metrics,
+            PendingMembershipRecordSync::first(
+                remote_peer,
+                &local_capabilities,
+                &remote_capabilities,
+            ),
+        );
+
+        let (first_request_id, first_request) = syncs
+            .pending
+            .iter()
+            .next()
+            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+            .expect("first request");
+        let first_page = build_membership_records_page(&first_request, &records, "lab", None, &[])
+            .expect("first membership page");
+        assert!(first_page.next_cursor.is_some());
+        handle_membership_record_sync_response(
+            &mut node.swarm,
+            &mut forwarder,
+            &mut membership,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            first_request_id,
+            ControlResponse::MembershipRecordsPage(first_page),
+            MembershipValidationScope {
+                network: "lab",
+                current_tag: None,
+                previous_tags: &[],
+            },
+        );
+        assert_eq!(forwarder.member_records(), &records[..2]);
+
+        let (second_request_id, second_request) = syncs
+            .pending
+            .iter()
+            .next()
+            .map(|(request_id, pending)| (*request_id, pending.request.clone()))
+            .expect("second request");
+        let mut second_page =
+            build_membership_records_page(&second_request, &records, "lab", None, &[])
+                .expect("second membership page");
+        assert!(second_page.next_cursor.is_none());
+        second_page.records[0].payload.sequence =
+            second_page.records[0].payload.sequence.saturating_add(1);
+        handle_membership_record_sync_response(
+            &mut node.swarm,
+            &mut forwarder,
+            &mut membership,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            second_request_id,
+            ControlResponse::MembershipRecordsPage(second_page),
+            MembershipValidationScope {
+                network: "lab",
+                current_tag: None,
+                previous_tags: &[],
+            },
+        );
+
+        assert_eq!(forwarder.member_records(), &records[..2]);
+        assert_eq!(membership.len(), 2);
+        assert!(syncs.pending.is_empty());
+        assert!(syncs.retry_after.contains_key(&remote_peer));
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_record_pages_received, 2);
+        assert_eq!(snapshot.membership_record_syncs_completed, 0);
+        assert_eq!(snapshot.membership_record_sync_failures, 1);
+        assert_eq!(snapshot.membership_records_accepted, 0);
+    }
+
+    #[tokio::test]
+    async fn legacy_peer_capabilities_do_not_start_membership_record_sync() {
+        let local = NodeIdentity::generate_ed25519().expect("local");
+        let remote = NodeIdentity::generate_ed25519().expect("remote");
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let config = config_with_peer(&local, remote_peer);
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut node = build_node(&HostConfig {
+            identity: local,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        let mut legacy_capabilities = ControlCapabilities::local("lab", None, 1280);
+        legacy_capabilities.supports_membership_record_pages = false;
+        legacy_capabilities.membership_records_snapshot =
+            Some(format!("sha256:{}", URL_SAFE_NO_PAD.encode([1_u8; 32])));
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+
+        maybe_start_membership_record_sync(
+            &mut node.swarm,
+            &forwarder,
+            &local_capabilities,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            &legacy_capabilities,
+        );
+
+        assert!(syncs.pending.is_empty());
+        assert!(syncs.completed_snapshots.is_empty());
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_page_requests_sent,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_bounds_concurrency_restart_and_retry() {
+        let local = NodeIdentity::generate_ed25519().expect("local");
+        let mut node = build_node(&HostConfig {
+            identity: local,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let local_capabilities = ControlCapabilities::local("lab", None, 1280);
+        let remote_capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_membership_record_inventory(&[]);
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        let peers = (0..=MAX_CONCURRENT_MEMBERSHIP_SYNCS)
+            .map(|_| peer_id())
+            .collect::<Vec<_>>();
+        let now = Instant::now();
+        let mut page_rate_limiters = PeerRateLimiters::new(MEMBERSHIP_PAGE_REQUESTS_PER_SECOND);
+        for _ in 0..MAX_MEMBERSHIP_RECORDS {
+            assert!(page_rate_limiters.allow(peers[0], now));
+        }
+        assert!(!page_rate_limiters.allow(peers[0], now));
+        for peer in peers.iter().take(MAX_CONCURRENT_MEMBERSHIP_SYNCS) {
+            send_membership_record_sync_request(
+                &mut node.swarm,
+                &mut syncs,
+                &metrics,
+                PendingMembershipRecordSync::first(
+                    *peer,
+                    &local_capabilities,
+                    &remote_capabilities,
+                ),
+            );
+        }
+        let waiting_peer = peers[MAX_CONCURRENT_MEMBERSHIP_SYNCS];
+        assert!(!syncs.can_start(waiting_peer, "snapshot-a", now));
+
+        for peer in peers.iter().take(MAX_CONCURRENT_MEMBERSHIP_SYNCS) {
+            syncs.remove_peer(*peer);
+        }
+        syncs.mark_failed(waiting_peer, now);
+        assert!(!syncs.can_start(waiting_peer, "snapshot-a", now));
+        assert!(syncs.can_start(
+            waiting_peer,
+            "snapshot-a",
+            now + MEMBERSHIP_SYNC_RETRY_DELAY
+        ));
+        syncs.mark_completed(waiting_peer, "snapshot-a".to_owned());
+        assert!(!syncs.can_start(
+            waiting_peer,
+            "snapshot-a",
+            now + MEMBERSHIP_SYNC_RETRY_DELAY
+        ));
+        assert!(syncs.can_start(
+            waiting_peer,
+            "snapshot-b",
+            now + MEMBERSHIP_SYNC_RETRY_DELAY
+        ));
+
+        let config = config_with_peer(
+            &NodeIdentity::generate_ed25519().expect("forwarder local"),
+            waiting_peer,
+        );
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        syncs.completed_snapshots.clear();
+        send_membership_record_sync_request(
+            &mut node.swarm,
+            &mut syncs,
+            &metrics,
+            PendingMembershipRecordSync::first(
+                waiting_peer,
+                &local_capabilities,
+                &remote_capabilities,
+            ),
+        );
+        for restart in 0..=MAX_MEMBERSHIP_SYNC_RESTARTS {
+            let request_id = *syncs.pending.keys().next().expect("pending request");
+            handle_membership_record_sync_response(
+                &mut node.swarm,
+                &mut forwarder,
+                &mut membership,
+                &mut syncs,
+                &metrics,
+                waiting_peer,
+                request_id,
+                ControlResponse::MembershipRecordsRejected(
+                    MembershipRecordsRejectionReason::SnapshotChanged,
+                ),
+                MembershipValidationScope {
+                    network: "lab",
+                    current_tag: None,
+                    previous_tags: &[],
+                },
+            );
+            assert_eq!(
+                syncs.pending.is_empty(),
+                restart == MAX_MEMBERSHIP_SYNC_RESTARTS
+            );
+        }
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(
+            snapshot.membership_record_page_requests_sent,
+            u64::try_from(MAX_CONCURRENT_MEMBERSHIP_SYNCS).expect("bounded count")
+                + u64::from(MAX_MEMBERSHIP_SYNC_RESTARTS)
+                + 1
+        );
+        assert_eq!(
+            snapshot.membership_record_syncs_restarted,
+            u64::from(MAX_MEMBERSHIP_SYNC_RESTARTS)
+        );
+        assert_eq!(snapshot.membership_record_sync_failures, 1);
     }
 
     #[test]
