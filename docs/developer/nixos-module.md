@@ -27,6 +27,7 @@ Internal read-only values support evaluation tests:
 | `effectiveListenAddresses` | Resolved libp2p listeners |
 | `identityFiles` | Resolved identity paths |
 | `pairingStateFiles` | Resolved encrypted pairing-state paths |
+| `membershipStateFiles` | Resolved signed membership-history paths |
 
 These values are not user configuration APIs.
 
@@ -160,6 +161,16 @@ The daemon encrypts that state with the local identity and network context.
 
 Disabling the control socket also disables the pairing-state argument.
 
+Every native instance also receives:
+
+```text
+--membership-state /var/lib/p2p-vpn/<name>/membership-state.json
+```
+
+This path remains enabled independently of the local control socket.
+
+The file stores owner-only signed history and is not an encrypted secret envelope.
+
 ### Native Artifact
 
 `pair artifacts` emits typed module options on both paired hosts.
@@ -197,14 +208,19 @@ Before normal runtime processing, the daemon:
 1. Loads and authenticates encrypted pairing state.
 2. Revalidates every durable enrollment.
 3. Applies prepared forwarding and TUN updates.
-4. Reconstructs applied membership state.
-5. Persists finalized state atomically.
+4. Loads network- and identity-bound membership history.
+5. Reconstructs effective members and kernel routes.
+6. Persists finalized signed history atomically.
 
 Incoming unknown peers are provisional membership probes.
 
 They cannot use packet, service, or route authority before validation.
 
 After generated Nix is installed, `pair acknowledge` compacts the enrollment.
+
+Nix rebuilds preserve both state files through the stable `StateDirectory`.
+
+Unsupported membership-state versions fail startup instead of being discarded.
 
 ## systemd Contract
 

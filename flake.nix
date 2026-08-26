@@ -3488,6 +3488,7 @@ EOF
           cp ${./docs/user/README.md} "$release_dir/docs/user/README.md"
           cp ${./docs/user/quick-start.md} "$release_dir/docs/user/quick-start.md"
           cp ${./docs/user/configuration.md} "$release_dir/docs/user/configuration.md"
+          cp ${./docs/user/membership.md} "$release_dir/docs/user/membership.md"
           cp ${./docs/user/nixos.md} "$release_dir/docs/user/nixos.md"
           cp ${./docs/user/operations.md} "$release_dir/docs/user/operations.md"
           cp ${./docs/user/pairing.md} "$release_dir/docs/user/pairing.md"
@@ -3495,6 +3496,7 @@ EOF
           cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
           cp ${./docs/developer/architecture.md} "$release_dir/docs/developer/architecture.md"
           cp ${./docs/developer/feature-matrix.md} "$release_dir/docs/developer/feature-matrix.md"
+          cp ${./docs/developer/membership.md} "$release_dir/docs/developer/membership.md"
           cp ${./docs/developer/nixos-module.md} "$release_dir/docs/developer/nixos-module.md"
           cp ${./docs/developer/pairing.md} "$release_dir/docs/developer/pairing.md"
           cp ${./docs/developer/testing.md} "$release_dir/docs/developer/testing.md"
@@ -3654,6 +3656,7 @@ EOF
               "$root/docs/user/README.md" \
               "$root/docs/user/quick-start.md" \
               "$root/docs/user/configuration.md" \
+              "$root/docs/user/membership.md" \
               "$root/docs/user/nixos.md" \
               "$root/docs/user/operations.md" \
               "$root/docs/user/pairing.md" \
@@ -3661,6 +3664,7 @@ EOF
               "$root/docs/developer/README.md" \
               "$root/docs/developer/architecture.md" \
               "$root/docs/developer/feature-matrix.md" \
+              "$root/docs/developer/membership.md" \
               "$root/docs/developer/nixos-module.md" \
               "$root/docs/developer/pairing.md" \
               "$root/docs/developer/testing.md" \

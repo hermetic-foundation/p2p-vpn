@@ -41,6 +41,16 @@ Membership sources are explicit:
 | Public bootstrap peers | Reachability only. |
 | Relay peers | Reachability only. |
 
+Signed records form a delegated trust graph.
+
+Connected members exchange bounded snapshot pages and persist learned history.
+
+Accepted records automatically update transport peers, TUN routes, and discovery targets.
+
+A matching network name never authorizes a peer.
+
+See [Membership Convergence](membership.md) for merge and persistence invariants.
+
 ## Pairing
 
 Pairing is the interactive onboarding flow.
@@ -237,3 +247,6 @@ The daemon exposes text and JSON views:
 | Paths | `daemon-paths` |
 | MTU | `daemon-mtu` |
 | Capabilities | `daemon-capabilities` |
+
+Membership persistence and paging add counters for loads, saves, records, pages,
+snapshot restarts, and failures.

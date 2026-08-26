@@ -89,6 +89,7 @@ Coverage:
 | Offline pairing | `nixos-vm-pairing` |
 | Code pairing on LAN | `nixos-vm-code-pairing-lan` |
 | Code pairing over relay | `nixos-vm-code-pairing-relay` |
+| Membership convergence | `nixos-vm-membership-convergence` |
 | QUIC datagram | `nixos-vm-quic-datagram` |
 | QUIC stream | `nixos-vm-quic-stream` |
 | Forced relay | `nixos-vm-forced-relay` |
@@ -345,6 +346,49 @@ Coverage:
 | Path state | Both peers select `circuit_relay`. |
 | Restart | Both services recover enrollment and traffic. |
 
+## NixOS VM Membership Convergence
+
+Run the four-node convergence check:
+
+```sh
+nix build --no-link \
+  .#checks.x86_64-linux.nixos-vm-membership-convergence \
+  -L
+```
+
+Topology:
+
+```text
+node B --pairs only with-- node A --pairs only with-- node C
+   \                         |                         /
+    +---------- shared relay infrastructure --------+
+```
+
+The relay has the same network name but no membership grant.
+
+It remains infrastructure and cannot originate overlay traffic.
+
+Coverage:
+
+| Scenario | Assertion |
+| --- | --- |
+| Minimal config | All edge configurations start with empty static peer lists. |
+| Independent admission | `B` and `C` pair only with root `A`. |
+| Full convergence | `B` and `C` learn and validate each other automatically. |
+| Derived routes | Both install the other's built-in `/32` route on `pv0`. |
+| Direct LAN | Bidirectional traffic selects direct paths. |
+| Isolated restart | `B` restores `C` and its route while `A` and `C` are offline. |
+| Simultaneous restart | All three edge daemons recover the full mesh. |
+| Network move | `C` moves to an isolated VLAN without a config change. |
+| Relay fallback | `B` and `C` recover through `circuit_relay`. |
+| Cold relay restart | Relay-only traffic survives all edge daemon restarts. |
+| LAN return | Direct paths replace relay paths automatically. |
+| Persistence | Owner-only state files retain all three signed records. |
+
+The test compares generated config hashes before and after movement.
+
+No static peer, underlay address, or manual route is introduced during recovery.
+
 ## Offline Pairing Integration
 
 Run direct live pairing:
@@ -414,7 +458,9 @@ Coverage:
 
 ## Latest Local Gate
 
-The 2026-08-23 local operational gate passed:
+The 2026-08-23 local operational gate passed.
+
+The 2026-08-25 membership convergence check and full Rust suite also passed.
 
 ```sh
 nix run .#check-operational
@@ -432,6 +478,9 @@ Coverage:
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
 | Code pairing LAN | One-time code, inviter approval, traffic, and restart recovery passed. |
 | Code pairing relay | DHT discovery, relay transport, approval, and traffic passed. |
+| Membership convergence | Independent pairings formed a three-member mesh. |
+| Durable membership | Offline restart restored learned members and routes. |
+| Membership movement | Direct LAN, isolated relay, cold restart, and LAN return passed. |
 | Pairing artifacts | Secret-free native Nix output evaluated with agenix paths. |
 | Offline pairing | Offer-file compatibility and replay rejection passed. |
 | QUIC datagram | `nixos-vm-quic-datagram` passed. |

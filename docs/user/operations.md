@@ -7,7 +7,9 @@ Use these commands after a daemon is running.
 ```sh
 sudo p2p-vpn up \
   --config /etc/p2p-vpn/p2p-vpn.json \
-  --control-socket /run/p2p-vpn/control.sock
+  --control-socket /run/p2p-vpn/control.sock \
+  --pairing-state /var/lib/p2p-vpn/pairing-state.json \
+  --membership-state /var/lib/p2p-vpn/membership-state.json
 ```
 
 ## Health Check
@@ -100,6 +102,18 @@ Useful packet-path counters:
 | `outbound_direct_tcp_stream_fallback_packets` | Packets sent over direct TCP stream fallback. |
 | `outbound_relay_stream_fallback_packets` | Packets sent over relay stream fallback. |
 
+Useful membership counters:
+
+| Counter | Meaning |
+| --- | --- |
+| `membership_record_syncs_completed` | Complete signed snapshots merged from peers. |
+| `membership_record_sync_failures` | Snapshot validation or transfer failures. |
+| `membership_records_accepted` | Records accepted through connected-peer sync. |
+| `membership_state_loads` | Successful durable-state loads. |
+| `membership_state_load_failures` | Rejected or unreadable state files. |
+| `membership_state_persists` | Successful atomic saves. |
+| `membership_state_persist_failures` | Failed saves. |
+
 Example:
 
 ```sh
@@ -158,3 +172,7 @@ sudo p2p-vpn daemon-shutdown \
 | Relay not selected | `daemon-paths`, relay reservation counters. |
 | Datagram path missing | packet-plane listener, endpoints, direct path. |
 | Public discovery idle | bootstrap peers, Kademlia, AutoNAT status. |
+| Mesh inventory differs | membership record count and sync failure counters. |
+| Learned routes vanish on restart | membership state path and `membership_state_load_*`. |
+
+See [Network Membership](membership.md) for convergence and state recovery.

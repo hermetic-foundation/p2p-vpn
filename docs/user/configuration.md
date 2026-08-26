@@ -104,7 +104,7 @@ Add `addresses` when discovery cannot find the peer:
 
 ## Peer Entries
 
-Each peer entry grants overlay membership to one peer ID.
+Each peer entry statically grants overlay membership to one peer ID.
 
 Addresses and routes are optional.
 
@@ -125,7 +125,7 @@ Use `addresses` for custom ports, DNS, QUIC, or relay paths.
 
 ## Route Rules
 
-Route ownership is static and exclusive.
+Route ownership is explicit and exclusive.
 
 The daemon rejects overlapping prefixes owned by different peers.
 
@@ -135,6 +135,7 @@ The daemon rejects overlapping prefixes owned by different peers.
 | `peers[].routes[]` | That peer. |
 | Built-in IPv4 host route | Derived from peer ID. |
 | Built-in IPv6 host route | Derived from peer ID. |
+| Signed member record route | The record subject. |
 
 Use `vpn_ip` for stable, chosen host addresses.
 Use explicit route entries for prefixes.
@@ -240,6 +241,28 @@ When set, peers must present the same network-scoped membership tag.
 | `membership_key` | Current overlay-wide shared secret. |
 | `previous_membership_tags` | Temporary accept list during rotation. |
 | `member_records` | Signed grants and revocations. |
+
+The membership key narrows discovery and connection scope.
+
+It does not authorize a peer without static membership or a valid signed record.
+
+## Signed Membership State
+
+`network.member_records` supplies declarative trust anchors and admission history.
+
+The daemon learns additional valid records from admitted peers.
+
+Persist learned history with:
+
+```sh
+p2p-vpn up \
+  --config p2p-vpn.json \
+  --membership-state /var/lib/p2p-vpn/membership-state.json
+```
+
+The NixOS module supplies this option automatically.
+
+See [Network Membership](membership.md) for convergence, revocation, and limits.
 
 ## Validate Before Running
 

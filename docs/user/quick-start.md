@@ -1,8 +1,12 @@
 # Quick Start
 
-This guide creates a two-host overlay with code pairing.
+This guide admits a host to an overlay with code pairing.
 
 No peer ID, peer address, relay, route, or JSON file is exchanged by hand.
+
+Pair each new node once with any authorized member.
+
+Admitted nodes then learn every other member without pairwise pairing.
 
 ## Requirements
 
@@ -235,10 +239,13 @@ Start the daemon with durable code-pairing support:
 sudo ./result/bin/p2p-vpn up \
   --config p2p-vpn.json \
   --control-socket /run/p2p-vpn/control.sock \
-  --pairing-state /var/lib/p2p-vpn/pairing-state.json
+  --pairing-state /var/lib/p2p-vpn/pairing-state.json \
+  --membership-state /var/lib/p2p-vpn/membership-state.json
 ```
 
 For persistent JSON onboarding, use the offline workflow in [Pairing](pairing.md).
+
+See [Network Membership](membership.md) for whole-overlay convergence and recovery.
 
 ## Health Check
 

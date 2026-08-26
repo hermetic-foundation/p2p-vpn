@@ -106,6 +106,7 @@ Defaults are assigned by the sorted native instance index `N`.
 | Network name | Instance name |
 | Identity | `/var/lib/p2p-vpn/<instance>/private.key` |
 | Pairing state | `/var/lib/p2p-vpn/<instance>/pairing-state.json` |
+| Learned membership | `/var/lib/p2p-vpn/<instance>/membership-state.json` |
 | Interface | `pvN` |
 | TUN MTU | `1280` |
 | libp2p TCP | `0.0.0.0:4001+N` |
@@ -224,6 +225,20 @@ The shared membership key is optional:
 Pairing can exchange this key and also issues a signed member record.
 
 Do not place private keys or membership keys in Nix strings.
+
+### Learned Membership
+
+Native mode always persists learned signed records at:
+
+```text
+/var/lib/p2p-vpn/<instance>/membership-state.json
+```
+
+No module option or generated JSON is required.
+
+The daemon restores derived members and routes before normal network processing.
+
+Declarative `memberRecords` remain trust anchors; learned records remain service state.
 
 ## Stable Overlay Addresses
 
@@ -485,6 +500,10 @@ Update static authorization or pair the node again.
 Back up the private key and generated pairing Nix together.
 
 Restore the key with mode `0600` before starting the service.
+
+Back up `membership-state.json` when the full learned mesh must restore offline.
+
+See [Network Membership](membership.md) for state and upgrade behavior.
 
 ## Evaluation Guards
 

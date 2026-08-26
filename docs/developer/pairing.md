@@ -4,6 +4,8 @@ This document defines the online code protocol and durable enrollment path.
 
 User commands live in [../user/pairing.md](../user/pairing.md).
 
+Post-admission dissemination is defined in [Membership Convergence](membership.md).
+
 ## Protocol Surfaces
 
 | Surface | Version | Framing | Limit |
@@ -213,6 +215,10 @@ Bytes on disk are an encrypted binary envelope.
 Received membership keys use a separate owner-only `membership.key` file.
 
 Private key and membership-key contents never enter generated Nix.
+
+Learned signed history uses a separate `membership-state.json` file.
+
+That file is versioned JSON and is not part of the encrypted pairing envelope.
 
 ## Acknowledgment and Compaction
 

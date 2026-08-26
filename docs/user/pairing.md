@@ -12,6 +12,16 @@ The default workflow uses a short code and two running daemons.
 | `pair offer` / `pair accept` | Offline fallback for an out-of-band file exchange. |
 | Static peer settings | Fully declarative environments with known peer IDs. |
 
+## Network-Wide Result
+
+Pairing is an overlay admission, not a permanent pairwise relationship.
+
+If `B` and `C` each pair only with authorized member `A`, they still learn each other.
+
+The daemons exchange signed histories, derive routes, and discover direct or relay paths.
+
+See [Network Membership](membership.md) for trust and convergence details.
+
 ## Prerequisites
 
 Both hosts need:
@@ -308,6 +318,7 @@ This includes identities supplied through agenix or another runtime secret path.
 | --- | --- |
 | Private identity | Existing module state or `privateKeyFile`. |
 | Pairing state | `/var/lib/p2p-vpn/<instance>/pairing-state.json`. |
+| Learned membership | `/var/lib/p2p-vpn/<instance>/membership-state.json`. |
 | Received membership key | `/var/lib/p2p-vpn/<instance>/membership.key`. |
 | Generated Nix | Public records and secret paths only. |
 
@@ -369,7 +380,8 @@ Code pairing requires a durable daemon state path:
 sudo p2p-vpn up \
   --config /etc/p2p-vpn/lab.json \
   --control-socket /run/p2p-vpn/control.sock \
-  --pairing-state /var/lib/p2p-vpn/pairing-state.json
+  --pairing-state /var/lib/p2p-vpn/pairing-state.json \
+  --membership-state /var/lib/p2p-vpn/membership-state.json
 ```
 
 The current code artifact renderer emits native Nix.
