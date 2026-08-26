@@ -3118,6 +3118,7 @@ fn pair_rpc_nixos_config(artifacts: &PairRpcCompletionArtifacts) -> Config {
         .collect();
     Config {
         network: NetworkConfig {
+            dns: p2p_vpn::dns::DnsConfig::default(),
             name: plan.network_name.clone(),
             local_peer: plan.local_peer.clone(),
             private_key: None,
@@ -3157,6 +3158,7 @@ fn pair_rpc_membership_record_to_config(
             membership_epoch: record.payload.membership_epoch,
             sequence: record.payload.sequence,
             revoked: record.payload.revoked,
+            hostname: record.payload.hostname.clone(),
             roles: record
                 .payload
                 .roles
@@ -4012,6 +4014,12 @@ fn push_nixos_member_records(
             "          revoked = {};",
             nix_bool(payload.revoked)
         ));
+        if let Some(hostname) = payload.hostname.as_deref() {
+            lines.push(format!(
+                "          hostname = {};",
+                nix_string_literal(hostname)?
+            ));
+        }
         let roles = payload
             .roles
             .iter()
@@ -9157,6 +9165,7 @@ mod tests {
         let remote = NodeIdentity::generate_ed25519().expect("remote identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9248,6 +9257,7 @@ mod tests {
         let remote = NodeIdentity::generate_ed25519().expect("remote identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9333,6 +9343,7 @@ mod tests {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9386,6 +9397,7 @@ mod tests {
         let relay = NodeIdentity::generate_ed25519().expect("relay identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9595,6 +9607,7 @@ mod tests {
         let remote = NodeIdentity::generate_ed25519().expect("remote identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9780,6 +9793,7 @@ mod tests {
         let relay = NodeIdentity::generate_ed25519().expect("relay identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -9966,6 +9980,7 @@ mod tests {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.peer_id.clone(),
                 private_key: Some(local.private_key),
@@ -10703,6 +10718,7 @@ mod tests {
             let identity = NodeIdentity::generate_ed25519().expect("identity");
             let config = Config {
                 network: p2p_vpn::config::NetworkConfig {
+                    dns: p2p_vpn::dns::DnsConfig::default(),
                     name: network.to_owned(),
                     local_peer: String::new(),
                     private_key: Some(identity.private_key.clone()),
@@ -13443,6 +13459,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "mesh lab".to_owned(),
                 local_peer: String::new(),
                 private_key: Some(identity.private_key.clone()),
@@ -13495,6 +13512,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: String::new(),
                 private_key: Some(identity.private_key),
@@ -13660,6 +13678,7 @@ mod tests {
                 membership_epoch: grant.payload.membership_epoch,
                 sequence: grant.payload.sequence,
                 revoked: grant.payload.revoked,
+                hostname: grant.payload.hostname.clone(),
                 roles: vec![PairRpcMembershipRole::OverlayMember],
                 route_grants: Vec::new(),
                 issued_at_unix_seconds: grant.payload.issued_at_unix_seconds,
@@ -13739,6 +13758,7 @@ mod tests {
         .expect("membership record");
         let mut config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: String::new(),
                 private_key: Some(identity.private_key.clone()),
@@ -14046,6 +14066,7 @@ mod tests {
             pairing_requested_vpn_ip(&identity, None).expect("generated requested VPN IP");
         let mut config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -14182,6 +14203,7 @@ mod tests {
         let inviter_peer: Libp2pPeerId = inviter.peer_id.parse().expect("inviter peer");
         let config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter.peer_id.clone(),
                 private_key: Some(inviter.private_key.clone()),
@@ -14258,6 +14280,7 @@ mod tests {
         };
         let inviter_config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter_identity.peer_id.clone(),
                 private_key: Some(inviter_identity.private_key),
@@ -14319,6 +14342,7 @@ mod tests {
         };
         let mut inviter_config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter_identity.peer_id.clone(),
                 private_key: Some(inviter_identity.private_key.clone()),
@@ -14488,6 +14512,7 @@ mod tests {
         };
         let mut inviter_config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter_identity.peer_id.clone(),
                 private_key: Some(inviter_identity.private_key.clone()),
@@ -14666,6 +14691,7 @@ mod tests {
         .await;
         let mut inviter_config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter_identity.peer_id.clone(),
                 private_key: Some(inviter_identity.private_key.clone()),
@@ -14855,6 +14881,7 @@ mod tests {
 
         let mut inviter_config = Config {
             network: p2p_vpn::config::NetworkConfig {
+                dns: p2p_vpn::dns::DnsConfig::default(),
                 name: "live-public-pairing".to_owned(),
                 local_peer: inviter_identity.peer_id.clone(),
                 private_key: Some(inviter_identity.private_key.clone()),

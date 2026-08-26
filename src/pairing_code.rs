@@ -891,6 +891,7 @@ mod tests {
     fn config(identity: &NodeIdentity) -> Config {
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "runners".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),

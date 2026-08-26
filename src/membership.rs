@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libp2p::{PeerId as Libp2pPeerId, identity::PublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::dns::{DnsNameError, canonical_dns_label};
 use crate::{PeerId, config::RouteConfig, identity::NodeIdentity};
 
 pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
@@ -83,6 +84,8 @@ pub struct MembershipRecordPayload {
     pub sequence: u64,
     #[serde(default, skip_serializing_if = "is_false")]
     pub revoked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
     #[serde(default)]
     pub roles: Vec<MembershipRole>,
     #[serde(default)]
@@ -193,6 +196,15 @@ pub fn issue_membership_record_for_subject_at(
     options: MembershipRecordIssueOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<SignedMembershipRecord, MembershipRecordError> {
+    issue_named_membership_record_for_subject_at(issuer, options, None, issued_at_unix_seconds)
+}
+
+pub fn issue_named_membership_record_for_subject_at(
+    issuer: &NodeIdentity,
+    options: MembershipRecordIssueOptions,
+    hostname: Option<String>,
+    issued_at_unix_seconds: u64,
+) -> Result<SignedMembershipRecord, MembershipRecordError> {
     if let Some(expires_at) = options.expires_at_unix_seconds
         && expires_at <= issued_at_unix_seconds
     {
@@ -208,6 +220,7 @@ pub fn issue_membership_record_for_subject_at(
         membership_epoch: options.membership_epoch.max(1),
         sequence: options.sequence,
         revoked: options.revoked,
+        hostname,
         roles: options.roles,
         route_grants: options.route_grants,
         issued_at_unix_seconds,
@@ -642,6 +655,7 @@ pub struct EffectiveMember {
     pub transport_peer: Libp2pPeerId,
     pub membership_epoch: u64,
     pub sequence: u64,
+    pub hostnames: Vec<String>,
     pub roles: Vec<MembershipRole>,
     pub route_grants: Vec<RouteConfig>,
 }
@@ -654,6 +668,14 @@ impl EffectiveMember {
             transport_peer,
             membership_epoch: payload.membership_epoch,
             sequence: payload.sequence,
+            hostnames: payload
+                .hostname
+                .as_deref()
+                .map(canonical_dns_label)
+                .transpose()
+                .map_err(MembershipRecordError::InvalidHostname)?
+                .into_iter()
+                .collect(),
             roles: payload.roles.clone(),
             route_grants: payload.route_grants.clone(),
         })
@@ -668,6 +690,14 @@ impl EffectiveMember {
         if (payload.membership_epoch, payload.sequence) > (self.membership_epoch, self.sequence) {
             self.membership_epoch = payload.membership_epoch;
             self.sequence = payload.sequence;
+        }
+        if let Some(hostname) = payload
+            .hostname
+            .as_deref()
+            .and_then(|hostname| canonical_dns_label(hostname).ok())
+            && !self.hostnames.contains(&hostname)
+        {
+            self.hostnames.push(hostname);
         }
         for role in &payload.roles {
             if !self.roles.contains(role) {
@@ -696,7 +726,10 @@ fn validate_payload(payload: &MembershipRecordPayload) -> Result<(), MembershipR
     validate_portable_integer("sequence", payload.sequence)?;
     validate_portable_integer("issued_at_unix_seconds", payload.issued_at_unix_seconds)?;
     if payload.revoked {
-        if !payload.roles.is_empty() || !payload.route_grants.is_empty() {
+        if payload.hostname.is_some()
+            || !payload.roles.is_empty()
+            || !payload.route_grants.is_empty()
+        {
             return Err(MembershipRecordError::RevocationCarriesAuthority);
         }
         if payload.expires_at_unix_seconds.is_some() {
@@ -704,6 +737,9 @@ fn validate_payload(payload: &MembershipRecordPayload) -> Result<(), MembershipR
         }
     } else if payload.roles.is_empty() {
         return Err(MembershipRecordError::MissingRoles);
+    }
+    if let Some(hostname) = payload.hostname.as_deref() {
+        canonical_dns_label(hostname).map_err(MembershipRecordError::InvalidHostname)?;
     }
     if let Some(expires_at) = payload.expires_at_unix_seconds {
         validate_portable_integer("expires_at_unix_seconds", expires_at)?;
@@ -792,6 +828,7 @@ pub enum MembershipRecordError {
     Libp2pIdentity(libp2p::identity::DecodingError),
     Libp2pPeerId(libp2p::identity::ParseError),
     RoutePrefix(crate::config::RoutePrefixError),
+    InvalidHostname(DnsNameError),
     UnsupportedVersion(u8),
     EmptyNetworkName,
     InvalidMembershipEpoch,
@@ -876,6 +913,7 @@ impl From<crate::config::RoutePrefixError> for MembershipRecordError {
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde::Serialize;
 
     use super::*;
 
@@ -904,6 +942,150 @@ mod tests {
         .expect("record");
 
         (issuer, member, record)
+    }
+
+    #[derive(Serialize)]
+    struct LegacyMembershipRecordPayload {
+        version: u8,
+        network_name: String,
+        member_peer: String,
+        member_public_key: String,
+        issuer_peer: String,
+        issuer_public_key: String,
+        membership_epoch: u64,
+        sequence: u64,
+        #[serde(skip_serializing_if = "is_false")]
+        revoked: bool,
+        roles: Vec<MembershipRole>,
+        route_grants: Vec<RouteConfig>,
+        issued_at_unix_seconds: u64,
+        expires_at_unix_seconds: Option<u64>,
+    }
+
+    #[derive(Serialize)]
+    struct LegacySignedMembershipRecord {
+        payload: LegacyMembershipRecordPayload,
+        signature: String,
+    }
+
+    #[test]
+    fn records_signed_before_hostname_claims_remain_valid() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let payload = LegacyMembershipRecordPayload {
+            version: MEMBERSHIP_RECORD_VERSION,
+            network_name: "lab".to_owned(),
+            member_peer: member.peer_id.clone(),
+            member_public_key: STANDARD.encode(member.public_key_protobuf().expect("member key")),
+            issuer_peer: issuer.peer_id.clone(),
+            issuer_public_key: STANDARD.encode(issuer.public_key_protobuf().expect("issuer key")),
+            membership_epoch: 1,
+            sequence: 7,
+            revoked: false,
+            roles: vec![MembershipRole::OverlayMember],
+            route_grants: Vec::new(),
+            issued_at_unix_seconds: 1_000,
+            expires_at_unix_seconds: None,
+        };
+        let encoded_payload = serde_json::to_vec(&payload).expect("legacy payload");
+        let mut message = SIGNING_DOMAIN.to_vec();
+        message.extend_from_slice(&encoded_payload);
+        let legacy = LegacySignedMembershipRecord {
+            payload,
+            signature: STANDARD.encode(issuer.sign(&message).expect("signature")),
+        };
+        let encoded = serde_json::to_vec(&legacy).expect("legacy record");
+
+        let decoded: SignedMembershipRecord =
+            serde_json::from_slice(&encoded).expect("new decoder accepts legacy record");
+
+        assert_eq!(decoded.payload.hostname, None);
+        decoded
+            .verify_at(1_001)
+            .expect("legacy signature remains valid");
+        assert!(
+            !String::from_utf8(encoded)
+                .expect("JSON")
+                .contains("hostname")
+        );
+    }
+
+    #[test]
+    fn signed_hostname_claim_is_authenticated_and_canonicalized_for_dns() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let record = issue_named_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            Some("Worker-1".to_owned()),
+            1_000,
+        )
+        .expect("named membership record");
+
+        record.verify_at(1_001).expect("signed hostname");
+        let effective =
+            effective_membership_at(&[record], "lab", 1_001).expect("effective membership");
+        assert_eq!(
+            effective
+                .overlay_members()
+                .next()
+                .expect("member")
+                .hostnames,
+            vec!["worker-1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn invalid_or_revoked_hostname_claims_are_rejected() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let subject = MembershipRecordSubject::from_identity(&member).expect("subject");
+        let options = MembershipRecordIssueOptions {
+            network_name: "lab".to_owned(),
+            member: subject.clone(),
+            membership_epoch: 1,
+            sequence: 1,
+            revoked: false,
+            roles: vec![MembershipRole::OverlayMember],
+            route_grants: Vec::new(),
+            expires_at_unix_seconds: None,
+        };
+        assert!(matches!(
+            issue_named_membership_record_for_subject_at(
+                &issuer,
+                options,
+                Some("invalid name".to_owned()),
+                1_000,
+            ),
+            Err(MembershipRecordError::InvalidHostname(_))
+        ));
+        assert!(matches!(
+            issue_named_membership_record_for_subject_at(
+                &issuer,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: subject,
+                    membership_epoch: 1,
+                    sequence: 2,
+                    revoked: true,
+                    roles: Vec::new(),
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                Some("worker-1".to_owned()),
+                1_001,
+            ),
+            Err(MembershipRecordError::RevocationCarriesAuthority)
+        ));
     }
 
     fn overlay_record(

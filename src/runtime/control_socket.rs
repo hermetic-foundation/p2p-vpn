@@ -418,6 +418,8 @@ pub struct PairRpcMembershipRecordPayload {
     pub membership_epoch: u64,
     pub sequence: u64,
     pub revoked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
     #[serde(default)]
     pub roles: Vec<PairRpcMembershipRole>,
     #[serde(default)]
@@ -1113,6 +1115,7 @@ mod tests {
                         membership_epoch: 1,
                         sequence: 7,
                         revoked: false,
+                        hostname: None,
                         roles: vec![PairRpcMembershipRole::OverlayMember],
                         route_grants: Vec::new(),
                         issued_at_unix_seconds: 1_700_000_100,

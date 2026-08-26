@@ -151,6 +151,11 @@ let
               default = false;
               description = "Whether this record revokes the member.";
             };
+            hostname = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              description = "Optional signed overlay DNS hostname claim.";
+            };
             roles = mkOption {
               type = types.listOf (
                 types.enum [
@@ -205,6 +210,9 @@ let
     }
     // optionalAttrs (record.payload.expiresAtUnixSeconds != null) {
       expires_at_unix_seconds = record.payload.expiresAtUnixSeconds;
+    }
+    // optionalAttrs (record.payload.hostname != null) {
+      hostname = record.payload.hostname;
     };
     inherit (record) signature;
   };

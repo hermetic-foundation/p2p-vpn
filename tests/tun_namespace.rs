@@ -3154,6 +3154,7 @@ fn node_config(
 ) -> Config {
     Config {
         network: NetworkConfig {
+            dns: p2p_vpn::dns::DnsConfig::default(),
             name: name.to_owned(),
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),
@@ -3186,6 +3187,7 @@ fn node_config(
 fn relay_config(identity: &NodeIdentity) -> Config {
     Config {
         network: NetworkConfig {
+            dns: p2p_vpn::dns::DnsConfig::default(),
             name: NETWORK_NAME.to_owned(),
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),
@@ -3223,6 +3225,7 @@ fn relay_config(identity: &NodeIdentity) -> Config {
 fn bootstrap_config(identity: &NodeIdentity) -> Config {
     Config {
         network: NetworkConfig {
+            dns: p2p_vpn::dns::DnsConfig::default(),
             name: NETWORK_NAME.to_owned(),
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key.clone()),

@@ -2842,6 +2842,7 @@ fn pairing_rpc_membership_record(record: &SignedMembershipRecord) -> PairRpcSign
             membership_epoch: payload.membership_epoch,
             sequence: payload.sequence,
             revoked: payload.revoked,
+            hostname: payload.hostname.clone(),
             roles: payload
                 .roles
                 .iter()
@@ -17802,6 +17803,7 @@ mod tests {
     ) -> Config {
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -20902,6 +20904,7 @@ mod tests {
         let unconfigured = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -24342,6 +24345,7 @@ mod tests {
         let peer_address_relay = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26169,6 +26173,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26359,6 +26364,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26423,6 +26429,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26489,6 +26496,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26556,6 +26564,7 @@ mod tests {
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26614,6 +26623,7 @@ mod tests {
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26683,6 +26693,7 @@ mod tests {
         let remote_overlay = PeerId::from_libp2p(remote);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26746,6 +26757,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -26842,6 +26854,7 @@ mod tests {
         .expect("record");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -27008,6 +27021,7 @@ mod tests {
         .expect("revocation");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -27116,6 +27130,7 @@ mod tests {
         .expect("untrusted record");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -27197,6 +27212,7 @@ mod tests {
         .expect("member record");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -27919,6 +27935,7 @@ mod tests {
         member_record.payload.sequence += 1;
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -27977,6 +27994,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -28031,6 +28049,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -28085,6 +28104,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -28142,6 +28162,7 @@ mod tests {
         let unconfigured = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -28196,6 +28217,7 @@ mod tests {
         let remote = peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),
@@ -28259,6 +28281,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -28351,6 +28374,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -28454,6 +28478,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -28552,6 +28577,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -28812,6 +28838,7 @@ mod tests {
         let remote_ipv4 = builtin_ipv4(remote_overlay);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -29073,6 +29100,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -29175,6 +29203,7 @@ mod tests {
             .expect("local overlay peer");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key.clone()),
@@ -31682,6 +31711,7 @@ mod tests {
         let datagram_overlay = PeerId::from_libp2p(datagram_peer);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local_identity.peer_id.clone(),
                 private_key: Some(local_identity.private_key),

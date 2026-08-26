@@ -159,6 +159,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),

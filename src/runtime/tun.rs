@@ -888,6 +888,7 @@ mod tests {
         let local = PeerId::from_bytes([7; 32]);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: local.to_string(),
                 private_key: None,
@@ -928,6 +929,7 @@ mod tests {
     fn runtime_config_uses_effective_packet_mtu() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
@@ -969,6 +971,7 @@ mod tests {
         ]);
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
@@ -1032,6 +1035,7 @@ mod tests {
     fn runtime_config_assigns_local_host_routes_as_addresses() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
@@ -1108,6 +1112,7 @@ mod tests {
     fn runtime_config_assigns_local_vpn_ip_as_address_and_route_source() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
@@ -1173,6 +1178,7 @@ mod tests {
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: inviter.peer_id.clone(),
                 private_key: None,
@@ -1275,6 +1281,7 @@ mod tests {
     fn route_commands_install_ipv6_address_and_peer_routes() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,
@@ -1345,6 +1352,7 @@ mod tests {
     fn route_commands_prefer_configured_local_host_route_as_source() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: peer_hex(1),
                 private_key: None,

@@ -553,6 +553,7 @@ mod tests {
     fn pairing_config(identity: NodeIdentity) -> Config {
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),

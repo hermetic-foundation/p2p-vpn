@@ -378,6 +378,7 @@ mod tests {
         let other = Keypair::generate_ed25519().public().to_peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: Keypair::generate_ed25519()
                     .public()
@@ -430,6 +431,7 @@ mod tests {
         let other = Keypair::generate_ed25519().public().to_peer_id();
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: Keypair::generate_ed25519()
                     .public()

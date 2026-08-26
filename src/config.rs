@@ -12,6 +12,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     PathKind, PeerId,
+    dns::{DnsConfig, DnsValidationError},
     identity::NodeIdentity,
     membership::{
         EffectiveMembership, MembershipRecordError, MembershipRole, SignedMembershipRecord,
@@ -177,6 +178,7 @@ impl Config {
         self.membership_key_bytes()?;
         self.previous_membership_tags()?;
         self.validate_membership_records()?;
+        self.validate_dns()?;
         self.compile_routes()?;
         self.validate_interface()?;
         self.validate_resources()?;
@@ -193,6 +195,27 @@ impl Config {
         self.validate_peer_reachability()?;
         self.validate_discovery()?;
         validate_kademlia_protocol(&self.network.discovery.kademlia_protocol)?;
+        Ok(())
+    }
+
+    fn validate_dns(&self) -> Result<(), ConfigError> {
+        self.network
+            .dns
+            .validate(&self.network.name)
+            .map_err(ConfigError::Dns)?;
+        if self.network.dns.enabled {
+            for peer in &self.peers {
+                if let Some(hostname) = peer.name.as_deref() {
+                    crate::dns::canonical_dns_label(hostname).map_err(|error| {
+                        ConfigError::Dns(DnsValidationError::InvalidPeerHostname {
+                            peer: peer.id.clone(),
+                            hostname: hostname.to_owned(),
+                            error,
+                        })
+                    })?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -489,6 +512,8 @@ pub struct NetworkConfig {
     pub previous_membership_tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_records: Vec<SignedMembershipRecord>,
+    #[serde(default, skip_serializing_if = "DnsConfig::is_disabled")]
+    pub dns: DnsConfig,
     #[serde(default, alias = "vpnIp", skip_serializing_if = "Option::is_none")]
     pub vpn_ip: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -882,6 +907,7 @@ impl InitConfigTemplate {
 
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: self.network_name,
                 local_peer: self.identity.peer_id,
                 private_key: Some(self.identity.private_key),
@@ -949,6 +975,7 @@ pub enum ConfigError {
     Resource(ResourceValidationError),
     Discovery(DiscoveryValidationError),
     PacketPlane(PacketPlaneValidationError),
+    Dns(DnsValidationError),
     RoutePrefix(RoutePrefixError),
     Route(RouteError),
     MembershipRecord(MembershipRecordError),
@@ -1827,6 +1854,53 @@ mod tests {
     }
 
     #[test]
+    fn omitted_dns_configuration_remains_disabled_and_compact() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "lab",
+                "private_key": identity.private_key
+            }
+        }))
+        .expect("minimal config");
+
+        assert_eq!(config.network.dns, DnsConfig::default());
+        let encoded = serde_json::to_value(&config).expect("serialized config");
+        assert!(encoded["network"].get("dns").is_none());
+    }
+
+    #[test]
+    fn enabled_dns_requires_a_valid_name_and_loopback_listener() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let config = |hostname: Option<&str>, listen: &str| {
+            serde_json::from_value::<Config>(serde_json::json!({
+                "network": {
+                    "name": "runner-mesh",
+                    "private_key": identity.private_key.clone(),
+                    "dns": {
+                        "enabled": true,
+                        "hostname": hostname,
+                        "listen": listen
+                    }
+                }
+            }))
+            .expect("DNS config")
+        };
+
+        config(Some("worker-1"), "127.0.0.1:0")
+            .validate_runtime()
+            .expect("valid DNS config");
+        assert!(matches!(
+            config(None, "127.0.0.1:0").validate_runtime(),
+            Err(ConfigError::Dns(DnsValidationError::MissingHostname))
+        ));
+        assert!(matches!(
+            config(Some("worker-1"), "0.0.0.0:53").validate_runtime(),
+            Err(ConfigError::Dns(DnsValidationError::NonLoopbackListener(_)))
+        ));
+    }
+
+    #[test]
     fn peer_ip_synthesizes_default_direct_tcp_multiaddr() {
         let config: Config = serde_json::from_str(
             r#"{
@@ -1885,6 +1959,7 @@ mod tests {
         let key = base64::engine::general_purpose::STANDARD.encode([7_u8; 32]);
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -1939,6 +2014,7 @@ mod tests {
     fn previous_membership_tags_require_current_membership_key() {
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -1983,6 +2059,7 @@ mod tests {
     fn previous_membership_tags_reject_invalid_tag_encoding() {
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -2028,6 +2105,7 @@ mod tests {
     fn runtime_config_for_identity(identity: NodeIdentity) -> Config {
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),
@@ -2352,6 +2430,7 @@ mod tests {
     fn config_compiles_builtin_and_advertised_routes() {
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -2416,6 +2495,7 @@ mod tests {
     fn config_rejects_local_and_peer_route_overlap() {
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -2467,6 +2547,7 @@ mod tests {
     fn effective_packet_mtu_is_capped_by_packet_plane_payload_length() {
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -2514,6 +2595,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2552,6 +2634,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2597,6 +2680,7 @@ mod tests {
         let remote = NodeIdentity::generate_ed25519().expect("remote identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2652,6 +2736,7 @@ mod tests {
         let remote = NodeIdentity::generate_ed25519().expect("remote identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2701,6 +2786,7 @@ mod tests {
     fn config_rejects_cross_peer_route_overlap() {
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: "0000000000000000000000000000000000000000000000000000000000000000"
                     .to_owned(),
@@ -2768,6 +2854,7 @@ mod tests {
             .to_peer_id();
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key.clone()),
@@ -2837,6 +2924,7 @@ mod tests {
         let other = NodeIdentity::generate_ed25519().expect("other identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(other.private_key),
@@ -2872,6 +2960,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2907,6 +2996,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -2969,6 +3059,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3015,6 +3106,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3093,6 +3185,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3133,6 +3226,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3173,6 +3267,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3213,6 +3308,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3260,6 +3356,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3361,6 +3458,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3464,6 +3562,7 @@ mod tests {
             .to_peer_id();
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3526,6 +3625,7 @@ mod tests {
             .to_peer_id();
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),
@@ -3591,6 +3691,7 @@ mod tests {
             .to_peer_id();
         let mut config = Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "dev".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),

@@ -1850,6 +1850,7 @@ fn relay_probe_config_with_relayed_peer_discovery(
     let identity = NodeIdentity::generate_ed25519().map_err(|error| format!("{error:?}"))?;
     Ok(Config {
         network: NetworkConfig {
+            dns: crate::dns::DnsConfig::default(),
             name: "lab".to_owned(),
             local_peer: identity.peer_id.clone(),
             private_key: Some(identity.private_key),
@@ -4264,6 +4265,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id.clone(),
                 private_key: Some(identity.private_key),

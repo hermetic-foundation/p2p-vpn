@@ -296,6 +296,7 @@ fn pair_artifacts_cli_writes_native_nix_without_json_or_secrets() {
                     membership_epoch: 1,
                     sequence: 1,
                     revoked: false,
+                    hostname: None,
                     roles: vec![PairRpcMembershipRole::OverlayMember],
                     route_grants: Vec::new(),
                     issued_at_unix_seconds: 1_700_000_000,

@@ -525,6 +525,7 @@ pub fn import_pairing_response_config_at(
     response.verify_for_offer_at(offer, &options.identity, now_unix_seconds)?;
     let config = Config {
         network: crate::config::NetworkConfig {
+            dns: crate::dns::DnsConfig::default(),
             name: response.payload.network_name.clone(),
             local_peer: options.identity.peer_id.clone(),
             private_key: Some(options.identity.private_key),
@@ -1334,6 +1335,7 @@ mod tests {
         let identity = NodeIdentity::generate_ed25519().expect("identity");
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer: identity.peer_id,
                 private_key: Some(identity.private_key),

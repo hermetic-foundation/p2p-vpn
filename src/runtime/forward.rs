@@ -891,6 +891,7 @@ mod tests {
 
         Config {
             network: NetworkConfig {
+                dns: crate::dns::DnsConfig::default(),
                 name: "lab".to_owned(),
                 local_peer,
                 private_key: None,
