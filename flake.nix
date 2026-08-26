@@ -146,6 +146,7 @@ USAGE
               ".#checks.$system.nixos-vm-pairing"
               ".#checks.$system.nixos-vm-code-pairing-lan"
               ".#checks.$system.nixos-vm-code-pairing-relay"
+              ".#checks.$system.nixos-vm-membership-convergence"
               ".#checks.$system.nixos-vm-quic-datagram"
               ".#checks.$system.nixos-vm-quic-stream"
               ".#checks.$system.nixos-vm-forced-relay"
@@ -3389,6 +3390,9 @@ EOF
         nixosVmCodePairingRelay = import ./tests/nixos/code-pairing-relay.nix {
           inherit self pkgs package;
         };
+        nixosVmMembershipConvergence = import ./tests/nixos/membership-convergence.nix {
+          inherit self pkgs package;
+        };
         nixosVmQuicDatagram = import ./tests/nixos/quic-datagram.nix {
           inherit self pkgs package;
         };
@@ -3983,6 +3987,7 @@ EOF
           nixos-vm-pairing = nixosVmPairing;
           nixos-vm-code-pairing-lan = nixosVmCodePairingLan;
           nixos-vm-code-pairing-relay = nixosVmCodePairingRelay;
+          nixos-vm-membership-convergence = nixosVmMembershipConvergence;
           nixos-vm-quic-datagram = nixosVmQuicDatagram;
           nixos-vm-quic-stream = nixosVmQuicStream;
           nixos-vm-forced-relay = nixosVmForcedRelay;
