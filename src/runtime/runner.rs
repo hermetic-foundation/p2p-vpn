@@ -815,6 +815,8 @@ where
         })
         .transpose()?;
     let membership_state_store = membership_state_path.map(MembershipStateStore::new);
+    // `p2p-vpn up` installs routes from the file-backed config before runtime state is restored.
+    let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config())?;
     let mut code_pairing_sessions = load_code_pairing_sessions(
         pairing_state_store.as_ref(),
         &node.network_name,
@@ -827,6 +829,7 @@ where
         pairing_state_store.as_ref(),
         &mut forwarder,
         &mut membership,
+        &mut tun_runtime,
         &node.identity,
     )?;
     load_persisted_membership_records(
@@ -835,6 +838,7 @@ where
         &mut membership,
         &node.identity.peer_id,
     )?;
+    sync_live_tun_routes(&forwarder, &mut tun_runtime)?;
     persist_membership_records(
         membership_state_store.as_ref(),
         &forwarder,
@@ -846,10 +850,6 @@ where
             .active_replay_tokens(current_unix_seconds_lossy())
             .map(str::to_owned),
     );
-    let mut tun_runtime = TunRuntimeConfig::from_config_with_member_records(
-        forwarder.config(),
-        forwarder.member_records(),
-    )?;
     node.membership_tag = forwarder.config().membership_tag()?;
     node.kademlia_rendezvous_key = node.discovery.kademlia.then(|| {
         crate::runtime::p2p::kademlia_rendezvous_key(
@@ -1609,6 +1609,7 @@ fn reconcile_persisted_pairing_enrollments(
     store: Option<&PairingStateStore>,
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     identity: &NodeIdentity,
 ) -> Result<(), RunnerError> {
     reconcile_persisted_pairing_enrollments_with(
@@ -1617,6 +1618,7 @@ fn reconcile_persisted_pairing_enrollments(
         store,
         forwarder,
         membership,
+        tun_runtime,
         identity,
         execute_ip_command,
     )
@@ -1629,6 +1631,7 @@ fn reconcile_persisted_pairing_enrollments_with(
     store: Option<&PairingStateStore>,
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
     identity: &NodeIdentity,
     execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
 ) -> Result<(), RunnerError> {
@@ -1675,13 +1678,13 @@ fn reconcile_persisted_pairing_enrollments_with(
 
     let now = current_unix_seconds_lossy();
     let next_membership = OverlayMembership::from_config(&next_config)?;
-    let current_tun = TunRuntimeConfig::from_config(forwarder.config())?;
     let next_tun = TunRuntimeConfig::from_config(&next_config)?;
-    let tun_update = next_tun.additive_update_from(&current_tun)?;
+    let tun_update = next_tun.additive_update_from(tun_runtime)?;
     let update = forwarder.prepare_reconfigure(next_config, now)?;
     execute_tun_route_update(&tun_update, execute)?;
     forwarder.commit_reconfigure(update);
     *membership = next_membership;
+    *tun_runtime = next_tun;
 
     let mut finalized = 0_usize;
     for enrollment in &prepared {
@@ -17094,8 +17097,10 @@ mod tests {
         let mut node = pairing_test_node(&inviter);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
         let before_config = forwarder.config().clone();
         let before_membership = membership.clone();
+        let before_tun_runtime = tun_runtime.clone();
         let mut commands = Vec::new();
 
         let result = reconcile_persisted_pairing_enrollments_with(
@@ -17104,6 +17109,7 @@ mod tests {
             None,
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &inviter,
             |command| {
                 commands.push(command.to_string());
@@ -17120,6 +17126,7 @@ mod tests {
         assert!(commands.is_empty());
         assert_eq!(forwarder.config(), &before_config);
         assert_eq!(membership, before_membership);
+        assert_eq!(tun_runtime, before_tun_runtime);
         assert!(!forwarder.is_configured_transport_peer(joiner_peer));
     }
 
@@ -17179,6 +17186,7 @@ mod tests {
         let mut node = pairing_test_node(&inviter);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
         let mut commands = Vec::new();
         reconcile_persisted_pairing_enrollments_with(
             &mut node.swarm,
@@ -17186,6 +17194,7 @@ mod tests {
             Some(&store),
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &inviter,
             |command| {
                 commands.push(command.to_string());
@@ -17216,6 +17225,7 @@ mod tests {
             Some(&store),
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &inviter,
             |command| {
                 commands.push(command.to_string());
@@ -17317,6 +17327,7 @@ mod tests {
         let mut node = pairing_test_node(&joiner);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
         let mut commands = Vec::new();
         reconcile_persisted_pairing_enrollments_with(
             &mut node.swarm,
@@ -17324,6 +17335,7 @@ mod tests {
             Some(&store),
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &joiner,
             |command| {
                 commands.push(command.to_string());
@@ -17334,6 +17346,10 @@ mod tests {
 
         assert!(forwarder.is_configured_transport_peer(inviter_peer));
         assert!(membership.allows(inviter_peer));
+        assert_eq!(
+            tun_runtime,
+            TunRuntimeConfig::from_config(forwarder.config()).expect("recovered TUN runtime")
+        );
         assert!(matches!(
             restored.join_status(&operation_id),
             Ok(PairingJoinStatus::Completed)
@@ -17354,6 +17370,7 @@ mod tests {
             Some(&store),
             &mut forwarder,
             &mut membership,
+            &mut tun_runtime,
             &joiner,
             |command| {
                 commands.push(command.to_string());
@@ -25718,8 +25735,14 @@ mod tests {
                 member,
                 membership_epoch: 1,
                 sequence: 2,
-                roles: vec![MembershipRole::OverlayMember],
-                route_grants: Vec::new(),
+                roles: vec![
+                    MembershipRole::OverlayMember,
+                    MembershipRole::RouteAuthority,
+                ],
+                route_grants: vec![RouteConfig {
+                    prefix: "10.88.0.2/32".to_owned(),
+                    metric: 0,
+                }],
                 expires_at_unix_seconds: None,
             },
             1_001,
@@ -25748,6 +25771,7 @@ mod tests {
 
         let mut restarted_forwarder = Forwarder::from_config(&config).expect("restart forwarder");
         let mut restarted_membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut restarted_tun = TunRuntimeConfig::from_config(&config).expect("startup TUN");
         load_persisted_membership_records(
             Some(&store),
             &mut restarted_forwarder,
@@ -25759,6 +25783,23 @@ mod tests {
         assert!(restarted_forwarder.is_configured_transport_peer(member_peer));
         assert!(restarted_membership.allows(member_peer));
         assert_eq!(restarted_forwarder.member_record_count(), 2);
+        let mut commands = Vec::new();
+        sync_live_tun_routes_with(&restarted_forwarder, &mut restarted_tun, 1_001, |command| {
+            commands.push(command.to_string());
+            Ok(())
+        })
+        .expect("restore learned routes");
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.contains("route replace 10.88.0.2/32"))
+        );
+        assert!(
+            restarted_tun
+                .routes
+                .iter()
+                .any(|route| route.prefix.to_string() == "10.88.0.2/32")
+        );
 
         fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
     }
