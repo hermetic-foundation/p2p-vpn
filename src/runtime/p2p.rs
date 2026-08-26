@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, dns, identify,
@@ -24,6 +24,9 @@ use crate::{
 };
 
 const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
+const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
+const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
+const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
@@ -155,7 +158,11 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                         identify::Config::new(PROTOCOL_VERSION.to_owned(), keypair.public())
                             .with_hide_listen_addrs(true),
                     ),
-                    ping: ping::Behaviour::default(),
+                    ping: ping::Behaviour::new(
+                        ping::Config::new()
+                            .with_interval(CONNECTION_PING_INTERVAL)
+                            .with_timeout(CONNECTION_PING_TIMEOUT),
+                    ),
                     kad,
                     relay,
                     relay_server: relay_server
@@ -181,6 +188,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                 })
             },
         )?
+        .with_swarm_config(|config| {
+            config.with_idle_connection_timeout(SWARM_IDLE_CONNECTION_TIMEOUT)
+        })
         .build();
 
     let relay_reservations_started = config.relay_reservations.len();
@@ -1164,6 +1174,74 @@ mod tests {
         )
         .await
         .expect("packet exchange timed out");
+    }
+
+    #[tokio::test]
+    async fn two_nodes_keep_idle_connection_alive_between_pings() {
+        let discovery = relay_test_discovery();
+        let mut listener = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().expect("listen address")],
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("listener node");
+        let listener_address = next_listen_address(&mut listener.swarm).await;
+        let listener_peer = listener.local_peer_id;
+
+        let mut dialer = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: vec![(listener_peer, listener_address)],
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("dialer node");
+        let dialer_peer = dialer.local_peer_id;
+        next_connection_to_peer(&mut listener.swarm, &mut dialer.swarm, listener_peer).await;
+
+        // The libp2p swarm default expires at 10 seconds, before the next 15-second ping.
+        let idle_boundary = tokio::time::sleep(Duration::from_secs(17));
+        tokio::pin!(idle_boundary);
+        loop {
+            tokio::select! {
+                () = &mut idle_boundary => break,
+                event = listener.swarm.select_next_some() => {
+                    if matches!(event, SwarmEvent::ConnectionClosed { peer_id, .. } if peer_id == dialer_peer) {
+                        panic!("listener connection closed before the keepalive ping");
+                    }
+                }
+                event = dialer.swarm.select_next_some() => {
+                    if matches!(event, SwarmEvent::ConnectionClosed { peer_id, .. } if peer_id == listener_peer) {
+                        panic!("dialer connection closed before the keepalive ping");
+                    }
+                }
+            }
+        }
+
+        assert!(listener.swarm.is_connected(&dialer_peer));
+        assert!(dialer.swarm.is_connected(&listener_peer));
     }
 
     #[tokio::test]
