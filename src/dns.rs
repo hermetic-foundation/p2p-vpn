@@ -689,7 +689,7 @@ mod tests {
                 }],
                 expires_at_unix_seconds: None,
             },
-            Some("worker-1".to_owned()),
+            Some("worker-1"),
             1_000,
         )
         .expect("membership record");
@@ -737,7 +737,7 @@ mod tests {
                         route_grants: Vec::new(),
                         expires_at_unix_seconds: None,
                     },
-                    Some("worker".to_owned()),
+                    Some("worker"),
                     1_000,
                 )
                 .expect("membership record"),
@@ -777,7 +777,7 @@ mod tests {
                     route_grants: Vec::new(),
                     expires_at_unix_seconds: Some(1_010),
                 },
-                Some("ephemeral".to_owned()),
+                Some("ephemeral"),
                 1_000,
             )
             .expect("expiring record"),

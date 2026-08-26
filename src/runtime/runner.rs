@@ -32,12 +32,13 @@ use crate::{
         AutoRelayConfig, Config, ConfigError, DiscoveryConfig, PUBLIC_IPFS_KADEMLIA_PROTOCOL,
         QueueConfig, ResourceConfig, RouteConfig, public_ipfs_bootstrap_peer_configs,
     },
+    dns::canonical_dns_label,
     identity::NodeIdentity,
     membership::{
         MAX_MEMBERSHIP_RECORD_ENCODED_LEN, MAX_MEMBERSHIP_RECORD_INTEGER, MAX_MEMBERSHIP_RECORDS,
         MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
-        SignedMembershipRecord, effective_membership_at, issue_membership_record_for_subject_at,
-        overlay_membership_trust_path_at,
+        SignedMembershipRecord, effective_membership_at,
+        issue_named_membership_record_for_subject_at, overlay_membership_trust_path_at,
     },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
@@ -45,7 +46,7 @@ use crate::{
     },
     pairing::{
         MAX_PAIRING_MEMBERSHIP_RECORDS, PairingOffer, PairingRequest, PairingRequestOptions,
-        PairingResponse, apply_pairing_response_to_config_at, build_pairing_request_at,
+        PairingResponse, apply_pairing_response_to_config_at, build_named_pairing_request_at,
     },
     pairing_code::{
         answer_pairing_code_hello_at, authenticate_pairing_request, open_pairing_code_challenge_at,
@@ -2485,9 +2486,21 @@ fn handle_pair_rpc_request(
         PairRpcRequest::PairApprove {
             operation_id,
             approval_id,
+            assigned_hostname,
             assigned_vpn_ip,
             granted_routes,
         } => (|| {
+            let assigned_hostname = assigned_hostname
+                .as_deref()
+                .map(canonical_dns_label)
+                .transpose()
+                .map_err(|_| {
+                    pair_rpc_error(
+                        PairRpcErrorCode::InvalidRequest,
+                        "assigned hostname is not a valid DNS label",
+                        false,
+                    )
+                })?;
             if let Some(vpn_ip) = assigned_vpn_ip.as_deref()
                 && vpn_ip.parse::<IpAddr>().is_err()
             {
@@ -2521,7 +2534,7 @@ fn handle_pair_rpc_request(
                 };
                 (offer, enrollment.response.clone())
             } else {
-                pairing_offer_and_response_for_request_with_grants(
+                pairing_offer_and_response_for_request_with_grants_and_hostname(
                     forwarder.config(),
                     forwarder.member_records(),
                     identity,
@@ -2530,6 +2543,7 @@ fn handle_pair_rpc_request(
                     &approval.request,
                     now,
                     crate::pairing::PairingAcceptanceMode::CodeApproval,
+                    assigned_hostname,
                     assigned_vpn_ip,
                     Some(granted_routes),
                 )
@@ -2996,6 +3010,7 @@ fn pairing_rpc_status(
             PairingOpenStatus::AwaitingApproval {
                 approval_id,
                 joiner_peer,
+                requested_hostname,
                 requested_vpn_ip,
                 requested_routes,
                 ..
@@ -3015,6 +3030,7 @@ fn pairing_rpc_status(
                         approval_id,
                         peer_id: joiner_peer,
                         public_key_fingerprint: fingerprint,
+                        requested_hostname,
                         requested_vpn_ip,
                         requested_routes: config_routes_to_pair_rpc(requested_routes),
                     }),
@@ -11532,13 +11548,19 @@ fn handle_pairing_code_response(
             else {
                 return Ok(());
             };
-            let mut request = build_pairing_request_at(
+            let configured_hostname = if context.forwarder.config().network.dns.enabled {
+                context.forwarder.config().network.dns.hostname.as_deref()
+            } else {
+                None
+            };
+            let mut request = build_named_pairing_request_at(
                 &offer,
                 PairingRequestOptions {
                     identity: context.identity.clone(),
                     requested_vpn_ip,
                     requested_routes,
                 },
+                configured_hostname,
                 current_unix_seconds_lossy(),
             )?;
             authenticate_pairing_request(&mut request, &session)
@@ -12557,6 +12579,35 @@ fn pairing_offer_and_response_for_request_with_grants(
     assigned_vpn_ip: Option<String>,
     granted_routes: Option<Vec<RouteConfig>>,
 ) -> Result<(crate::pairing::PairingOffer, PairingResponse), crate::pairing::PairingError> {
+    pairing_offer_and_response_for_request_with_grants_and_hostname(
+        config,
+        current_member_records,
+        identity,
+        consumed_tokens,
+        transport_peer,
+        request,
+        now_unix_seconds,
+        expected_acceptance_mode,
+        None,
+        assigned_vpn_ip,
+        granted_routes,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn pairing_offer_and_response_for_request_with_grants_and_hostname(
+    config: &Config,
+    current_member_records: &[SignedMembershipRecord],
+    identity: &NodeIdentity,
+    consumed_tokens: &mut HashSet<String>,
+    transport_peer: Libp2pPeerId,
+    request: &PairingRequest,
+    now_unix_seconds: u64,
+    expected_acceptance_mode: crate::pairing::PairingAcceptanceMode,
+    assigned_hostname: Option<String>,
+    assigned_vpn_ip: Option<String>,
+    granted_routes: Option<Vec<RouteConfig>>,
+) -> Result<(crate::pairing::PairingOffer, PairingResponse), crate::pairing::PairingError> {
     let offer = if let Some(offer) = request.offer.as_ref() {
         offer.clone()
     } else {
@@ -12614,6 +12665,17 @@ fn pairing_offer_and_response_for_request_with_grants(
         return Err(crate::pairing::PairingError::RendezvousTokenMismatch);
     }
 
+    let assigned_hostname = assigned_hostname
+        .or_else(|| request.payload.requested_hostname.clone())
+        .as_deref()
+        .map(canonical_dns_label)
+        .transpose()
+        .map_err(crate::pairing::PairingError::InvalidHostname)?;
+    let inviter_hostname = if config.network.dns.enabled {
+        config.network.dns.hostname.clone()
+    } else {
+        None
+    };
     let assigned_vpn_ip = assigned_vpn_ip.or_else(|| request.payload.requested_vpn_ip.clone());
     let route_grants =
         pairing_route_grants_for_assignment(request, assigned_vpn_ip.as_deref(), granted_routes)?;
@@ -12638,7 +12700,7 @@ fn pairing_offer_and_response_for_request_with_grants(
         &request.payload.joiner_peer,
         now_unix_seconds,
     )?;
-    let inviter_record = issue_membership_record_for_subject_at(
+    let inviter_record = issue_named_membership_record_for_subject_at(
         identity,
         MembershipRecordIssueOptions {
             network_name: config.network.name.clone(),
@@ -12650,9 +12712,10 @@ fn pairing_offer_and_response_for_request_with_grants(
             route_grants: inviter_route_grants,
             expires_at_unix_seconds: None,
         },
+        inviter_hostname.as_deref(),
         now_unix_seconds,
     )?;
-    let joiner_record = issue_membership_record_for_subject_at(
+    let joiner_record = issue_named_membership_record_for_subject_at(
         identity,
         MembershipRecordIssueOptions {
             network_name: config.network.name.clone(),
@@ -12667,6 +12730,7 @@ fn pairing_offer_and_response_for_request_with_grants(
             route_grants,
             expires_at_unix_seconds: None,
         },
+        assigned_hostname.as_deref(),
         now_unix_seconds,
     )?;
     let member_records = pairing_response_membership_snapshot(
@@ -18609,10 +18673,12 @@ mod tests {
     }
 
     #[test]
-    fn pairing_response_for_request_issues_joiner_membership_record() {
+    fn pairing_response_for_request_issues_authenticated_hostname_records() {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
-        let config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        let mut config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        config.network.dns.enabled = true;
+        config.network.dns.hostname = Some("inviter-host".to_owned());
         let offer =
             export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");
         let joiner_overlay = PeerId::from_libp2p(joiner.peer_id.parse().expect("joiner peer"));
@@ -18621,13 +18687,14 @@ mod tests {
             prefix: "10.42.0.2/32".to_owned(),
             metric: 100,
         }];
-        let request = build_pairing_request_at(
+        let request = build_named_pairing_request_at(
             &offer,
             PairingRequestOptions {
                 identity: joiner.clone(),
                 requested_vpn_ip: Some(requested_vpn_ip.clone()),
                 requested_routes: requested_routes.clone(),
             },
+            Some("JOINER-HOST"),
             1_001,
         )
         .expect("request");
@@ -18651,6 +18718,16 @@ mod tests {
         );
         assert!(response.payload.membership_key.is_none());
         assert_eq!(response.payload.member_records.len(), 2);
+        let inviter_record = response
+            .payload
+            .member_records
+            .iter()
+            .find(|record| record.payload.member_peer == inviter.peer_id)
+            .expect("inviter membership record");
+        assert_eq!(
+            inviter_record.payload.hostname.as_deref(),
+            Some("inviter-host")
+        );
         let joiner_record = response
             .payload
             .member_records
@@ -18658,6 +18735,10 @@ mod tests {
             .find(|record| record.payload.member_peer == joiner.peer_id)
             .expect("joiner membership record");
         assert_eq!(joiner_record.payload.member_peer, joiner.peer_id);
+        assert_eq!(
+            joiner_record.payload.hostname.as_deref(),
+            Some("joiner-host")
+        );
         assert_eq!(joiner_record.payload.route_grants, requested_routes);
         assert_eq!(
             joiner_record.payload.roles,
@@ -18667,6 +18748,33 @@ mod tests {
             ]
         );
         assert!(!consumed_tokens.contains(&offer.payload.rendezvous_token));
+
+        let (_, overridden) = pairing_offer_and_response_for_request_with_grants_and_hostname(
+            &config,
+            &config.network.member_records,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_003,
+            PairingAcceptanceMode::FileBearer,
+            Some("approved-host".to_owned()),
+            None,
+            None,
+        )
+        .expect("response with approved hostname");
+        assert_eq!(
+            overridden
+                .payload
+                .member_records
+                .iter()
+                .find(|record| record.payload.member_peer == joiner.peer_id)
+                .expect("overridden joiner record")
+                .payload
+                .hostname
+                .as_deref(),
+            Some("approved-host")
+        );
     }
 
     #[test]

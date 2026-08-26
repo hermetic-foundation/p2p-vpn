@@ -67,6 +67,8 @@ pub enum PairRpcRequest {
     PairApprove {
         operation_id: String,
         approval_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assigned_hostname: Option<String>,
         #[serde(default)]
         assigned_vpn_ip: Option<String>,
         #[serde(default)]
@@ -121,12 +123,14 @@ impl fmt::Debug for PairRpcRequest {
             Self::PairApprove {
                 operation_id,
                 approval_id,
+                assigned_hostname,
                 assigned_vpn_ip,
                 granted_routes,
             } => formatter
                 .debug_struct("PairApprove")
                 .field("operation_id", operation_id)
                 .field("approval_id", approval_id)
+                .field("assigned_hostname", assigned_hostname)
                 .field("assigned_vpn_ip", assigned_vpn_ip)
                 .field("granted_routes", granted_routes)
                 .finish(),
@@ -336,6 +340,8 @@ pub struct PairRpcCandidate {
     pub approval_id: String,
     pub peer_id: String,
     pub public_key_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_hostname: Option<String>,
     #[serde(default)]
     pub requested_vpn_ip: Option<String>,
     #[serde(default)]
@@ -1147,6 +1153,7 @@ mod tests {
             PairRpcRequest::PairApprove {
                 operation_id: "approve-operation".to_owned(),
                 approval_id: "approval-transcript".to_owned(),
+                assigned_hostname: Some("worker-2".to_owned()),
                 assigned_vpn_ip: Some("10.42.0.2".to_owned()),
                 granted_routes: vec![PairRpcRoute {
                     prefix: "10.42.0.2/32".to_owned(),
@@ -1186,6 +1193,7 @@ mod tests {
                 approval_id: "approval-transcript".to_owned(),
                 peer_id: "12D3KooWRemote".to_owned(),
                 public_key_fingerprint: "sha256:public-key".to_owned(),
+                requested_hostname: Some("worker-2".to_owned()),
                 requested_vpn_ip: Some("10.42.0.2".to_owned()),
                 requested_routes: Vec::new(),
             }),
@@ -1378,6 +1386,32 @@ mod tests {
                 ..PairRpcDiagnostics::default()
             }
         );
+    }
+
+    #[test]
+    fn pair_rpc_approve_accepts_legacy_request_without_hostname() {
+        let legacy = serde_json::json!({
+            "version": PAIR_RPC_VERSION,
+            "request": {
+                "method": "pair_approve",
+                "params": {
+                    "operation_id": "operation",
+                    "approval_id": "approval",
+                    "assigned_vpn_ip": "10.42.0.2",
+                    "granted_routes": []
+                }
+            }
+        });
+
+        let decoded: PairRpcRequestEnvelope =
+            serde_json::from_value(legacy).expect("legacy approve request");
+        assert!(matches!(
+            decoded.request,
+            PairRpcRequest::PairApprove {
+                assigned_hostname: None,
+                ..
+            }
+        ));
     }
 
     #[test]

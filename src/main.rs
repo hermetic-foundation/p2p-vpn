@@ -42,8 +42,8 @@ use p2p_vpn::{
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
         DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingError, PairingOffer,
-        PairingOfferOptions, PairingRequestOptions, PairingResponse, build_pairing_request_at,
-        export_discovery_only_pairing_offer, export_pairing_offer,
+        PairingOfferOptions, PairingRequestOptions, PairingResponse,
+        build_named_pairing_request_at, export_discovery_only_pairing_offer, export_pairing_offer,
         import_pairing_response_config_at,
     },
     queue::QueueStats,
@@ -706,6 +706,8 @@ enum PairCommand {
         approval_id: String,
         #[command(flatten)]
         target: PairDaemonTarget,
+        #[arg(long = "hostname")]
+        assigned_hostname: Option<String>,
         #[arg(long = "vpn-ip")]
         assigned_vpn_ip: Option<String>,
         #[arg(long = "route")]
@@ -807,6 +809,8 @@ enum PairCommand {
         local_routes: Vec<LocalRouteArg>,
         #[arg(long = "vpn-ip")]
         vpn_ip: Option<String>,
+        #[arg(long)]
+        hostname: Option<String>,
         #[arg(long)]
         peer_name: Option<String>,
         #[arg(long, default_value_t = 30)]
@@ -1240,6 +1244,7 @@ async fn main() -> Result<(), String> {
                 operation_id,
                 approval_id,
                 target,
+                assigned_hostname,
                 assigned_vpn_ip,
                 granted_routes,
                 format,
@@ -1248,6 +1253,7 @@ async fn main() -> Result<(), String> {
                     &target,
                     &operation_id,
                     &approval_id,
+                    assigned_hostname,
                     assigned_vpn_ip,
                     granted_routes,
                     format,
@@ -1335,6 +1341,7 @@ async fn main() -> Result<(), String> {
                 mtu,
                 local_routes,
                 vpn_ip,
+                hostname,
                 peer_name,
                 timeout_seconds,
                 force,
@@ -1352,6 +1359,7 @@ async fn main() -> Result<(), String> {
                     mtu,
                     local_routes,
                     vpn_ip,
+                    hostname,
                     peer_name,
                     timeout_seconds,
                     force,
@@ -1655,6 +1663,7 @@ struct PairAcceptArgs {
     mtu: u16,
     local_routes: Vec<LocalRouteArg>,
     vpn_ip: Option<String>,
+    hostname: Option<String>,
     peer_name: Option<String>,
     timeout_seconds: u64,
     force: bool,
@@ -2843,6 +2852,7 @@ async fn pair_daemon_approve(
     target: &PairDaemonTarget,
     operation_id: &str,
     approval_id: &str,
+    assigned_hostname: Option<String>,
     assigned_vpn_ip: Option<String>,
     granted_routes: Vec<LocalRouteArg>,
     format: PairOutputFormat,
@@ -2852,6 +2862,7 @@ async fn pair_daemon_approve(
         PairRpcRequest::PairApprove {
             operation_id: operation_id.to_owned(),
             approval_id: approval_id.to_owned(),
+            assigned_hostname,
             assigned_vpn_ip,
             granted_routes: pair_rpc_routes(granted_routes),
         },
@@ -3130,6 +3141,9 @@ fn print_pair_status(
             "candidate key fingerprint: {}",
             candidate.public_key_fingerprint
         );
+        if let Some(hostname) = &candidate.requested_hostname {
+            println!("requested hostname: {hostname}");
+        }
         if let Some(vpn_ip) = &candidate.requested_vpn_ip {
             println!("requested VPN IP: {vpn_ip}");
         }
@@ -3499,6 +3513,7 @@ async fn pair_accept(args: PairAcceptArgs) -> Result<(), String> {
         identity.clone(),
         args.mtu,
         args.timeout_seconds,
+        args.hostname.as_deref(),
         Some(requested_vpn_ip),
         local_routes.clone(),
     )
@@ -4484,6 +4499,7 @@ async fn live_pair_accept(
     identity: NodeIdentity,
     mtu: u16,
     timeout_seconds: u64,
+    requested_hostname: Option<&str>,
     requested_vpn_ip: Option<String>,
     requested_routes: Vec<RouteConfig>,
 ) -> Result<PairingResponse, String> {
@@ -4527,13 +4543,14 @@ async fn live_pair_accept(
         &mut diagnostics,
         PairingDiscoveredAddressSource::Offer,
     );
-    let request = build_pairing_request_at(
+    let request = build_named_pairing_request_at(
         offer,
         PairingRequestOptions {
             identity,
             requested_vpn_ip,
             requested_routes,
         },
+        requested_hostname,
         current_unix_seconds_lossy(),
     )
     .map_err(|error| format!("failed to build pairing request: {error:?}"))?;
@@ -13202,6 +13219,8 @@ mod tests {
             "approve",
             "operation",
             "approval",
+            "--hostname",
+            "worker-2",
             "--vpn-ip",
             "10.42.0.2",
             "--route",
@@ -13213,6 +13232,7 @@ mod tests {
                 PairCommand::Approve {
                     operation_id,
                     approval_id,
+                    assigned_hostname,
                     assigned_vpn_ip,
                     granted_routes,
                     ..
@@ -13223,6 +13243,7 @@ mod tests {
         };
         assert_eq!(operation_id, "operation");
         assert_eq!(approval_id, "approval");
+        assert_eq!(assigned_hostname.as_deref(), Some("worker-2"));
         assert_eq!(assigned_vpn_ip.as_deref(), Some("10.42.0.2"));
         assert_eq!(granted_routes[0].route.metric, 20);
 
@@ -13477,6 +13498,8 @@ mod tests {
             "10.42.0.2/32,100",
             "--vpn-ip",
             "10.42.0.2",
+            "--hostname",
+            "node-b",
             "--peer-name",
             "node-a",
             "--timeout-seconds",
@@ -13499,6 +13522,7 @@ mod tests {
                     mtu,
                     local_routes,
                     vpn_ip,
+                    hostname,
                     peer_name,
                     timeout_seconds,
                     force,
@@ -13524,6 +13548,7 @@ mod tests {
         assert_eq!(local_routes.len(), 1);
         assert_eq!(local_routes[0].route.prefix, "10.42.0.2/32");
         assert_eq!(vpn_ip.as_deref(), Some("10.42.0.2"));
+        assert_eq!(hostname.as_deref(), Some("node-b"));
         assert_eq!(peer_name.as_deref(), Some("node-a"));
         assert_eq!(timeout_seconds, 7);
         assert!(force);
@@ -14486,6 +14511,7 @@ mod tests {
             joiner_identity,
             1280,
             1,
+            None,
             Some("10.42.0.2".to_owned()),
             Vec::new(),
         )
@@ -14542,7 +14568,7 @@ mod tests {
         };
         let (address_tx, address_rx) = std::sync::mpsc::channel();
         let (offer_tx, offer_rx) = std::sync::mpsc::channel();
-        let (requested_routes_tx, requested_routes_rx) = std::sync::mpsc::channel();
+        let (requested_options_tx, requested_options_rx) = std::sync::mpsc::channel();
         let inviter_identity_for_thread = inviter_identity.clone();
         let inviter_config_for_thread = inviter_config.clone();
         let membership_key_for_thread = membership_key.clone();
@@ -14596,9 +14622,12 @@ mod tests {
                                 ..
                             },
                         )) => {
-                            requested_routes_tx
-                                .send(request.payload.requested_routes.clone())
-                                .expect("send requested routes");
+                            requested_options_tx
+                                .send((
+                                    request.payload.requested_hostname.clone(),
+                                    request.payload.requested_routes.clone(),
+                                ))
+                                .expect("send requested options");
                             let response = build_pairing_response_at(
                                 &inviter_config_for_response,
                                 &offer_for_response,
@@ -14641,6 +14670,7 @@ mod tests {
             joiner_identity.clone(),
             1280,
             5,
+            Some("Worker-2"),
             Some(requested_vpn_ip.clone()),
             vec![RouteConfig {
                 prefix: "10.42.0.2/32".to_owned(),
@@ -14651,8 +14681,11 @@ mod tests {
         .expect("live response");
 
         inviter_thread.join().expect("inviter thread");
+        let (requested_hostname, requested_routes) =
+            requested_options_rx.recv().expect("requested options");
+        assert_eq!(requested_hostname.as_deref(), Some("worker-2"));
         assert_eq!(
-            requested_routes_rx.recv().expect("requested routes"),
+            requested_routes,
             vec![RouteConfig {
                 prefix: "10.42.0.2/32".to_owned(),
                 metric: 100,
@@ -14746,6 +14779,7 @@ mod tests {
                 joiner_identity.clone(),
                 1280,
                 5,
+                None,
                 Some("10.42.0.2".to_owned()),
                 Vec::new(),
             ));
@@ -14911,6 +14945,7 @@ mod tests {
                 joiner_identity.clone(),
                 1280,
                 10,
+                None,
                 Some("10.42.0.2".to_owned()),
                 Vec::new(),
             ));
@@ -15105,6 +15140,7 @@ mod tests {
                 joiner_identity.clone(),
                 1280,
                 timeout_seconds,
+                None,
                 Some("10.42.0.2".to_owned()),
                 Vec::new(),
             ));

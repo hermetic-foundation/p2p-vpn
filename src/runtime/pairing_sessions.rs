@@ -91,6 +91,8 @@ pub enum PairingOpenStatus {
     AwaitingApproval {
         approval_id: String,
         joiner_peer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requested_hostname: Option<String>,
         requested_vpn_ip: Option<String>,
         requested_routes: Vec<RouteConfig>,
         expires_at_unix_seconds: u64,
@@ -669,6 +671,7 @@ impl CodePairingSessions {
             return Ok(PairingOpenStatus::AwaitingApproval {
                 approval_id: approval.approval_id.clone(),
                 joiner_peer: approval.request.payload.joiner_peer.clone(),
+                requested_hostname: approval.request.payload.requested_hostname.clone(),
                 requested_vpn_ip: approval.request.payload.requested_vpn_ip.clone(),
                 requested_routes: approval.request.payload.requested_routes.clone(),
                 expires_at_unix_seconds: operation.expires_at_unix_seconds,
@@ -3683,19 +3686,28 @@ mod tests {
             .expect("open pairing");
         assert!(sessions.can_accept_pending_approval());
 
+        let mut request = test_request(inviter, joiner);
+        request.payload.requested_hostname = Some("worker-2".to_owned());
         sessions
             .set_pending_approval(
                 PendingApproval::new(
-                    started.operation_id,
+                    started.operation_id.clone(),
                     joiner,
                     started.expires_at_unix_seconds,
-                    test_request(inviter, joiner),
+                    request,
                 )
                 .expect("approval"),
             )
             .expect("set approval");
 
         assert!(!sessions.can_accept_pending_approval());
+        assert!(matches!(
+            sessions.open_status(&started.operation_id),
+            Ok(PairingOpenStatus::AwaitingApproval {
+                requested_hostname: Some(hostname),
+                ..
+            }) if hostname == "worker-2"
+        ));
     }
 
     #[test]

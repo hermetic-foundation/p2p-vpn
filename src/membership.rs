@@ -202,9 +202,13 @@ pub fn issue_membership_record_for_subject_at(
 pub fn issue_named_membership_record_for_subject_at(
     issuer: &NodeIdentity,
     options: MembershipRecordIssueOptions,
-    hostname: Option<String>,
+    hostname: Option<&str>,
     issued_at_unix_seconds: u64,
 ) -> Result<SignedMembershipRecord, MembershipRecordError> {
+    let hostname = hostname
+        .map(canonical_dns_label)
+        .transpose()
+        .map_err(MembershipRecordError::InvalidHostname)?;
     if let Some(expires_at) = options.expires_at_unix_seconds
         && expires_at <= issued_at_unix_seconds
     {
@@ -1026,12 +1030,13 @@ mod tests {
                 route_grants: Vec::new(),
                 expires_at_unix_seconds: None,
             },
-            Some("Worker-1".to_owned()),
+            Some("Worker-1"),
             1_000,
         )
         .expect("named membership record");
 
         record.verify_at(1_001).expect("signed hostname");
+        assert_eq!(record.payload.hostname.as_deref(), Some("worker-1"));
         let effective =
             effective_membership_at(&[record], "lab", 1_001).expect("effective membership");
         assert_eq!(
@@ -1063,7 +1068,7 @@ mod tests {
             issue_named_membership_record_for_subject_at(
                 &issuer,
                 options,
-                Some("invalid name".to_owned()),
+                Some("invalid name"),
                 1_000,
             ),
             Err(MembershipRecordError::InvalidHostname(_))
@@ -1081,7 +1086,7 @@ mod tests {
                     route_grants: Vec::new(),
                     expires_at_unix_seconds: None,
                 },
-                Some("worker-1".to_owned()),
+                Some("worker-1"),
                 1_001,
             ),
             Err(MembershipRecordError::RevocationCarriesAuthority)
