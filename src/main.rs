@@ -605,6 +605,8 @@ enum Command {
         control_socket: Option<PathBuf>,
         #[arg(long, requires = "control_socket")]
         pairing_state: Option<PathBuf>,
+        #[arg(long)]
+        membership_state: Option<PathBuf>,
     },
 }
 
@@ -1448,6 +1450,7 @@ async fn main() -> Result<(), String> {
             metrics_interval_seconds,
             control_socket,
             pairing_state,
+            membership_state,
         } => {
             Box::pin(up(
                 &config,
@@ -1455,6 +1458,7 @@ async fn main() -> Result<(), String> {
                 metrics_interval_seconds,
                 control_socket,
                 pairing_state,
+                membership_state,
             ))
             .await
         }
@@ -8857,6 +8861,7 @@ async fn up(
     metrics_interval_seconds: Option<u64>,
     control_socket: Option<PathBuf>,
     pairing_state: Option<PathBuf>,
+    membership_state: Option<PathBuf>,
 ) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
@@ -8904,6 +8909,9 @@ async fn up(
         if let Some(state) = &pairing_state {
             println!("pairing state {state}", state = state.display());
         }
+        if let Some(state) = &membership_state {
+            println!("membership state {state}", state = state.display());
+        }
         if config.network.relay.server {
             println!("libp2p relay server enabled");
         }
@@ -8935,12 +8943,13 @@ async fn up(
 
     println!("starting libp2p packet forwarding runtime");
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
-    Box::pin(runner::run_config_until(
+    Box::pin(runner::run_config_until_with_membership_state(
         config,
         device,
         metrics_interval,
         control_socket,
         pairing_state,
+        membership_state,
         shutdown_signal(),
     ))
     .await
@@ -15867,6 +15876,8 @@ mod tests {
             "/run/p2p-vpn-node-a/control.sock",
             "--pairing-state",
             "/var/lib/p2p-vpn/node-a/pairing-state.json",
+            "--membership-state",
+            "/var/lib/p2p-vpn/node-a/membership-state.json",
         ])
         .expect("cli");
 
@@ -15874,6 +15885,7 @@ mod tests {
             config,
             control_socket,
             pairing_state,
+            membership_state,
             ..
         } = cli.command
         else {
@@ -15889,6 +15901,12 @@ mod tests {
             pairing_state,
             Some(PathBuf::from("/var/lib/p2p-vpn/node-a/pairing-state.json"))
         );
+        assert_eq!(
+            membership_state,
+            Some(PathBuf::from(
+                "/var/lib/p2p-vpn/node-a/membership-state.json"
+            ))
+        );
         assert!(
             Cli::try_parse_from([
                 "p2p-vpn",
@@ -15897,6 +15915,15 @@ mod tests {
                 "/tmp/pairing-state.json",
             ])
             .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "up",
+                "--membership-state",
+                "/tmp/membership-state.json",
+            ])
+            .is_ok()
         );
     }
 
