@@ -3575,6 +3575,21 @@ fn local_capability_lines(
             local_capabilities.supports_native_quic_datagrams
         ),
         format!(
+            "local capability supports membership record pages: {}",
+            local_capabilities.supports_membership_record_pages
+        ),
+        format!(
+            "local capability membership record count: {}",
+            local_capabilities.membership_record_count
+        ),
+        format!(
+            "local capability membership records snapshot: {}",
+            local_capabilities
+                .membership_records_snapshot
+                .as_deref()
+                .unwrap_or("unavailable")
+        ),
+        format!(
             "local capability supports owned udp packet plane: {}",
             local_capabilities.supports_owned_udp_packet_plane
         ),
@@ -3688,6 +3703,21 @@ fn extend_remote_capability_lines(
     lines.push(format!(
         "remote capability supports native quic datagrams: {peer} {}",
         capabilities.supports_native_quic_datagrams
+    ));
+    lines.push(format!(
+        "remote capability supports membership record pages: {peer} {}",
+        capabilities.supports_membership_record_pages
+    ));
+    lines.push(format!(
+        "remote capability membership record count: {peer} {}",
+        capabilities.membership_record_count
+    ));
+    lines.push(format!(
+        "remote capability membership records snapshot: {peer} {}",
+        capabilities
+            .membership_records_snapshot
+            .as_deref()
+            .unwrap_or("unavailable")
     ));
     lines.push(format!(
         "remote capability supports owned udp packet plane: {peer} {}",
@@ -18689,12 +18719,14 @@ mod tests {
         }];
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let local_capabilities = ControlCapabilities::local("lab", None, 1280)
-            .with_advertised_routes(forwarder.local_advertised_routes());
+            .with_advertised_routes(forwarder.local_advertised_routes())
+            .with_membership_record_inventory(&[]);
         let mut peer_capabilities = PeerCapabilities::default();
         peer_capabilities.record(
             remote_overlay,
             ControlCapabilities::local("lab", None, 1200)
-                .with_advertised_routes(vec![ControlRoute::new("10.20.0.0/24", 70)]),
+                .with_advertised_routes(vec![ControlRoute::new("10.20.0.0/24", 70)])
+                .with_membership_record_inventory(&[]),
         );
         let mut paths = PathSet::new();
         paths.record_established_with_details(
@@ -18786,9 +18818,30 @@ mod tests {
             &packet_plane,
         );
         assert!(capability_lines.contains(&"local capability advertised routes: 3".to_owned()));
+        assert!(
+            capability_lines
+                .contains(&"local capability supports membership record pages: true".to_owned())
+        );
+        assert!(
+            capability_lines.contains(&"local capability membership record count: 0".to_owned())
+        );
+        assert!(capability_lines.contains(&format!(
+            "local capability membership records snapshot: {}",
+            membership_records_snapshot(&[])
+        )));
         assert!(capability_lines.contains(&"validated peers: 1".to_owned()));
         assert!(capability_lines.contains(&format!(
             "remote capability preferred path: {remote_overlay} direct_quic_stream"
+        )));
+        assert!(capability_lines.contains(&format!(
+            "remote capability supports membership record pages: {remote_overlay} true"
+        )));
+        assert!(capability_lines.contains(&format!(
+            "remote capability membership record count: {remote_overlay} 0"
+        )));
+        assert!(capability_lines.contains(&format!(
+            "remote capability membership records snapshot: {remote_overlay} {}",
+            membership_records_snapshot(&[])
         )));
     }
 
