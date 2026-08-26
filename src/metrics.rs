@@ -195,6 +195,14 @@ pub struct RuntimeMetrics {
     control_reject_unauthorized_route_advertisement: AtomicU64,
     control_reject_invalid_owned_quic_certificate: AtomicU64,
     control_reject_invalid_membership_record: AtomicU64,
+    membership_record_page_requests_sent: AtomicU64,
+    membership_record_page_requests_received: AtomicU64,
+    membership_record_pages_received: AtomicU64,
+    membership_record_pages_served: AtomicU64,
+    membership_record_syncs_completed: AtomicU64,
+    membership_record_syncs_restarted: AtomicU64,
+    membership_record_sync_failures: AtomicU64,
+    membership_records_accepted: AtomicU64,
     control_failures: AtomicU64,
     service_requests_sent: AtomicU64,
     service_requests_received: AtomicU64,
@@ -837,6 +845,45 @@ impl RuntimeMetrics {
         self.control_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_membership_record_page_request_sent(&self) {
+        self.membership_record_page_requests_sent
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_record_page_request_received(&self) {
+        self.membership_record_page_requests_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_record_page_received(&self) {
+        self.membership_record_pages_received
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_record_page_served(&self) {
+        self.membership_record_pages_served
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_record_sync_completed(&self, accepted: usize) {
+        self.membership_record_syncs_completed
+            .fetch_add(1, Ordering::Relaxed);
+        self.membership_records_accepted.fetch_add(
+            u64::try_from(accepted).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_membership_record_sync_restarted(&self) {
+        self.membership_record_syncs_restarted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_record_sync_failure(&self) {
+        self.membership_record_sync_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_service_request_sent(&self) {
         self.service_requests_sent.fetch_add(1, Ordering::Relaxed);
     }
@@ -1415,6 +1462,27 @@ impl RuntimeMetrics {
         snapshot.control_reject_invalid_membership_record = self
             .control_reject_invalid_membership_record
             .load(Ordering::Relaxed);
+        snapshot.membership_record_page_requests_sent = self
+            .membership_record_page_requests_sent
+            .load(Ordering::Relaxed);
+        snapshot.membership_record_page_requests_received = self
+            .membership_record_page_requests_received
+            .load(Ordering::Relaxed);
+        snapshot.membership_record_pages_received = self
+            .membership_record_pages_received
+            .load(Ordering::Relaxed);
+        snapshot.membership_record_pages_served =
+            self.membership_record_pages_served.load(Ordering::Relaxed);
+        snapshot.membership_record_syncs_completed = self
+            .membership_record_syncs_completed
+            .load(Ordering::Relaxed);
+        snapshot.membership_record_syncs_restarted = self
+            .membership_record_syncs_restarted
+            .load(Ordering::Relaxed);
+        snapshot.membership_record_sync_failures =
+            self.membership_record_sync_failures.load(Ordering::Relaxed);
+        snapshot.membership_records_accepted =
+            self.membership_records_accepted.load(Ordering::Relaxed);
         snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
         snapshot.service_requests_sent = self.service_requests_sent.load(Ordering::Relaxed);
         snapshot.service_requests_received = self.service_requests_received.load(Ordering::Relaxed);
@@ -1637,6 +1705,14 @@ pub struct RuntimeSnapshot {
     pub control_reject_unauthorized_route_advertisement: u64,
     pub control_reject_invalid_owned_quic_certificate: u64,
     pub control_reject_invalid_membership_record: u64,
+    pub membership_record_page_requests_sent: u64,
+    pub membership_record_page_requests_received: u64,
+    pub membership_record_pages_received: u64,
+    pub membership_record_pages_served: u64,
+    pub membership_record_syncs_completed: u64,
+    pub membership_record_syncs_restarted: u64,
+    pub membership_record_sync_failures: u64,
+    pub membership_records_accepted: u64,
     pub control_failures: u64,
     pub service_requests_sent: u64,
     pub service_requests_received: u64,
@@ -2074,6 +2150,38 @@ impl RuntimeSnapshot {
             format!(
                 "control_reject_invalid_membership_record {}",
                 self.control_reject_invalid_membership_record
+            ),
+            format!(
+                "membership_record_page_requests_sent {}",
+                self.membership_record_page_requests_sent
+            ),
+            format!(
+                "membership_record_page_requests_received {}",
+                self.membership_record_page_requests_received
+            ),
+            format!(
+                "membership_record_pages_received {}",
+                self.membership_record_pages_received
+            ),
+            format!(
+                "membership_record_pages_served {}",
+                self.membership_record_pages_served
+            ),
+            format!(
+                "membership_record_syncs_completed {}",
+                self.membership_record_syncs_completed
+            ),
+            format!(
+                "membership_record_syncs_restarted {}",
+                self.membership_record_syncs_restarted
+            ),
+            format!(
+                "membership_record_sync_failures {}",
+                self.membership_record_sync_failures
+            ),
+            format!(
+                "membership_records_accepted {}",
+                self.membership_records_accepted
             ),
             format!("control_failures {}", self.control_failures),
         ]);
@@ -2619,6 +2727,13 @@ mod tests {
             metrics.record_control_capability_rejection(reason);
         }
         metrics.record_control_failure();
+        metrics.record_membership_record_page_request_sent();
+        metrics.record_membership_record_page_request_received();
+        metrics.record_membership_record_page_received();
+        metrics.record_membership_record_page_served();
+        metrics.record_membership_record_sync_completed(3);
+        metrics.record_membership_record_sync_restarted();
+        metrics.record_membership_record_sync_failure();
         metrics.record_service_request_sent();
         metrics.record_service_request_received();
         metrics.record_service_response_received();
@@ -3033,6 +3148,14 @@ mod tests {
         assert_eq!(snapshot.control_reject_invalid_owned_quic_certificate, 1);
         assert_eq!(snapshot.control_reject_invalid_membership_record, 1);
         assert_eq!(snapshot.control_failures, 1);
+        assert_eq!(snapshot.membership_record_page_requests_sent, 1);
+        assert_eq!(snapshot.membership_record_page_requests_received, 1);
+        assert_eq!(snapshot.membership_record_pages_received, 1);
+        assert_eq!(snapshot.membership_record_pages_served, 1);
+        assert_eq!(snapshot.membership_record_syncs_completed, 1);
+        assert_eq!(snapshot.membership_record_syncs_restarted, 1);
+        assert_eq!(snapshot.membership_record_sync_failures, 1);
+        assert_eq!(snapshot.membership_records_accepted, 3);
         assert_eq!(snapshot.service_requests_sent, 1);
         assert_eq!(snapshot.service_requests_received, 1);
         assert_eq!(snapshot.service_responses_received, 1);
@@ -3202,6 +3325,14 @@ mod tests {
         assert_metric_line(&snapshot, "control_reject_invalid_owned_quic_certificate 1");
         assert_metric_line(&snapshot, "control_reject_invalid_membership_record 1");
         assert_metric_line(&snapshot, "control_failures 1");
+        assert_metric_line(&snapshot, "membership_record_page_requests_sent 1");
+        assert_metric_line(&snapshot, "membership_record_page_requests_received 1");
+        assert_metric_line(&snapshot, "membership_record_pages_received 1");
+        assert_metric_line(&snapshot, "membership_record_pages_served 1");
+        assert_metric_line(&snapshot, "membership_record_syncs_completed 1");
+        assert_metric_line(&snapshot, "membership_record_syncs_restarted 1");
+        assert_metric_line(&snapshot, "membership_record_sync_failures 1");
+        assert_metric_line(&snapshot, "membership_records_accepted 3");
         assert_metric_line(&snapshot, "service_requests_sent 1");
         assert_metric_line(&snapshot, "service_requests_received 1");
         assert_metric_line(&snapshot, "service_responses_received 1");
