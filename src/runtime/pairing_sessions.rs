@@ -3406,6 +3406,7 @@ mod tests {
                 offer_expires_at_unix_seconds: 1_600,
                 offer_signature: "offer-signature".to_owned(),
                 issued_at_unix_seconds: 1_001,
+                requested_hostname: None,
                 requested_vpn_ip: Some("10.42.0.2".to_owned()),
                 requested_routes: Vec::new(),
             },

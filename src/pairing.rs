@@ -17,6 +17,7 @@ use crate::{
         BootstrapPeerConfig, Config, DiscoveryConfig, InterfaceConfig, PeerConfig, QueueConfig,
         RelayConfig, ResourceConfig, RouteConfig,
     },
+    dns::{DnsNameError, canonical_dns_label},
     identity::NodeIdentity,
     membership::{
         MembershipRole, SignedMembershipRecord, overlay_membership_trust_path_at,
@@ -205,6 +206,8 @@ pub struct PairingRequestPayload {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub offer_signature: String,
     pub issued_at_unix_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_hostname: Option<String>,
     #[serde(default)]
     pub requested_vpn_ip: Option<String>,
     #[serde(default)]
@@ -424,7 +427,20 @@ pub fn build_pairing_request_at(
     options: PairingRequestOptions,
     issued_at_unix_seconds: u64,
 ) -> Result<PairingRequest, PairingError> {
+    build_named_pairing_request_at(offer, options, None, issued_at_unix_seconds)
+}
+
+pub fn build_named_pairing_request_at(
+    offer: &PairingOffer,
+    options: PairingRequestOptions,
+    requested_hostname: Option<&str>,
+    issued_at_unix_seconds: u64,
+) -> Result<PairingRequest, PairingError> {
     offer.verify_at(issued_at_unix_seconds)?;
+    let requested_hostname = requested_hostname
+        .map(canonical_dns_label)
+        .transpose()
+        .map_err(PairingError::InvalidHostname)?;
     let payload = PairingRequestPayload {
         version: PAIRING_OFFER_VERSION,
         network_name: offer.payload.network_name.clone(),
@@ -436,6 +452,7 @@ pub fn build_pairing_request_at(
         offer_expires_at_unix_seconds: offer.payload.expires_at_unix_seconds,
         offer_signature: offer.signature.clone(),
         issued_at_unix_seconds,
+        requested_hostname,
         requested_vpn_ip: options.requested_vpn_ip,
         requested_routes: options.requested_routes,
     };
@@ -927,6 +944,9 @@ fn validate_request_payload(
     }
     payload.joiner_peer.parse::<Libp2pPeerId>()?;
     decode_public_key(&payload.joiner_public_key)?;
+    if let Some(hostname) = payload.requested_hostname.as_deref() {
+        canonical_dns_label(hostname).map_err(PairingError::InvalidHostname)?;
+    }
     validate_optional_ip(payload.requested_vpn_ip.as_deref())?;
     validate_routes(&payload.requested_routes)?;
     validate_rendezvous_token(&payload.rendezvous_token)?;
@@ -1217,6 +1237,7 @@ pub enum PairingError {
     IpAddr(std::net::AddrParseError),
     RoutePrefix(crate::config::RoutePrefixError),
     MembershipRecord(crate::membership::MembershipRecordError),
+    InvalidHostname(DnsNameError),
     UnsupportedVersion(u8),
     EmptyNetworkName,
     MissingPrivateKey,
@@ -1596,6 +1617,67 @@ mod tests {
             request.payload.requested_vpn_ip.as_deref(),
             Some("10.42.0.2")
         );
+        assert!(request.payload.requested_hostname.is_none());
+        assert!(
+            serde_json::to_value(&request).expect("request JSON")["payload"]
+                .get("requested_hostname")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pairing_request_authenticates_canonical_hostname() {
+        let offer = export_pairing_offer_at(&config(), PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let mut request = build_named_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            Some("MIDI-ThinkPad-250"),
+            1_001,
+        )
+        .expect("named request");
+
+        assert_eq!(
+            request.payload.requested_hostname.as_deref(),
+            Some("midi-thinkpad-250")
+        );
+        request
+            .verify_for_offer_at(&offer, 1_002)
+            .expect("named request verifies");
+
+        request.payload.requested_hostname = Some("different-host".to_owned());
+        assert!(matches!(
+            request.verify_for_offer_at(&offer, 1_002),
+            Err(PairingError::InvalidSignature)
+        ));
+    }
+
+    #[test]
+    fn pairing_request_rejects_invalid_hostname() {
+        let offer = export_pairing_offer_at(&config(), PairingOfferOptions::default(), 1_000)
+            .expect("offer");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+
+        assert!(matches!(
+            build_named_pairing_request_at(
+                &offer,
+                PairingRequestOptions {
+                    identity: joiner,
+                    requested_vpn_ip: None,
+                    requested_routes: Vec::new(),
+                },
+                Some("not a hostname"),
+                1_001,
+            ),
+            Err(PairingError::InvalidHostname(
+                DnsNameError::InvalidCharacter
+            ))
+        ));
     }
 
     #[test]
