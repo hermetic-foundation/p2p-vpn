@@ -390,6 +390,33 @@ The test compares generated config hashes before and after movement.
 
 No static peer, underlay address, or manual route is introduced during recovery.
 
+## Physical Four-Member LAN Audit
+
+The 2026-08-26 audit used four admitted NixOS hosts.
+
+| Host | Overlay IPv4 |
+| --- | --- |
+| `midi-framework-laptop` | `100.64.63.174` |
+| `midi-thinkpad-250` | `100.64.39.219` |
+| `midi-thinkpad-120` | `100.64.124.157` |
+| `midi-desktop-1` | `100.64.50.33` |
+
+| Assertion | Result |
+| --- | --- |
+| Membership | Each host retained four signed records. |
+| Routes | Each host installed three derived IPv4 and IPv6 host routes. |
+| Full mesh | All 12 directed host pairs connected without pairwise enrollment. |
+| Sustained TCP | 240 of 240 pre-restart SSH-port connections passed. |
+| Daemon restart | Desktop restored its records and routes from native state. |
+| Path recovery | Desktop observed healthy UDP, QUIC-stream, and TCP to every peer. |
+| Post-restart TCP | 120 of 120 directed connections passed. |
+| First activation | IPv6 `nodad` avoided a tentative-source route race. |
+| Service health | Activation and restart both reported zero automatic retries. |
+
+Public IPFS discovery also supplied private-address claims from unrelated peers.
+
+The source-aware filter rejected those claims. Local mDNS candidates remained eligible.
+
 ## Offline Pairing Integration
 
 Run direct live pairing:

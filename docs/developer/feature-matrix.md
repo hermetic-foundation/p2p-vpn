@@ -66,8 +66,12 @@ Status is conservative.
 | 2026-08-22 | Peerless code-pairing namespace | LAN discovery, approval, and bidirectional traffic passed. |
 | 2026-08-22 | NixOS code-pairing LAN VM | Artifacts, evaluation, acknowledgment, restart, and traffic passed. |
 | 2026-08-22 | NixOS code-pairing relay VM | DHT discovery, relay transport, restart, and traffic passed. |
-| 2026-08-26 | NixOS membership convergence VM | A admitted B, B admitted C, and all three converged. |
 | 2026-08-25 | Membership restart and movement VM | Offline route restore, relay fallback, cold restart, and LAN promotion passed. |
+| 2026-08-26 | NixOS membership convergence VM | A admitted B, B admitted C, and all three converged. |
+| 2026-08-26 | Physical four-member LAN | Four signed histories converged; 240/240 directed TCP probes passed. |
+| 2026-08-26 | Physical desktop restart | Routes and three direct path classes recovered; 120/120 probes passed. |
+| 2026-08-26 | Public discovery address hygiene | Unverified private IPFS addresses were rejected without failed-neighbor growth. |
+| 2026-08-26 | IPv6 first activation | `nodad` removed the route-source race; the service started with zero retries. |
 
 ## Main Remaining Gap
 
