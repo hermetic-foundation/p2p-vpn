@@ -203,6 +203,12 @@ pub struct RuntimeMetrics {
     membership_record_syncs_restarted: AtomicU64,
     membership_record_sync_failures: AtomicU64,
     membership_records_accepted: AtomicU64,
+    membership_state_loads: AtomicU64,
+    membership_state_records_loaded: AtomicU64,
+    membership_state_load_failures: AtomicU64,
+    membership_state_persists: AtomicU64,
+    membership_state_records_persisted: AtomicU64,
+    membership_state_persist_failures: AtomicU64,
     control_failures: AtomicU64,
     service_requests_sent: AtomicU64,
     service_requests_received: AtomicU64,
@@ -884,6 +890,33 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_membership_state_loaded(&self, records: usize) {
+        self.membership_state_loads.fetch_add(1, Ordering::Relaxed);
+        self.membership_state_records_loaded.fetch_add(
+            u64::try_from(records).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_membership_state_load_failure(&self) {
+        self.membership_state_load_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_membership_state_persisted(&self, records: usize) {
+        self.membership_state_persists
+            .fetch_add(1, Ordering::Relaxed);
+        self.membership_state_records_persisted.fetch_add(
+            u64::try_from(records).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub fn record_membership_state_persist_failure(&self) {
+        self.membership_state_persist_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_service_request_sent(&self) {
         self.service_requests_sent.fetch_add(1, Ordering::Relaxed);
     }
@@ -1483,6 +1516,18 @@ impl RuntimeMetrics {
             self.membership_record_sync_failures.load(Ordering::Relaxed);
         snapshot.membership_records_accepted =
             self.membership_records_accepted.load(Ordering::Relaxed);
+        snapshot.membership_state_loads = self.membership_state_loads.load(Ordering::Relaxed);
+        snapshot.membership_state_records_loaded =
+            self.membership_state_records_loaded.load(Ordering::Relaxed);
+        snapshot.membership_state_load_failures =
+            self.membership_state_load_failures.load(Ordering::Relaxed);
+        snapshot.membership_state_persists = self.membership_state_persists.load(Ordering::Relaxed);
+        snapshot.membership_state_records_persisted = self
+            .membership_state_records_persisted
+            .load(Ordering::Relaxed);
+        snapshot.membership_state_persist_failures = self
+            .membership_state_persist_failures
+            .load(Ordering::Relaxed);
         snapshot.control_failures = self.control_failures.load(Ordering::Relaxed);
         snapshot.service_requests_sent = self.service_requests_sent.load(Ordering::Relaxed);
         snapshot.service_requests_received = self.service_requests_received.load(Ordering::Relaxed);
@@ -1713,6 +1758,12 @@ pub struct RuntimeSnapshot {
     pub membership_record_syncs_restarted: u64,
     pub membership_record_sync_failures: u64,
     pub membership_records_accepted: u64,
+    pub membership_state_loads: u64,
+    pub membership_state_records_loaded: u64,
+    pub membership_state_load_failures: u64,
+    pub membership_state_persists: u64,
+    pub membership_state_records_persisted: u64,
+    pub membership_state_persist_failures: u64,
     pub control_failures: u64,
     pub service_requests_sent: u64,
     pub service_requests_received: u64,
@@ -2182,6 +2233,27 @@ impl RuntimeSnapshot {
             format!(
                 "membership_records_accepted {}",
                 self.membership_records_accepted
+            ),
+            format!("membership_state_loads {}", self.membership_state_loads),
+            format!(
+                "membership_state_records_loaded {}",
+                self.membership_state_records_loaded
+            ),
+            format!(
+                "membership_state_load_failures {}",
+                self.membership_state_load_failures
+            ),
+            format!(
+                "membership_state_persists {}",
+                self.membership_state_persists
+            ),
+            format!(
+                "membership_state_records_persisted {}",
+                self.membership_state_records_persisted
+            ),
+            format!(
+                "membership_state_persist_failures {}",
+                self.membership_state_persist_failures
             ),
             format!("control_failures {}", self.control_failures),
         ]);
@@ -2734,6 +2806,10 @@ mod tests {
         metrics.record_membership_record_sync_completed(3);
         metrics.record_membership_record_sync_restarted();
         metrics.record_membership_record_sync_failure();
+        metrics.record_membership_state_loaded(3);
+        metrics.record_membership_state_load_failure();
+        metrics.record_membership_state_persisted(4);
+        metrics.record_membership_state_persist_failure();
         metrics.record_service_request_sent();
         metrics.record_service_request_received();
         metrics.record_service_response_received();
@@ -3156,6 +3232,12 @@ mod tests {
         assert_eq!(snapshot.membership_record_syncs_restarted, 1);
         assert_eq!(snapshot.membership_record_sync_failures, 1);
         assert_eq!(snapshot.membership_records_accepted, 3);
+        assert_eq!(snapshot.membership_state_loads, 1);
+        assert_eq!(snapshot.membership_state_records_loaded, 3);
+        assert_eq!(snapshot.membership_state_load_failures, 1);
+        assert_eq!(snapshot.membership_state_persists, 1);
+        assert_eq!(snapshot.membership_state_records_persisted, 4);
+        assert_eq!(snapshot.membership_state_persist_failures, 1);
         assert_eq!(snapshot.service_requests_sent, 1);
         assert_eq!(snapshot.service_requests_received, 1);
         assert_eq!(snapshot.service_responses_received, 1);
@@ -3333,6 +3415,12 @@ mod tests {
         assert_metric_line(&snapshot, "membership_record_syncs_restarted 1");
         assert_metric_line(&snapshot, "membership_record_sync_failures 1");
         assert_metric_line(&snapshot, "membership_records_accepted 3");
+        assert_metric_line(&snapshot, "membership_state_loads 1");
+        assert_metric_line(&snapshot, "membership_state_records_loaded 3");
+        assert_metric_line(&snapshot, "membership_state_load_failures 1");
+        assert_metric_line(&snapshot, "membership_state_persists 1");
+        assert_metric_line(&snapshot, "membership_state_records_persisted 4");
+        assert_metric_line(&snapshot, "membership_state_persist_failures 1");
         assert_metric_line(&snapshot, "service_requests_sent 1");
         assert_metric_line(&snapshot, "service_requests_received 1");
         assert_metric_line(&snapshot, "service_responses_received 1");

@@ -837,12 +837,14 @@ where
         &mut forwarder,
         &mut membership,
         &node.identity.peer_id,
+        &metrics,
     )?;
     sync_live_tun_routes(&forwarder, &mut tun_runtime)?;
     persist_membership_records(
         membership_state_store.as_ref(),
         &forwarder,
         &node.identity.peer_id,
+        &metrics,
     )?;
     let mut persisted_membership_revision = forwarder.membership_revision();
     pairing_replay_tokens.replace_code_approval(
@@ -1397,6 +1399,7 @@ where
                             &forwarder,
                             &node.identity.peer_id,
                             &mut persisted_membership_revision,
+                            &metrics,
                         )?;
                         if respond_to.send(response).is_err() {
                             eprintln!("control socket pair RPC response receiver dropped");
@@ -1474,6 +1477,7 @@ where
             &forwarder,
             &node.identity.peer_id,
             &mut persisted_membership_revision,
+            &metrics,
         )?;
     }
 }
@@ -1524,11 +1528,27 @@ fn load_persisted_membership_records(
     forwarder: &mut Forwarder,
     membership: &mut OverlayMembership,
     local_peer: &str,
+    metrics: &RuntimeMetrics,
 ) -> Result<(), RunnerError> {
     let Some(store) = store else {
         return Ok(());
     };
-    let Some(records) = store.load(&forwarder.config().network.name, local_peer)? else {
+    let records = match store.load(&forwarder.config().network.name, local_peer) {
+        Ok(records) => records,
+        Err(error) => {
+            metrics.record_membership_state_load_failure();
+            log_runtime_event(
+                LogLevel::Error,
+                "membership_state_load_failed",
+                &[
+                    ("reason", &error.to_string()),
+                    ("action", "repair_or_remove_the_invalid_state_file"),
+                ],
+            );
+            return Err(error.into());
+        }
+    };
+    let Some(records) = records else {
         return Ok(());
     };
 
@@ -1556,6 +1576,7 @@ fn load_persisted_membership_records(
             ("removed_untrusted", &stats.removed_untrusted.to_string()),
         ],
     );
+    metrics.record_membership_state_loaded(records.len());
     Ok(())
 }
 
@@ -1563,20 +1584,33 @@ fn persist_membership_records(
     store: Option<&MembershipStateStore>,
     forwarder: &Forwarder,
     local_peer: &str,
+    metrics: &RuntimeMetrics,
 ) -> Result<(), RunnerError> {
     let Some(store) = store else {
         return Ok(());
     };
-    store.save(
+    if let Err(error) = store.save(
         &forwarder.config().network.name,
         local_peer,
         forwarder.member_records(),
-    )?;
+    ) {
+        metrics.record_membership_state_persist_failure();
+        log_runtime_event(
+            LogLevel::Error,
+            "membership_state_persist_failed",
+            &[
+                ("reason", &error.to_string()),
+                ("action", "check_state_directory_permissions_and_disk_space"),
+            ],
+        );
+        return Err(error.into());
+    }
     log_runtime_event(
         LogLevel::Info,
         "membership_state_persisted",
         &[("records", &forwarder.member_record_count().to_string())],
     );
+    metrics.record_membership_state_persisted(forwarder.member_record_count());
     Ok(())
 }
 
@@ -1585,12 +1619,13 @@ fn persist_membership_records_if_changed(
     forwarder: &Forwarder,
     local_peer: &str,
     persisted_revision: &mut u64,
+    metrics: &RuntimeMetrics,
 ) -> Result<(), RunnerError> {
     let revision = forwarder.membership_revision();
     if revision == *persisted_revision {
         return Ok(());
     }
-    persist_membership_records(store, forwarder, local_peer)?;
+    persist_membership_records(store, forwarder, local_peer, metrics)?;
     *persisted_revision = revision;
     Ok(())
 }
@@ -25759,12 +25794,14 @@ mod tests {
         let path =
             test_pairing_state_path("membership-restart").with_file_name("membership-state.json");
         let store = MembershipStateStore::new(&path);
+        let metrics = RuntimeMetrics::default();
         let mut persisted_revision = 0;
         persist_membership_records_if_changed(
             Some(&store),
             &forwarder,
             &root.peer_id,
             &mut persisted_revision,
+            &metrics,
         )
         .expect("persist learned state");
         assert_eq!(persisted_revision, forwarder.membership_revision());
@@ -25777,12 +25814,20 @@ mod tests {
             &mut restarted_forwarder,
             &mut restarted_membership,
             &root.peer_id,
+            &metrics,
         )
         .expect("restore learned state");
 
         assert!(restarted_forwarder.is_configured_transport_peer(member_peer));
         assert!(restarted_membership.allows(member_peer));
         assert_eq!(restarted_forwarder.member_record_count(), 2);
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_state_persists, 1);
+        assert_eq!(snapshot.membership_state_records_persisted, 2);
+        assert_eq!(snapshot.membership_state_loads, 1);
+        assert_eq!(snapshot.membership_state_records_loaded, 2);
+        assert_eq!(snapshot.membership_state_load_failures, 0);
+        assert_eq!(snapshot.membership_state_persist_failures, 0);
         let mut commands = Vec::new();
         sync_live_tun_routes_with(&restarted_forwarder, &mut restarted_tun, 1_001, |command| {
             commands.push(command.to_string());
@@ -25802,6 +25847,38 @@ mod tests {
         );
 
         fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
+    }
+
+    #[test]
+    fn membership_state_failures_are_counted() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let config = config_with_peer(&local, peer_id());
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let metrics = RuntimeMetrics::default();
+        let path =
+            test_pairing_state_path("membership-failures").with_file_name("membership-state.json");
+        fs::write(&path, b"not valid membership state").expect("invalid state fixture");
+        let store = MembershipStateStore::new(&path);
+
+        load_persisted_membership_records(
+            Some(&store),
+            &mut forwarder,
+            &mut membership,
+            &local.peer_id,
+            &metrics,
+        )
+        .expect_err("invalid persisted state must fail");
+
+        fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
+        persist_membership_records(Some(&store), &forwarder, &local.peer_id, &metrics)
+            .expect_err("missing state directory must fail");
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_state_load_failures, 1);
+        assert_eq!(snapshot.membership_state_persist_failures, 1);
+        assert_eq!(snapshot.membership_state_loads, 0);
+        assert_eq!(snapshot.membership_state_persists, 0);
     }
 
     #[tokio::test]
