@@ -151,6 +151,18 @@ pub enum DnsNameSource {
     PeerIdFallback,
 }
 
+impl DnsNameSource {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalConfiguration => "local_configuration",
+            Self::PeerConfiguration => "peer_configuration",
+            Self::SignedMembership => "signed_membership",
+            Self::PeerIdFallback => "peer_id_fallback",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsRecordSet {
     pub label: String,
@@ -377,6 +389,15 @@ impl DnsZone {
 
     pub fn conflicts(&self) -> impl Iterator<Item = &DnsNameConflict> {
         self.conflicts.iter()
+    }
+
+    #[must_use]
+    pub fn conflict(&self, fqdn: &str) -> Option<&DnsNameConflict> {
+        let canonical = canonical_fqdn(fqdn);
+        self.conflicts
+            .binary_search_by(|conflict| conflict.fqdn.cmp(&canonical))
+            .ok()
+            .map(|index| &self.conflicts[index])
     }
 
     #[must_use]

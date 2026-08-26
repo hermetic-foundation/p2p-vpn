@@ -65,13 +65,13 @@ use crate::{
             validate_membership_records_page,
         },
         control_socket::{
-            ControlSocket, MAX_PAIR_RPC_RESPONSE_LEN, PairRpcCandidate, PairRpcCompletionArtifacts,
-            PairRpcDiagnostics, PairRpcDiscoveryStage, PairRpcErrorCode, PairRpcFailure,
-            PairRpcFailureCode, PairRpcJoinStarted, PairRpcMembershipRecordPayload,
-            PairRpcMembershipRole, PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus,
-            PairRpcPeer, PairRpcPhase, PairRpcReceipt, PairRpcRequest, PairRpcResponseEnvelope,
-            PairRpcResult, PairRpcRole, PairRpcRoute, PairRpcSignedMembershipRecord,
-            PairRpcTransport, RuntimeControlRequest,
+            ControlSocket, DnsControlRequest, MAX_PAIR_RPC_RESPONSE_LEN, PairRpcCandidate,
+            PairRpcCompletionArtifacts, PairRpcDiagnostics, PairRpcDiscoveryStage,
+            PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode, PairRpcJoinStarted,
+            PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan,
+            PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
+            PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
+            PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlRequest,
         },
         dns::{DnsRuntime, DnsRuntimeError},
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
@@ -1483,6 +1483,7 @@ where
                     ),
                     packet_plane_session_ttl,
                     packet_plane_replay_windows_per_session,
+                    dns: dns_runtime.as_ref(),
                 };
                 if let Some(reason) = handle_runtime_control_request(request, &control_context) {
                     log_runtime_event(
@@ -3298,6 +3299,7 @@ struct RuntimeControlContext<'a> {
     packet_plane_quic: PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
     packet_plane_replay_windows_per_session: usize,
+    dns: Option<&'a DnsRuntime>,
 }
 
 fn handle_runtime_control_request(
@@ -3401,6 +3403,25 @@ fn handle_runtime_control_request(
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket capabilities response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::Dns {
+            request,
+            respond_to,
+        } => {
+            let lines = match (context.dns, request) {
+                (Some(dns), DnsControlRequest::Status) => dns.status_lines(),
+                (Some(dns), DnsControlRequest::List { offset, limit }) => {
+                    dns.list_lines(offset, limit)
+                }
+                (Some(dns), DnsControlRequest::Resolve { input, lookup_type }) => {
+                    dns.resolve_lines(&input, lookup_type)
+                }
+                (None, _) => vec!["dns enabled=false".to_owned()],
+            };
+            if respond_to.send(lines).is_err() {
+                eprintln!("control socket DNS response receiver dropped");
             }
             None
         }
@@ -19897,6 +19918,7 @@ mod tests {
                 packet_plane_quic: PacketPlaneQuicSnapshot::default(),
                 packet_plane_session_ttl: Duration::from_secs(42),
                 packet_plane_replay_windows_per_session: 512,
+                dns: None,
             },
         );
 

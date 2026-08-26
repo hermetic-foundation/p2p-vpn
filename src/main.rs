@@ -61,8 +61,10 @@ use p2p_vpn::{
             PairRpcOperationStatus, PairRpcOutcome, PairRpcPhase, PairRpcQueryError,
             PairRpcRejectionReason, PairRpcRequest, PairRpcRequestEnvelope,
             PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
-            PairRpcSignedMembershipRecord, query_pair_rpc,
+            PairRpcSignedMembershipRecord, query_dns_list, query_dns_resolve, query_dns_status,
+            query_pair_rpc,
         },
+        dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
         forward::session_id_for_peer,
         p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
@@ -433,6 +435,10 @@ enum Command {
         #[command(subcommand)]
         command: PairCommand,
     },
+    Dns {
+        #[command(subcommand)]
+        command: DnsCommand,
+    },
     MembershipRecordIssue {
         #[arg(long = "issuer-config", default_value = "p2p-vpn.json")]
         issuer_config: PathBuf,
@@ -628,6 +634,35 @@ enum InstanceCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum DnsCommand {
+    Status {
+        #[command(flatten)]
+        target: DnsDaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    List {
+        #[command(flatten)]
+        target: DnsDaemonTarget,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = MAX_DNS_CONTROL_LIST_LIMIT)]
+        limit: usize,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    Resolve {
+        input: String,
+        #[command(flatten)]
+        target: DnsDaemonTarget,
+        #[arg(long = "type", value_enum, default_value_t = DnsRecordTypeArg::Auto)]
+        record_type: DnsRecordTypeArg,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum PairCommand {
     /// Open a one-time pairing window on a running daemon.
     Open {
@@ -792,6 +827,19 @@ struct PairDaemonTarget {
     /// Timeout for each local daemon RPC.
     #[arg(long, default_value_t = 5)]
     rpc_timeout_seconds: u64,
+}
+
+#[derive(Clone, Debug, ClapArgs)]
+struct DnsDaemonTarget {
+    /// Running daemon control socket. Defaults to /run/p2p-vpn/control.sock.
+    #[arg(long, conflicts_with = "instance")]
+    socket: Option<PathBuf>,
+    /// NixOS module instance, resolved to its generated control socket.
+    #[arg(long, conflicts_with = "socket")]
+    instance: Option<String>,
+    /// Timeout for the local daemon request.
+    #[arg(long, default_value_t = 5)]
+    timeout_seconds: u64,
 }
 
 #[tokio::main]
@@ -1311,6 +1359,7 @@ async fn main() -> Result<(), String> {
                 .await
             }
         },
+        Command::Dns { command } => dns_command(command).await,
         Command::MembershipRecordIssue {
             issuer_config,
             member_identity,
@@ -1731,6 +1780,27 @@ enum MetricsFormat {
 enum DaemonViewFormat {
     Text,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DnsRecordTypeArg {
+    Auto,
+    A,
+    Aaaa,
+    Ptr,
+    Any,
+}
+
+impl From<DnsRecordTypeArg> for DnsLookupType {
+    fn from(record_type: DnsRecordTypeArg) -> Self {
+        match record_type {
+            DnsRecordTypeArg::Auto => Self::Auto,
+            DnsRecordTypeArg::A => Self::A,
+            DnsRecordTypeArg::Aaaa => Self::Aaaa,
+            DnsRecordTypeArg::Ptr => Self::Ptr,
+            DnsRecordTypeArg::Any => Self::Any,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -2909,6 +2979,25 @@ fn pair_daemon_target(target: &PairDaemonTarget) -> Result<(PathBuf, Duration), 
             .unwrap_or_else(|| PathBuf::from("/run/p2p-vpn/control.sock"))
     };
     Ok((socket, Duration::from_secs(target.rpc_timeout_seconds)))
+}
+
+fn dns_daemon_target(target: &DnsDaemonTarget) -> Result<(PathBuf, Duration), String> {
+    if target.timeout_seconds == 0 || target.timeout_seconds > 300 {
+        return Err("--timeout-seconds must be between 1 and 300".to_owned());
+    }
+    let socket = if let Some(instance) = target.instance.as_deref() {
+        validate_nixos_instance_name(instance).map_err(|_| {
+            "--instance must start with an ASCII letter or digit and contain only letters, digits, dots, underscores, or hyphens"
+                .to_owned()
+        })?;
+        PathBuf::from(format!("/run/p2p-vpn-{instance}/control.sock"))
+    } else {
+        target
+            .socket
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/run/p2p-vpn/control.sock"))
+    };
+    Ok((socket, Duration::from_secs(target.timeout_seconds)))
 }
 
 fn pair_rpc_result(response: PairRpcResponseEnvelope) -> Result<PairRpcResult, String> {
@@ -8020,6 +8109,43 @@ fn relay_scan_config(
     Ok(config)
 }
 
+async fn dns_command(command: DnsCommand) -> Result<(), String> {
+    let (lines, view, format) = match command {
+        DnsCommand::Status { target, format } => {
+            let (socket, timeout) = dns_daemon_target(&target)?;
+            let lines = query_dns_status(&socket, timeout)
+                .await
+                .map_err(|error| format!("daemon DNS status query failed: {error:?}"))?;
+            (lines, "dns-status", format)
+        }
+        DnsCommand::List {
+            target,
+            offset,
+            limit,
+            format,
+        } => {
+            let (socket, timeout) = dns_daemon_target(&target)?;
+            let lines = query_dns_list(&socket, timeout, offset, limit)
+                .await
+                .map_err(|error| format!("daemon DNS list query failed: {error:?}"))?;
+            (lines, "dns-list", format)
+        }
+        DnsCommand::Resolve {
+            input,
+            target,
+            record_type,
+            format,
+        } => {
+            let (socket, timeout) = dns_daemon_target(&target)?;
+            let lines = query_dns_resolve(&socket, timeout, &input, record_type.into())
+                .await
+                .map_err(|error| format!("daemon DNS resolution query failed: {error:?}"))?;
+            (lines, "dns-resolve", format)
+        }
+    };
+    write_daemon_view_output(view, &lines, format)
+}
+
 async fn daemon_status(
     socket: &Path,
     timeout_seconds: u64,
@@ -10884,6 +11010,54 @@ mod tests {
             assert_eq!(timeout_seconds, 3);
             assert_eq!(format, expected_format);
         }
+    }
+
+    #[test]
+    fn cli_parses_dns_status_list_and_resolve_commands() {
+        let status = Cli::try_parse_from([
+            "p2p-vpn",
+            "dns",
+            "status",
+            "--instance",
+            "runner-mesh",
+            "--format",
+            "json",
+        ])
+        .expect("DNS status CLI");
+        let Command::Dns {
+            command: DnsCommand::Status { target, format },
+        } = status.command
+        else {
+            panic!("expected DNS status command");
+        };
+        assert_eq!(target.instance.as_deref(), Some("runner-mesh"));
+        assert_eq!(target.timeout_seconds, 5);
+        assert_eq!(format, DaemonViewFormat::Json);
+
+        let list =
+            Cli::try_parse_from(["p2p-vpn", "dns", "list", "--offset", "10", "--limit", "20"])
+                .expect("DNS list CLI");
+        let Command::Dns {
+            command: DnsCommand::List { offset, limit, .. },
+        } = list.command
+        else {
+            panic!("expected DNS list command");
+        };
+        assert_eq!((offset, limit), (10, 20));
+
+        let resolve =
+            Cli::try_parse_from(["p2p-vpn", "dns", "resolve", "worker-1", "--type", "aaaa"])
+                .expect("DNS resolve CLI");
+        let Command::Dns {
+            command: DnsCommand::Resolve {
+                input, record_type, ..
+            },
+        } = resolve.command
+        else {
+            panic!("expected DNS resolve command");
+        };
+        assert_eq!(input, "worker-1");
+        assert_eq!(record_type, DnsRecordTypeArg::Aaaa);
     }
 
     #[test]

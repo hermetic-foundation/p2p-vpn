@@ -34,6 +34,31 @@ pub const MAX_DNS_TCP_RESPONSE_BYTES: usize = 65_535;
 pub const MAX_DNS_TCP_CONNECTIONS: usize = 64;
 pub const MAX_DNS_TCP_QUERIES_PER_CONNECTION: usize = 32;
 pub const DNS_TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
+pub const MAX_DNS_CONTROL_LIST_LIMIT: usize = 256;
+const DNS_CONTROL_ADDRESS_PREVIEW: usize = 8;
+const DNS_CONTROL_PEER_PREVIEW: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DnsLookupType {
+    Auto,
+    A,
+    Aaaa,
+    Ptr,
+    Any,
+}
+
+impl DnsLookupType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "AUTO",
+            Self::A => "A",
+            Self::Aaaa => "AAAA",
+            Self::Ptr => "PTR",
+            Self::Any => "ANY",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct DnsRuntime {
@@ -162,6 +187,179 @@ impl DnsRuntime {
             zone_refreshes: self.metrics.zone_refreshes.load(Ordering::Relaxed),
             zone_refresh_failures: self.metrics.zone_refresh_failures.load(Ordering::Relaxed),
         }
+    }
+
+    #[must_use]
+    pub fn status_lines(&self) -> Vec<String> {
+        let snapshot = self.snapshot();
+        vec![
+            format!(
+                "dns enabled=true listener={} zone={} ttl_seconds={}",
+                snapshot.listener, snapshot.zone, snapshot.ttl_seconds
+            ),
+            format!(
+                "dns_records record_sets={} reverse_records={} conflicts={}",
+                snapshot.record_sets, snapshot.reverse_records, snapshot.conflicts
+            ),
+            format!(
+                "dns_queries udp={} tcp={} responses={} format_errors={} refused={} nxdomain={} truncated={} oversized_requests={} tcp_connections_rejected={} io_errors={}",
+                snapshot.udp_queries,
+                snapshot.tcp_queries,
+                snapshot.responses,
+                snapshot.format_errors,
+                snapshot.refused,
+                snapshot.nxdomain,
+                snapshot.truncated,
+                snapshot.oversized_requests,
+                snapshot.tcp_connections_rejected,
+                snapshot.io_errors,
+            ),
+            format!(
+                "dns_refresh successful={} failed={}",
+                snapshot.zone_refreshes, snapshot.zone_refresh_failures
+            ),
+        ]
+    }
+
+    #[must_use]
+    pub fn list_lines(&self, offset: usize, limit: usize) -> Vec<String> {
+        let zone = self.zone();
+        let mut entries = Vec::new();
+        for record in zone.records() {
+            let sources = record
+                .sources
+                .iter()
+                .map(|source| source.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            entries.push(format!(
+                "dns_record name={} peer={} transport_peer={} ipv4={} ipv4_total={} ipv6={} ipv6_total={} fallback={} sources={}",
+                record.fqdn,
+                record.peer,
+                record.transport_peer,
+                preview_values(&record.ipv4, DNS_CONTROL_ADDRESS_PREVIEW),
+                record.ipv4.len(),
+                preview_values(&record.ipv6, DNS_CONTROL_ADDRESS_PREVIEW),
+                record.ipv6.len(),
+                record.fallback,
+                sources,
+            ));
+        }
+        for (owner, target) in zone.reverse_records() {
+            entries.push(format!("dns_ptr name={owner} target={target}"));
+        }
+        for conflict in zone.conflicts() {
+            entries.push(format!(
+                "dns_conflict name={} peers={} peers_total={}",
+                conflict.fqdn,
+                preview_values(&conflict.peers, DNS_CONTROL_PEER_PREVIEW),
+                conflict.peers.len(),
+            ));
+        }
+
+        let total = entries.len();
+        let limit = limit.clamp(1, MAX_DNS_CONTROL_LIST_LIMIT);
+        let page = entries
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let returned = page.len();
+        let mut lines = vec![format!(
+            "dns_list offset={offset} limit={limit} returned={returned} total={total} more={}",
+            offset.saturating_add(returned) < total
+        )];
+        lines.extend(page);
+        lines
+    }
+
+    #[must_use]
+    pub fn resolve_lines(&self, input: &str, lookup_type: DnsLookupType) -> Vec<String> {
+        let zone = self.zone();
+        let (name, lookup_type) = match control_lookup(&zone, input, lookup_type) {
+            Ok(lookup) => lookup,
+            Err(reason) => {
+                return vec![format!(
+                    "dns_resolution query={} type={} status=invalid reason={reason}",
+                    sanitize_control_value(input),
+                    lookup_type.as_str(),
+                )];
+            }
+        };
+
+        if lookup_type == DnsLookupType::Ptr {
+            return match zone.reverse_target_name(&name) {
+                Some(target) => vec![format!(
+                    "dns_resolution query={} name={} type=PTR status=ok values={target}",
+                    sanitize_control_value(input),
+                    name,
+                )],
+                None => vec![format!(
+                    "dns_resolution query={} name={} type=PTR status=nxdomain values=-",
+                    sanitize_control_value(input),
+                    name,
+                )],
+            };
+        }
+
+        if !name_is_in_zone(&name, zone.name()) {
+            return vec![format!(
+                "dns_resolution query={} name={} type={} status=refused values=-",
+                sanitize_control_value(input),
+                name,
+                lookup_type.as_str(),
+            )];
+        }
+        if let Some(conflict) = zone.conflict(&name) {
+            return vec![format!(
+                "dns_resolution query={} name={} type={} status=conflict values=- peers={} peers_total={}",
+                sanitize_control_value(input),
+                name,
+                lookup_type.as_str(),
+                preview_values(&conflict.peers, DNS_CONTROL_PEER_PREVIEW),
+                conflict.peers.len(),
+            )];
+        }
+        let Some(record) = zone.record(&name) else {
+            return vec![format!(
+                "dns_resolution query={} name={} type={} status=nxdomain values=-",
+                sanitize_control_value(input),
+                name,
+                lookup_type.as_str(),
+            )];
+        };
+
+        let values = match lookup_type {
+            DnsLookupType::A => record
+                .ipv4
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            DnsLookupType::Aaaa => record
+                .ipv6
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            DnsLookupType::Auto | DnsLookupType::Any => record
+                .ipv4
+                .iter()
+                .map(|address| format!("A:{address}"))
+                .chain(record.ipv6.iter().map(|address| format!("AAAA:{address}")))
+                .collect::<Vec<_>>(),
+            DnsLookupType::Ptr => unreachable!("PTR lookups returned above"),
+        };
+        let status = if values.is_empty() { "nodata" } else { "ok" };
+        let values = if values.is_empty() {
+            "-".to_owned()
+        } else {
+            values.join(",")
+        };
+        vec![format!(
+            "dns_resolution query={} name={} type={} status={status} values={values}",
+            sanitize_control_value(input),
+            name,
+            lookup_type.as_str(),
+        )]
     }
 }
 
@@ -530,6 +728,63 @@ fn canonical_text_name(name: &str) -> String {
     canonical
 }
 
+fn control_lookup(
+    zone: &DnsZone,
+    input: &str,
+    lookup_type: DnsLookupType,
+) -> Result<(String, DnsLookupType), &'static str> {
+    if input.is_empty() || input.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err("invalid_input");
+    }
+    if let Ok(address) = input.parse() {
+        if matches!(lookup_type, DnsLookupType::A | DnsLookupType::Aaaa) {
+            return Err("address_requires_ptr_or_auto");
+        }
+        return Ok((crate::dns::reverse_name(address), DnsLookupType::Ptr));
+    }
+
+    let name = if input.contains('.') {
+        input.to_owned()
+    } else {
+        zone.qualify(input).map_err(|_| "invalid_name")?
+    };
+    let name = Name::from_ascii(&name).map_err(|_| "invalid_name")?;
+    let lookup_type = if lookup_type == DnsLookupType::Auto {
+        DnsLookupType::Any
+    } else {
+        lookup_type
+    };
+    Ok((canonical_name(&name), lookup_type))
+}
+
+fn preview_values<T: ToString>(values: &[T], limit: usize) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+    let mut preview = values
+        .iter()
+        .take(limit)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if values.len() > limit {
+        preview.push("...".to_owned());
+    }
+    preview.join(",")
+}
+
+fn sanitize_control_value(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':') {
+                char::from(byte)
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn name_is_in_zone(name: &str, zone: &str) -> bool {
     let zone = canonical_text_name(zone);
     name == zone
@@ -778,5 +1033,40 @@ mod tests {
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot.zone_refreshes, 0);
         assert_eq!(snapshot.zone_refresh_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn control_views_report_status_pages_and_qualified_resolution() {
+        let config = config("worker-1");
+        let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
+            .await
+            .expect("DNS bind")
+            .expect("enabled DNS");
+
+        let status = runtime.status_lines();
+        assert!(status[0].contains("enabled=true"));
+        assert!(status[0].contains("zone=runner-mesh.p2p-vpn.internal."));
+
+        let list = runtime.list_lines(0, 1);
+        assert!(list[0].starts_with("dns_list offset=0 limit=1 returned=1"));
+        assert!(list[0].contains("more=true"));
+
+        let resolved = runtime.resolve_lines("worker-1", DnsLookupType::Auto);
+        assert!(resolved[0].contains("name=worker-1.runner-mesh.p2p-vpn.internal."));
+        assert!(resolved[0].contains("status=ok"));
+        assert!(resolved[0].contains("A:"));
+        assert!(resolved[0].contains("AAAA:"));
+
+        let address = runtime
+            .zone()
+            .record("worker-1.runner-mesh.p2p-vpn.internal.")
+            .expect("local record")
+            .ipv4[0];
+        let reverse = runtime.resolve_lines(&address.to_string(), DnsLookupType::Auto);
+        assert!(reverse[0].contains("type=PTR status=ok"));
+        assert!(reverse[0].contains("values=worker-1.runner-mesh.p2p-vpn.internal."));
+
+        let refused = runtime.resolve_lines("example.com", DnsLookupType::A);
+        assert!(refused[0].contains("status=refused"));
     }
 }

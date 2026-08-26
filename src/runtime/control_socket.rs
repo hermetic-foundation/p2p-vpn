@@ -10,6 +10,8 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
+use crate::runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT};
+
 const STATUS_REQUEST: &[u8] = b"status\n";
 const STATE_REQUEST: &[u8] = b"state\n";
 const PEERS_REQUEST: &[u8] = b"peers\n";
@@ -19,7 +21,7 @@ const MTU_REQUEST: &[u8] = b"mtu\n";
 const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const PAIR_RPC_FRAME_PREFIX: &str = "rpc-v1 ";
-const MAX_REQUEST_LEN: usize = 64;
+const MAX_REQUEST_LEN: usize = 512;
 const MAX_RESPONSE_LEN: usize = 256 * 1024;
 const REQUEST_CHANNEL: usize = 16;
 
@@ -483,12 +485,29 @@ pub enum RuntimeControlRequest {
     Capabilities {
         respond_to: oneshot::Sender<Vec<String>>,
     },
+    Dns {
+        request: DnsControlRequest,
+        respond_to: oneshot::Sender<Vec<String>>,
+    },
     Shutdown {
         respond_to: oneshot::Sender<Vec<String>>,
     },
     PairRpc {
         request: PairRpcRequest,
         respond_to: oneshot::Sender<PairRpcResponseEnvelope>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DnsControlRequest {
+    Status,
+    List {
+        offset: usize,
+        limit: usize,
+    },
+    Resolve {
+        input: String,
+        lookup_type: DnsLookupType,
     },
 }
 
@@ -562,6 +581,13 @@ async fn handle_connection(
         MTU_REQUEST => RequestKind::Mtu,
         CAPABILITIES_REQUEST => RequestKind::Capabilities,
         SHUTDOWN_REQUEST => RequestKind::Shutdown,
+        header if header.starts_with(b"dns ") => {
+            let Some(request) = parse_dns_control_request(header) else {
+                stream.write_all(b"error invalid dns request\n").await?;
+                return Ok(());
+            };
+            RequestKind::Dns(request)
+        }
         header if header.starts_with(b"rpc-v1") => {
             return handle_pair_rpc_connection(&mut stream, &tx, header).await;
         }
@@ -629,6 +655,16 @@ async fn handle_legacy_connection(
                 .map_err(|_| {
                     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
                 })?;
+        }
+        RequestKind::Dns(request) => {
+            tx.send(RuntimeControlRequest::Dns {
+                request,
+                respond_to,
+            })
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+            })?;
         }
         RequestKind::Shutdown => {
             tx.send(RuntimeControlRequest::Shutdown { respond_to })
@@ -784,7 +820,7 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RequestKind {
     Status,
     State,
@@ -793,7 +829,38 @@ enum RequestKind {
     Paths,
     Mtu,
     Capabilities,
+    Dns(DnsControlRequest),
     Shutdown,
+}
+
+fn parse_dns_control_request(header: &[u8]) -> Option<DnsControlRequest> {
+    let header = std::str::from_utf8(header).ok()?.strip_suffix('\n')?;
+    let fields = header.split_ascii_whitespace().collect::<Vec<_>>();
+    match fields.as_slice() {
+        ["dns", "status"] => Some(DnsControlRequest::Status),
+        ["dns", "list", offset, limit] => {
+            let offset = offset.parse().ok()?;
+            let limit = limit.parse().ok()?;
+            (limit > 0 && limit <= MAX_DNS_CONTROL_LIST_LIMIT)
+                .then_some(DnsControlRequest::List { offset, limit })
+        }
+        ["dns", "resolve", input, lookup_type] => Some(DnsControlRequest::Resolve {
+            input: (*input).to_owned(),
+            lookup_type: parse_dns_lookup_type(lookup_type)?,
+        }),
+        _ => None,
+    }
+}
+
+fn parse_dns_lookup_type(input: &str) -> Option<DnsLookupType> {
+    match input.to_ascii_uppercase().as_str() {
+        "AUTO" => Some(DnsLookupType::Auto),
+        "A" => Some(DnsLookupType::A),
+        "AAAA" => Some(DnsLookupType::Aaaa),
+        "PTR" => Some(DnsLookupType::Ptr),
+        "ANY" => Some(DnsLookupType::Any),
+        _ => None,
+    }
 }
 
 async fn read_bounded_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
@@ -874,6 +941,51 @@ pub async fn query_capabilities(
     query_lines(path, timeout, CAPABILITIES_REQUEST).await
 }
 
+pub async fn query_dns_status(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Vec<String>, QueryError> {
+    query_lines(path, timeout, b"dns status\n").await
+}
+
+pub async fn query_dns_list(
+    path: &Path,
+    timeout: std::time::Duration,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<String>, QueryError> {
+    if limit == 0 || limit > MAX_DNS_CONTROL_LIST_LIMIT {
+        return Err(QueryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("DNS list limit must be between 1 and {MAX_DNS_CONTROL_LIST_LIMIT}"),
+        )));
+    }
+    let request = format!("dns list {offset} {limit}\n");
+    query_lines(path, timeout, request.as_bytes()).await
+}
+
+pub async fn query_dns_resolve(
+    path: &Path,
+    timeout: std::time::Duration,
+    input: &str,
+    lookup_type: DnsLookupType,
+) -> Result<Vec<String>, QueryError> {
+    if input.is_empty() || input.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err(QueryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DNS lookup input must be one name or IP address",
+        )));
+    }
+    let request = format!("dns resolve {input} {}\n", lookup_type.as_str());
+    if request.len() > MAX_REQUEST_LEN {
+        return Err(QueryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("DNS lookup request exceeds the {MAX_REQUEST_LEN}-byte limit"),
+        )));
+    }
+    query_lines(path, timeout, request.as_bytes()).await
+}
+
 pub async fn query_shutdown(
     path: &Path,
     timeout: std::time::Duration,
@@ -940,7 +1052,7 @@ pub async fn query_pair_rpc(
 async fn query_lines(
     path: &Path,
     timeout: std::time::Duration,
-    request: &'static [u8],
+    request: &[u8],
 ) -> Result<Vec<String>, QueryError> {
     let mut stream = tokio::time::timeout(timeout, UnixStream::connect(path))
         .await
@@ -1464,6 +1576,94 @@ mod tests {
                 .expect("capabilities"),
             vec!["validated peers: 1".to_owned()]
         );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[test]
+    fn dns_control_request_parser_accepts_bounded_operations() {
+        assert_eq!(
+            parse_dns_control_request(b"dns status\n"),
+            Some(DnsControlRequest::Status)
+        );
+        assert_eq!(
+            parse_dns_control_request(b"dns list 32 64\n"),
+            Some(DnsControlRequest::List {
+                offset: 32,
+                limit: 64,
+            })
+        );
+        assert_eq!(
+            parse_dns_control_request(b"dns resolve worker-1 AAAA\n"),
+            Some(DnsControlRequest::Resolve {
+                input: "worker-1".to_owned(),
+                lookup_type: DnsLookupType::Aaaa,
+            })
+        );
+        assert!(parse_dns_control_request(b"dns list 0 0\n").is_none());
+        assert!(parse_dns_control_request(b"dns list 0 257\n").is_none());
+        assert!(parse_dns_control_request(b"dns resolve host MX\n").is_none());
+    }
+
+    #[tokio::test]
+    async fn control_socket_round_trips_dns_requests() {
+        let path = test_socket_path("dns");
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let expected = [
+                DnsControlRequest::Status,
+                DnsControlRequest::List {
+                    offset: 2,
+                    limit: 4,
+                },
+                DnsControlRequest::Resolve {
+                    input: "worker-1".to_owned(),
+                    lookup_type: DnsLookupType::Auto,
+                },
+            ];
+            for request in expected {
+                let Some(RuntimeControlRequest::Dns {
+                    request: actual,
+                    respond_to,
+                }) = rx.recv().await
+                else {
+                    panic!("expected DNS request");
+                };
+                assert_eq!(actual, request);
+                respond_to
+                    .send(vec!["dns test=true".to_owned()])
+                    .expect("DNS response accepted");
+            }
+        });
+
+        assert_eq!(
+            query_dns_status(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("DNS status"),
+            vec!["dns test=true".to_owned()]
+        );
+        assert_eq!(
+            query_dns_list(&path, std::time::Duration::from_secs(1), 2, 4)
+                .await
+                .expect("DNS list"),
+            vec!["dns test=true".to_owned()]
+        );
+        assert_eq!(
+            query_dns_resolve(
+                &path,
+                std::time::Duration::from_secs(1),
+                "worker-1",
+                DnsLookupType::Auto,
+            )
+            .await
+            .expect("DNS resolve"),
+            vec!["dns test=true".to_owned()]
+        );
+        assert!(matches!(
+            query_dns_list(&path, std::time::Duration::from_secs(1), 0, 0).await,
+            Err(QueryError::Io(error)) if error.kind() == io::ErrorKind::InvalidInput
+        ));
         responder.await.expect("responder");
         drop(socket);
     }
