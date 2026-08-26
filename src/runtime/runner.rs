@@ -112,6 +112,7 @@ use crate::{
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
+const RECOVERY_DISCOVERY_QUERY_TIMEOUT: Duration = Duration::from_mins(1);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
 const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
@@ -127,6 +128,7 @@ const PATH_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 const DISCOVERED_ADDRESS_TTL: Duration = Duration::from_mins(60);
 const DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE: Duration = Duration::from_secs(10);
 const DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX: Duration = Duration::from_mins(5);
+const RECOVERY_DIAL_STATE_TTL: Duration = Duration::from_secs(5 * 60 + 10);
 const MIN_QUEUE_EXPIRY_INTERVAL: Duration = Duration::from_millis(10);
 const SERVICE_STATUS_NONCE: u64 = 1;
 const PATH_PROBE_PAYLOAD: &[u8] = b"path-probe-v1";
@@ -147,6 +149,9 @@ const MAX_KADEMLIA_PEER_ADDRESS_RECORD_BYTES: usize = 64 * 1024;
 const MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES: usize = 32;
 const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 30 * 60;
 const KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE: u64 = 60 * 60;
+const MAX_RECOVERY_DIAL_ATTEMPTS: usize =
+    MAX_MEMBERSHIP_RECORDS * MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES;
+const MAX_RECOVERY_DISCOVERY_QUERIES: usize = MAX_MEMBERSHIP_RECORDS;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
 const STREAM_FALLBACK_ORDERED_FLOW_WINDOW: usize = 16;
@@ -4364,6 +4369,7 @@ fn handle_redial_tick(
             node.membership_tag.as_deref(),
             forwarder.configured_transport_peers(),
             paths,
+            discovered_peer_addresses,
             metrics,
         );
     }
@@ -4410,6 +4416,7 @@ fn query_configured_peer_recovery_discovery(
     membership_tag: Option<&str>,
     configured_peers: impl IntoIterator<Item = Libp2pPeerId>,
     paths: &PathSet,
+    recovery_state: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
 ) {
     for peer in configured_peer_recovery_discovery_targets(
@@ -4417,20 +4424,14 @@ fn query_configured_peer_recovery_discovery(
         configured_peers,
         |candidate| redial_connection_state(paths, *candidate, swarm.is_connected(candidate)),
     ) {
-        swarm
-            .behaviour_mut()
-            .kad
-            .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
-                network_name,
-                membership_tag,
-                peer,
-            ));
-        swarm.behaviour_mut().kad.get_closest_peers(peer);
-        metrics.record_kademlia_provider_lookup();
-        log_runtime_event(
-            LogLevel::Info,
-            "peer_recovery_discovery_query",
-            &[("peer", &peer.to_string()), ("reason", "periodic")],
+        query_configured_peer_recovery_discovery_for_peer(
+            swarm,
+            network_name,
+            membership_tag,
+            peer,
+            recovery_state,
+            metrics,
+            "periodic",
         );
     }
 }
@@ -4440,24 +4441,32 @@ fn query_configured_peer_recovery_discovery_for_peer(
     network_name: &str,
     membership_tag: Option<&str>,
     peer: Libp2pPeerId,
+    recovery_state: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
     reason: &'static str,
-) {
-    swarm
-        .behaviour_mut()
-        .kad
-        .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
-            network_name,
-            membership_tag,
-            peer,
-        ));
-    swarm.behaviour_mut().kad.get_closest_peers(peer);
+) -> bool {
+    let now = Instant::now();
+    if !recovery_state.should_query_recovery_discovery_at(peer, now) {
+        return false;
+    }
+    let record_query =
+        swarm
+            .behaviour_mut()
+            .kad
+            .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
+                network_name,
+                membership_tag,
+                peer,
+            ));
+    let closest_query = swarm.behaviour_mut().kad.get_closest_peers(peer);
+    recovery_state.record_recovery_discovery_queries(peer, [record_query, closest_query], now);
     metrics.record_kademlia_provider_lookup();
     log_runtime_event(
         LogLevel::Info,
         "peer_recovery_discovery_query",
         &[("peer", &peer.to_string()), ("reason", reason)],
     );
+    true
 }
 
 fn should_query_configured_peer_recovery_discovery(discovery: &DiscoveryConfig) -> bool {
@@ -5308,11 +5317,15 @@ fn redial_known_addresses(
     }
 
     for (peer, address) in targets.addresses {
+        let now = Instant::now();
+        if !discovered_address_state.should_attempt_recovery_dial_at(peer, &address, now) {
+            continue;
+        }
         metrics.record_redial_attempt();
         let dial_address = peer_dial_address(peer, address.clone());
         if let Err(error) = swarm.dial(dial_address.clone()) {
-            let discovered =
-                discovered_address_state.record_failure_at(peer, &address, Instant::now());
+            discovered_address_state.record_recovery_dial_failure_at(peer, &address, now);
+            let discovered = discovered_address_state.record_failure_at(peer, &address, now);
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -5332,7 +5345,6 @@ fn redial_known_addresses(
 struct RelayReadiness {
     accepted_reservations: HashSet<Libp2pPeerId>,
     relayed_listen_addresses: HashMap<Libp2pPeerId, Vec<Multiaddr>>,
-    attempted_ready_dials: HashMap<(Libp2pPeerId, Libp2pPeerId, Multiaddr), Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -6249,8 +6261,6 @@ impl RelayReadiness {
         }
 
         self.relayed_listen_addresses.remove(&relay);
-        self.attempted_ready_dials
-            .retain(|(attempted_relay, _, _), _| *attempted_relay != relay);
         true
     }
 
@@ -6258,17 +6268,10 @@ impl RelayReadiness {
         let removed_reservation = self.accepted_reservations.remove(&relay);
         let removed_listen_address = self.relayed_listen_addresses.remove(&relay).is_some();
         if removed_reservation || removed_listen_address {
-            self.attempted_ready_dials
-                .retain(|(attempted_relay, _, _), _| *attempted_relay != relay);
             true
         } else {
             false
         }
-    }
-
-    fn record_peer_connection_lost(&mut self, peer: Libp2pPeerId) {
-        self.attempted_ready_dials
-            .retain(|(_, attempted_peer, _), _| *attempted_peer != peer);
     }
 
     fn relay_ready(&self, relay: Libp2pPeerId) -> bool {
@@ -6293,27 +6296,6 @@ impl RelayReadiness {
             .map(|address| (relay, address))
             .collect()
     }
-
-    fn should_attempt_ready_dial(
-        &mut self,
-        relay: Libp2pPeerId,
-        peer: Libp2pPeerId,
-        address: &Multiaddr,
-        now: Instant,
-    ) -> bool {
-        let key = (relay, peer, address.clone());
-        if self
-            .attempted_ready_dials
-            .get(&key)
-            .is_some_and(|last_attempt| {
-                now.saturating_duration_since(*last_attempt) < REDIAL_INTERVAL
-            })
-        {
-            return false;
-        }
-        self.attempted_ready_dials.insert(key, now);
-        true
-    }
 }
 
 fn dial_relay_ready_configured_peers(
@@ -6322,7 +6304,7 @@ fn dial_relay_ready_configured_peers(
     relay_readiness: &mut RelayReadiness,
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
-    discovered_peer_addresses: &DiscoveredPeerAddresses,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     paths: &PathSet,
     metrics: &RuntimeMetrics,
     relay: Libp2pPeerId,
@@ -6350,7 +6332,8 @@ fn dial_relay_ready_configured_peers(
         discovered_peer_addresses,
         |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
     ) {
-        if !relay_readiness.should_attempt_ready_dial(relay, peer, &address, Instant::now()) {
+        let now = Instant::now();
+        if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
             continue;
         }
         metrics.record_redial_attempt();
@@ -6365,6 +6348,7 @@ fn dial_relay_ready_configured_peers(
             ],
         );
         if let Err(error) = swarm.dial(dial_address.clone()) {
+            discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -6401,7 +6385,7 @@ fn relay_ready_configured_peer_targets(
         .map(|(peer, address)| (peer, address))
         .chain(discovered)
     {
-        if *peer == local_peer || connection_state(peer).has_usable_relay_path() {
+        if *peer == local_peer || !connection_state(peer).needs_relay_path() {
             continue;
         }
         if !configured_peer_set.contains(peer) {
@@ -6422,7 +6406,7 @@ fn relay_ready_configured_peer_targets(
         .map(|(_, address)| address.clone().with(Protocol::P2pCircuit))
         .collect::<Vec<_>>();
     for peer in configured_peers {
-        if peer == local_peer || connection_state(&peer).has_usable_relay_path() {
+        if peer == local_peer || !connection_state(&peer).needs_relay_path() {
             continue;
         }
         for address in &relay_reservation_addresses {
@@ -6470,11 +6454,15 @@ fn redial_selected_addresses(
         if !selected_peers.contains(&peer) {
             continue;
         }
+        let now = Instant::now();
+        if !discovered_address_state.should_attempt_recovery_dial_at(peer, &address, now) {
+            continue;
+        }
         metrics.record_redial_attempt();
         let dial_address = peer_dial_address(peer, address.clone());
         if let Err(error) = swarm.dial(dial_address.clone()) {
-            let discovered =
-                discovered_address_state.record_failure_at(peer, &address, Instant::now());
+            discovered_address_state.record_recovery_dial_failure_at(peer, &address, now);
+            let discovered = discovered_address_state.record_failure_at(peer, &address, now);
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -6508,9 +6496,13 @@ fn redial_packet_plane_recovery_addresses(
         relay_addresses,
         &ready_discovered_addresses,
     ) {
+        if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
+            continue;
+        }
         metrics.record_packet_plane_path_recovery_dial_attempt();
         let dial_address = peer_dial_address(peer, address.clone());
         if let Err(error) = swarm.dial(dial_address.clone()) {
+            discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
             discovered_peer_addresses.record_failure_at(peer, &address, now);
             metrics.record_packet_plane_path_recovery_dial_failure();
             log_runtime_event(
@@ -6635,8 +6627,9 @@ fn pending_redial_targets(
         }
         match connection_state(peer) {
             RedialConnectionState::Disconnected | RedialConnectionState::ConnectedNoUsablePath => {}
-            RedialConnectionState::DirectOnly => {}
-            RedialConnectionState::RelayOnly | RedialConnectionState::DirectAndRelay => {
+            RedialConnectionState::RelayOnly
+            | RedialConnectionState::DirectOnly
+            | RedialConnectionState::DirectAndRelay => {
                 skipped_connected += 1;
                 continue;
             }
@@ -6672,8 +6665,8 @@ impl RedialConnectionState {
         !matches!(self, Self::Disconnected | Self::ConnectedNoUsablePath)
     }
 
-    const fn has_usable_relay_path(self) -> bool {
-        matches!(self, Self::RelayOnly | Self::DirectAndRelay)
+    const fn needs_relay_path(self) -> bool {
+        matches!(self, Self::Disconnected | Self::ConnectedNoUsablePath)
     }
 }
 
@@ -6753,7 +6746,11 @@ fn record_discovered_outgoing_connection_failure(
     };
     let now = Instant::now();
     let failed_addresses = dial_error_failed_addresses(error);
+    let mut recorded_recovery_failures = HashSet::new();
     for address in failed_addresses {
+        if recorded_recovery_failures.insert(recovery_dial_target(peer, &address)) {
+            discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
+        }
         if dial_error_reports_relay_no_reservation(error)
             && relayed_address_relay_peer(&address).is_some()
         {
@@ -6846,6 +6843,10 @@ struct RedialTargets {
 #[derive(Debug, Default, Eq, PartialEq)]
 struct DiscoveredPeerAddresses {
     addresses: Vec<DiscoveredPeerAddress>,
+    recovery_dial_attempts: HashMap<(Libp2pPeerId, RecoveryDialTarget), RecoveryDialAttempt>,
+    last_recovery_dial_prune: Option<Instant>,
+    recovery_discovery_queries: HashMap<Libp2pPeerId, RecoveryDiscoveryQuery>,
+    recovery_discovery_query_peers: HashMap<kad::QueryId, Libp2pPeerId>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -6855,6 +6856,25 @@ struct DiscoveredPeerAddress {
     last_seen: Instant,
     failure_count: u8,
     quarantined_until: Option<Instant>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RecoveryDialAttempt {
+    last_attempt: Instant,
+    retry_after: Instant,
+    failure_count: u8,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RecoveryDiscoveryQuery {
+    last_query: Instant,
+    pending_queries: usize,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum RecoveryDialTarget {
+    Direct(Multiaddr),
+    Relay(Libp2pPeerId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6978,6 +6998,164 @@ impl DiscoveredPeerAddresses {
             .map(|entry| (entry.peer, entry.address.clone()))
             .collect()
     }
+
+    fn should_attempt_recovery_dial_at(
+        &mut self,
+        peer: Libp2pPeerId,
+        address: &Multiaddr,
+        now: Instant,
+    ) -> bool {
+        let key = (peer, recovery_dial_target(peer, address));
+        if self
+            .recovery_dial_attempts
+            .get(&key)
+            .is_some_and(|attempt| attempt.retry_after > now)
+        {
+            return false;
+        }
+
+        if !self.make_recovery_dial_room(&key, now) {
+            return false;
+        }
+        let failure_count = self
+            .recovery_dial_attempts
+            .get(&key)
+            .map_or(0, |attempt| attempt.failure_count);
+        self.recovery_dial_attempts.insert(
+            key,
+            RecoveryDialAttempt {
+                last_attempt: now,
+                retry_after: now + REDIAL_INTERVAL,
+                failure_count,
+            },
+        );
+        true
+    }
+
+    fn record_recovery_dial_failure_at(
+        &mut self,
+        peer: Libp2pPeerId,
+        address: &Multiaddr,
+        now: Instant,
+    ) {
+        let key = (peer, recovery_dial_target(peer, address));
+        if !self.make_recovery_dial_room(&key, now) {
+            return;
+        }
+        let attempt = self
+            .recovery_dial_attempts
+            .entry(key)
+            .or_insert(RecoveryDialAttempt {
+                last_attempt: now,
+                retry_after: now,
+                failure_count: 0,
+            });
+        attempt.last_attempt = now;
+        attempt.failure_count = attempt.failure_count.saturating_add(1);
+        attempt.retry_after = now + discovered_address_failure_backoff(attempt.failure_count);
+    }
+
+    fn record_recovery_connection_at(&mut self, peer: Libp2pPeerId, now: Instant) {
+        for ((attempted_peer, _), attempt) in &mut self.recovery_dial_attempts {
+            if *attempted_peer != peer {
+                continue;
+            }
+            attempt.failure_count = 0;
+            attempt.retry_after = now + REDIAL_INTERVAL;
+        }
+    }
+
+    fn should_query_recovery_discovery_at(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
+        let expired_peers = self
+            .recovery_discovery_queries
+            .iter()
+            .filter_map(|(candidate, query)| {
+                let age = now.saturating_duration_since(query.last_query);
+                (age >= RECOVERY_DISCOVERY_QUERY_TIMEOUT
+                    || (query.pending_queries == 0 && age >= REDIAL_INTERVAL))
+                    .then_some(*candidate)
+            })
+            .collect::<HashSet<_>>();
+        if !expired_peers.is_empty() {
+            self.recovery_discovery_queries
+                .retain(|candidate, _| !expired_peers.contains(candidate));
+            self.recovery_discovery_query_peers
+                .retain(|_, candidate| !expired_peers.contains(candidate));
+        }
+        if self.recovery_discovery_queries.contains_key(&peer) {
+            return false;
+        }
+        if self.recovery_discovery_queries.len() >= MAX_RECOVERY_DISCOVERY_QUERIES {
+            return false;
+        }
+        self.recovery_discovery_queries.insert(
+            peer,
+            RecoveryDiscoveryQuery {
+                last_query: now,
+                pending_queries: 0,
+            },
+        );
+        true
+    }
+
+    fn record_recovery_discovery_queries(
+        &mut self,
+        peer: Libp2pPeerId,
+        queries: impl IntoIterator<Item = kad::QueryId>,
+        now: Instant,
+    ) {
+        let Some(state) = self.recovery_discovery_queries.get_mut(&peer) else {
+            return;
+        };
+        state.last_query = now;
+        for query in queries {
+            if self
+                .recovery_discovery_query_peers
+                .insert(query, peer)
+                .is_none()
+            {
+                state.pending_queries += 1;
+            }
+        }
+    }
+
+    fn finish_recovery_discovery_query(&mut self, query: kad::QueryId) {
+        let Some(peer) = self.recovery_discovery_query_peers.remove(&query) else {
+            return;
+        };
+        if let Some(state) = self.recovery_discovery_queries.get_mut(&peer) {
+            state.pending_queries = state.pending_queries.saturating_sub(1);
+        }
+    }
+
+    fn make_recovery_dial_room(
+        &mut self,
+        key: &(Libp2pPeerId, RecoveryDialTarget),
+        now: Instant,
+    ) -> bool {
+        if self.recovery_dial_attempts.contains_key(key)
+            || self.recovery_dial_attempts.len() < MAX_RECOVERY_DIAL_ATTEMPTS
+        {
+            return true;
+        }
+        if self
+            .last_recovery_dial_prune
+            .is_none_or(|last_prune| now.saturating_duration_since(last_prune) >= REDIAL_INTERVAL)
+        {
+            self.recovery_dial_attempts.retain(|_, attempt| {
+                now.saturating_duration_since(attempt.last_attempt) < RECOVERY_DIAL_STATE_TTL
+            });
+            self.last_recovery_dial_prune = Some(now);
+        }
+        self.recovery_dial_attempts.len() < MAX_RECOVERY_DIAL_ATTEMPTS
+    }
+}
+
+fn recovery_dial_target(peer: Libp2pPeerId, address: &Multiaddr) -> RecoveryDialTarget {
+    relayed_address_relay_peer(address).map_or_else(
+        || RecoveryDialTarget::Direct(peer_dial_address(peer, address.clone())),
+        RecoveryDialTarget::Relay,
+    )
 }
 
 fn discovered_address_failure_backoff(failure_count: u8) -> Duration {
@@ -8282,7 +8460,11 @@ async fn handle_swarm_event(
                 context.auto_relay.should_discover_candidates(),
                 context.relay_server_enabled,
             ) {
-                EstablishedConnectionAuthorization::OverlayPeer => {}
+                EstablishedConnectionAuthorization::OverlayPeer => {
+                    context
+                        .discovered_peer_addresses
+                        .record_recovery_connection_at(peer_id, Instant::now());
+                }
                 EstablishedConnectionAuthorization::InfrastructurePeer => {
                     advertise_relay_server_listener_address(
                         swarm,
@@ -8414,9 +8596,6 @@ async fn handle_swarm_event(
             ..
         } => {
             context.active_connections.remove(&(peer_id, connection_id));
-            if context.forwarder.is_configured_transport_peer(peer_id) {
-                context.relay_readiness.record_peer_connection_lost(peer_id);
-            }
             record_path_closed(
                 context.paths,
                 context.forwarder,
@@ -8462,6 +8641,7 @@ async fn handle_swarm_event(
                         &context.local_capabilities.network_name,
                         context.local_capabilities.membership_tag.as_deref(),
                         peer_id,
+                        context.discovered_peer_addresses,
                         context.metrics,
                         "connection_closed",
                     );
@@ -8509,7 +8689,6 @@ async fn handle_swarm_event(
             if let Some(peer_id) = peer_id
                 && context.forwarder.is_configured_transport_peer(peer_id)
             {
-                context.relay_readiness.record_peer_connection_lost(peer_id);
                 if should_query_configured_peer_recovery_discovery(context.discovery)
                     && peer_lacks_supported_packet_path(
                         context.paths,
@@ -8524,6 +8703,7 @@ async fn handle_swarm_event(
                         &context.local_capabilities.network_name,
                         context.local_capabilities.membership_tag.as_deref(),
                         peer_id,
+                        context.discovered_peer_addresses,
                         context.metrics,
                         "outgoing_connection_error",
                     );
@@ -15035,6 +15215,9 @@ fn handle_kademlia_event(
                 &result,
             );
             if step.last {
+                context
+                    .discovered_peer_addresses
+                    .finish_recovery_discovery_query(id);
                 context.code_pairing_sessions.finish_join_lookup(id);
             }
             log_runtime_event(
@@ -15406,7 +15589,7 @@ fn handle_relay_event(
     paths: &PathSet,
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
-    discovered_peer_addresses: &DiscoveredPeerAddresses,
+    discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
     discovery: &DiscoveryConfig,
     local_capabilities: &ControlCapabilities,
@@ -15584,8 +15767,12 @@ fn learn_peer_address(
     }
 
     let dial_address = peer_dial_address(peer, address.clone());
+    if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
+        return;
+    }
     metrics.record_discovered_address_dial_attempt();
     if let Err(error) = swarm.dial(dial_address) {
+        discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
         discovered_peer_addresses.record_failure_at(peer, &address, now);
         metrics.record_discovered_address_dial_failure();
         eprintln!("dial discovered peer {peer} failed: {error}");
@@ -20734,7 +20921,7 @@ mod tests {
     }
 
     #[test]
-    fn redial_targets_prewarm_configured_relay_for_direct_only_peers() {
+    fn redial_targets_skip_configured_relay_for_direct_only_peers() {
         let local = peer_id();
         let relay = peer_id();
         let peer = peer_id();
@@ -20768,8 +20955,8 @@ mod tests {
         assert_eq!(
             targets,
             RedialTargets {
-                addresses: vec![(peer, relayed_address)],
-                skipped_connected: 2,
+                addresses: vec![],
+                skipped_connected: 3,
             }
         );
     }
@@ -21072,14 +21259,55 @@ mod tests {
         })
         .expect("node");
         let metrics = RuntimeMetrics::default();
+        let mut recovery_state = DiscoveredPeerAddresses::default();
 
-        query_configured_peer_recovery_discovery_for_peer(
+        assert!(query_configured_peer_recovery_discovery_for_peer(
             &mut node.swarm,
             "lab",
             None,
             remote,
+            &mut recovery_state,
             &metrics,
             "test",
+        ));
+        assert!(!query_configured_peer_recovery_discovery_for_peer(
+            &mut node.swarm,
+            "lab",
+            None,
+            remote,
+            &mut recovery_state,
+            &metrics,
+            "duplicate",
+        ));
+        let query_started_at = recovery_state
+            .recovery_discovery_queries
+            .get(&remote)
+            .expect("recovery query state")
+            .last_query;
+        let query_ids = recovery_state
+            .recovery_discovery_query_peers
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(query_ids.len(), 2);
+        assert!(
+            !recovery_state
+                .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)
+        );
+        for query in query_ids {
+            recovery_state.finish_recovery_discovery_query(query);
+        }
+        assert_eq!(
+            recovery_state
+                .recovery_discovery_queries
+                .get(&remote)
+                .expect("completed query cooldown")
+                .pending_queries,
+            0
+        );
+        assert!(
+            recovery_state
+                .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -21655,17 +21883,13 @@ mod tests {
     }
 
     #[test]
-    fn relay_ready_peer_targets_synthesize_backup_for_direct_only_peer() {
+    fn relay_ready_peer_targets_skip_backup_for_direct_only_peer() {
         let local = peer_id();
         let relay = peer_id();
         let peer = peer_id();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
-        let relayed_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit")
-            .parse()
-            .expect("relayed address");
-
         let targets = relay_ready_configured_peer_targets(
             local,
             relay,
@@ -21676,22 +21900,16 @@ mod tests {
             |_| RedialConnectionState::DirectOnly,
         );
 
-        assert_eq!(targets, vec![(peer, relayed_address)]);
+        assert!(targets.is_empty());
     }
 
     #[test]
     fn relay_readiness_requires_reservation_and_relayed_listen_address() {
         let relay = peer_id();
-        let peer = peer_id();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
-        let address: Multiaddr =
-            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
-                .parse()
-                .expect("relayed address");
         let mut readiness = RelayReadiness::default();
-        let now = Instant::now();
 
         readiness.record_reservation_accepted(relay);
 
@@ -21700,42 +21918,102 @@ mod tests {
         readiness.record_relay_listen_address(relay, relay_address.clone());
 
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
-        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address, now));
-        assert!(!readiness.should_attempt_ready_dial(
-            relay,
-            peer,
-            &address,
-            now + REDIAL_INTERVAL - Duration::from_millis(1)
-        ));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now + REDIAL_INTERVAL));
     }
 
     #[test]
-    fn relay_readiness_retries_ready_dials_after_peer_connection_loss() {
-        let relay = peer_id();
+    fn recovery_dials_are_coalesced_per_peer_address() {
         let peer = peer_id();
-        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
-            .parse()
-            .expect("relay address");
-        let address: Multiaddr =
-            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
-                .parse()
-                .expect("relayed address");
-        let mut readiness = RelayReadiness::default();
+        let first: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("first address");
+        let second: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("second address");
+        let mut recovery = DiscoveredPeerAddresses::default();
         let now = Instant::now();
 
-        readiness.record_reservation_accepted(relay);
-        readiness.record_relay_listen_address(relay, relay_address.clone());
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &first, now));
+        assert!(!recovery.should_attempt_recovery_dial_at(peer, &first, now));
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &second, now));
+        assert!(!recovery.should_attempt_recovery_dial_at(
+            peer,
+            &first,
+            now + REDIAL_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &first, now + REDIAL_INTERVAL));
+    }
 
-        assert_eq!(readiness.ready_relays().len(), 1);
-        assert!(readiness.ready_relays().contains(&relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
-        assert!(!readiness.should_attempt_ready_dial(relay, peer, &address, now));
+    #[test]
+    fn recovery_dials_are_coalesced_across_one_relays_addresses() {
+        let peer = peer_id();
+        let relay = peer_id();
+        let first: Multiaddr =
+            format!("/ip4/192.0.2.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("first relay address");
+        let second: Multiaddr =
+            format!("/ip4/198.51.100.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("second relay address");
+        let other_relay = peer_id();
+        let other: Multiaddr =
+            format!("/ip4/203.0.113.1/tcp/4001/p2p/{other_relay}/p2p-circuit/p2p/{peer}")
+                .parse()
+                .expect("other relay address");
+        let mut recovery = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
 
-        readiness.record_peer_connection_lost(peer);
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &first, now));
+        assert!(!recovery.should_attempt_recovery_dial_at(peer, &second, now));
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &other, now));
+    }
 
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
+    #[test]
+    fn recovery_dial_failures_apply_exponential_backoff() {
+        let peer = peer_id();
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
+        let mut recovery = DiscoveredPeerAddresses::default();
+        let now = Instant::now();
+
+        assert!(recovery.should_attempt_recovery_dial_at(peer, &address, now));
+        recovery.record_recovery_dial_failure_at(peer, &address, now);
+        recovery.record_recovery_dial_failure_at(peer, &address, now);
+
+        assert!(!recovery.should_attempt_recovery_dial_at(
+            peer,
+            &address,
+            now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE
+        ));
+        assert!(recovery.should_attempt_recovery_dial_at(
+            peer,
+            &address,
+            now + DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE * 2
+        ));
+    }
+
+    #[test]
+    fn recovery_dial_state_rejects_new_targets_at_capacity_until_entries_expire() {
+        let peer = peer_id();
+        let now = Instant::now();
+        let mut recovery = DiscoveredPeerAddresses::default();
+
+        for index in 0..MAX_RECOVERY_DIAL_ATTEMPTS {
+            let address: Multiaddr = format!("/memory/{}", index + 1)
+                .parse()
+                .expect("memory address");
+            assert!(recovery.should_attempt_recovery_dial_at(peer, &address, now));
+        }
+        let overflow: Multiaddr = format!("/memory/{}", MAX_RECOVERY_DIAL_ATTEMPTS + 1)
+            .parse()
+            .expect("overflow address");
+
+        assert!(!recovery.should_attempt_recovery_dial_at(peer, &overflow, now));
+        assert_eq!(
+            recovery.recovery_dial_attempts.len(),
+            MAX_RECOVERY_DIAL_ATTEMPTS
+        );
+        assert!(recovery.should_attempt_recovery_dial_at(
+            peer,
+            &overflow,
+            now + RECOVERY_DIAL_STATE_TTL
+        ));
+        assert_eq!(recovery.recovery_dial_attempts.len(), 1);
     }
 
     #[test]
@@ -21760,25 +22038,18 @@ mod tests {
     #[test]
     fn relay_readiness_clears_on_lost_listen_address_and_reservation() {
         let relay = peer_id();
-        let peer = peer_id();
         let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
         let relay_address_backup: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}")
             .parse()
             .expect("backup relay address");
-        let address: Multiaddr =
-            format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{peer}")
-                .parse()
-                .expect("relayed address");
         let mut readiness = RelayReadiness::default();
-        let now = Instant::now();
 
         readiness.record_reservation_accepted(relay);
         readiness.record_relay_listen_address(relay, relay_address.clone());
         readiness.record_relay_listen_address(relay, relay_address_backup.clone());
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
 
         assert!(!readiness.record_relay_listen_address_lost(relay, &relay_address));
         assert!(readiness.relay_ready(relay));
@@ -21788,7 +22059,6 @@ mod tests {
 
         readiness.record_relay_listen_address(relay, relay_address.clone());
         assert!(readiness.relay_ready(relay));
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
 
         assert!(readiness.record_relay_reservation_lost(relay));
         assert!(!readiness.relay_ready(relay));
@@ -21796,7 +22066,7 @@ mod tests {
 
         readiness.record_reservation_accepted(relay);
         readiness.record_relay_listen_address(relay, relay_address);
-        assert!(readiness.should_attempt_ready_dial(relay, peer, &address, now));
+        assert!(readiness.relay_ready(relay));
     }
 
     #[test]
