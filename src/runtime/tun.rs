@@ -327,7 +327,8 @@ impl IpCommand {
     #[must_use]
     pub fn addr_replace(interface: String, prefix: IpCidr) -> Self {
         let mut args = Vec::new();
-        if prefix.address().is_ipv6() {
+        let is_ipv6 = prefix.address().is_ipv6();
+        if is_ipv6 {
             args.push("-6".to_owned());
         }
         args.extend([
@@ -337,6 +338,9 @@ impl IpCommand {
             "dev".to_owned(),
             interface,
         ]);
+        if is_ipv6 {
+            args.push("nodad".to_owned());
+        }
         Self { args }
     }
 
@@ -1091,7 +1095,7 @@ mod tests {
         assert!(
             commands
                 .iter()
-                .any(|command| command == "ip -6 addr replace fd00::44/128 dev hs0")
+                .any(|command| command == "ip -6 addr replace fd00::44/128 dev hs0 nodad")
         );
         assert!(
             !commands
