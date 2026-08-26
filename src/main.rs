@@ -6251,6 +6251,16 @@ fn capability_lines_local(config: &Config) -> Result<Vec<String>, String> {
             })
             .collect(),
     )
+    .with_member_records(
+        config
+            .network
+            .member_records
+            .iter()
+            .take(p2p_vpn::runtime::control::MAX_CONTROL_MEMBERSHIP_RECORDS)
+            .cloned()
+            .collect(),
+    )
+    .with_membership_record_inventory(&config.network.member_records)
     .with_owned_udp_packet_plane(owned_udp_packet_plane);
     let mut lines = vec![
         format!("local peer: {local_peer_display}"),
@@ -6321,6 +6331,21 @@ fn push_capability_lines(
     lines.push(format!(
         "{prefix} supports native quic datagrams: {}",
         capabilities.supports_native_quic_datagrams
+    ));
+    lines.push(format!(
+        "{prefix} supports membership record pages: {}",
+        capabilities.supports_membership_record_pages
+    ));
+    lines.push(format!(
+        "{prefix} membership record count: {}",
+        capabilities.membership_record_count
+    ));
+    lines.push(format!(
+        "{prefix} membership records snapshot: {}",
+        capabilities
+            .membership_records_snapshot
+            .as_deref()
+            .unwrap_or("unavailable")
     ));
     lines.push(format!(
         "{prefix} supports owned udp packet plane: {}",
@@ -10006,6 +10031,22 @@ mod tests {
         assert!(
             lines
                 .iter()
+                .any(|line| line == "local capability supports membership record pages: true")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "local capability membership record count: 0")
+        );
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "local capability membership records snapshot: {}",
+                p2p_vpn::runtime::control::membership_records_snapshot(&[])
+            )
+        }));
+        assert!(
+            lines
+                .iter()
                 .any(|line| line == "local capability advertised route: 10.41.0.0/24 metric 50")
         );
     }
@@ -10023,7 +10064,8 @@ mod tests {
         .with_advertised_routes(vec![p2p_vpn::runtime::control::ControlRoute::new(
             "10.42.0.0/24",
             100,
-        )]);
+        )])
+        .with_membership_record_inventory(&[]);
         capabilities = capabilities.with_owned_udp_packet_plane(true);
         capabilities.preferred_path = PathKind::DirectQuicDatagram.wire_name().to_owned();
         let mut lines = vec![format!("remote capability peer: {peer}")];
@@ -10055,6 +10097,22 @@ mod tests {
                 .iter()
                 .any(|line| line == "remote capability supports native quic datagrams: false")
         );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability supports membership record pages: true")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "remote capability membership record count: 0")
+        );
+        assert!(lines.iter().any(|line| {
+            line == &format!(
+                "remote capability membership records snapshot: {}",
+                p2p_vpn::runtime::control::membership_records_snapshot(&[])
+            )
+        }));
         assert!(
             lines
                 .iter()
