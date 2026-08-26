@@ -85,7 +85,23 @@ impl DnsRuntime {
             member_records,
             now_unix_seconds,
         )?);
-        let udp = UdpSocket::bind(config.network.dns.listen).await?;
+        Self::bind_zone(config.network.dns.listen, zone)
+            .await
+            .map(Some)
+    }
+
+    pub async fn bind_reserved_suffix(listener: SocketAddr) -> Result<Self, DnsRuntimeError> {
+        if !listener.ip().is_loopback() {
+            return Err(DnsRuntimeError::NonLoopbackListener(listener));
+        }
+        Self::bind_zone(listener, Arc::new(DnsZone::reserved_suffix_guard())).await
+    }
+
+    async fn bind_zone(
+        requested_listener: SocketAddr,
+        zone: Arc<DnsZone>,
+    ) -> Result<Self, DnsRuntimeError> {
+        let udp = UdpSocket::bind(requested_listener).await?;
         let listener = udp.local_addr()?;
         let tcp = TcpListener::bind(listener).await?;
         let (zone_tx, zone_rx) = watch::channel(zone);
@@ -106,14 +122,14 @@ impl DnsRuntime {
             )),
         ];
 
-        Ok(Some(Self {
+        Ok(Self {
             listener,
             zone_tx,
             shutdown_tx,
             metrics,
             last_refresh_attempt_unix_seconds: AtomicU64::new(0),
             tasks,
-        }))
+        })
     }
 
     #[must_use]
@@ -398,6 +414,7 @@ pub struct DnsRuntimeSnapshot {
 pub enum DnsRuntimeError {
     Io(io::Error),
     Zone(DnsZoneError),
+    NonLoopbackListener(SocketAddr),
 }
 
 impl fmt::Display for DnsRuntimeError {
@@ -405,6 +422,9 @@ impl fmt::Display for DnsRuntimeError {
         match self {
             Self::Io(error) => write!(formatter, "DNS listener failed: {error}"),
             Self::Zone(error) => write!(formatter, "DNS zone generation failed: {error:?}"),
+            Self::NonLoopbackListener(listener) => {
+                write!(formatter, "DNS listener must be loopback-only: {listener}")
+            }
         }
     }
 }
@@ -921,6 +941,51 @@ mod tests {
         );
         assert_eq!(nodata.response_code(), ResponseCode::NoError);
         assert!(nodata.answers().is_empty());
+    }
+
+    #[test]
+    fn reserved_suffix_guard_blocks_private_names_and_refuses_unrelated_queries() {
+        let zone = DnsZone::reserved_suffix_guard();
+        let metrics = DnsRuntimeMetrics::default();
+        let private = answer_request(
+            &Message::from_vec(&query(
+                "worker.runner-mesh.p2p-vpn.internal.",
+                RecordType::A,
+            ))
+            .expect("private query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(private.response_code(), ResponseCode::NXDomain);
+        assert!(private.authoritative());
+
+        let unrelated = answer_request(
+            &Message::from_vec(&query("example.com.", RecordType::A)).expect("external query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(unrelated.response_code(), ResponseCode::Refused);
+        assert!(!unrelated.authoritative());
+        assert_eq!(metrics.nxdomain.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.refused.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn reserved_suffix_guard_binds_only_to_loopback() {
+        let guard = DnsRuntime::bind_reserved_suffix("127.0.0.1:0".parse().expect("listener"))
+            .await
+            .expect("guard bind");
+        let private = udp_query(
+            guard.listener(),
+            &query("unknown.p2p-vpn.internal.", RecordType::A),
+        )
+        .await;
+        assert_eq!(private.response_code(), ResponseCode::NXDomain);
+
+        let error = DnsRuntime::bind_reserved_suffix("0.0.0.0:0".parse().expect("listener"))
+            .await
+            .expect_err("non-loopback guard");
+        assert!(matches!(error, DnsRuntimeError::NonLoopbackListener(_)));
     }
 
     #[tokio::test]

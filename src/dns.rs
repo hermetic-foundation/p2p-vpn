@@ -194,6 +194,19 @@ pub struct DnsZone {
 }
 
 impl DnsZone {
+    #[must_use]
+    pub(crate) fn reserved_suffix_guard() -> Self {
+        Self {
+            network_name: DNS_PRIVATE_SUFFIX.to_owned(),
+            zone: format!("{DNS_PRIVATE_SUFFIX}."),
+            ttl_seconds: DEFAULT_DNS_TTL_SECONDS,
+            next_refresh_unix_seconds: None,
+            records: Vec::new(),
+            conflicts: Vec::new(),
+            reverse: BTreeMap::new(),
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn from_config_at(
         config: &Config,

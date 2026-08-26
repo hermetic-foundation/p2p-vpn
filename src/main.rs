@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeSet, HashSet},
     fs::{self, OpenOptions},
     io::{self, Write as _},
-    net::{IpAddr, UdpSocket},
+    net::{IpAddr, SocketAddr, UdpSocket},
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     str::FromStr,
@@ -64,7 +64,7 @@ use p2p_vpn::{
             PairRpcSignedMembershipRecord, query_dns_list, query_dns_resolve, query_dns_status,
             query_pair_rpc,
         },
-        dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
+        dns::{DnsLookupType, DnsRuntime, MAX_DNS_CONTROL_LIST_LIMIT},
         forward::session_id_for_peer,
         p2p::{BehaviourEvent, HostConfig, build_node},
         packet_plane::{PACKET_PLANE_DATAGRAM_OVERHEAD_LEN, PACKET_PLANE_MAX_PAYLOAD_LEN},
@@ -635,6 +635,13 @@ enum InstanceCommand {
 
 #[derive(Debug, Subcommand)]
 enum DnsCommand {
+    #[command(hide = true)]
+    Guard {
+        #[arg(long, default_value = "127.0.0.1:0")]
+        listen: SocketAddr,
+        #[arg(long)]
+        ready_file: PathBuf,
+    },
     Status {
         #[command(flatten)]
         target: DnsDaemonTarget,
@@ -8128,6 +8135,9 @@ fn relay_scan_config(
 
 async fn dns_command(command: DnsCommand) -> Result<(), String> {
     let (lines, view, format) = match command {
+        DnsCommand::Guard { listen, ready_file } => {
+            return dns_guard_command(listen, &ready_file).await;
+        }
         DnsCommand::Status { target, format } => {
             let (socket, timeout) = dns_daemon_target(&target)?;
             let lines = query_dns_status(&socket, timeout)
@@ -8161,6 +8171,30 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
         }
     };
     write_daemon_view_output(view, &lines, format)
+}
+
+async fn dns_guard_command(listen: SocketAddr, ready_file: &Path) -> Result<(), String> {
+    let runtime = DnsRuntime::bind_reserved_suffix(listen)
+        .await
+        .map_err(|error| format!("reserved DNS suffix guard failed: {error}"))?;
+    write_secret_file(ready_file, &runtime.listener().to_string(), true)?;
+    println!(
+        "reserved DNS suffix guard listening on {} for p2p-vpn.internal",
+        runtime.listener()
+    );
+    let _ = shutdown_signal().await;
+    drop(runtime);
+    match fs::remove_file(ready_file) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to remove DNS guard ready file {}: {error}",
+                ready_file.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn daemon_status(
@@ -11075,6 +11109,25 @@ mod tests {
         };
         assert_eq!(input, "worker-1");
         assert_eq!(record_type, DnsRecordTypeArg::Aaaa);
+
+        let guard = Cli::try_parse_from([
+            "p2p-vpn",
+            "dns",
+            "guard",
+            "--listen",
+            "[::1]:0",
+            "--ready-file",
+            "/run/p2p-vpn-dns-guard/listener",
+        ])
+        .expect("DNS guard CLI");
+        let Command::Dns {
+            command: DnsCommand::Guard { listen, ready_file },
+        } = guard.command
+        else {
+            panic!("expected DNS guard command");
+        };
+        assert_eq!(listen, "[::1]:0".parse().expect("listener"));
+        assert_eq!(ready_file, PathBuf::from("/run/p2p-vpn-dns-guard/listener"));
     }
 
     #[test]
