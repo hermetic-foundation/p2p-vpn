@@ -9357,7 +9357,9 @@ async fn handle_control_request(
                     audit_control_capabilities_rejection(peer, *reason);
                 }
                 ControlResponse::PacketPlaneAccepted(_)
-                | ControlResponse::PacketPlaneRejected(_) => {}
+                | ControlResponse::PacketPlaneRejected(_)
+                | ControlResponse::MembershipRecordsPage(_)
+                | ControlResponse::MembershipRecordsRejected(_) => {}
             }
             swarm
                 .behaviour_mut()
@@ -9390,6 +9392,19 @@ async fn handle_control_request(
                 .behaviour_mut()
                 .control
                 .send_response(channel, response)
+                .map_err(|_| RunnerError::ControlResponseDropped)?;
+        }
+        ControlRequest::MembershipRecords(_) => {
+            context.metrics.record_control_request_received();
+            swarm
+                .behaviour_mut()
+                .control
+                .send_response(
+                    channel,
+                    ControlResponse::MembershipRecordsRejected(
+                        crate::runtime::control::MembershipRecordsRejectionReason::UnsupportedVersion,
+                    ),
+                )
                 .map_err(|_| RunnerError::ControlResponseDropped)?;
         }
     }
@@ -11397,6 +11412,11 @@ fn handle_control_response_event(
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
         }
+        ControlResponse::MembershipRecordsPage(_)
+        | ControlResponse::MembershipRecordsRejected(_) => {
+            metrics.record_control_failure();
+            eprintln!("unexpected membership record response from {peer}");
+        }
     }
 }
 
@@ -11445,6 +11465,11 @@ fn handle_control_response(
             metrics.record_control_capability_rejection(reason);
             metrics.record_control_failure();
             eprintln!("packet-plane hello rejected by {peer}: {reason:?}");
+        }
+        ControlResponse::MembershipRecordsPage(_)
+        | ControlResponse::MembershipRecordsRejected(_) => {
+            metrics.record_control_failure();
+            eprintln!("unexpected membership record response from {peer}");
         }
     }
 }

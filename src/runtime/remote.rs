@@ -13,7 +13,8 @@ use crate::{
     runtime::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
-            accepted_capabilities_response, rejected_capabilities_response, validate_capabilities,
+            MembershipRecordsRejectionReason, accepted_capabilities_response,
+            rejected_capabilities_response, validate_capabilities,
         },
         forward::Forwarder,
         p2p::{BehaviourEvent, HostConfig, P2pBuildError, build_node},
@@ -244,6 +245,12 @@ fn handle_control_event(
                     "unexpected packet-plane negotiation response".to_owned(),
                 ));
             }
+            ControlResponse::MembershipRecordsPage(_)
+            | ControlResponse::MembershipRecordsRejected(_) => {
+                return Err(RemoteQueryError::ControlFailure(
+                    "unexpected membership record response".to_owned(),
+                ));
+            }
         },
         request_response::Event::OutboundFailure { peer, error, .. } if peer == target_peer => {
             return Err(RemoteQueryError::ControlFailure(error.to_string()));
@@ -368,6 +375,9 @@ fn inbound_capability_response(
         ControlRequest::PacketPlaneHello(_) => {
             ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath)
         }
+        ControlRequest::MembershipRecords(_) => ControlResponse::MembershipRecordsRejected(
+            MembershipRecordsRejectionReason::UnsupportedVersion,
+        ),
     }
 }
 

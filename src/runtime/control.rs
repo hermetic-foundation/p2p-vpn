@@ -1,15 +1,17 @@
-use std::{collections::HashMap, io, time::Duration};
+use std::{cmp::Ordering, collections::HashMap, io, time::Duration};
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{StreamProtocol, request_response};
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use sha2_010::{Digest as _, Sha256};
 
 use crate::{
     PathKind, PeerId,
     config::validate_packet_plane_endpoint_candidate,
-    membership::SignedMembershipRecord,
+    membership::{MAX_MEMBERSHIP_RECORDS, SignedMembershipRecord},
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
 };
@@ -19,6 +21,11 @@ const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;
 pub const MAX_CONTROL_MEMBERSHIP_RECORDS: usize = 8;
 pub const MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES: usize = 32;
 pub const MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN: usize = 2048;
+pub const MEMBERSHIP_RECORD_PAGE_VERSION: u8 = 1;
+
+const MEMBERSHIP_RECORD_SNAPSHOT_DOMAIN: &[u8] = b"p2p-vpn membership snapshot v1\n";
+const MEMBERSHIP_RECORD_SNAPSHOT_PREFIX: &str = "sha256:";
+const SHA256_LEN: usize = 32;
 
 #[derive(Clone, Debug, Default)]
 pub struct ControlCodec;
@@ -69,6 +76,12 @@ pub struct ControlCapabilities {
     pub direct_address_candidates: Vec<String>,
     #[serde(default)]
     pub member_records: Vec<SignedMembershipRecord>,
+    #[serde(default)]
+    pub supports_membership_record_pages: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership_records_snapshot: Option<String>,
+    #[serde(default)]
+    pub membership_record_count: u16,
 }
 
 impl ControlCapabilities {
@@ -92,6 +105,9 @@ impl ControlCapabilities {
             packet_endpoint_candidates: Vec::new(),
             direct_address_candidates: Vec::new(),
             member_records: Vec::new(),
+            supports_membership_record_pages: false,
+            membership_records_snapshot: None,
+            membership_record_count: 0,
         }
     }
 
@@ -116,6 +132,14 @@ impl ControlCapabilities {
     #[must_use]
     pub fn with_member_records(mut self, records: Vec<SignedMembershipRecord>) -> Self {
         self.member_records = records;
+        self
+    }
+
+    #[must_use]
+    pub fn with_membership_record_inventory(mut self, records: &[SignedMembershipRecord]) -> Self {
+        self.supports_membership_record_pages = true;
+        self.membership_records_snapshot = Some(membership_records_snapshot(records));
+        self.membership_record_count = u16::try_from(records.len()).unwrap_or(u16::MAX);
         self
     }
 
@@ -193,6 +217,7 @@ impl ControlCapabilities {
 pub enum ControlRequest {
     Capabilities(ControlCapabilities),
     PacketPlaneHello(Vec<u8>),
+    MembershipRecords(MembershipRecordsRequest),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -202,6 +227,70 @@ pub enum ControlResponse {
     CapabilitiesRejected(ControlRejectionReason),
     PacketPlaneAccepted(Vec<u8>),
     PacketPlaneRejected(ControlRejectionReason),
+    MembershipRecordsPage(MembershipRecordsPage),
+    MembershipRecordsRejected(MembershipRecordsRejectionReason),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MembershipRecordsRequest {
+    pub version: u8,
+    pub network_name: String,
+    #[serde(default)]
+    pub membership_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+    pub cursor: u16,
+}
+
+impl MembershipRecordsRequest {
+    #[must_use]
+    pub fn first(network_name: &str, membership_tag: Option<String>) -> Self {
+        Self {
+            version: MEMBERSHIP_RECORD_PAGE_VERSION,
+            network_name: network_name.to_owned(),
+            membership_tag,
+            snapshot: None,
+            cursor: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn next(&self, snapshot: String, cursor: u16) -> Self {
+        Self {
+            version: MEMBERSHIP_RECORD_PAGE_VERSION,
+            network_name: self.network_name.clone(),
+            membership_tag: self.membership_tag.clone(),
+            snapshot: Some(snapshot),
+            cursor,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MembershipRecordsPage {
+    pub version: u8,
+    pub network_name: String,
+    #[serde(default)]
+    pub membership_tag: Option<String>,
+    pub snapshot: String,
+    pub cursor: u16,
+    pub total_records: u16,
+    pub records: Vec<SignedMembershipRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MembershipRecordsRejectionReason {
+    UnauthorizedPeer,
+    RateLimited,
+    WrongNetwork,
+    MembershipMismatch,
+    UnsupportedVersion,
+    InvalidSnapshot,
+    InvalidCursor,
+    SnapshotChanged,
+    PageTooLarge,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -358,6 +447,20 @@ pub fn validate_capabilities(
     if capabilities.member_records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
         return Some(ControlRejectionReason::InvalidMembershipRecord);
     }
+    if capabilities.supports_membership_record_pages {
+        if usize::from(capabilities.membership_record_count) > MAX_MEMBERSHIP_RECORDS
+            || capabilities
+                .membership_records_snapshot
+                .as_deref()
+                .is_none_or(|snapshot| !is_membership_records_snapshot(snapshot))
+        {
+            return Some(ControlRejectionReason::InvalidMembershipRecord);
+        }
+    } else if capabilities.membership_records_snapshot.is_some()
+        || capabilities.membership_record_count != 0
+    {
+        return Some(ControlRejectionReason::InvalidMembershipRecord);
+    }
     if capabilities.direct_address_candidates.len() > MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES
         || capabilities
             .direct_address_candidates
@@ -430,6 +533,232 @@ pub fn accepted_capabilities_response(capabilities: &ControlCapabilities) -> Con
 #[must_use]
 pub const fn rejected_capabilities_response(reason: ControlRejectionReason) -> ControlResponse {
     ControlResponse::CapabilitiesRejected(reason)
+}
+
+#[must_use]
+pub fn membership_records_snapshot(records: &[SignedMembershipRecord]) -> String {
+    let mut encoded = records
+        .iter()
+        .map(|record| {
+            (
+                serde_json::to_vec(record)
+                    .expect("membership records contain only JSON-serializable fields"),
+                record,
+            )
+        })
+        .collect::<Vec<_>>();
+    encoded.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut digest = Sha256::new();
+    digest.update(MEMBERSHIP_RECORD_SNAPSHOT_DOMAIN);
+    for (record, _) in encoded {
+        let length = u32::try_from(record.len()).expect("membership record length is bounded");
+        digest.update(length.to_be_bytes());
+        digest.update(record);
+    }
+    format!(
+        "{MEMBERSHIP_RECORD_SNAPSHOT_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(digest.finalize())
+    )
+}
+
+#[must_use]
+pub fn is_membership_records_snapshot(snapshot: &str) -> bool {
+    let Some(encoded) = snapshot.strip_prefix(MEMBERSHIP_RECORD_SNAPSHOT_PREFIX) else {
+        return false;
+    };
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(encoded) else {
+        return false;
+    };
+    decoded.len() == SHA256_LEN && URL_SAFE_NO_PAD.encode(decoded) == encoded
+}
+
+pub fn build_membership_records_page(
+    request: &MembershipRecordsRequest,
+    records: &[SignedMembershipRecord],
+    expected_network: &str,
+    expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+) -> Result<MembershipRecordsPage, MembershipRecordsRejectionReason> {
+    if records.len() > MAX_MEMBERSHIP_RECORDS {
+        return Err(MembershipRecordsRejectionReason::PageTooLarge);
+    }
+    build_membership_records_page_for_snapshot(
+        request,
+        records,
+        &membership_records_snapshot(records),
+        expected_network,
+        expected_membership_tag,
+        previous_membership_tags,
+    )
+}
+
+pub fn build_membership_records_page_for_snapshot(
+    request: &MembershipRecordsRequest,
+    records: &[SignedMembershipRecord],
+    current_snapshot: &str,
+    expected_network: &str,
+    expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+) -> Result<MembershipRecordsPage, MembershipRecordsRejectionReason> {
+    if request.version != MEMBERSHIP_RECORD_PAGE_VERSION {
+        return Err(MembershipRecordsRejectionReason::UnsupportedVersion);
+    }
+    if request.network_name != expected_network {
+        return Err(MembershipRecordsRejectionReason::WrongNetwork);
+    }
+    if !membership_tag_matches(
+        request.membership_tag.as_deref(),
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
+        return Err(MembershipRecordsRejectionReason::MembershipMismatch);
+    }
+    if records.len() > MAX_MEMBERSHIP_RECORDS {
+        return Err(MembershipRecordsRejectionReason::PageTooLarge);
+    }
+    if !is_membership_records_snapshot(current_snapshot) {
+        return Err(MembershipRecordsRejectionReason::InvalidSnapshot);
+    }
+    if request
+        .snapshot
+        .as_deref()
+        .is_some_and(|snapshot| !is_membership_records_snapshot(snapshot))
+    {
+        return Err(MembershipRecordsRejectionReason::InvalidSnapshot);
+    }
+    if request.snapshot.is_none() && request.cursor != 0 {
+        return Err(MembershipRecordsRejectionReason::InvalidCursor);
+    }
+
+    let mut sorted = records.iter().collect::<Vec<_>>();
+    sorted.sort_unstable_by(|left, right| compare_membership_records(left, right));
+    if request
+        .snapshot
+        .as_deref()
+        .is_some_and(|expected| expected != current_snapshot)
+    {
+        return Err(MembershipRecordsRejectionReason::SnapshotChanged);
+    }
+
+    let total_records = u16::try_from(sorted.len()).expect("membership record count is bounded");
+    if request.cursor > total_records {
+        return Err(MembershipRecordsRejectionReason::InvalidCursor);
+    }
+    let mut page = MembershipRecordsPage {
+        version: MEMBERSHIP_RECORD_PAGE_VERSION,
+        network_name: expected_network.to_owned(),
+        membership_tag: expected_membership_tag.map(str::to_owned),
+        snapshot: current_snapshot.to_owned(),
+        cursor: request.cursor,
+        total_records,
+        records: Vec::new(),
+        next_cursor: None,
+    };
+    let start = usize::from(request.cursor);
+    for record in sorted
+        .into_iter()
+        .skip(start)
+        .take(MAX_CONTROL_MEMBERSHIP_RECORDS)
+    {
+        page.records.push(record.clone());
+        let next = start + page.records.len();
+        page.next_cursor = (next < usize::from(total_records))
+            .then(|| u16::try_from(next).expect("membership page cursor is bounded"));
+        let response = ControlResponse::MembershipRecordsPage(page.clone());
+        let encoded = serde_json::to_vec(&response)
+            .expect("control responses contain only JSON-serializable fields");
+        if encoded.len() > MAX_CONTROL_MESSAGE_LEN {
+            page.records.pop();
+            let next = start + page.records.len();
+            page.next_cursor = (next < usize::from(total_records))
+                .then(|| u16::try_from(next).expect("membership page cursor is bounded"));
+            break;
+        }
+    }
+    if start < usize::from(total_records) && page.records.is_empty() {
+        return Err(MembershipRecordsRejectionReason::PageTooLarge);
+    }
+    let encoded = serde_json::to_vec(&ControlResponse::MembershipRecordsPage(page.clone()))
+        .expect("control responses contain only JSON-serializable fields");
+    if encoded.len() > MAX_CONTROL_MESSAGE_LEN {
+        return Err(MembershipRecordsRejectionReason::PageTooLarge);
+    }
+
+    Ok(page)
+}
+
+fn compare_membership_records(
+    left: &SignedMembershipRecord,
+    right: &SignedMembershipRecord,
+) -> Ordering {
+    left.payload
+        .issuer_peer
+        .cmp(&right.payload.issuer_peer)
+        .then_with(|| left.payload.member_peer.cmp(&right.payload.member_peer))
+        .then_with(|| {
+            left.payload
+                .membership_epoch
+                .cmp(&right.payload.membership_epoch)
+        })
+        .then_with(|| left.payload.sequence.cmp(&right.payload.sequence))
+        .then_with(|| {
+            let left = serde_json::to_vec(left)
+                .expect("membership records contain only JSON-serializable fields");
+            let right = serde_json::to_vec(right)
+                .expect("membership records contain only JSON-serializable fields");
+            left.cmp(&right)
+        })
+}
+
+pub fn validate_membership_records_page(
+    page: &MembershipRecordsPage,
+    request: &MembershipRecordsRequest,
+    expected_network: &str,
+    expected_membership_tag: Option<&str>,
+    previous_membership_tags: &[String],
+) -> Result<(), MembershipRecordsRejectionReason> {
+    if page.version != MEMBERSHIP_RECORD_PAGE_VERSION {
+        return Err(MembershipRecordsRejectionReason::UnsupportedVersion);
+    }
+    if page.network_name != expected_network {
+        return Err(MembershipRecordsRejectionReason::WrongNetwork);
+    }
+    if !membership_tag_matches(
+        page.membership_tag.as_deref(),
+        expected_membership_tag,
+        previous_membership_tags,
+    ) {
+        return Err(MembershipRecordsRejectionReason::MembershipMismatch);
+    }
+    if !is_membership_records_snapshot(&page.snapshot) {
+        return Err(MembershipRecordsRejectionReason::InvalidSnapshot);
+    }
+    if request
+        .snapshot
+        .as_deref()
+        .is_some_and(|snapshot| snapshot != page.snapshot)
+    {
+        return Err(MembershipRecordsRejectionReason::SnapshotChanged);
+    }
+    if usize::from(page.total_records) > MAX_MEMBERSHIP_RECORDS
+        || page.records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS
+        || page.cursor != request.cursor
+    {
+        return Err(MembershipRecordsRejectionReason::InvalidCursor);
+    }
+    let end = usize::from(page.cursor).saturating_add(page.records.len());
+    let total = usize::from(page.total_records);
+    if end > total || page.records.is_empty() && end < total {
+        return Err(MembershipRecordsRejectionReason::InvalidCursor);
+    }
+    let expected_next =
+        (end < total).then(|| u16::try_from(end).expect("membership page cursor is bounded"));
+    if page.next_cursor != expected_next {
+        return Err(MembershipRecordsRejectionReason::InvalidCursor);
+    }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -561,6 +890,27 @@ mod tests {
 
     use super::*;
 
+    fn membership_record(sequence: u64) -> SignedMembershipRecord {
+        SignedMembershipRecord {
+            payload: crate::membership::MembershipRecordPayload {
+                version: crate::membership::MEMBERSHIP_RECORD_VERSION,
+                network_name: "lab".to_owned(),
+                member_peer: format!("member-{sequence}"),
+                member_public_key: format!("member-key-{sequence}"),
+                issuer_peer: "issuer".to_owned(),
+                issuer_public_key: "issuer-key".to_owned(),
+                membership_epoch: 1,
+                sequence,
+                revoked: false,
+                roles: vec![crate::membership::MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                issued_at_unix_seconds: 1,
+                expires_at_unix_seconds: None,
+            },
+            signature: format!("signature-{sequence}"),
+        }
+    }
+
     fn test_owned_quic_certificate_der() -> Vec<u8> {
         rcgen::generate_simple_self_signed(vec!["p2p-vpn-packet-plane".to_owned()])
             .expect("test certificate")
@@ -614,6 +964,9 @@ mod tests {
         assert!(capabilities.advertised_routes.is_empty());
         assert!(capabilities.packet_endpoint_candidates.is_empty());
         assert!(capabilities.member_records.is_empty());
+        assert!(!capabilities.supports_membership_record_pages);
+        assert_eq!(capabilities.membership_records_snapshot, None);
+        assert_eq!(capabilities.membership_record_count, 0);
     }
 
     #[test]
@@ -714,6 +1067,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn control_codec_round_trips_membership_record_page() {
+        let mut codec = ControlCodec;
+        let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
+        let request = MembershipRecordsRequest::first("lab", Some("tag".to_owned()));
+        let page = build_membership_records_page(
+            &request,
+            &[membership_record(1)],
+            "lab",
+            Some("tag"),
+            &[],
+        )
+        .expect("membership page");
+        let response = ControlResponse::MembershipRecordsPage(page);
+        let mut written_request = Cursor::new(Vec::new());
+        let mut written_response = Cursor::new(Vec::new());
+
+        request_response::Codec::write_request(
+            &mut codec,
+            &protocol,
+            &mut written_request,
+            ControlRequest::MembershipRecords(request.clone()),
+        )
+        .await
+        .expect("write request");
+        request_response::Codec::write_response(
+            &mut codec,
+            &protocol,
+            &mut written_response,
+            response.clone(),
+        )
+        .await
+        .expect("write response");
+
+        written_request.set_position(0);
+        written_response.set_position(0);
+        let decoded_request =
+            request_response::Codec::read_request(&mut codec, &protocol, &mut written_request)
+                .await
+                .expect("read request");
+        let decoded_response =
+            request_response::Codec::read_response(&mut codec, &protocol, &mut written_response)
+                .await
+                .expect("read response");
+
+        assert_eq!(decoded_request, ControlRequest::MembershipRecords(request));
+        assert_eq!(decoded_response, response);
+    }
+
+    #[test]
+    fn membership_snapshot_is_stable_across_record_order() {
+        let first = membership_record(1);
+        let second = membership_record(2);
+
+        let forward = membership_records_snapshot(&[first.clone(), second.clone()]);
+        let reverse = membership_records_snapshot(&[second, first]);
+
+        assert_eq!(forward, reverse);
+        assert!(is_membership_records_snapshot(&forward));
+        assert!(!is_membership_records_snapshot("sha256:not-base64"));
+    }
+
+    #[test]
+    fn membership_inventory_enables_paged_capability_advertisement() {
+        let records = vec![membership_record(1), membership_record(2)];
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(&records);
+        let expected_snapshot = membership_records_snapshot(&records);
+
+        assert!(capabilities.supports_membership_record_pages);
+        assert_eq!(capabilities.membership_record_count, 2);
+        assert_eq!(
+            capabilities.membership_records_snapshot.as_deref(),
+            Some(expected_snapshot.as_str())
+        );
+    }
+
+    #[test]
+    fn membership_pages_are_bounded_and_cursor_validated() {
+        let records = (0..10).map(membership_record).collect::<Vec<_>>();
+        let first_request = MembershipRecordsRequest::first("lab", None);
+        let first = build_membership_records_page(&first_request, &records, "lab", None, &[])
+            .expect("first page");
+
+        assert_eq!(first.cursor, 0);
+        assert_eq!(first.total_records, 10);
+        assert_eq!(first.records.len(), MAX_CONTROL_MEMBERSHIP_RECORDS);
+        assert_eq!(first.next_cursor, Some(8));
+        validate_membership_records_page(&first, &first_request, "lab", None, &[])
+            .expect("valid first page");
+
+        let second_request = first_request.next(first.snapshot.clone(), 8);
+        let second = build_membership_records_page(&second_request, &records, "lab", None, &[])
+            .expect("second page");
+        assert_eq!(second.records.len(), 2);
+        assert_eq!(second.next_cursor, None);
+        validate_membership_records_page(&second, &second_request, "lab", None, &[])
+            .expect("valid second page");
+
+        let invalid_request = MembershipRecordsRequest {
+            cursor: 1,
+            ..MembershipRecordsRequest::first("lab", None)
+        };
+        assert_eq!(
+            build_membership_records_page(&invalid_request, &records, "lab", None, &[]),
+            Err(MembershipRecordsRejectionReason::InvalidCursor)
+        );
+    }
+
+    #[test]
+    fn membership_pages_respect_encoded_frame_size() {
+        let mut first = membership_record(1);
+        first.signature = "a".repeat(9_000);
+        let mut second = membership_record(2);
+        second.signature = "b".repeat(9_000);
+        let request = MembershipRecordsRequest::first("lab", None);
+
+        let page = build_membership_records_page(&request, &[first, second], "lab", None, &[])
+            .expect("size-bounded page");
+        let encoded = serde_json::to_vec(&ControlResponse::MembershipRecordsPage(page.clone()))
+            .expect("encoded page");
+
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.next_cursor, Some(1));
+        assert!(encoded.len() <= MAX_CONTROL_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn cached_membership_pages_cover_the_maximum_bounded_inventory() {
+        let records = (0..MAX_MEMBERSHIP_RECORDS)
+            .map(|sequence| {
+                let mut record = membership_record(u64::try_from(sequence).expect("sequence"));
+                record.signature = "x".repeat(10_000);
+                record
+            })
+            .collect::<Vec<_>>();
+        let snapshot = membership_records_snapshot(&records);
+        let mut request = MembershipRecordsRequest::first("lab", None);
+        let mut records_received = 0;
+        let mut pages = 0;
+
+        loop {
+            let page = build_membership_records_page_for_snapshot(
+                &request,
+                &records,
+                &snapshot,
+                "lab",
+                None,
+                &[],
+            )
+            .expect("bounded page");
+            let encoded = serde_json::to_vec(&ControlResponse::MembershipRecordsPage(page.clone()))
+                .expect("encoded page");
+            assert!(encoded.len() <= MAX_CONTROL_MESSAGE_LEN);
+            assert_eq!(page.snapshot, snapshot);
+            records_received += page.records.len();
+            pages += 1;
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            request = request.next(snapshot.clone(), next_cursor);
+        }
+
+        assert_eq!(records_received, MAX_MEMBERSHIP_RECORDS);
+        assert_eq!(pages, MAX_MEMBERSHIP_RECORDS);
+    }
+
+    #[test]
+    fn membership_page_detects_snapshot_changes() {
+        let records = vec![membership_record(1)];
+        let request = MembershipRecordsRequest {
+            snapshot: Some(membership_records_snapshot(&[membership_record(2)])),
+            ..MembershipRecordsRequest::first("lab", None)
+        };
+
+        assert_eq!(
+            build_membership_records_page(&request, &records, "lab", None, &[]),
+            Err(MembershipRecordsRejectionReason::SnapshotChanged)
+        );
+    }
+
+    #[tokio::test]
     async fn control_codec_rejects_oversized_messages() {
         let mut codec = ControlCodec;
         let protocol = StreamProtocol::new(CONTROL_PROTOCOL);
@@ -744,6 +1278,9 @@ mod tests {
         assert!(!capabilities.supports_owned_quic_packet_plane);
         assert_eq!(capabilities.owned_quic_packet_plane_certificate_der, None);
         assert!(capabilities.packet_endpoint_candidates.is_empty());
+        assert!(!capabilities.supports_membership_record_pages);
+        assert_eq!(capabilities.membership_record_count, 0);
+        assert_eq!(capabilities.membership_records_snapshot, None);
     }
 
     #[test]
