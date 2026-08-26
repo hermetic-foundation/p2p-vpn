@@ -1,7 +1,8 @@
 use std::{error::Error, num::NonZeroU8, time::Duration};
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, dns, identify,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, allow_block_list, autonat, connection_limits, dcutr,
+    dns, identify,
     identity::Keypair,
     kad, mdns,
     multiaddr::Protocol,
@@ -32,6 +33,7 @@ const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
     pub connection_limits: connection_limits::Behaviour,
+    pub blocked_peers: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
@@ -155,6 +157,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     connection_limits: connection_limits::Behaviour::new(
                         resources.to_connection_limits(),
                     ),
+                    blocked_peers: allow_block_list::Behaviour::default(),
                     identify: identify::Behaviour::new(
                         identify::Config::new(PROTOCOL_VERSION.to_owned(), keypair.public())
                             .with_hide_listen_addrs(true),

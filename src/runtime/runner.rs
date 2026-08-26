@@ -120,6 +120,10 @@ const MAX_CONCURRENT_MEMBERSHIP_SYNCS: usize = 4;
 const MAX_MEMBERSHIP_SYNC_RESTARTS: u8 = 3;
 const MEMBERSHIP_SYNC_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MEMBERSHIP_PROBE_CONNECTION_TTL: Duration = Duration::from_secs(30);
+const MEMBERSHIP_PROBE_QUARANTINE_BASE: Duration = Duration::from_secs(30);
+const MEMBERSHIP_PROBE_QUARANTINE_MAX: Duration = Duration::from_mins(10);
+const MEMBERSHIP_PROBE_QUARANTINE_RESET: Duration = Duration::from_mins(30);
+const MEMBERSHIP_PROBE_QUARANTINE_CAPACITY: usize = 1024;
 const MAX_MEMBERSHIP_SYNC_BYTES: usize = MAX_MEMBERSHIP_RECORDS * MAX_MEMBERSHIP_RECORD_ENCODED_LEN;
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
@@ -8325,15 +8329,33 @@ struct MembershipProbeConnection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MembershipProbeQuarantine {
+    consecutive_failures: u32,
+    retry_at: Instant,
+    last_failure: Instant,
+    blocked: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MembershipProbeQuarantineUpdate {
+    active_connection_id: Option<ConnectionId>,
+    consecutive_failures: u32,
+    delay: Duration,
+    evicted_blocked_peer: Option<Libp2pPeerId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MembershipProbeAdmission {
     Admitted,
     Replaced(ConnectionId),
     Duplicate,
+    Quarantined,
 }
 
 #[derive(Debug, Default)]
 struct MembershipProbeConnections {
     by_peer: HashMap<Libp2pPeerId, MembershipProbeConnection>,
+    quarantines: HashMap<Libp2pPeerId, MembershipProbeQuarantine>,
 }
 
 impl MembershipProbeConnections {
@@ -8344,6 +8366,9 @@ impl MembershipProbeConnections {
         relayed: bool,
         now: Instant,
     ) -> MembershipProbeAdmission {
+        if self.is_quarantined(peer, now) {
+            return MembershipProbeAdmission::Quarantined;
+        }
         let next = MembershipProbeConnection {
             connection_id,
             relayed,
@@ -8365,18 +8390,103 @@ impl MembershipProbeConnections {
         MembershipProbeAdmission::Duplicate
     }
 
-    fn remove(&mut self, peer: Libp2pPeerId, connection_id: ConnectionId) {
+    fn is_quarantined(&self, peer: Libp2pPeerId, now: Instant) -> bool {
+        self.quarantines
+            .get(&peer)
+            .is_some_and(|quarantine| quarantine.blocked && now < quarantine.retry_at)
+    }
+
+    fn remove(&mut self, peer: Libp2pPeerId, connection_id: ConnectionId) -> bool {
         if self
             .by_peer
             .get(&peer)
             .is_some_and(|probe| probe.connection_id == connection_id)
         {
             self.by_peer.remove(&peer);
+            return true;
+        }
+        false
+    }
+
+    fn authorize(&mut self, peer: Libp2pPeerId) -> bool {
+        self.by_peer.remove(&peer);
+        self.clear_quarantine(peer)
+    }
+
+    fn clear_quarantine(&mut self, peer: Libp2pPeerId) -> bool {
+        self.quarantines
+            .remove(&peer)
+            .is_some_and(|quarantine| quarantine.blocked)
+    }
+
+    fn quarantine(&mut self, peer: Libp2pPeerId, now: Instant) -> MembershipProbeQuarantineUpdate {
+        let active_connection_id = self.by_peer.remove(&peer).map(|probe| probe.connection_id);
+        let consecutive_failures = self.quarantines.get(&peer).map_or(1, |quarantine| {
+            if now.saturating_duration_since(quarantine.last_failure)
+                >= MEMBERSHIP_PROBE_QUARANTINE_RESET
+            {
+                1
+            } else {
+                quarantine.consecutive_failures.saturating_add(1)
+            }
+        });
+        let shift = consecutive_failures.saturating_sub(1).min(8);
+        let delay = MEMBERSHIP_PROBE_QUARANTINE_BASE
+            .saturating_mul(1_u32 << shift)
+            .min(MEMBERSHIP_PROBE_QUARANTINE_MAX);
+        let evicted_blocked_peer = if !self.quarantines.contains_key(&peer)
+            && self.quarantines.len() >= MEMBERSHIP_PROBE_QUARANTINE_CAPACITY
+        {
+            self.quarantines
+                .iter()
+                .min_by_key(|(_, quarantine)| quarantine.last_failure)
+                .map(|(peer, _)| *peer)
+                .and_then(|evicted| {
+                    self.quarantines
+                        .remove(&evicted)
+                        .is_some_and(|quarantine| quarantine.blocked)
+                        .then_some(evicted)
+                })
+        } else {
+            None
+        };
+        self.quarantines.insert(
+            peer,
+            MembershipProbeQuarantine {
+                consecutive_failures,
+                retry_at: now + delay,
+                last_failure: now,
+                blocked: true,
+            },
+        );
+
+        MembershipProbeQuarantineUpdate {
+            active_connection_id,
+            consecutive_failures,
+            delay,
+            evicted_blocked_peer,
         }
     }
 
-    fn authorize(&mut self, peer: Libp2pPeerId) {
-        self.by_peer.remove(&peer);
+    fn release_ready_quarantines(&mut self, now: Instant) -> Vec<Libp2pPeerId> {
+        let mut released = Vec::new();
+        self.quarantines.retain(|peer, quarantine| {
+            if quarantine.blocked && now >= quarantine.retry_at {
+                quarantine.blocked = false;
+                released.push(*peer);
+            }
+            quarantine.blocked
+                || now.saturating_duration_since(quarantine.last_failure)
+                    < MEMBERSHIP_PROBE_QUARANTINE_RESET
+        });
+        released
+    }
+
+    fn quarantined_peers(&self) -> Vec<Libp2pPeerId> {
+        self.quarantines
+            .iter()
+            .filter_map(|(peer, quarantine)| quarantine.blocked.then_some(*peer))
+            .collect()
     }
 
     fn expired(&self, now: Instant) -> Vec<(Libp2pPeerId, ConnectionId)> {
@@ -8397,6 +8507,77 @@ impl MembershipProbeConnections {
     }
 }
 
+fn authorize_membership_probe_peer(
+    swarm: &mut Swarm<Behaviour>,
+    probes: &mut MembershipProbeConnections,
+    peer: Libp2pPeerId,
+    reason: &str,
+) {
+    let tracked_block = probes.authorize(peer);
+    let unblocked = swarm.behaviour_mut().blocked_peers.unblock_peer(peer);
+    if tracked_block || unblocked {
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_probe_peer_authorized",
+            &[("peer", &peer.to_string()), ("reason", reason)],
+        );
+    }
+}
+
+fn clear_membership_probe_quarantine(
+    swarm: &mut Swarm<Behaviour>,
+    probes: &mut MembershipProbeConnections,
+    peer: Libp2pPeerId,
+    reason: &str,
+) {
+    let tracked_block = probes.clear_quarantine(peer);
+    let unblocked = swarm.behaviour_mut().blocked_peers.unblock_peer(peer);
+    if tracked_block || unblocked {
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_probe_peer_unblocked",
+            &[("peer", &peer.to_string()), ("reason", reason)],
+        );
+    }
+}
+
+fn quarantine_membership_probe_peer(
+    swarm: &mut Swarm<Behaviour>,
+    probes: &mut MembershipProbeConnections,
+    peer: Libp2pPeerId,
+    now: Instant,
+    reason: &str,
+) -> MembershipProbeQuarantineUpdate {
+    let update = probes.quarantine(peer, now);
+    if let Some(evicted) = update.evicted_blocked_peer {
+        swarm.behaviour_mut().blocked_peers.unblock_peer(evicted);
+        log_runtime_event(
+            LogLevel::Warn,
+            "membership_probe_quarantine_evicted",
+            &[("peer", &evicted.to_string())],
+        );
+    }
+    let newly_blocked = swarm.behaviour_mut().blocked_peers.block_peer(peer);
+    if let Some(connection_id) = update.active_connection_id {
+        swarm.close_connection(connection_id);
+    }
+    log_runtime_event(
+        LogLevel::Warn,
+        "membership_probe_peer_quarantined",
+        &[
+            ("peer", &peer.to_string()),
+            ("reason", reason),
+            ("delay_seconds", &update.delay.as_secs().to_string()),
+            (
+                "consecutive_failures",
+                &update.consecutive_failures.to_string(),
+            ),
+            ("newly_blocked", &newly_blocked.to_string()),
+        ],
+    );
+    update
+}
+
 fn expire_membership_probe_connections(
     swarm: &mut Swarm<Behaviour>,
     probes: &mut MembershipProbeConnections,
@@ -8406,12 +8587,23 @@ fn expire_membership_probe_connections(
     metrics: &RuntimeMetrics,
     now: Instant,
 ) {
+    for peer in probes.quarantined_peers() {
+        if membership.allows(peer)
+            || membership.allows_configured_infrastructure(peer)
+            || infrastructure_peers.contains(peer)
+        {
+            authorize_membership_probe_peer(swarm, probes, peer, "membership_available");
+        } else if code_pairing_sessions.allows_pairing_probe(peer) {
+            clear_membership_probe_quarantine(swarm, probes, peer, "pairing_session_active");
+        }
+    }
+
     for (peer, connection_id) in probes.expired(now) {
         if membership.allows(peer)
             || membership.allows_configured_infrastructure(peer)
             || infrastructure_peers.contains(peer)
         {
-            probes.authorize(peer);
+            authorize_membership_probe_peer(swarm, probes, peer, "membership_available");
             continue;
         }
         if code_pairing_sessions.allows_pairing_probe(peer) {
@@ -8419,9 +8611,9 @@ fn expire_membership_probe_connections(
             continue;
         }
 
-        probes.remove(peer, connection_id);
         metrics.record_unauthorized_connection_dropped();
         let close_requested = swarm.close_connection(connection_id);
+        quarantine_membership_probe_peer(swarm, probes, peer, now, "authorization_timeout");
         log_runtime_event(
             LogLevel::Warn,
             "membership_probe_connection_expired",
@@ -8429,6 +8621,19 @@ fn expire_membership_probe_connections(
                 ("peer", &peer.to_string()),
                 ("connection_id", &connection_id.to_string()),
                 ("close_requested", &close_requested.to_string()),
+            ],
+        );
+    }
+
+    for peer in probes.release_ready_quarantines(now) {
+        let unblocked = swarm.behaviour_mut().blocked_peers.unblock_peer(peer);
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_probe_peer_unblocked",
+            &[
+                ("peer", &peer.to_string()),
+                ("reason", "quarantine_expired"),
+                ("unblocked", &unblocked.to_string()),
             ],
         );
     }
@@ -8579,9 +8784,6 @@ async fn handle_swarm_event(
                     "overlay_connection_established",
                 );
             }
-            context
-                .public_discovery_backoff
-                .record_connection_established(peer_id);
             match authorize_established_connection(
                 context.membership,
                 context.infrastructure_peers,
@@ -8593,12 +8795,29 @@ async fn handle_swarm_event(
                 context.relay_server_enabled,
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {
-                    context.membership_probe_connections.authorize(peer_id);
+                    authorize_membership_probe_peer(
+                        swarm,
+                        context.membership_probe_connections,
+                        peer_id,
+                        "overlay_connection_established",
+                    );
+                    context
+                        .public_discovery_backoff
+                        .record_connection_established(peer_id);
                     context
                         .discovered_peer_addresses
                         .record_recovery_connection_at(peer_id, Instant::now());
                 }
                 EstablishedConnectionAuthorization::InfrastructurePeer => {
+                    authorize_membership_probe_peer(
+                        swarm,
+                        context.membership_probe_connections,
+                        peer_id,
+                        "infrastructure_connection_established",
+                    );
+                    context
+                        .public_discovery_backoff
+                        .record_connection_established(peer_id);
                     advertise_relay_server_listener_address(
                         swarm,
                         context.relay_server_enabled,
@@ -8615,11 +8834,12 @@ async fn handle_swarm_event(
                     return Ok(());
                 }
                 EstablishedConnectionAuthorization::MembershipProbe => {
+                    let now = Instant::now();
                     match context.membership_probe_connections.admit(
                         peer_id,
                         connection_id,
                         endpoint.is_relayed(),
-                        Instant::now(),
+                        now,
                     ) {
                         MembershipProbeAdmission::Admitted => {}
                         MembershipProbeAdmission::Replaced(replaced_connection_id) => {
@@ -8640,13 +8860,36 @@ async fn handle_swarm_event(
                         }
                         MembershipProbeAdmission::Duplicate => {
                             let close_requested = swarm.close_connection(connection_id);
+                            context.metrics.record_unauthorized_connection_dropped();
+                            quarantine_membership_probe_peer(
+                                swarm,
+                                context.membership_probe_connections,
+                                peer_id,
+                                now,
+                                "duplicate_connection",
+                            );
                             log_runtime_event(
-                                LogLevel::Info,
+                                LogLevel::Warn,
                                 "membership_probe_connection_deduplicated",
                                 &[
                                     ("peer", &peer_id.to_string()),
                                     ("connection_id", &connection_id.to_string()),
                                     ("relayed", &endpoint.is_relayed().to_string()),
+                                    ("close_requested", &close_requested.to_string()),
+                                ],
+                            );
+                            return Ok(());
+                        }
+                        MembershipProbeAdmission::Quarantined => {
+                            context.metrics.record_unauthorized_connection_dropped();
+                            swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
+                            let close_requested = swarm.close_connection(connection_id);
+                            log_runtime_event(
+                                LogLevel::Warn,
+                                "membership_probe_connection_suppressed",
+                                &[
+                                    ("peer", &peer_id.to_string()),
+                                    ("connection_id", &connection_id.to_string()),
                                     ("close_requested", &close_requested.to_string()),
                                 ],
                             );
@@ -8685,6 +8928,13 @@ async fn handle_swarm_event(
                     return Ok(());
                 }
                 EstablishedConnectionAuthorization::Rejected => {
+                    quarantine_membership_probe_peer(
+                        swarm,
+                        context.membership_probe_connections,
+                        peer_id,
+                        Instant::now(),
+                        "outbound_connection_rejected",
+                    );
                     log_runtime_event(
                         LogLevel::Warn,
                         "unauthorized_peer_disconnected",
@@ -8767,9 +9017,31 @@ async fn handle_swarm_event(
             ..
         } => {
             context.active_connections.remove(&(peer_id, connection_id));
-            context
+            let membership_probe_closed = context
                 .membership_probe_connections
                 .remove(peer_id, connection_id);
+            if context.membership.allows(peer_id)
+                || context.membership.allows_configured_infrastructure(peer_id)
+                || context.infrastructure_peers.contains(peer_id)
+            {
+                authorize_membership_probe_peer(
+                    swarm,
+                    context.membership_probe_connections,
+                    peer_id,
+                    "authorized_connection_closed",
+                );
+            } else if membership_probe_closed
+                && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+            {
+                context.metrics.record_unauthorized_connection_dropped();
+                quarantine_membership_probe_peer(
+                    swarm,
+                    context.membership_probe_connections,
+                    peer_id,
+                    Instant::now(),
+                    "probe_closed_before_authorization",
+                );
+            }
             record_path_closed(
                 context.paths,
                 context.forwarder,
@@ -11620,7 +11892,7 @@ fn promote_authenticated_overlay_connection(
     if !context.forwarder.is_configured_transport_peer(peer) {
         return;
     }
-    context.membership_probe_connections.authorize(peer);
+    authorize_membership_probe_peer(swarm, context.membership_probe_connections, peer, reason);
     remove_overlay_peer_from_infrastructure(
         context.infrastructure_peers,
         context.auto_relay,
@@ -23714,7 +23986,7 @@ mod tests {
         );
         assert_eq!(probes.by_peer.len(), 1);
 
-        probes.remove(peer, relay_connection);
+        assert!(!probes.remove(peer, relay_connection));
         assert_eq!(probes.by_peer.len(), 1);
         assert_eq!(
             probes.expired(now + MEMBERSHIP_PROBE_CONNECTION_TTL),
@@ -23738,6 +24010,72 @@ mod tests {
 
         probes.authorize(peer);
         assert!(probes.by_peer.is_empty());
+    }
+
+    #[test]
+    fn membership_probe_quarantine_backs_off_and_recovers_on_authorization() {
+        let peer = peer_id();
+        let first_connection = ConnectionId::new_unchecked(1);
+        let second_connection = ConnectionId::new_unchecked(2);
+        let now = Instant::now();
+        let mut probes = MembershipProbeConnections::default();
+
+        assert_eq!(
+            probes.admit(peer, first_connection, false, now),
+            MembershipProbeAdmission::Admitted
+        );
+        let first = probes.quarantine(peer, now);
+        assert_eq!(first.active_connection_id, Some(first_connection));
+        assert_eq!(first.consecutive_failures, 1);
+        assert_eq!(first.delay, MEMBERSHIP_PROBE_QUARANTINE_BASE);
+        assert_eq!(
+            probes.admit(peer, second_connection, false, now),
+            MembershipProbeAdmission::Quarantined
+        );
+        assert!(
+            probes
+                .release_ready_quarantines(now + MEMBERSHIP_PROBE_QUARANTINE_BASE / 2)
+                .is_empty()
+        );
+
+        let retry_at = now + MEMBERSHIP_PROBE_QUARANTINE_BASE;
+        assert_eq!(probes.release_ready_quarantines(retry_at), vec![peer]);
+        assert_eq!(
+            probes.admit(peer, second_connection, false, retry_at),
+            MembershipProbeAdmission::Admitted
+        );
+        let second = probes.quarantine(peer, retry_at);
+        assert_eq!(second.consecutive_failures, 2);
+        assert_eq!(
+            second.delay,
+            MEMBERSHIP_PROBE_QUARANTINE_BASE.saturating_mul(2)
+        );
+
+        assert!(probes.authorize(peer));
+        assert!(probes.by_peer.is_empty());
+        assert!(probes.quarantines.is_empty());
+    }
+
+    #[test]
+    fn membership_probe_quarantine_state_is_bounded() {
+        let now = Instant::now();
+        let mut probes = MembershipProbeConnections::default();
+        let mut last_update = None;
+
+        for _ in 0..=MEMBERSHIP_PROBE_QUARANTINE_CAPACITY {
+            last_update = Some(probes.quarantine(peer_id(), now));
+        }
+
+        assert_eq!(
+            probes.quarantines.len(),
+            MEMBERSHIP_PROBE_QUARANTINE_CAPACITY
+        );
+        assert!(
+            last_update
+                .expect("last quarantine update")
+                .evicted_blocked_peer
+                .is_some()
+        );
     }
 
     #[test]

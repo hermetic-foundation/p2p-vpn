@@ -161,6 +161,25 @@ A snapshot change restarts from cursor zero up to the configured bound.
 
 The aggregate byte limit is `record count * maximum encoded record size`.
 
+## Pre-Authorization Connections
+
+Unknown transport identities receive one bounded membership probe.
+
+The block list applies after the secure transport identifies the remote peer.
+
+| Bound | Policy |
+| --- | --- |
+| Active probes | One per peer; a direct path may replace a relayed path. |
+| Authorization deadline | 30 seconds. |
+| Rejection backoff | 30 seconds, doubling to 10 minutes. |
+| Backoff reset | 30 minutes without another rejection. |
+| Retained peer state | 1,024 entries with oldest-entry eviction. |
+| Successful authorization | Clear the block and failure history immediately. |
+
+An active join may temporarily admit peers in its bounded mDNS candidate set.
+
+An open inviter must admit unknown peers until the pairing protocol authenticates them.
+
 ## Kademlia Dissemination
 
 Kademlia publishes at most eight records in a 64 KiB bundle.
@@ -285,6 +304,9 @@ Persistence metric names are listed in [User Operations](../user/operations.md).
 | `membership_record_sync_*` | Full-snapshot completion or failure. |
 | `membership_state_*` | Startup load and atomic persistence. |
 | `membership_authorization_*` | Expiry or trust-graph refresh. |
+| `membership_probe_peer_quarantined` | Rejected peer, reason, failure count, and retry delay. |
+| `membership_probe_peer_unblocked` | Expired quarantine or active pairing exception. |
+| `membership_probe_peer_authorized` | Signed membership or infrastructure authorization. |
 
 Secrets are never included in membership events.
 

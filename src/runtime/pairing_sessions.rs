@@ -1972,9 +1972,11 @@ impl CodePairingSessions {
     pub fn allows_pairing_probe(&self, peer: Libp2pPeerId) -> bool {
         self.active_open().is_some()
             || self.active_join().is_some_and(|join| {
-                join.peer_attempts
-                    .get(&peer)
-                    .is_some_and(|attempt| attempt.in_flight)
+                (join.selected_inviter.is_none() && self.lan_candidates.contains_key(&peer))
+                    || join
+                        .peer_attempts
+                        .get(&peer)
+                        .is_some_and(|attempt| attempt.in_flight)
                     || join.selected_inviter == Some(peer)
             })
             || self
@@ -3616,6 +3618,35 @@ mod tests {
         assert!(sessions.allows_pairing_probe(candidate));
         sessions.cancel(&started.operation_id).expect("cancel");
         assert!(!sessions.allows_pairing_probe(candidate));
+    }
+
+    #[test]
+    fn join_allows_bounded_lan_candidates_before_dialing() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let candidate = peer(9);
+        let unrelated = peer(10);
+        sessions.record_lan_candidate(
+            candidate,
+            "/ip4/127.0.0.1/tcp/4001"
+                .parse()
+                .expect("candidate address"),
+            now,
+        );
+        sessions
+            .join(
+                "runners",
+                PairingCode::generate(),
+                None,
+                Vec::new(),
+                600,
+                1_000,
+                now,
+            )
+            .expect("join pairing");
+
+        assert!(sessions.allows_pairing_probe(candidate));
+        assert!(!sessions.allows_pairing_probe(unrelated));
     }
 
     #[test]

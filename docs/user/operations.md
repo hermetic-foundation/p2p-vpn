@@ -113,6 +113,7 @@ Useful membership counters:
 | `membership_state_load_failures` | Rejected or unreadable state files. |
 | `membership_state_persists` | Successful atomic saves. |
 | `membership_state_persist_failures` | Failed saves. |
+| `unauthorized_connections_dropped` | Rejected or quarantined transport connections. |
 
 Example:
 
@@ -174,5 +175,6 @@ sudo p2p-vpn daemon-shutdown \
 | Public discovery idle | bootstrap peers, Kademlia, AutoNAT status. |
 | Mesh inventory differs | membership record count and sync failure counters. |
 | Learned routes vanish on restart | membership state path and `membership_state_load_*`. |
+| Rejected peer reconnects continuously | `unauthorized_connections_dropped` and `membership_probe_peer_quarantined` journal events. |
 
 See [Network Membership](membership.md) for convergence and state recovery.
