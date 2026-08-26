@@ -41,6 +41,18 @@ Membership sources are explicit:
 | Public bootstrap peers | Reachability only. |
 | Relay peers | Reachability only. |
 
+Transport roles are independent from overlay authorization:
+
+| Role | Bound | Promotion rule |
+| --- | --- | --- |
+| Membership probe | 30-second lifetime | Valid signed membership or pairing |
+| Public routing | 64 peers | Valid signed membership only |
+| Relay infrastructure | 64 candidates | Valid signed membership only |
+| Overlay member | Membership history bound | Already authorized |
+
+Kademlia protocol support permits routing transport only. Application handlers
+still reject packets, routes, status, and membership pages from non-members.
+
 Signed records form a delegated trust graph.
 
 Connected members exchange bounded snapshot pages and persist learned history.
@@ -229,6 +241,9 @@ Relay peers are not VPN members unless they also appear in `peers[]`.
 ## Public Discovery
 
 Public IPFS/libp2p routing is default reachability infrastructure.
+
+Unknown connections are classified after Identify. Exact Kademlia protocol
+matches remain connected as bounded routing-only peers.
 
 Provider results are dialed only when they match configured overlay peers.
 

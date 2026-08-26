@@ -16,6 +16,22 @@ It must not be treated as VPN membership or route authority.
 | Authorize VPN routes | no |
 | Authorize VPN membership | no |
 
+## Connection Roles
+
+Public routing connections stay outside the VPN data plane.
+
+| Role | Admission | Authority |
+| --- | --- | --- |
+| Public routing | Exact configured Kademlia protocol | DHT requests only |
+| Relay infrastructure | Relay-hop protocol or explicit config | Relay service only |
+| Pairing probe | Active pairing session | Pairing protocol only |
+| Overlay member | Valid static or signed membership | Approved routes and packets |
+
+The daemon retains at most 64 identified public routing peers.
+
+Unknown peers have 30 seconds to identify or present membership. Invalid
+overlay capability attempts are disconnected and quarantined with backoff.
+
 ## Code Pairing Over Public Paths
 
 The default code workflow can use public routing and relays.
@@ -225,6 +241,15 @@ lookups continue during the backoff window.
 | `relayed_peer_circuit` | Relay path did not connect to target. |
 | `dcutr_success` | Hole punching did not complete. |
 | `none` | Candidate passed requested checks. |
+
+Inspect active public routing transport:
+
+```sh
+sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
+  | rg '^public_routing_peers '
+```
+
+This count does not include VPN members or grant route authority.
 
 ## More References
 

@@ -158,6 +158,7 @@ const MAX_RECOVERY_DIAL_ATTEMPTS: usize =
     MAX_MEMBERSHIP_RECORDS * MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES;
 const MAX_RECOVERY_DISCOVERY_QUERIES: usize = MAX_MEMBERSHIP_RECORDS;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
+const KADEMLIA_ROUTING_PEER_CAPACITY: usize = 64;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
 const STREAM_FALLBACK_ORDERED_FLOW_WINDOW: usize = 16;
 
@@ -799,6 +800,7 @@ where
     let mut public_discovery_backoff =
         PublicDiscoveryBackoff::from_bootstrap_defaults(public_bootstrap_defaults);
     let mut infrastructure_peers = InfrastructurePeers::default();
+    let mut routing_infrastructure_peers = RoutingInfrastructurePeers::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
     let mut inbound_packet_rate_limiters =
         PeerRateLimiters::new(resources.inbound_packet_rate_limit());
@@ -1030,6 +1032,7 @@ where
                         membership: &mut membership,
                         tun_runtime: &mut tun_runtime,
                         infrastructure_peers: &mut infrastructure_peers,
+                        routing_infrastructure_peers: &mut routing_infrastructure_peers,
                         writer: &mut writer,
                         paths: &mut paths,
                         peer_capabilities: &mut peer_capabilities,
@@ -1287,6 +1290,7 @@ where
                     &mut membership_probe_connections,
                     &membership,
                     &infrastructure_peers,
+                    &routing_infrastructure_peers,
                     &code_pairing_sessions,
                     &metrics,
                     now,
@@ -1362,6 +1366,7 @@ where
                                 membership: &mut membership,
                                 tun_runtime: &mut tun_runtime,
                                 infrastructure_peers: &mut infrastructure_peers,
+                                routing_infrastructure_peers: &mut routing_infrastructure_peers,
                                 writer: &mut writer,
                                 paths: &mut paths,
                                 peer_capabilities: &mut peer_capabilities,
@@ -1447,6 +1452,7 @@ where
                     ),
                     packet_in_flight: queue_runtime.packet_in_flight.stats(),
                     auto_relay: auto_relay.snapshot(Instant::now()),
+                    public_routing_peers: routing_infrastructure_peers.len(),
                     relay_infrastructure: infrastructure_peers.snapshot(&node.swarm),
                     packet_plane: packet_plane.snapshot(),
                     packet_plane_quic: current_packet_plane_quic_snapshot(
@@ -3225,6 +3231,7 @@ struct RuntimeControlContext<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     auto_relay: AutoRelaySnapshot,
+    public_routing_peers: usize,
     relay_infrastructure: RelayInfrastructureSnapshot,
     packet_plane: PacketPlaneSnapshot,
     packet_plane_quic: PacketPlaneQuicSnapshot,
@@ -3243,6 +3250,7 @@ fn handle_runtime_control_request(
                 queue: context.queue,
                 path_stats: context.path_stats,
                 auto_relay: context.auto_relay,
+                public_routing_peers: context.public_routing_peers,
                 packet_plane: &context.packet_plane,
                 packet_plane_quic: &context.packet_plane_quic,
                 packet_plane_session_ttl: context.packet_plane_session_ttl,
@@ -3264,6 +3272,7 @@ fn handle_runtime_control_request(
                 path_stats: context.path_stats,
                 packet_in_flight: context.packet_in_flight,
                 auto_relay: context.auto_relay,
+                public_routing_peers: context.public_routing_peers,
                 relay_infrastructure: &context.relay_infrastructure,
                 packet_plane: &context.packet_plane,
                 packet_plane_quic: &context.packet_plane_quic,
@@ -3839,6 +3848,7 @@ struct RuntimeStatusView<'a> {
     queue: crate::queue::QueueStats,
     path_stats: crate::path::PathRuntimeStats,
     auto_relay: AutoRelaySnapshot,
+    public_routing_peers: usize,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
     packet_plane_session_ttl: Duration,
@@ -3851,6 +3861,10 @@ fn runtime_status_lines(view: RuntimeStatusView<'_>) -> Vec<String> {
         .snapshot_with_paths(view.queue, view.path_stats)
         .lines();
     extend_auto_relay_summary_lines(&mut lines, view.auto_relay);
+    lines.push(format!(
+        "public_routing_peers {}",
+        view.public_routing_peers
+    ));
     lines.push(format!(
         "packet_plane_session_ttl_seconds {}",
         view.packet_plane_session_ttl.as_secs()
@@ -3881,6 +3895,7 @@ struct RuntimeStateView<'a> {
     path_stats: crate::path::PathRuntimeStats,
     packet_in_flight: PacketInFlightStats,
     auto_relay: AutoRelaySnapshot,
+    public_routing_peers: usize,
     relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
@@ -3905,6 +3920,7 @@ fn runtime_state_lines(view: &RuntimeStateView<'_>) -> Vec<String> {
         replay_windows: view.forwarder.replay_window_count(),
         packet_in_flight: view.packet_in_flight,
         auto_relay: view.auto_relay,
+        public_routing_peers: view.public_routing_peers,
         relay_infrastructure: view.relay_infrastructure,
         packet_plane: view.packet_plane,
         packet_plane_quic: view.packet_plane_quic,
@@ -3937,6 +3953,7 @@ struct RuntimeStateSummaryView<'a> {
     replay_windows: usize,
     packet_in_flight: PacketInFlightStats,
     auto_relay: AutoRelaySnapshot,
+    public_routing_peers: usize,
     relay_infrastructure: &'a RelayInfrastructureSnapshot,
     packet_plane: &'a PacketPlaneSnapshot,
     packet_plane_quic: &'a PacketPlaneQuicSnapshot,
@@ -4003,6 +4020,10 @@ fn runtime_state_summary_lines(view: RuntimeStateSummaryView<'_>) -> Vec<String>
     ];
     extend_runtime_discovery_summary_lines(&mut lines, snapshot);
     extend_auto_relay_summary_lines(&mut lines, view.auto_relay);
+    lines.push(format!(
+        "public_routing_peers {}",
+        view.public_routing_peers
+    ));
     extend_runtime_path_summary_lines(&mut lines, snapshot);
     extend_runtime_relay_infrastructure_lines(&mut lines, view.relay_infrastructure);
     extend_runtime_packet_plane_summary_lines(&mut lines, view.packet_plane);
@@ -5796,6 +5817,43 @@ impl InfrastructurePeers {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RoutingInfrastructureAdmission {
+    Admitted,
+    Existing,
+    AtCapacity,
+}
+
+#[derive(Debug, Default)]
+struct RoutingInfrastructurePeers {
+    peers: HashSet<Libp2pPeerId>,
+}
+
+impl RoutingInfrastructurePeers {
+    fn admit(&mut self, peer: Libp2pPeerId) -> RoutingInfrastructureAdmission {
+        if self.peers.contains(&peer) {
+            return RoutingInfrastructureAdmission::Existing;
+        }
+        if self.peers.len() >= KADEMLIA_ROUTING_PEER_CAPACITY {
+            return RoutingInfrastructureAdmission::AtCapacity;
+        }
+        self.peers.insert(peer);
+        RoutingInfrastructureAdmission::Admitted
+    }
+
+    fn contains(&self, peer: Libp2pPeerId) -> bool {
+        self.peers.contains(&peer)
+    }
+
+    fn remove(&mut self, peer: Libp2pPeerId) -> bool {
+        self.peers.remove(&peer)
+    }
+
+    fn len(&self) -> usize {
+        self.peers.len()
+    }
+}
+
 fn admit_kademlia_relay_infrastructure_peer<'a>(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
@@ -6109,9 +6167,13 @@ fn auto_relay_candidate_addresses(peer: Libp2pPeerId, info: &identify::Info) -> 
 }
 
 fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
+    identify_protocols_include(protocols, relay::HOP_PROTOCOL_NAME.as_ref())
+}
+
+fn identify_protocols_include(protocols: &[libp2p::StreamProtocol], expected: &str) -> bool {
     protocols
         .iter()
-        .any(|protocol| protocol.as_ref() == relay::HOP_PROTOCOL_NAME.as_ref())
+        .any(|protocol| protocol.as_ref() == expected)
 }
 
 fn auto_relay_candidate_address(peer: Libp2pPeerId, address: &Multiaddr) -> Option<Multiaddr> {
@@ -8408,6 +8470,10 @@ impl MembershipProbeConnections {
         false
     }
 
+    fn release_probe(&mut self, peer: Libp2pPeerId) -> bool {
+        self.by_peer.remove(&peer).is_some()
+    }
+
     fn authorize(&mut self, peer: Libp2pPeerId) -> bool {
         self.by_peer.remove(&peer);
         self.clear_quarantine(peer)
@@ -8524,6 +8590,19 @@ fn authorize_membership_probe_peer(
     }
 }
 
+fn classify_membership_probe_as_routing(
+    probes: &mut MembershipProbeConnections,
+    peer: Libp2pPeerId,
+) {
+    if probes.release_probe(peer) {
+        log_runtime_event(
+            LogLevel::Info,
+            "membership_probe_peer_classified",
+            &[("peer", &peer.to_string()), ("role", "public_routing")],
+        );
+    }
+}
+
 fn clear_membership_probe_quarantine(
     swarm: &mut Swarm<Behaviour>,
     probes: &mut MembershipProbeConnections,
@@ -8578,16 +8657,62 @@ fn quarantine_membership_probe_peer(
     update
 }
 
+fn quarantine_rejected_control_probe(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    connection_id: ConnectionId,
+    reason: ControlRejectionReason,
+) {
+    if context.membership.allows(peer) {
+        return;
+    }
+    context.routing_infrastructure_peers.remove(peer);
+    context.metrics.record_unauthorized_connection_dropped();
+    quarantine_membership_probe_peer(
+        swarm,
+        context.membership_probe_connections,
+        peer,
+        Instant::now(),
+        "control_capabilities_rejected",
+    );
+    let close_requested = swarm.close_connection(connection_id);
+    log_runtime_event(
+        LogLevel::Warn,
+        "rejected_control_probe_disconnected",
+        &[
+            ("peer", &peer.to_string()),
+            ("reason", control_rejection_name(reason)),
+            ("close_requested", &close_requested.to_string()),
+        ],
+    );
+}
+
+fn rejected_control_probe_reason(
+    response: &ControlResponse,
+    membership: &OverlayMembership,
+    peer: Libp2pPeerId,
+) -> Option<ControlRejectionReason> {
+    match response {
+        ControlResponse::CapabilitiesRejected(reason) if !membership.allows(peer) => Some(*reason),
+        _ => None,
+    }
+}
+
 fn expire_membership_probe_connections(
     swarm: &mut Swarm<Behaviour>,
     probes: &mut MembershipProbeConnections,
     membership: &OverlayMembership,
     infrastructure_peers: &InfrastructurePeers,
+    routing_infrastructure_peers: &RoutingInfrastructurePeers,
     code_pairing_sessions: &CodePairingSessions,
     metrics: &RuntimeMetrics,
     now: Instant,
 ) {
     for peer in probes.quarantined_peers() {
+        if routing_infrastructure_peers.contains(peer) {
+            continue;
+        }
         if membership.allows(peer)
             || membership.allows_configured_infrastructure(peer)
             || infrastructure_peers.contains(peer)
@@ -8599,6 +8724,10 @@ fn expire_membership_probe_connections(
     }
 
     for (peer, connection_id) in probes.expired(now) {
+        if routing_infrastructure_peers.contains(peer) {
+            classify_membership_probe_as_routing(probes, peer);
+            continue;
+        }
         if membership.allows(peer)
             || membership.allows_configured_infrastructure(peer)
             || infrastructure_peers.contains(peer)
@@ -8644,6 +8773,7 @@ struct SwarmEventContext<'a> {
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
+    routing_infrastructure_peers: &'a mut RoutingInfrastructurePeers,
     writer: &'a mut TunWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
@@ -8749,6 +8879,7 @@ async fn handle_swarm_event(
                 membership: context.membership,
                 tun_runtime: context.tun_runtime,
                 infrastructure_peers: context.infrastructure_peers,
+                routing_infrastructure_peers: context.routing_infrastructure_peers,
                 relay_readiness: context.relay_readiness,
                 auto_relay: context.auto_relay,
                 paths: context.paths,
@@ -8762,6 +8893,7 @@ async fn handle_swarm_event(
                 previous_membership_tags: context.previous_membership_tags,
                 identity: context.identity,
                 code_pairing_sessions: context.code_pairing_sessions,
+                membership_probe_connections: context.membership_probe_connections,
                 public_discovery_quiet,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
@@ -8777,6 +8909,7 @@ async fn handle_swarm_event(
                 .active_connections
                 .insert((peer_id, connection_id), endpoint.clone());
             if context.membership.allows(peer_id) {
+                context.routing_infrastructure_peers.remove(peer_id);
                 remove_overlay_peer_from_infrastructure(
                     context.infrastructure_peers,
                     context.auto_relay,
@@ -8787,11 +8920,13 @@ async fn handle_swarm_event(
             match authorize_established_connection(
                 context.membership,
                 context.infrastructure_peers,
+                context.routing_infrastructure_peers,
                 context.metrics,
                 peer_id,
                 matches!(endpoint, ConnectedPoint::Listener { .. })
                     || context.code_pairing_sessions.allows_pairing_probe(peer_id),
                 context.auto_relay.should_discover_candidates(),
+                context.discovery.kademlia,
                 context.relay_server_enabled,
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {
@@ -8829,6 +8964,25 @@ async fn handle_swarm_event(
                         &[
                             ("peer", &peer_id.to_string()),
                             ("relayed", &endpoint.is_relayed().to_string()),
+                        ],
+                    );
+                    return Ok(());
+                }
+                EstablishedConnectionAuthorization::RoutingPeer => {
+                    classify_membership_probe_as_routing(
+                        context.membership_probe_connections,
+                        peer_id,
+                    );
+                    context
+                        .public_discovery_backoff
+                        .record_connection_established(peer_id);
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "public_routing_connection_established",
+                        &[
+                            ("peer", &peer_id.to_string()),
+                            ("relayed", &endpoint.is_relayed().to_string()),
+                            ("state", "identified"),
                         ],
                     );
                     return Ok(());
@@ -8927,6 +9081,40 @@ async fn handle_swarm_event(
                     );
                     return Ok(());
                 }
+                EstablishedConnectionAuthorization::RoutingProbe => {
+                    let admission = context.routing_infrastructure_peers.admit(peer_id);
+                    if admission == RoutingInfrastructureAdmission::AtCapacity {
+                        let close_requested = swarm.close_connection(connection_id);
+                        log_runtime_event(
+                            LogLevel::Warn,
+                            "public_routing_connection_rejected",
+                            &[
+                                ("peer", &peer_id.to_string()),
+                                ("reason", "capacity"),
+                                ("close_requested", &close_requested.to_string()),
+                            ],
+                        );
+                        return Ok(());
+                    }
+                    context
+                        .public_discovery_backoff
+                        .record_connection_established(peer_id);
+                    let state = if admission == RoutingInfrastructureAdmission::Existing {
+                        "existing"
+                    } else {
+                        "new"
+                    };
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "public_routing_probe_connection_established",
+                        &[
+                            ("peer", &peer_id.to_string()),
+                            ("relayed", &endpoint.is_relayed().to_string()),
+                            ("state", state),
+                        ],
+                    );
+                    return Ok(());
+                }
                 EstablishedConnectionAuthorization::Rejected => {
                     quarantine_membership_probe_peer(
                         swarm,
@@ -9020,9 +9208,12 @@ async fn handle_swarm_event(
             let membership_probe_closed = context
                 .membership_probe_connections
                 .remove(peer_id, connection_id);
+            let routing_peer_closed =
+                num_established == 0 && context.routing_infrastructure_peers.remove(peer_id);
             if context.membership.allows(peer_id)
                 || context.membership.allows_configured_infrastructure(peer_id)
                 || context.infrastructure_peers.contains(peer_id)
+                || routing_peer_closed
             {
                 authorize_membership_probe_peer(
                     swarm,
@@ -9040,6 +9231,13 @@ async fn handle_swarm_event(
                     peer_id,
                     Instant::now(),
                     "probe_closed_before_authorization",
+                );
+            }
+            if routing_peer_closed {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "public_routing_connection_closed",
+                    &[("peer", &peer_id.to_string())],
                 );
             }
             record_path_closed(
@@ -10467,7 +10665,11 @@ async fn handle_control_request(
                 | ControlResponse::MembershipRecordsPage(_)
                 | ControlResponse::MembershipRecordsRejected(_) => {}
             }
+            let rejected_probe = rejected_control_probe_reason(&response, context.membership, peer);
             send_control_response_nonfatal(swarm, context.metrics, peer, channel, response);
+            if let Some(reason) = rejected_probe {
+                quarantine_rejected_control_probe(swarm, context, peer, connection_id, reason);
+            }
         }
         ControlRequest::PacketPlaneHello(handshake) => {
             context.metrics.record_control_request_received();
@@ -11893,6 +12095,13 @@ fn promote_authenticated_overlay_connection(
         return;
     }
     authorize_membership_probe_peer(swarm, context.membership_probe_connections, peer, reason);
+    if context.routing_infrastructure_peers.remove(peer) {
+        log_runtime_event(
+            LogLevel::Info,
+            "public_routing_peer_promoted",
+            &[("peer", &peer.to_string()), ("reason", reason)],
+        );
+    }
     remove_overlay_peer_from_infrastructure(
         context.infrastructure_peers,
         context.auto_relay,
@@ -15097,18 +15306,22 @@ fn log_path_selection_change(event: &str, change: crate::path::PathSelectionChan
 enum EstablishedConnectionAuthorization {
     OverlayPeer,
     InfrastructurePeer,
+    RoutingPeer,
     MembershipProbe,
     InfrastructureProbe,
+    RoutingProbe,
     Rejected,
 }
 
 fn authorize_established_connection(
     membership: &OverlayMembership,
     infrastructure_peers: &InfrastructurePeers,
+    routing_infrastructure_peers: &RoutingInfrastructurePeers,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
     allow_membership_probe: bool,
     allow_infrastructure_probe: bool,
+    allow_routing_probe: bool,
     relay_server_enabled: bool,
 ) -> EstablishedConnectionAuthorization {
     if membership.allows(peer) {
@@ -15123,12 +15336,20 @@ fn authorize_established_connection(
         return EstablishedConnectionAuthorization::InfrastructurePeer;
     }
 
+    if routing_infrastructure_peers.contains(peer) {
+        return EstablishedConnectionAuthorization::RoutingPeer;
+    }
+
     if allow_membership_probe {
         return EstablishedConnectionAuthorization::MembershipProbe;
     }
 
     if allow_infrastructure_probe {
         return EstablishedConnectionAuthorization::InfrastructureProbe;
+    }
+
+    if allow_routing_probe {
+        return EstablishedConnectionAuthorization::RoutingProbe;
     }
 
     metrics.record_unauthorized_connection_dropped();
@@ -15188,6 +15409,7 @@ struct BehaviourEventContext<'a> {
     membership: &'a mut OverlayMembership,
     tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
+    routing_infrastructure_peers: &'a mut RoutingInfrastructurePeers,
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
     paths: &'a PathSet,
@@ -15201,6 +15423,7 @@ struct BehaviourEventContext<'a> {
     previous_membership_tags: &'a [String],
     identity: &'a NodeIdentity,
     code_pairing_sessions: &'a mut CodePairingSessions,
+    membership_probe_connections: &'a mut MembershipProbeConnections,
     public_discovery_quiet: bool,
 }
 
@@ -15267,8 +15490,12 @@ fn handle_behaviour_event(
                 }
             }
         }
-        BehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            handle_identify_received(swarm, context, peer_id, info);
+        BehaviourEvent::Identify(identify::Event::Received {
+            peer_id,
+            connection_id,
+            info,
+        }) => {
+            handle_identify_received(swarm, context, peer_id, connection_id, info);
         }
         BehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
             if context.infrastructure_peers.contains(peer_id) && !context.membership.allows(peer_id)
@@ -15280,6 +15507,26 @@ fn handle_behaviour_event(
                     peer_id,
                     "identify_failed",
                 );
+            }
+            if context.routing_infrastructure_peers.remove(peer_id)
+                && !context.membership.allows(peer_id)
+                && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+            {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "public_routing_connection_rejected",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("reason", "identify_failed"),
+                    ],
+                );
+                if swarm.disconnect_peer_id(peer_id).is_err() {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "public_routing_connection_already_disconnected",
+                        &[("peer", &peer_id.to_string())],
+                    );
+                }
             }
             eprintln!("identify with {peer_id} failed: {error}");
         }
@@ -15378,10 +15625,13 @@ fn handle_identify_received(
     swarm: &mut Swarm<Behaviour>,
     context: &mut BehaviourEventContext<'_>,
     peer_id: Libp2pPeerId,
+    connection_id: ConnectionId,
     info: identify::Info,
 ) {
     let observed_addr = info.observed_addr.clone();
     let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
+    let kademlia_routing = context.discovery.kademlia
+        && identify_protocols_include(&info.protocols, &context.discovery.kademlia_protocol);
     let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info);
     for address in info.listen_addrs {
         learn_peer_address(
@@ -15396,13 +15646,76 @@ fn handle_identify_received(
             DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
         );
     }
+    if !context.membership.allows(peer_id)
+        && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        && kademlia_routing
+    {
+        match context.routing_infrastructure_peers.admit(peer_id) {
+            RoutingInfrastructureAdmission::Admitted => {
+                classify_membership_probe_as_routing(context.membership_probe_connections, peer_id);
+                log_runtime_event(
+                    LogLevel::Info,
+                    "public_routing_peer_identified",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("protocol", &context.discovery.kademlia_protocol),
+                    ],
+                );
+            }
+            RoutingInfrastructureAdmission::Existing => {
+                classify_membership_probe_as_routing(context.membership_probe_connections, peer_id);
+            }
+            RoutingInfrastructureAdmission::AtCapacity => {
+                remove_unconfirmed_infrastructure_peer(
+                    context.infrastructure_peers,
+                    context.auto_relay,
+                    peer_id,
+                    "public_routing_capacity",
+                );
+                context
+                    .membership_probe_connections
+                    .remove(peer_id, connection_id);
+                let close_requested = swarm.close_connection(connection_id);
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "public_routing_connection_rejected",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("reason", "capacity"),
+                        ("close_requested", &close_requested.to_string()),
+                    ],
+                );
+                return;
+            }
+        }
+    } else if context.routing_infrastructure_peers.remove(peer_id) {
+        log_runtime_event(
+            LogLevel::Warn,
+            "public_routing_connection_rejected",
+            &[
+                ("peer", &peer_id.to_string()),
+                ("reason", "unsupported_kademlia_protocol"),
+            ],
+        );
+    }
     if context.infrastructure_peers.contains(peer_id)
         && !context.membership.allows(peer_id)
         && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
         && !relay_hop
     {
-        if context.relay_server_enabled {
+        if context.relay_server_enabled || kademlia_routing {
             remove_unconfirmed_infrastructure_peer(
+                context.infrastructure_peers,
+                context.auto_relay,
+                peer_id,
+                "missing_relay_hop",
+            );
+            if context.relay_server_enabled {
+                return;
+            }
+        } else {
+            reject_unconfirmed_infrastructure_peer(
+                swarm,
                 context.infrastructure_peers,
                 context.auto_relay,
                 peer_id,
@@ -15410,18 +15723,11 @@ fn handle_identify_received(
             );
             return;
         }
-        reject_unconfirmed_infrastructure_peer(
-            swarm,
-            context.infrastructure_peers,
-            context.auto_relay,
-            peer_id,
-            "missing_relay_hop",
-        );
-        return;
     }
     if !context.membership.allows(peer_id)
         && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
         && !relay_hop
+        && !kademlia_routing
         && !context.relay_server_enabled
     {
         log_runtime_event(
@@ -17331,6 +17637,7 @@ mod tests {
                 limit_per_peer: 256,
             },
             auto_relay,
+            public_routing_peers: 7,
             relay_infrastructure: &relay_infrastructure,
             packet_plane: &packet_plane,
             packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
@@ -19374,6 +19681,7 @@ mod tests {
                 path_stats: crate::path::PathRuntimeStats::default(),
                 packet_in_flight: PacketInFlightStats::default(),
                 auto_relay: AutoRelaySnapshot::default(),
+                public_routing_peers: 0,
                 relay_infrastructure: RelayInfrastructureSnapshot::default(),
                 packet_plane: PacketPlaneSnapshot::default(),
                 packet_plane_quic: PacketPlaneQuicSnapshot::default(),
@@ -19683,6 +19991,7 @@ mod tests {
             queue: crate::queue::QueueStats::default(),
             path_stats: crate::path::PathRuntimeStats::default(),
             auto_relay,
+            public_routing_peers: 5,
             packet_plane: &packet_plane,
             packet_plane_quic: &packet_plane_quic,
             packet_plane_session_ttl: Duration::from_secs(75),
@@ -19690,6 +19999,7 @@ mod tests {
         });
 
         assert_auto_relay_lines(&lines, auto_relay);
+        assert!(lines.contains(&"public_routing_peers 5".to_owned()));
         assert!(lines.contains(&"packet_plane_session_ttl_seconds 75".to_owned()));
         assert!(lines.contains(&"packet_plane_replay_windows_per_session 512".to_owned()));
         assert!(lines.contains(&"packet_plane_listeners 1".to_owned()));
@@ -19747,6 +20057,7 @@ mod tests {
                 "outbound_path_mtu_probe_confirmations 1",
                 "outbound_queue_blocked_no_supported_path_events 0",
                 "outbound_queue_blocked_packet_window_events 0",
+                "public_routing_peers 7",
                 "relay_infrastructure_peers 1",
                 "packet_stream_fallback_in_flight 2",
                 "packet_stream_fallback_in_flight_peers 1",
@@ -19803,6 +20114,7 @@ mod tests {
             replay_windows: 0,
             packet_in_flight: PacketInFlightStats::default(),
             auto_relay: AutoRelaySnapshot::default(),
+            public_routing_peers: 0,
             relay_infrastructure: &RelayInfrastructureSnapshot::default(),
             packet_plane: &PacketPlaneSnapshot::default(),
             packet_plane_quic: &PacketPlaneQuicSnapshot::default(),
@@ -23249,6 +23561,7 @@ mod tests {
             .parse()
             .expect("relay address");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let mut auto_relay = AutoRelayState::default();
         let metrics = RuntimeMetrics::default();
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
@@ -23271,8 +23584,10 @@ mod tests {
             authorize_established_connection(
                 &OverlayMembership::default(),
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 relay,
+                false,
                 false,
                 false,
                 false,
@@ -23548,6 +23863,7 @@ mod tests {
             .parse()
             .expect("address");
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let mut auto_relay = AutoRelayState::default();
         let metrics = RuntimeMetrics::default();
         assert!(infrastructure_peers.insert(peer, address.clone()));
@@ -23566,8 +23882,10 @@ mod tests {
             authorize_established_connection(
                 &OverlayMembership::default(),
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 peer,
+                false,
                 false,
                 false,
                 true,
@@ -24079,6 +24397,171 @@ mod tests {
     }
 
     #[test]
+    fn routing_infrastructure_peer_state_is_bounded() {
+        let mut routing = RoutingInfrastructurePeers::default();
+        let first = peer_id();
+
+        assert_eq!(
+            routing.admit(first),
+            RoutingInfrastructureAdmission::Admitted
+        );
+        assert_eq!(
+            routing.admit(first),
+            RoutingInfrastructureAdmission::Existing
+        );
+        for _ in 1..KADEMLIA_ROUTING_PEER_CAPACITY {
+            assert_eq!(
+                routing.admit(peer_id()),
+                RoutingInfrastructureAdmission::Admitted
+            );
+        }
+
+        assert_eq!(routing.len(), KADEMLIA_ROUTING_PEER_CAPACITY);
+        assert_eq!(
+            routing.admit(peer_id()),
+            RoutingInfrastructureAdmission::AtCapacity
+        );
+        assert_eq!(routing.len(), KADEMLIA_ROUTING_PEER_CAPACITY);
+    }
+
+    #[test]
+    fn routing_classification_preserves_membership_rejection_history() {
+        let now = Instant::now();
+        let peer = peer_id();
+        let mut probes = MembershipProbeConnections::default();
+        let first = probes.quarantine(peer, now);
+        assert_eq!(first.consecutive_failures, 1);
+        let retry_at = now + first.delay;
+        assert_eq!(probes.release_ready_quarantines(retry_at), vec![peer]);
+        assert_eq!(
+            probes.admit(peer, ConnectionId::new_unchecked(1), false, retry_at),
+            MembershipProbeAdmission::Admitted
+        );
+
+        classify_membership_probe_as_routing(&mut probes, peer);
+        let second = probes.quarantine(peer, retry_at);
+
+        assert_eq!(second.consecutive_failures, 2);
+        assert_eq!(
+            second.delay,
+            MEMBERSHIP_PROBE_QUARANTINE_BASE.saturating_mul(2)
+        );
+    }
+
+    #[test]
+    fn routing_connections_remain_transport_only_until_membership_is_authorized() {
+        let overlay = peer_id();
+        let routing_peer = peer_id();
+        let routing_probe = peer_id();
+        let membership = OverlayMembership {
+            peers: HashSet::from([overlay]),
+            configured_infrastructure_peers: HashSet::new(),
+        };
+        let infrastructure_peers = InfrastructurePeers::default();
+        let mut routing_infrastructure_peers = RoutingInfrastructurePeers::default();
+        assert_eq!(
+            routing_infrastructure_peers.admit(overlay),
+            RoutingInfrastructureAdmission::Admitted
+        );
+        assert_eq!(
+            routing_infrastructure_peers.admit(routing_peer),
+            RoutingInfrastructureAdmission::Admitted
+        );
+        let metrics = RuntimeMetrics::default();
+
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &routing_infrastructure_peers,
+                &metrics,
+                overlay,
+                false,
+                false,
+                true,
+                false,
+            ),
+            EstablishedConnectionAuthorization::OverlayPeer,
+        );
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &routing_infrastructure_peers,
+                &metrics,
+                routing_peer,
+                false,
+                false,
+                true,
+                false,
+            ),
+            EstablishedConnectionAuthorization::RoutingPeer,
+        );
+        assert_eq!(
+            authorize_established_connection(
+                &membership,
+                &infrastructure_peers,
+                &routing_infrastructure_peers,
+                &metrics,
+                routing_probe,
+                false,
+                false,
+                true,
+                false,
+            ),
+            EstablishedConnectionAuthorization::RoutingProbe,
+        );
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .unauthorized_connections_dropped,
+            0
+        );
+    }
+
+    #[test]
+    fn identify_protocol_matching_is_exact() {
+        let protocols = vec![libp2p::StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL)];
+
+        assert!(identify_protocols_include(
+            &protocols,
+            PUBLIC_IPFS_KADEMLIA_PROTOCOL
+        ));
+        assert!(!identify_protocols_include(&protocols, "/p2p-vpn/kad/1"));
+    }
+
+    #[test]
+    fn only_unauthorized_capability_rejections_quarantine_transport_probes() {
+        let peer = peer_id();
+        let authorized = OverlayMembership {
+            peers: HashSet::from([peer]),
+            configured_infrastructure_peers: HashSet::new(),
+        };
+        let unauthorized = OverlayMembership::default();
+        let response =
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer);
+
+        assert_eq!(
+            rejected_control_probe_reason(&response, &unauthorized, peer),
+            Some(ControlRejectionReason::UnauthorizedPeer)
+        );
+        assert_eq!(
+            rejected_control_probe_reason(&response, &authorized, peer),
+            None
+        );
+        assert_eq!(
+            rejected_control_probe_reason(
+                &ControlResponse::CapabilitiesAccepted(ControlCapabilities::local(
+                    "lab", None, 1280
+                )),
+                &unauthorized,
+                peer,
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn unauthorized_connections_are_rejected_and_counted() {
         let allowed = peer_id();
         let infrastructure = peer_id();
@@ -24088,6 +24571,7 @@ mod tests {
             configured_infrastructure_peers: HashSet::new(),
         };
         let mut infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         assert!(
             infrastructure_peers.insert(
                 infrastructure,
@@ -24102,8 +24586,10 @@ mod tests {
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 allowed,
+                false,
                 false,
                 false,
                 false,
@@ -24114,8 +24600,10 @@ mod tests {
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 infrastructure,
+                false,
                 false,
                 false,
                 false,
@@ -24126,8 +24614,10 @@ mod tests {
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
                 false,
                 false,
@@ -24148,14 +24638,17 @@ mod tests {
             configured_infrastructure_peers: HashSet::from([infrastructure]),
         };
         let infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let metrics = RuntimeMetrics::default();
 
         assert_eq!(
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 infrastructure,
+                false,
                 false,
                 false,
                 false,
@@ -24166,8 +24659,10 @@ mod tests {
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 rejected,
+                false,
                 false,
                 false,
                 false,
@@ -24187,16 +24682,19 @@ mod tests {
             configured_infrastructure_peers: HashSet::new(),
         };
         let infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let metrics = RuntimeMetrics::default();
 
         assert_eq!(
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 probe,
                 false,
                 true,
+                false,
                 false,
             ),
             EstablishedConnectionAuthorization::InfrastructureProbe,
@@ -24214,15 +24712,18 @@ mod tests {
             configured_infrastructure_peers: HashSet::new(),
         };
         let infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let metrics = RuntimeMetrics::default();
 
         assert_eq!(
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 probe,
                 true,
+                false,
                 false,
                 false,
             ),
@@ -24244,14 +24745,17 @@ mod tests {
             configured_infrastructure_peers: HashSet::new(),
         };
         let infrastructure_peers = InfrastructurePeers::default();
+        let routing_infrastructure_peers = RoutingInfrastructurePeers::default();
         let metrics = RuntimeMetrics::default();
 
         assert_eq!(
             authorize_established_connection(
                 &membership,
                 &infrastructure_peers,
+                &routing_infrastructure_peers,
                 &metrics,
                 client,
+                false,
                 false,
                 false,
                 true,
