@@ -74,6 +74,7 @@ use crate::{
             PairRpcTransport, RuntimeControlRequest,
         },
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
+        membership_store::{MembershipStateStore, MembershipStateStoreError},
         p2p::{
             Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node,
             kademlia_pairing_code_key,
@@ -516,6 +517,30 @@ pub async fn run_config_until<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    run_config_until_with_membership_state(
+        config,
+        device,
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        None,
+        shutdown,
+    )
+    .await
+}
+
+pub async fn run_config_until_with_membership_state<Shutdown>(
+    config: Config,
+    device: TunDevice,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    membership_state_path: Option<PathBuf>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
     let identity = config.identity()?;
     let public_bootstrap_defaults = config.uses_public_ipfs_bootstrap_defaults();
     let effective_bootstrap_peers = config.effective_bootstrap_multiaddrs()?;
@@ -574,7 +599,7 @@ where
     let membership = OverlayMembership::from_config(&config)?;
     let previous_membership_tags = config.previous_membership_tags()?;
 
-    Box::pin(run_node_until(
+    Box::pin(run_node_until_with_membership_state(
         node,
         forwarder,
         membership,
@@ -586,6 +611,7 @@ where
         metrics_interval,
         control_socket,
         pairing_state_path,
+        membership_state_path,
         packet_plane,
         packet_plane_quic,
         config.packet_plane_quic_endpoint_candidates()?,
@@ -663,6 +689,59 @@ pub struct RuntimeNodeOptions {
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_node_until<Shutdown>(
+    node: P2pNode,
+    forwarder: Forwarder,
+    membership: OverlayMembership,
+    previous_membership_tags: Vec<String>,
+    device: TunDevice,
+    mtu: u16,
+    queue_config: QueueConfig,
+    resources: ResourceConfig,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    packet_plane: PacketPlaneRuntime,
+    packet_plane_quic: Option<PacketPlaneQuicRuntime>,
+    packet_plane_quic_external_endpoints: Vec<String>,
+    packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
+    auto_relay_config: AutoRelayConfig,
+    public_bootstrap_defaults: bool,
+    public_discovery_holdoff_until: Option<Instant>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
+    Box::pin(run_node_until_with_membership_state(
+        node,
+        forwarder,
+        membership,
+        previous_membership_tags,
+        device,
+        mtu,
+        queue_config,
+        resources,
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        None,
+        packet_plane,
+        packet_plane_quic,
+        packet_plane_quic_external_endpoints,
+        packet_plane_session_ttl,
+        packet_plane_replay_windows_per_session,
+        auto_relay_config,
+        public_bootstrap_defaults,
+        public_discovery_holdoff_until,
+        shutdown,
+    ))
+    .await
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+async fn run_node_until_with_membership_state<Shutdown>(
     mut node: P2pNode,
     mut forwarder: Forwarder,
     mut membership: OverlayMembership,
@@ -674,6 +753,7 @@ pub async fn run_node_until<Shutdown>(
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
     pairing_state_path: Option<PathBuf>,
+    membership_state_path: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
     mut packet_plane_quic: Option<PacketPlaneQuicRuntime>,
     packet_plane_quic_external_endpoints: Vec<String>,
@@ -734,6 +814,7 @@ where
             )
         })
         .transpose()?;
+    let membership_state_store = membership_state_path.map(MembershipStateStore::new);
     let mut code_pairing_sessions = load_code_pairing_sessions(
         pairing_state_store.as_ref(),
         &node.network_name,
@@ -748,6 +829,18 @@ where
         &mut membership,
         &node.identity,
     )?;
+    load_persisted_membership_records(
+        membership_state_store.as_ref(),
+        &mut forwarder,
+        &mut membership,
+        &node.identity.peer_id,
+    )?;
+    persist_membership_records(
+        membership_state_store.as_ref(),
+        &forwarder,
+        &node.identity.peer_id,
+    )?;
+    let mut persisted_membership_revision = forwarder.membership_revision();
     pairing_replay_tokens.replace_code_approval(
         code_pairing_sessions
             .active_replay_tokens(current_unix_seconds_lossy())
@@ -1299,6 +1392,12 @@ where
                             &mut kademlia_membership_records_key,
                             &mut kademlia_membership_record_lookup_keys,
                         );
+                        persist_membership_records_if_changed(
+                            membership_state_store.as_ref(),
+                            &forwarder,
+                            &node.identity.peer_id,
+                            &mut persisted_membership_revision,
+                        )?;
                         if respond_to.send(response).is_err() {
                             eprintln!("control socket pair RPC response receiver dropped");
                         }
@@ -1370,6 +1469,12 @@ where
                 );
             }
         }
+        persist_membership_records_if_changed(
+            membership_state_store.as_ref(),
+            &forwarder,
+            &node.identity.peer_id,
+            &mut persisted_membership_revision,
+        )?;
     }
 }
 
@@ -1411,6 +1516,82 @@ fn persist_code_pairing_sessions(
         return Ok(());
     };
     store.save(&sessions.encode_persisted(network_name)?)?;
+    Ok(())
+}
+
+fn load_persisted_membership_records(
+    store: Option<&MembershipStateStore>,
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    local_peer: &str,
+) -> Result<(), RunnerError> {
+    let Some(store) = store else {
+        return Ok(());
+    };
+    let Some(records) = store.load(&forwarder.config().network.name, local_peer)? else {
+        return Ok(());
+    };
+
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let stats = forwarder.merge_membership_records(&records, now_unix_seconds)?;
+    let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    if changed {
+        membership.replace_record_members(
+            forwarder.config(),
+            forwarder.member_records(),
+            now_unix_seconds,
+        )?;
+    }
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_state_loaded",
+        &[
+            ("records", &records.len().to_string()),
+            ("accepted", &stats.accepted.to_string()),
+            (
+                "ignored_stale_or_equal",
+                &stats.ignored_stale_or_equal.to_string(),
+            ),
+            ("removed_expired", &stats.removed_expired.to_string()),
+            ("removed_untrusted", &stats.removed_untrusted.to_string()),
+        ],
+    );
+    Ok(())
+}
+
+fn persist_membership_records(
+    store: Option<&MembershipStateStore>,
+    forwarder: &Forwarder,
+    local_peer: &str,
+) -> Result<(), RunnerError> {
+    let Some(store) = store else {
+        return Ok(());
+    };
+    store.save(
+        &forwarder.config().network.name,
+        local_peer,
+        forwarder.member_records(),
+    )?;
+    log_runtime_event(
+        LogLevel::Info,
+        "membership_state_persisted",
+        &[("records", &forwarder.member_record_count().to_string())],
+    );
+    Ok(())
+}
+
+fn persist_membership_records_if_changed(
+    store: Option<&MembershipStateStore>,
+    forwarder: &Forwarder,
+    local_peer: &str,
+    persisted_revision: &mut u64,
+) -> Result<(), RunnerError> {
+    let revision = forwarder.membership_revision();
+    if revision == *persisted_revision {
+        return Ok(());
+    }
+    persist_membership_records(store, forwarder, local_peer)?;
+    *persisted_revision = revision;
     Ok(())
 }
 
@@ -16131,6 +16312,7 @@ pub enum RunnerError {
     ServiceResponseDropped,
     Pairing(crate::pairing::PairingError),
     PairingStateStore(PairingStateStoreError),
+    MembershipStateStore(MembershipStateStoreError),
     CodePairingSession(CodePairingSessionError),
 }
 
@@ -16167,6 +16349,12 @@ impl From<io::Error> for RunnerError {
 impl From<PairingStateStoreError> for RunnerError {
     fn from(error: PairingStateStoreError) -> Self {
         Self::PairingStateStore(error)
+    }
+}
+
+impl From<MembershipStateStoreError> for RunnerError {
+    fn from(error: MembershipStateStoreError) -> Self {
+        Self::MembershipStateStore(error)
     }
 }
 
@@ -25449,6 +25637,77 @@ mod tests {
         }
 
         (local, remote, records)
+    }
+
+    #[test]
+    fn persisted_membership_state_restores_a_learned_peer_after_restart() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse().expect("member peer");
+        let root_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: root.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000,
+        )
+        .expect("root record");
+        let member_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 2,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("member record");
+        let mut config = config_with_peer(&root, member_peer);
+        config.peers.clear();
+        config.network.member_records = vec![root_record];
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        forwarder
+            .merge_membership_records(&[member_record], 1_001)
+            .expect("learn member");
+
+        let path =
+            test_pairing_state_path("membership-restart").with_file_name("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        let mut persisted_revision = 0;
+        persist_membership_records_if_changed(
+            Some(&store),
+            &forwarder,
+            &root.peer_id,
+            &mut persisted_revision,
+        )
+        .expect("persist learned state");
+        assert_eq!(persisted_revision, forwarder.membership_revision());
+
+        let mut restarted_forwarder = Forwarder::from_config(&config).expect("restart forwarder");
+        let mut restarted_membership = OverlayMembership::from_config(&config).expect("membership");
+        load_persisted_membership_records(
+            Some(&store),
+            &mut restarted_forwarder,
+            &mut restarted_membership,
+            &root.peer_id,
+        )
+        .expect("restore learned state");
+
+        assert!(restarted_forwarder.is_configured_transport_peer(member_peer));
+        assert!(restarted_membership.allows(member_peer));
+        assert_eq!(restarted_forwarder.member_record_count(), 2);
+
+        fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ pub mod bootstrap_check;
 pub mod control;
 pub mod control_socket;
 pub mod forward;
+pub mod membership_store;
 pub mod p2p;
 pub mod packet;
 pub mod packet_plane;

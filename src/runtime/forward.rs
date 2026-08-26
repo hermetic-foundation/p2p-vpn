@@ -32,6 +32,7 @@ pub struct Forwarder {
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
+    membership_revision: u64,
     membership_effective_refresh_pending: bool,
     replay_windows: HashMap<(PeerId, SessionId), ReplayWindow>,
     replay_session_ttl: Duration,
@@ -140,6 +141,7 @@ impl Forwarder {
                 &member_records,
                 now_unix_seconds,
             )?,
+            membership_revision: 0,
             membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
             replay_session_ttl: DEFAULT_REPLAY_SESSION_TTL,
@@ -265,9 +267,13 @@ impl Forwarder {
             &member_records,
             now_unix_seconds,
         )?;
+        let records_changed = member_records != self.member_records;
         let effective_changed = routes != self.routes
             || peers != self.peers
             || authorized_peers != self.authorized_peers;
+        if records_changed {
+            self.membership_revision = self.membership_revision.wrapping_add(1);
+        }
         self.membership_effective_refresh_pending |= effective_changed;
         self.peers = peers;
         self.routes = routes;
@@ -309,6 +315,9 @@ impl Forwarder {
     }
 
     pub fn commit_reconfigure(&mut self, update: ForwarderUpdate) {
+        if self.member_records != update.member_records {
+            self.membership_revision = self.membership_revision.wrapping_add(1);
+        }
         self.config = update.config;
         self.member_records = update.member_records;
         self.routes = update.routes;
@@ -341,6 +350,11 @@ impl Forwarder {
     #[must_use]
     pub fn member_record_count(&self) -> usize {
         self.member_records.len()
+    }
+
+    #[must_use]
+    pub const fn membership_revision(&self) -> u64 {
+        self.membership_revision
     }
 
     #[must_use]
@@ -1165,12 +1179,19 @@ mod tests {
         )
         .expect("live pairing record");
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        assert_eq!(forwarder.membership_revision(), 0);
 
         let stats = forwarder
-            .merge_membership_records(&[incoming], 1_001)
+            .merge_membership_records(std::slice::from_ref(&incoming), 1_001)
             .expect("merge locally issued record");
 
         assert_eq!(stats.accepted, 1);
+        assert_eq!(forwarder.membership_revision(), 1);
+        let stats = forwarder
+            .merge_membership_records(&[incoming], 1_001)
+            .expect("merge duplicate record");
+        assert_eq!(stats.accepted, 0);
+        assert_eq!(forwarder.membership_revision(), 1);
         assert!(forwarder.is_configured_transport_peer(member_peer));
         assert!(
             forwarder
