@@ -1,6 +1,7 @@
 pub mod bootstrap_check;
 pub mod control;
 pub mod control_socket;
+pub mod dns;
 pub mod forward;
 pub mod membership_store;
 pub mod p2p;

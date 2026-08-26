@@ -15,6 +15,8 @@ pub const DNS_PRIVATE_SUFFIX: &str = "p2p-vpn.internal";
 pub const DEFAULT_DNS_TTL_SECONDS: u32 = 30;
 pub const MAX_DNS_TTL_SECONDS: u32 = 300;
 pub const MAX_DNS_RECORD_SETS: usize = 1_024;
+pub const MAX_DNS_ADDRESSES_PER_PEER: usize = 256;
+pub const MAX_DNS_ADDRESSES: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
@@ -173,6 +175,7 @@ pub struct DnsZone {
     network_name: String,
     zone: String,
     ttl_seconds: u32,
+    next_refresh_unix_seconds: Option<u64>,
     records: Vec<DnsRecordSet>,
     conflicts: Vec<DnsNameConflict>,
     reverse: BTreeMap<String, String>,
@@ -266,6 +269,25 @@ impl DnsZone {
             }
         }
 
+        let mut address_count = 0_usize;
+        for (peer, addresses) in &peers {
+            let peer_address_count = addresses.ipv4.len().saturating_add(addresses.ipv6.len());
+            if peer_address_count > MAX_DNS_ADDRESSES_PER_PEER {
+                return Err(DnsZoneError::TooManyPeerAddresses {
+                    peer: *peer,
+                    actual: peer_address_count,
+                    max: MAX_DNS_ADDRESSES_PER_PEER,
+                });
+            }
+            address_count = address_count.saturating_add(peer_address_count);
+        }
+        if address_count > MAX_DNS_ADDRESSES {
+            return Err(DnsZoneError::TooManyAddresses {
+                actual: address_count,
+                max: MAX_DNS_ADDRESSES,
+            });
+        }
+
         for peer in peers.keys().copied().collect::<Vec<_>>() {
             insert_name(
                 &mut names,
@@ -312,11 +334,17 @@ impl DnsZone {
         records.sort_by(|left, right| left.fqdn.cmp(&right.fqdn));
         conflicts.sort_by(|left, right| left.fqdn.cmp(&right.fqdn));
         let reverse = build_reverse_records(&records);
+        let next_refresh_unix_seconds = member_records
+            .iter()
+            .filter_map(|record| record.payload.expires_at_unix_seconds)
+            .filter(|expires_at| *expires_at > now_unix_seconds)
+            .min();
 
         Ok(Self {
             network_name: config.network.name.clone(),
             zone,
             ttl_seconds: config.network.dns.ttl_seconds,
+            next_refresh_unix_seconds,
             records,
             conflicts,
             reverse,
@@ -338,6 +366,11 @@ impl DnsZone {
         self.ttl_seconds
     }
 
+    #[must_use]
+    pub const fn next_refresh_unix_seconds(&self) -> Option<u64> {
+        self.next_refresh_unix_seconds
+    }
+
     pub fn records(&self) -> impl Iterator<Item = &DnsRecordSet> {
         self.records.iter()
     }
@@ -349,7 +382,10 @@ impl DnsZone {
     #[must_use]
     pub fn record(&self, fqdn: &str) -> Option<&DnsRecordSet> {
         let canonical = canonical_fqdn(fqdn);
-        self.records.iter().find(|record| record.fqdn == canonical)
+        self.records
+            .binary_search_by(|record| record.fqdn.cmp(&canonical))
+            .ok()
+            .map(|index| &self.records[index])
     }
 
     pub fn qualify(&self, label: &str) -> Result<String, DnsNameError> {
@@ -359,6 +395,11 @@ impl DnsZone {
     #[must_use]
     pub fn reverse_target(&self, address: IpAddr) -> Option<&str> {
         self.reverse.get(&reverse_name(address)).map(String::as_str)
+    }
+
+    #[must_use]
+    pub fn reverse_target_name(&self, owner: &str) -> Option<&str> {
+        self.reverse.get(&canonical_fqdn(owner)).map(String::as_str)
     }
 
     pub fn reverse_records(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -376,7 +417,19 @@ pub enum DnsZoneError {
     Config(ConfigError),
     Membership(crate::membership::MembershipRecordError),
     InvalidExplicitIp(String),
-    TooManyRecordSets { actual: usize, max: usize },
+    TooManyRecordSets {
+        actual: usize,
+        max: usize,
+    },
+    TooManyPeerAddresses {
+        peer: PeerId,
+        actual: usize,
+        max: usize,
+    },
+    TooManyAddresses {
+        actual: usize,
+        max: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -710,6 +763,7 @@ mod tests {
         ];
         let before = DnsZone::from_config_at(&config, &config.network.member_records, 1_009)
             .expect("zone before expiry");
+        assert_eq!(before.next_refresh_unix_seconds(), Some(1_010));
         assert!(
             before
                 .record("ephemeral.runners.p2p-vpn.internal")
@@ -717,6 +771,7 @@ mod tests {
         );
         let after = DnsZone::from_config_at(&config, &config.network.member_records, 1_011)
             .expect("zone after expiry");
+        assert_eq!(after.next_refresh_unix_seconds(), None);
         assert!(after.record("ephemeral.runners.p2p-vpn.internal").is_none());
 
         config.network.member_records.push(
@@ -766,5 +821,22 @@ mod tests {
                 address.octets()[1]
             )
         );
+    }
+
+    #[test]
+    fn zone_rejects_a_peer_address_set_that_cannot_fit_a_bounded_response() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let mut config = config_with_dns(&identity, "worker-1");
+        config.network.routes = (0_u16..u16::try_from(MAX_DNS_ADDRESSES_PER_PEER).unwrap())
+            .map(|suffix| RouteConfig {
+                prefix: format!("10.1.{}.{}/32", suffix / 256, suffix % 256),
+                metric: 100,
+            })
+            .collect();
+
+        assert!(matches!(
+            DnsZone::from_config_at(&config, &[], 1_000),
+            Err(DnsZoneError::TooManyPeerAddresses { .. })
+        ));
     }
 }

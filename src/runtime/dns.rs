@@ -1,0 +1,782 @@
+use std::{
+    fmt, io,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use hickory_proto::{
+    op::{Message, MessageType, OpCode, ResponseCode},
+    rr::{
+        DNSClass, Name, RData, Record, RecordType,
+        rdata::{A, AAAA, PTR},
+    },
+};
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    net::{TcpListener, TcpStream, UdpSocket},
+    sync::{Semaphore, watch},
+    task::{JoinHandle, JoinSet},
+};
+
+use crate::{
+    config::Config,
+    dns::{DnsZone, DnsZoneError},
+    membership::SignedMembershipRecord,
+};
+
+pub const MAX_DNS_REQUEST_BYTES: usize = 4_096;
+pub const MAX_DNS_UDP_RESPONSE_BYTES: usize = 1_232;
+pub const MAX_DNS_TCP_RESPONSE_BYTES: usize = 65_535;
+pub const MAX_DNS_TCP_CONNECTIONS: usize = 64;
+pub const MAX_DNS_TCP_QUERIES_PER_CONNECTION: usize = 32;
+pub const DNS_TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+pub struct DnsRuntime {
+    listener: SocketAddr,
+    zone_tx: watch::Sender<Arc<DnsZone>>,
+    shutdown_tx: watch::Sender<bool>,
+    metrics: Arc<DnsRuntimeMetrics>,
+    last_refresh_attempt_unix_seconds: AtomicU64,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl DnsRuntime {
+    pub async fn bind_at(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<Option<Self>, DnsRuntimeError> {
+        if !config.network.dns.enabled {
+            return Ok(None);
+        }
+
+        let zone = Arc::new(DnsZone::from_config_at(
+            config,
+            member_records,
+            now_unix_seconds,
+        )?);
+        let udp = UdpSocket::bind(config.network.dns.listen).await?;
+        let listener = udp.local_addr()?;
+        let tcp = TcpListener::bind(listener).await?;
+        let (zone_tx, zone_rx) = watch::channel(zone);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let metrics = Arc::new(DnsRuntimeMetrics::default());
+        let tasks = vec![
+            tokio::spawn(run_udp_server(
+                udp,
+                zone_rx.clone(),
+                shutdown_rx.clone(),
+                Arc::clone(&metrics),
+            )),
+            tokio::spawn(run_tcp_server(
+                tcp,
+                zone_rx,
+                shutdown_rx,
+                Arc::clone(&metrics),
+            )),
+        ];
+
+        Ok(Some(Self {
+            listener,
+            zone_tx,
+            shutdown_tx,
+            metrics,
+            last_refresh_attempt_unix_seconds: AtomicU64::new(0),
+            tasks,
+        }))
+    }
+
+    #[must_use]
+    pub const fn listener(&self) -> SocketAddr {
+        self.listener
+    }
+
+    #[must_use]
+    pub fn zone(&self) -> Arc<DnsZone> {
+        Arc::clone(&self.zone_tx.borrow())
+    }
+
+    #[must_use]
+    pub fn refresh_due(&self, now_unix_seconds: u64) -> bool {
+        self.zone()
+            .next_refresh_unix_seconds()
+            .is_some_and(|expires_at| {
+                expires_at <= now_unix_seconds
+                    && self
+                        .last_refresh_attempt_unix_seconds
+                        .load(Ordering::Relaxed)
+                        < expires_at
+            })
+    }
+
+    pub fn refresh_at(
+        &self,
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<(), DnsRuntimeError> {
+        self.last_refresh_attempt_unix_seconds
+            .store(now_unix_seconds, Ordering::Relaxed);
+        let zone = match DnsZone::from_config_at(config, member_records, now_unix_seconds) {
+            Ok(zone) => zone,
+            Err(error) => {
+                self.metrics
+                    .zone_refresh_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(error.into());
+            }
+        };
+        self.zone_tx.send_replace(Arc::new(zone));
+        self.metrics.zone_refreshes.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> DnsRuntimeSnapshot {
+        let zone = self.zone();
+        DnsRuntimeSnapshot {
+            listener: self.listener,
+            zone: zone.name().to_owned(),
+            ttl_seconds: zone.ttl_seconds(),
+            record_sets: zone.records().count(),
+            reverse_records: zone.reverse_records().count(),
+            conflicts: zone.conflicts().count(),
+            udp_queries: self.metrics.udp_queries.load(Ordering::Relaxed),
+            tcp_queries: self.metrics.tcp_queries.load(Ordering::Relaxed),
+            responses: self.metrics.responses.load(Ordering::Relaxed),
+            format_errors: self.metrics.format_errors.load(Ordering::Relaxed),
+            refused: self.metrics.refused.load(Ordering::Relaxed),
+            nxdomain: self.metrics.nxdomain.load(Ordering::Relaxed),
+            truncated: self.metrics.truncated.load(Ordering::Relaxed),
+            oversized_requests: self.metrics.oversized_requests.load(Ordering::Relaxed),
+            tcp_connections_rejected: self
+                .metrics
+                .tcp_connections_rejected
+                .load(Ordering::Relaxed),
+            io_errors: self.metrics.io_errors.load(Ordering::Relaxed),
+            zone_refreshes: self.metrics.zone_refreshes.load(Ordering::Relaxed),
+            zone_refresh_failures: self.metrics.zone_refresh_failures.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for DnsRuntime {
+    fn drop(&mut self) {
+        self.shutdown_tx.send_replace(true);
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsRuntimeSnapshot {
+    pub listener: SocketAddr,
+    pub zone: String,
+    pub ttl_seconds: u32,
+    pub record_sets: usize,
+    pub reverse_records: usize,
+    pub conflicts: usize,
+    pub udp_queries: u64,
+    pub tcp_queries: u64,
+    pub responses: u64,
+    pub format_errors: u64,
+    pub refused: u64,
+    pub nxdomain: u64,
+    pub truncated: u64,
+    pub oversized_requests: u64,
+    pub tcp_connections_rejected: u64,
+    pub io_errors: u64,
+    pub zone_refreshes: u64,
+    pub zone_refresh_failures: u64,
+}
+
+#[derive(Debug)]
+pub enum DnsRuntimeError {
+    Io(io::Error),
+    Zone(DnsZoneError),
+}
+
+impl fmt::Display for DnsRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "DNS listener failed: {error}"),
+            Self::Zone(error) => write!(formatter, "DNS zone generation failed: {error:?}"),
+        }
+    }
+}
+
+impl std::error::Error for DnsRuntimeError {}
+
+impl From<io::Error> for DnsRuntimeError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<DnsZoneError> for DnsRuntimeError {
+    fn from(error: DnsZoneError) -> Self {
+        Self::Zone(error)
+    }
+}
+
+#[derive(Debug, Default)]
+struct DnsRuntimeMetrics {
+    udp_queries: AtomicU64,
+    tcp_queries: AtomicU64,
+    responses: AtomicU64,
+    format_errors: AtomicU64,
+    refused: AtomicU64,
+    nxdomain: AtomicU64,
+    truncated: AtomicU64,
+    oversized_requests: AtomicU64,
+    tcp_connections_rejected: AtomicU64,
+    io_errors: AtomicU64,
+    zone_refreshes: AtomicU64,
+    zone_refresh_failures: AtomicU64,
+}
+
+async fn run_udp_server(
+    socket: UdpSocket,
+    zone_rx: watch::Receiver<Arc<DnsZone>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    metrics: Arc<DnsRuntimeMetrics>,
+) {
+    let mut buffer = vec![0_u8; MAX_DNS_REQUEST_BYTES + 1];
+    loop {
+        let received = tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_err() || *shutdown_rx.borrow() {
+                    break;
+                }
+                continue;
+            }
+            received = socket.recv_from(&mut buffer) => received,
+        };
+        let (length, source) = match received {
+            Ok(received) => received,
+            Err(_) => {
+                metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+        };
+        metrics.udp_queries.fetch_add(1, Ordering::Relaxed);
+        let response = if length > MAX_DNS_REQUEST_BYTES {
+            metrics.oversized_requests.fetch_add(1, Ordering::Relaxed);
+            encode_error_response(&buffer[..length], ResponseCode::FormErr)
+        } else {
+            encode_response(&buffer[..length], &zone_rx.borrow(), &metrics)
+        };
+        let Some(mut response) = response else {
+            continue;
+        };
+        if response.len() > MAX_DNS_UDP_RESPONSE_BYTES {
+            response = truncate_response(&response, &metrics);
+        }
+        match socket.send_to(&response, source).await {
+            Ok(_) => {
+                metrics.responses.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+async fn run_tcp_server(
+    listener: TcpListener,
+    zone_rx: watch::Receiver<Arc<DnsZone>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    metrics: Arc<DnsRuntimeMetrics>,
+) {
+    let permits = Arc::new(Semaphore::new(MAX_DNS_TCP_CONNECTIONS));
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_err() || *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+            accepted = listener.accept() => {
+                let (stream, _) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(_) => {
+                        metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                };
+                let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+                    metrics.tcp_connections_rejected.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                };
+                connections.spawn(handle_tcp_connection(
+                    stream,
+                    zone_rx.clone(),
+                    shutdown_rx.clone(),
+                    Arc::clone(&metrics),
+                    permit,
+                ));
+            }
+        }
+    }
+    connections.abort_all();
+}
+
+async fn handle_tcp_connection(
+    mut stream: TcpStream,
+    zone_rx: watch::Receiver<Arc<DnsZone>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+    metrics: Arc<DnsRuntimeMetrics>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    for _ in 0..MAX_DNS_TCP_QUERIES_PER_CONNECTION {
+        let mut length = [0_u8; 2];
+        let read_length = tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_err() || *shutdown_rx.borrow() {
+                    return;
+                }
+                continue;
+            }
+            result = tokio::time::timeout(DNS_TCP_IO_TIMEOUT, stream.read_exact(&mut length)) => result,
+        };
+        match read_length {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) if error.kind() == io::ErrorKind::UnexpectedEof => return,
+            Ok(Err(_)) | Err(_) => {
+                metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        let length = usize::from(u16::from_be_bytes(length));
+        if length == 0 || length > MAX_DNS_REQUEST_BYTES {
+            metrics.oversized_requests.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        let mut request = vec![0_u8; length];
+        match tokio::time::timeout(DNS_TCP_IO_TIMEOUT, stream.read_exact(&mut request)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => {
+                metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        metrics.tcp_queries.fetch_add(1, Ordering::Relaxed);
+        let Some(mut response) = encode_response(&request, &zone_rx.borrow(), &metrics) else {
+            continue;
+        };
+        if response.len() > MAX_DNS_TCP_RESPONSE_BYTES {
+            response = truncate_response(&response, &metrics);
+        }
+        let Ok(length) = u16::try_from(response.len()) else {
+            metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let write = async {
+            stream.write_all(&length.to_be_bytes()).await?;
+            stream.write_all(&response).await
+        };
+        match tokio::time::timeout(DNS_TCP_IO_TIMEOUT, write).await {
+            Ok(Ok(())) => {
+                metrics.responses.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(Err(_)) | Err(_) => {
+                metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+}
+
+fn encode_response(
+    request_bytes: &[u8],
+    zone: &DnsZone,
+    metrics: &DnsRuntimeMetrics,
+) -> Option<Vec<u8>> {
+    let request = match Message::from_vec(request_bytes) {
+        Ok(request) => request,
+        Err(_) => {
+            metrics.format_errors.fetch_add(1, Ordering::Relaxed);
+            return encode_error_response(request_bytes, ResponseCode::FormErr);
+        }
+    };
+    let response = answer_request(&request, zone, metrics);
+    match response.to_vec() {
+        Ok(response) => Some(response),
+        Err(_) => {
+            metrics.io_errors.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+fn encode_error_response(request_bytes: &[u8], code: ResponseCode) -> Option<Vec<u8>> {
+    let id = request_bytes
+        .get(..2)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u16::from_be_bytes)
+        .unwrap_or_default();
+    Message::error_msg(id, OpCode::Query, code).to_vec().ok()
+}
+
+fn answer_request(request: &Message, zone: &DnsZone, metrics: &DnsRuntimeMetrics) -> Message {
+    if request.message_type() != MessageType::Query
+        || request.op_code() != OpCode::Query
+        || request.queries().len() != 1
+    {
+        metrics.format_errors.fetch_add(1, Ordering::Relaxed);
+        return response_for(request, ResponseCode::FormErr, false);
+    }
+    let query = request.query().expect("one DNS query was checked");
+    if !matches!(query.query_class(), DNSClass::IN | DNSClass::ANY) {
+        metrics.refused.fetch_add(1, Ordering::Relaxed);
+        return response_for(request, ResponseCode::Refused, false);
+    }
+
+    let owner = canonical_name(query.name());
+    let forward_in_zone = name_is_in_zone(&owner, zone.name());
+    let reverse_target = zone.reverse_target_name(&owner);
+    if !forward_in_zone && reverse_target.is_none() {
+        metrics.refused.fetch_add(1, Ordering::Relaxed);
+        return response_for(request, ResponseCode::Refused, false);
+    }
+
+    let mut response = response_for(request, ResponseCode::NoError, true);
+    if let Some(target) = reverse_target {
+        if matches!(query.query_type(), RecordType::PTR | RecordType::ANY) {
+            match Name::from_ascii(target) {
+                Ok(target) => {
+                    response.add_answer(Record::from_rdata(
+                        query.name().clone(),
+                        zone.ttl_seconds(),
+                        RData::PTR(PTR(target)),
+                    ));
+                }
+                Err(_) => {
+                    response.set_response_code(ResponseCode::ServFail);
+                }
+            }
+        }
+        return response;
+    }
+
+    let Some(record) = zone.record(&owner) else {
+        if owner != canonical_text_name(zone.name()) {
+            response.set_response_code(ResponseCode::NXDomain);
+            metrics.nxdomain.fetch_add(1, Ordering::Relaxed);
+        }
+        return response;
+    };
+    if matches!(query.query_type(), RecordType::A | RecordType::ANY) {
+        response.add_answers(record.ipv4.iter().map(|address| {
+            Record::from_rdata(
+                query.name().clone(),
+                zone.ttl_seconds(),
+                RData::A(A(*address)),
+            )
+        }));
+    }
+    if matches!(query.query_type(), RecordType::AAAA | RecordType::ANY) {
+        response.add_answers(record.ipv6.iter().map(|address| {
+            Record::from_rdata(
+                query.name().clone(),
+                zone.ttl_seconds(),
+                RData::AAAA(AAAA(*address)),
+            )
+        }));
+    }
+    response
+}
+
+fn response_for(request: &Message, code: ResponseCode, authoritative: bool) -> Message {
+    let mut response = Message::new();
+    response
+        .set_id(request.id())
+        .set_message_type(MessageType::Response)
+        .set_op_code(request.op_code())
+        .set_authoritative(authoritative)
+        .set_recursion_desired(request.recursion_desired())
+        .set_recursion_available(false)
+        .set_response_code(code)
+        .add_queries(request.queries().iter().cloned());
+    response
+}
+
+fn truncate_response(response: &[u8], metrics: &DnsRuntimeMetrics) -> Vec<u8> {
+    metrics.truncated.fetch_add(1, Ordering::Relaxed);
+    Message::from_vec(response)
+        .map(|response| response.truncate())
+        .and_then(|response| response.to_vec())
+        .unwrap_or_default()
+}
+
+fn canonical_name(name: &Name) -> String {
+    canonical_text_name(&name.to_ascii())
+}
+
+fn canonical_text_name(name: &str) -> String {
+    let mut canonical = name.to_ascii_lowercase();
+    if !canonical.ends_with('.') {
+        canonical.push('.');
+    }
+    canonical
+}
+
+fn name_is_in_zone(name: &str, zone: &str) -> bool {
+    let zone = canonical_text_name(zone);
+    name == zone
+        || name
+            .strip_suffix(&zone)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{Config, RouteConfig},
+        identity::NodeIdentity,
+    };
+    use tokio::net::UdpSocket;
+
+    fn config(hostname: &str) -> Config {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "runner-mesh",
+                "private_key": identity.private_key,
+                "dns": {
+                    "enabled": true,
+                    "hostname": hostname,
+                    "listen": "127.0.0.1:0"
+                }
+            }
+        }))
+        .expect("DNS test config")
+    }
+
+    fn query(name: &str, record_type: RecordType) -> Vec<u8> {
+        let mut query = Message::new();
+        query
+            .set_id(42)
+            .set_recursion_desired(true)
+            .add_query(hickory_proto::op::Query::query(
+                Name::from_ascii(name).expect("query name"),
+                record_type,
+            ));
+        query.to_vec().expect("query encoding")
+    }
+
+    async fn udp_query(listener: SocketAddr, request: &[u8]) -> Message {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.expect("UDP client");
+        socket.send_to(request, listener).await.expect("send query");
+        let mut response = [0_u8; MAX_DNS_UDP_RESPONSE_BYTES];
+        let (length, _) =
+            tokio::time::timeout(Duration::from_secs(1), socket.recv_from(&mut response))
+                .await
+                .expect("DNS response timeout")
+                .expect("DNS response");
+        Message::from_vec(&response[..length]).expect("response encoding")
+    }
+
+    #[test]
+    fn authoritative_response_answers_a_aaaa_ptr_and_refuses_other_zones() {
+        let config = config("worker-1");
+        let zone = DnsZone::from_config_at(&config, &[], 1_000).expect("zone");
+        let metrics = DnsRuntimeMetrics::default();
+        let fqdn = "worker-1.runner-mesh.p2p-vpn.internal.";
+
+        let a = answer_request(
+            &Message::from_vec(&query(fqdn, RecordType::A)).expect("A query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(a.response_code(), ResponseCode::NoError);
+        assert!(a.authoritative());
+        assert!(
+            a.answers()
+                .iter()
+                .all(|answer| answer.record_type() == RecordType::A)
+        );
+        assert!(!a.answers().is_empty());
+
+        let aaaa = answer_request(
+            &Message::from_vec(&query(fqdn, RecordType::AAAA)).expect("AAAA query"),
+            &zone,
+            &metrics,
+        );
+        assert!(
+            aaaa.answers()
+                .iter()
+                .all(|answer| answer.record_type() == RecordType::AAAA)
+        );
+        assert!(!aaaa.answers().is_empty());
+
+        let reverse = zone.reverse_records().next().expect("reverse record");
+        let ptr = answer_request(
+            &Message::from_vec(&query(reverse.0, RecordType::PTR)).expect("PTR query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(ptr.answers().len(), 1);
+        assert_eq!(ptr.answers()[0].record_type(), RecordType::PTR);
+
+        let refused = answer_request(
+            &Message::from_vec(&query("example.com.", RecordType::A)).expect("external query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(refused.response_code(), ResponseCode::Refused);
+        assert!(!refused.authoritative());
+        assert!(!refused.recursion_available());
+    }
+
+    #[test]
+    fn unknown_overlay_name_is_nxdomain_and_known_other_type_is_nodata() {
+        let config = config("worker-1");
+        let zone = DnsZone::from_config_at(&config, &[], 1_000).expect("zone");
+        let metrics = DnsRuntimeMetrics::default();
+        let missing = answer_request(
+            &Message::from_vec(&query(
+                "missing.runner-mesh.p2p-vpn.internal.",
+                RecordType::A,
+            ))
+            .expect("missing query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(missing.response_code(), ResponseCode::NXDomain);
+
+        let nodata = answer_request(
+            &Message::from_vec(&query(
+                "worker-1.runner-mesh.p2p-vpn.internal.",
+                RecordType::TXT,
+            ))
+            .expect("TXT query"),
+            &zone,
+            &metrics,
+        );
+        assert_eq!(nodata.response_code(), ResponseCode::NoError);
+        assert!(nodata.answers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_serves_udp_and_tcp_on_the_same_ephemeral_port() {
+        let config = config("worker-1");
+        let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
+            .await
+            .expect("DNS bind")
+            .expect("enabled DNS");
+        let request = query("worker-1.runner-mesh.p2p-vpn.internal.", RecordType::A);
+        let udp = udp_query(runtime.listener(), &request).await;
+        assert_eq!(udp.response_code(), ResponseCode::NoError);
+        assert!(!udp.answers().is_empty());
+
+        let mut tcp = TcpStream::connect(runtime.listener())
+            .await
+            .expect("TCP client");
+        tcp.write_all(
+            &u16::try_from(request.len())
+                .expect("request length")
+                .to_be_bytes(),
+        )
+        .await
+        .expect("TCP length");
+        tcp.write_all(&request).await.expect("TCP query");
+        let length = tcp.read_u16().await.expect("TCP response length");
+        let mut response = vec![0_u8; usize::from(length)];
+        tcp.read_exact(&mut response).await.expect("TCP response");
+        let response = Message::from_vec(&response).expect("TCP DNS response");
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert!(!response.answers().is_empty());
+
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot.udp_queries, 1);
+        assert_eq!(snapshot.tcp_queries, 1);
+        assert_eq!(snapshot.responses, 2);
+    }
+
+    #[tokio::test]
+    async fn runtime_refresh_replaces_the_zone_atomically() {
+        let mut config = config("worker-1");
+        let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
+            .await
+            .expect("DNS bind")
+            .expect("enabled DNS");
+        config.network.dns.hostname = Some("worker-2".to_owned());
+        runtime.refresh_at(&config, &[], 1_001).expect("refresh");
+
+        let present = udp_query(
+            runtime.listener(),
+            &query("worker-2.runner-mesh.p2p-vpn.internal.", RecordType::A),
+        )
+        .await;
+        assert_eq!(present.response_code(), ResponseCode::NoError);
+        let absent = udp_query(
+            runtime.listener(),
+            &query("worker-1.runner-mesh.p2p-vpn.internal.", RecordType::A),
+        )
+        .await;
+        assert_eq!(absent.response_code(), ResponseCode::NXDomain);
+        assert_eq!(runtime.snapshot().zone_refreshes, 1);
+    }
+
+    #[tokio::test]
+    async fn udp_replies_formerr_to_malformed_input_and_truncates_large_answers() {
+        let mut config = config("worker-1");
+        config.network.routes = (0_u8..100)
+            .map(|suffix| RouteConfig {
+                prefix: format!("10.2.0.{suffix}/32"),
+                metric: 100,
+            })
+            .collect();
+        let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
+            .await
+            .expect("DNS bind")
+            .expect("enabled DNS");
+
+        let malformed = udp_query(runtime.listener(), &[0x12, 0x34, 0xff]).await;
+        assert_eq!(malformed.id(), 0x1234);
+        assert_eq!(malformed.response_code(), ResponseCode::FormErr);
+
+        let large = udp_query(
+            runtime.listener(),
+            &query("worker-1.runner-mesh.p2p-vpn.internal.", RecordType::A),
+        )
+        .await;
+        assert!(large.truncated());
+        assert!(large.answers().is_empty());
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot.format_errors, 1);
+        assert_eq!(snapshot.truncated, 1);
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_keeps_the_last_valid_zone() {
+        let mut config = config("worker-1");
+        let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
+            .await
+            .expect("DNS bind")
+            .expect("enabled DNS");
+        config.network.dns.hostname = Some("-invalid".to_owned());
+
+        assert!(runtime.refresh_at(&config, &[], 1_001).is_err());
+        assert!(
+            runtime
+                .zone()
+                .record("worker-1.runner-mesh.p2p-vpn.internal.")
+                .is_some()
+        );
+        let snapshot = runtime.snapshot();
+        assert_eq!(snapshot.zone_refreshes, 0);
+        assert_eq!(snapshot.zone_refresh_failures, 1);
+    }
+}

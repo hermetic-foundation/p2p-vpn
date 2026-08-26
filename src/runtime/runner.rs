@@ -73,6 +73,7 @@ use crate::{
             PairRpcResult, PairRpcRole, PairRpcRoute, PairRpcSignedMembershipRecord,
             PairRpcTransport, RuntimeControlRequest,
         },
+        dns::{DnsRuntime, DnsRuntimeError},
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
         membership_store::{MembershipStateStore, MembershipStateStoreError},
         p2p::{
@@ -859,6 +860,13 @@ where
         &metrics,
     )?;
     let mut persisted_membership_revision = forwarder.membership_revision();
+    let dns_runtime = DnsRuntime::bind_at(
+        forwarder.config(),
+        forwarder.member_records(),
+        current_unix_seconds_lossy(),
+    )
+    .await?;
+    let mut dns_membership_revision = forwarder.membership_revision();
     pairing_replay_tokens.replace_code_approval(
         code_pairing_sessions
             .active_replay_tokens(current_unix_seconds_lossy())
@@ -967,6 +975,15 @@ where
     log_startup_status(node.startup);
     log_packet_plane_status(packet_plane.snapshot());
     log_packet_plane_quic_status(&packet_plane_quic_snapshot);
+    if let Some(dns) = dns_runtime.as_ref() {
+        let listener = dns.listener().to_string();
+        let zone = dns.zone();
+        log_runtime_event(
+            LogLevel::Info,
+            "dns_resolver_listening",
+            &[("listener", &listener), ("zone", zone.name())],
+        );
+    }
     if public_discovery_holdoff_until.is_some() {
         log_runtime_event(
             LogLevel::Info,
@@ -1429,6 +1446,12 @@ where
                             &mut persisted_membership_revision,
                             &metrics,
                         )?;
+                        refresh_dns_zone_if_needed(
+                            dns_runtime.as_ref(),
+                            &forwarder,
+                            &mut dns_membership_revision,
+                            true,
+                        );
                         if respond_to.send(response).is_err() {
                             eprintln!("control socket pair RPC response receiver dropped");
                         }
@@ -1508,7 +1531,44 @@ where
             &mut persisted_membership_revision,
             &metrics,
         )?;
+        refresh_dns_zone_if_needed(
+            dns_runtime.as_ref(),
+            &forwarder,
+            &mut dns_membership_revision,
+            false,
+        );
     }
+}
+
+fn refresh_dns_zone_if_needed(
+    runtime: Option<&DnsRuntime>,
+    forwarder: &Forwarder,
+    membership_revision: &mut u64,
+    force: bool,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let revision = forwarder.membership_revision();
+    if !force && revision == *membership_revision && !runtime.refresh_due(now_unix_seconds) {
+        return;
+    }
+    if let Err(error) = runtime.refresh_at(
+        forwarder.config(),
+        forwarder.member_records(),
+        now_unix_seconds,
+    ) {
+        log_runtime_event(
+            LogLevel::Error,
+            "dns_zone_refresh_failed",
+            &[
+                ("reason", &error.to_string()),
+                ("action", "retaining_last_valid_zone"),
+            ],
+        );
+    }
+    *membership_revision = revision;
 }
 
 struct RuntimeTimers {
@@ -17455,6 +17515,7 @@ pub enum RunnerError {
     ControlSocket(io::Error),
     PacketPlane(io::Error),
     PacketPlaneQuic(PacketPlaneQuicError),
+    Dns(DnsRuntimeError),
     TunRouteCommand { command: String, status: ExitStatus },
     PacketResponseDropped,
     ControlResponseDropped,
@@ -17505,6 +17566,12 @@ impl From<PairingStateStoreError> for RunnerError {
 impl From<MembershipStateStoreError> for RunnerError {
     fn from(error: MembershipStateStoreError) -> Self {
         Self::MembershipStateStore(error)
+    }
+}
+
+impl From<DnsRuntimeError> for RunnerError {
+    fn from(error: DnsRuntimeError) -> Self {
+        Self::Dns(error)
     }
 }
 
