@@ -9,10 +9,10 @@ use std::{
 };
 
 use hickory_proto::{
-    op::{Message, MessageType, OpCode, ResponseCode},
+    op::{Edns, Message, MessageType, OpCode, ResponseCode},
     rr::{
         DNSClass, Name, RData, Record, RecordType,
-        rdata::{A, AAAA, PTR},
+        rdata::{A, AAAA, PTR, SOA},
     },
 };
 use tokio::{
@@ -459,6 +459,11 @@ struct DnsRuntimeMetrics {
     zone_refresh_failures: AtomicU64,
 }
 
+struct EncodedDnsResponse {
+    bytes: Vec<u8>,
+    udp_payload_limit: usize,
+}
+
 async fn run_udp_server(
     socket: UdpSocket,
     zone_rx: watch::Receiver<Arc<DnsZone>>,
@@ -490,13 +495,14 @@ async fn run_udp_server(
         } else {
             encode_response(&buffer[..length], &zone_rx.borrow(), &metrics)
         };
-        let Some(mut response) = response else {
+        let Some(response) = response else {
             continue;
         };
-        if response.len() > MAX_DNS_UDP_RESPONSE_BYTES {
-            response = truncate_response(&response, &metrics);
+        let mut response_bytes = response.bytes;
+        if response_bytes.len() > response.udp_payload_limit {
+            response_bytes = truncate_response(&response_bytes, &metrics);
         }
-        match socket.send_to(&response, source).await {
+        match socket.send_to(&response_bytes, source).await {
             Ok(_) => {
                 metrics.responses.fetch_add(1, Ordering::Relaxed);
             }
@@ -588,9 +594,10 @@ async fn handle_tcp_connection(
             }
         }
         metrics.tcp_queries.fetch_add(1, Ordering::Relaxed);
-        let Some(mut response) = encode_response(&request, &zone_rx.borrow(), &metrics) else {
+        let Some(response) = encode_response(&request, &zone_rx.borrow(), &metrics) else {
             continue;
         };
+        let mut response = response.bytes;
         if response.len() > MAX_DNS_TCP_RESPONSE_BYTES {
             response = truncate_response(&response, &metrics);
         }
@@ -618,7 +625,7 @@ fn encode_response(
     request_bytes: &[u8],
     zone: &DnsZone,
     metrics: &DnsRuntimeMetrics,
-) -> Option<Vec<u8>> {
+) -> Option<EncodedDnsResponse> {
     let request = match Message::from_vec(request_bytes) {
         Ok(request) => request,
         Err(_) => {
@@ -626,9 +633,13 @@ fn encode_response(
             return encode_error_response(request_bytes, ResponseCode::FormErr);
         }
     };
+    let udp_payload_limit = usize::from(request.max_payload()).min(MAX_DNS_UDP_RESPONSE_BYTES);
     let response = answer_request(&request, zone, metrics);
     match response.to_vec() {
-        Ok(response) => Some(response),
+        Ok(bytes) => Some(EncodedDnsResponse {
+            bytes,
+            udp_payload_limit,
+        }),
         Err(_) => {
             metrics.io_errors.fetch_add(1, Ordering::Relaxed);
             None
@@ -636,16 +647,25 @@ fn encode_response(
     }
 }
 
-fn encode_error_response(request_bytes: &[u8], code: ResponseCode) -> Option<Vec<u8>> {
+fn encode_error_response(request_bytes: &[u8], code: ResponseCode) -> Option<EncodedDnsResponse> {
     let id = request_bytes
         .get(..2)
         .and_then(|bytes| bytes.try_into().ok())
         .map(u16::from_be_bytes)
         .unwrap_or_default();
-    Message::error_msg(id, OpCode::Query, code).to_vec().ok()
+    Message::error_msg(id, OpCode::Query, code)
+        .to_vec()
+        .ok()
+        .map(|bytes| EncodedDnsResponse {
+            bytes,
+            udp_payload_limit: 512,
+        })
 }
 
 fn answer_request(request: &Message, zone: &DnsZone, metrics: &DnsRuntimeMetrics) -> Message {
+    if request.extensions().is_some() && request.version() != 0 {
+        return response_for(request, ResponseCode::BADVERS, false);
+    }
     if request.message_type() != MessageType::Query
         || request.op_code() != OpCode::Query
         || request.queries().len() != 1
@@ -683,6 +703,9 @@ fn answer_request(request: &Message, zone: &DnsZone, metrics: &DnsRuntimeMetrics
                 }
             }
         }
+        if response.answers().is_empty() {
+            add_negative_authority(&mut response, zone);
+        }
         return response;
     }
 
@@ -691,6 +714,7 @@ fn answer_request(request: &Message, zone: &DnsZone, metrics: &DnsRuntimeMetrics
             response.set_response_code(ResponseCode::NXDomain);
             metrics.nxdomain.fetch_add(1, Ordering::Relaxed);
         }
+        add_negative_authority(&mut response, zone);
         return response;
     };
     if matches!(query.query_type(), RecordType::A | RecordType::ANY) {
@@ -711,7 +735,28 @@ fn answer_request(request: &Message, zone: &DnsZone, metrics: &DnsRuntimeMetrics
             )
         }));
     }
+    if response.answers().is_empty() {
+        add_negative_authority(&mut response, zone);
+    }
     response
+}
+
+fn add_negative_authority(response: &mut Message, zone: &DnsZone) {
+    let Ok(zone_name) = Name::from_ascii(zone.name()) else {
+        return;
+    };
+    let Ok(primary) = Name::from_ascii(format!("ns.{}", zone.name())) else {
+        return;
+    };
+    let Ok(responsible) = Name::from_ascii(format!("hostmaster.{}", zone.name())) else {
+        return;
+    };
+    let ttl = zone.ttl_seconds();
+    response.add_name_server(Record::from_rdata(
+        zone_name,
+        ttl,
+        RData::SOA(SOA::new(primary, responsible, 1, 60, 30, 300, ttl)),
+    ));
 }
 
 fn response_for(request: &Message, code: ResponseCode, authoritative: bool) -> Message {
@@ -725,6 +770,13 @@ fn response_for(request: &Message, code: ResponseCode, authoritative: bool) -> M
         .set_recursion_available(false)
         .set_response_code(code)
         .add_queries(request.queries().iter().cloned());
+    if request.extensions().is_some() {
+        let mut response_edns = Edns::new();
+        let server_payload = u16::try_from(MAX_DNS_UDP_RESPONSE_BYTES)
+            .expect("maximum DNS UDP response size fits in an EDNS payload field");
+        response_edns.set_max_payload(request.max_payload().min(server_payload));
+        response.set_edns(response_edns);
+    }
     response
 }
 
@@ -820,6 +872,7 @@ mod tests {
         config::{Config, RouteConfig},
         identity::NodeIdentity,
     };
+    use hickory_proto::rr::rdata::opt::EdnsOption;
     use tokio::net::UdpSocket;
 
     fn config(hostname: &str) -> Config {
@@ -848,6 +901,16 @@ mod tests {
                 record_type,
             ));
         query.to_vec().expect("query encoding")
+    }
+
+    fn query_with_edns(name: &str, record_type: RecordType, max_payload: u16) -> Vec<u8> {
+        let mut query = Message::from_vec(&query(name, record_type)).expect("base query");
+        let mut edns = Edns::new();
+        edns.set_max_payload(max_payload);
+        edns.options_mut()
+            .insert(EdnsOption::Unknown(65_001, vec![1, 2, 3]));
+        query.set_edns(edns);
+        query.to_vec().expect("EDNS query encoding")
     }
 
     async fn udp_query(listener: SocketAddr, request: &[u8]) -> Message {
@@ -929,6 +992,8 @@ mod tests {
             &metrics,
         );
         assert_eq!(missing.response_code(), ResponseCode::NXDomain);
+        assert_eq!(missing.name_servers().len(), 1);
+        assert_eq!(missing.name_servers()[0].record_type(), RecordType::SOA);
 
         let nodata = answer_request(
             &Message::from_vec(&query(
@@ -941,6 +1006,8 @@ mod tests {
         );
         assert_eq!(nodata.response_code(), ResponseCode::NoError);
         assert!(nodata.answers().is_empty());
+        assert_eq!(nodata.name_servers().len(), 1);
+        assert_eq!(nodata.name_servers()[0].record_type(), RecordType::SOA);
     }
 
     #[test]
@@ -958,6 +1025,8 @@ mod tests {
         );
         assert_eq!(private.response_code(), ResponseCode::NXDomain);
         assert!(private.authoritative());
+        assert_eq!(private.name_servers().len(), 1);
+        assert_eq!(private.name_servers()[0].record_type(), RecordType::SOA);
 
         let unrelated = answer_request(
             &Message::from_vec(&query("example.com.", RecordType::A)).expect("external query"),
@@ -968,6 +1037,79 @@ mod tests {
         assert!(!unrelated.authoritative());
         assert_eq!(metrics.nxdomain.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.refused.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn authoritative_response_negotiates_edns_without_echoing_client_options() {
+        let zone = DnsZone::reserved_suffix_guard();
+        let metrics = DnsRuntimeMetrics::default();
+        let request = Message::from_vec(&query_with_edns(
+            "unknown.p2p-vpn.internal.",
+            RecordType::A,
+            4_096,
+        ))
+        .expect("EDNS query");
+        let response = answer_request(&request, &zone, &metrics);
+        let edns = response.extensions().as_ref().expect("EDNS response");
+
+        assert_eq!(edns.version(), 0);
+        assert_eq!(edns.max_payload(), MAX_DNS_UDP_RESPONSE_BYTES as u16);
+        assert!(edns.options().as_ref().is_empty());
+    }
+
+    #[test]
+    fn unsupported_edns_version_returns_badvers() {
+        let zone = DnsZone::reserved_suffix_guard();
+        let metrics = DnsRuntimeMetrics::default();
+        let mut request = Message::from_vec(&query_with_edns(
+            "unknown.p2p-vpn.internal.",
+            RecordType::A,
+            1_232,
+        ))
+        .expect("EDNS query");
+        request
+            .extensions_mut()
+            .as_mut()
+            .expect("EDNS request")
+            .set_version(1);
+        let encoded = answer_request(&request, &zone, &metrics)
+            .to_vec()
+            .expect("BADVERS response");
+        let response = Message::from_vec(&encoded).expect("decoded BADVERS response");
+
+        // Hickory decodes wire code 16 as BADSIG because BADVERS shares that value.
+        assert_eq!(u16::from(response.response_code()), 16);
+        assert_eq!(
+            response
+                .extensions()
+                .as_ref()
+                .expect("BADVERS EDNS response")
+                .rcode_high(),
+            1
+        );
+        assert_eq!(response.version(), 0);
+        assert!(!response.authoritative());
+    }
+
+    #[test]
+    fn encoded_response_honors_udp_payload_negotiation() {
+        let zone = DnsZone::reserved_suffix_guard();
+        let metrics = DnsRuntimeMetrics::default();
+        let plain = encode_response(
+            &query("unknown.p2p-vpn.internal.", RecordType::A),
+            &zone,
+            &metrics,
+        )
+        .expect("plain response");
+        let extended = encode_response(
+            &query_with_edns("unknown.p2p-vpn.internal.", RecordType::A, 4_096),
+            &zone,
+            &metrics,
+        )
+        .expect("EDNS response");
+
+        assert_eq!(plain.udp_payload_limit, 512);
+        assert_eq!(extended.udp_payload_limit, MAX_DNS_UDP_RESPONSE_BYTES);
     }
 
     #[tokio::test]
