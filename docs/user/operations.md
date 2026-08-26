@@ -115,6 +115,7 @@ Useful membership counters:
 | `membership_state_persist_failures` | Failed saves. |
 | `unauthorized_connections_dropped` | Rejected or quarantined transport connections. |
 | `public_routing_peers` | Connected routing-only peers using the configured Kademlia protocol. |
+| `public_discovery_unverified_addresses_rejected` | Unverified address scopes ignored from public discovery. |
 
 Useful routing-role journal events:
 
@@ -124,6 +125,7 @@ Useful routing-role journal events:
 | `membership_probe_peer_classified` | Pending peer became routing-only infrastructure. |
 | `public_routing_peer_promoted` | Signed membership promoted the peer into the overlay. |
 | `rejected_control_probe_disconnected` | Routing peer attempted an invalid overlay exchange. |
+| `public_discovery_address_rejected` | A sampled public record used a non-public transport. |
 
 Example:
 

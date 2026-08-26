@@ -250,6 +250,7 @@ pub struct RuntimeMetrics {
     discovered_address_dial_attempts: AtomicU64,
     discovered_address_dial_failures: AtomicU64,
     discovered_addresses_rejected: AtomicU64,
+    public_discovery_unverified_addresses_rejected: AtomicU64,
     discovered_addresses_expired: AtomicU64,
     outbound_queue_blocked_no_supported_path_events: AtomicU64,
     outbound_queue_blocked_packet_window_events: AtomicU64,
@@ -1106,6 +1107,12 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_public_discovery_unverified_address_rejected(&self) -> u64 {
+        self.public_discovery_unverified_addresses_rejected
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1)
+    }
+
     pub fn record_discovered_address_expired(&self, addresses: u64) {
         self.discovered_addresses_expired
             .fetch_add(addresses, Ordering::Relaxed);
@@ -1600,6 +1607,9 @@ impl RuntimeMetrics {
             .load(Ordering::Relaxed);
         snapshot.discovered_addresses_rejected =
             self.discovered_addresses_rejected.load(Ordering::Relaxed);
+        snapshot.public_discovery_unverified_addresses_rejected = self
+            .public_discovery_unverified_addresses_rejected
+            .load(Ordering::Relaxed);
         snapshot.discovered_addresses_expired =
             self.discovered_addresses_expired.load(Ordering::Relaxed);
         snapshot.outbound_queue_blocked_no_supported_path_events = self
@@ -1805,6 +1815,7 @@ pub struct RuntimeSnapshot {
     pub discovered_address_dial_attempts: u64,
     pub discovered_address_dial_failures: u64,
     pub discovered_addresses_rejected: u64,
+    pub public_discovery_unverified_addresses_rejected: u64,
     pub discovered_addresses_expired: u64,
     pub outbound_queue_blocked_no_supported_path_events: u64,
     pub outbound_queue_blocked_packet_window_events: u64,
@@ -2407,6 +2418,10 @@ impl RuntimeSnapshot {
                 self.discovered_addresses_rejected
             ),
             format!(
+                "public_discovery_unverified_addresses_rejected {}",
+                self.public_discovery_unverified_addresses_rejected
+            ),
+            format!(
                 "discovered_addresses_expired {}",
                 self.discovered_addresses_expired
             ),
@@ -2858,6 +2873,7 @@ mod tests {
         metrics.record_discovered_address_dial_attempt();
         metrics.record_discovered_address_dial_failure();
         metrics.record_discovered_address_rejected();
+        metrics.record_public_discovery_unverified_address_rejected();
         metrics.record_discovered_address_expired(2);
         metrics.record_outbound_queue_blocked_no_supported_path();
         metrics.record_outbound_queue_blocked_packet_window();
@@ -3256,6 +3272,7 @@ mod tests {
         assert_eq!(snapshot.discovered_address_dial_attempts, 1);
         assert_eq!(snapshot.discovered_address_dial_failures, 1);
         assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert_eq!(snapshot.public_discovery_unverified_addresses_rejected, 1);
         assert_eq!(snapshot.discovered_addresses_expired, 2);
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 1);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
@@ -3439,6 +3456,10 @@ mod tests {
         assert_metric_line(&snapshot, "discovered_address_dial_attempts 1");
         assert_metric_line(&snapshot, "discovered_address_dial_failures 1");
         assert_metric_line(&snapshot, "discovered_addresses_rejected 1");
+        assert_metric_line(
+            &snapshot,
+            "public_discovery_unverified_addresses_rejected 1",
+        );
         assert_metric_line(&snapshot, "discovered_addresses_expired 2");
         assert_metric_line(
             &snapshot,

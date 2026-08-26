@@ -233,6 +233,26 @@ This only restrains public bootstrap retries.
 LAN discovery, configured peers, discovered relay paths, and Kademlia record
 lookups continue during the backoff window.
 
+## Address Scope
+
+Public peers sometimes advertise private or unresolved DNS addresses.
+p2p-vpn accepts only globally routable literal IPs from those records.
+
+| Source | Private or unresolved DNS behavior |
+| --- | --- |
+| Public Kademlia and unadmitted Identify | Rejected |
+| Static configuration | Accepted |
+| Local mDNS | Accepted |
+| Established secure endpoint | Accepted |
+| Admitted member record or Identify | Accepted |
+
+Check the rejection counter:
+
+```sh
+sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
+  | rg '^public_discovery_unverified_addresses_rejected '
+```
+
 ## Interpret Results
 
 | Field | Meaning |

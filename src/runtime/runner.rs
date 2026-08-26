@@ -4097,6 +4097,10 @@ fn extend_runtime_discovery_summary_lines(lines: &mut Vec<String>, snapshot: &Ru
         format!("autonat_status_private {}", snapshot.autonat_status_private),
         format!("auto_relay_candidates {}", snapshot.auto_relay_candidates),
         format!(
+            "public_discovery_unverified_addresses_rejected {}",
+            snapshot.public_discovery_unverified_addresses_rejected
+        ),
+        format!(
             "auto_relay_reservation_attempts {}",
             snapshot.auto_relay_reservation_attempts
         ),
@@ -5854,21 +5858,22 @@ impl RoutingInfrastructurePeers {
     }
 }
 
-fn admit_kademlia_relay_infrastructure_peer<'a>(
+fn admit_discovered_relay_infrastructure_peer<'a>(
     swarm: &mut Swarm<Behaviour>,
     forwarder: &Forwarder,
     infrastructure_peers: &mut InfrastructurePeers,
     auto_relay: &mut AutoRelayState,
     metrics: &RuntimeMetrics,
     peer: Libp2pPeerId,
-    mut addresses: impl Iterator<Item = &'a Multiaddr>,
+    source: DiscoveredPeerAddressSource,
+    addresses: impl IntoIterator<Item = &'a Multiaddr>,
 ) {
     if peer == *swarm.local_peer_id() || forwarder.is_configured_transport_peer(peer) {
         return;
     }
 
     let local_networks = local_interface_networks("");
-    let Some(address) = best_auto_relay_candidate_address(peer, &mut addresses, &local_networks)
+    let Some(address) = best_auto_relay_candidate_address(peer, addresses, &local_networks, source)
     else {
         return;
     };
@@ -5889,6 +5894,7 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
         &[
             ("peer", &peer.to_string()),
             ("address", &address.to_string()),
+            ("source", source.as_str()),
         ],
     );
     metrics.record_auto_relay_infrastructure_candidate();
@@ -5898,6 +5904,7 @@ fn admit_kademlia_relay_infrastructure_peer<'a>(
         &[
             ("peer", &peer.to_string()),
             ("address", &address.to_string()),
+            ("source", source.as_str()),
         ],
     );
 
@@ -6155,15 +6162,24 @@ fn record_auto_relay_listener_termination(
     Some(released)
 }
 
-fn auto_relay_candidate_addresses(peer: Libp2pPeerId, info: &identify::Info) -> Vec<Multiaddr> {
+fn auto_relay_candidate_addresses(
+    peer: Libp2pPeerId,
+    info: &identify::Info,
+    source: DiscoveredPeerAddressSource,
+) -> Vec<Multiaddr> {
     if !identify_protocols_include_relay_hop(&info.protocols) {
         return Vec::new();
     }
 
-    ranked_auto_relay_candidate_addresses(peer, &info.listen_addrs, &local_interface_networks(""))
-        .into_iter()
-        .take(1)
-        .collect()
+    ranked_auto_relay_candidate_addresses(
+        peer,
+        &info.listen_addrs,
+        &local_interface_networks(""),
+        source,
+    )
+    .into_iter()
+    .take(1)
+    .collect()
 }
 
 fn identify_protocols_include_relay_hop(protocols: &[libp2p::StreamProtocol]) -> bool {
@@ -6194,8 +6210,9 @@ fn best_auto_relay_candidate_address<'a>(
     peer: Libp2pPeerId,
     addresses: impl IntoIterator<Item = &'a Multiaddr>,
     local_networks: &[LocalInterfaceNetwork],
+    source: DiscoveredPeerAddressSource,
 ) -> Option<Multiaddr> {
-    ranked_auto_relay_candidate_addresses(peer, addresses, local_networks)
+    ranked_auto_relay_candidate_addresses(peer, addresses, local_networks, source)
         .into_iter()
         .next()
 }
@@ -6204,10 +6221,14 @@ fn ranked_auto_relay_candidate_addresses<'a>(
     peer: Libp2pPeerId,
     addresses: impl IntoIterator<Item = &'a Multiaddr>,
     local_networks: &[LocalInterfaceNetwork],
+    source: DiscoveredPeerAddressSource,
 ) -> Vec<Multiaddr> {
     let mut candidates = addresses
         .into_iter()
         .filter_map(|address| auto_relay_candidate_address(peer, address))
+        .filter(|address| {
+            !source.requires_public_transport() || discovered_address_uses_public_transport(address)
+        })
         .fold(Vec::new(), |mut addresses, address| {
             if !addresses.contains(&address) {
                 addresses.push(address);
@@ -6282,16 +6303,33 @@ fn relayed_address_uses_public_relay_transport(address: &Multiaddr) -> bool {
 }
 
 fn relay_transport_is_publicly_dialable(address: &Multiaddr) -> bool {
-    address.iter().any(|protocol| match protocol {
-        Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => true,
-        Protocol::Ip4(address) => ipv4_relay_address_is_publicly_dialable(address),
-        Protocol::Ip6(address) => ipv6_relay_address_is_publicly_dialable(address),
-        _ => false,
-    })
+    transport_host_is_publicly_dialable(address, true)
+}
+
+fn public_discovery_transport_is_publicly_dialable(address: &Multiaddr) -> bool {
+    transport_host_is_publicly_dialable(address, false)
+}
+
+fn transport_host_is_publicly_dialable(address: &Multiaddr, allow_dns: bool) -> bool {
+    for protocol in address {
+        match protocol {
+            Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Dnsaddr(_) => {
+                return allow_dns;
+            }
+            Protocol::Ip4(address) => {
+                return ipv4_relay_address_is_publicly_dialable(address);
+            }
+            Protocol::Ip6(address) => {
+                return ipv6_relay_address_is_publicly_dialable(address);
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn ipv4_relay_address_is_publicly_dialable(address: Ipv4Addr) -> bool {
-    let [first, second, _, _] = address.octets();
+    let [first, second, third, _] = address.octets();
     !(address.is_unspecified()
         || address.is_loopback()
         || address.is_link_local()
@@ -6299,16 +6337,25 @@ fn ipv4_relay_address_is_publicly_dialable(address: Ipv4Addr) -> bool {
         || address.is_broadcast()
         || address.is_documentation()
         || address.is_multicast()
-        || (first == 100 && (64..=127).contains(&second)))
+        || first == 0
+        || (first == 100 && (64..=127).contains(&second))
+        || (first == 192 && second == 0 && third == 0)
+        || (first == 192 && second == 88 && third == 99)
+        || (first == 198 && (18..=19).contains(&second))
+        || first >= 240)
 }
 
 fn ipv6_relay_address_is_publicly_dialable(address: Ipv6Addr) -> bool {
+    if let Some(address) = address.to_ipv4_mapped() {
+        return ipv4_relay_address_is_publicly_dialable(address);
+    }
     let segments = address.segments();
     let first = segments[0];
     !(address.is_unspecified()
         || address.is_loopback()
         || address.is_multicast()
         || (first & 0xfe00) == 0xfc00
+        || (first & 0xffc0) == 0xfec0
         || (first & 0xffc0) == 0xfe80
         || (first == 0x2001 && segments[1] == 0x0db8))
 }
@@ -6961,7 +7008,9 @@ enum RecoveryDialTarget {
 enum DiscoveredPeerAddressSource {
     AuthenticatedPeerRecord,
     AuthenticatedControlHint,
-    UnauthenticatedDiscovery,
+    AuthenticatedPeerIdentify,
+    LocalDiscovery,
+    PublicDiscovery,
 }
 
 impl DiscoveredPeerAddressSource {
@@ -6969,8 +7018,63 @@ impl DiscoveredPeerAddressSource {
         match self {
             Self::AuthenticatedPeerRecord => "authenticated_peer_record",
             Self::AuthenticatedControlHint => "authenticated_control_hint",
-            Self::UnauthenticatedDiscovery => "unauthenticated_discovery",
+            Self::AuthenticatedPeerIdentify => "authenticated_peer_identify",
+            Self::LocalDiscovery => "local_discovery",
+            Self::PublicDiscovery => "public_discovery",
         }
+    }
+
+    const fn requires_public_transport(self) -> bool {
+        matches!(self, Self::PublicDiscovery)
+    }
+}
+
+fn accepted_discovery_addresses<'a>(
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = &'a Multiaddr>,
+    source: DiscoveredPeerAddressSource,
+    surface: &str,
+) -> Vec<&'a Multiaddr> {
+    addresses
+        .into_iter()
+        .filter(|address| {
+            if !source.requires_public_transport()
+                || discovered_address_uses_public_transport(address)
+            {
+                return true;
+            }
+
+            record_public_discovery_address_rejected(metrics, peer, address, surface);
+            false
+        })
+        .collect()
+}
+
+fn discovered_address_uses_public_transport(address: &Multiaddr) -> bool {
+    public_discovery_transport_is_publicly_dialable(address)
+}
+
+fn record_public_discovery_address_rejected(
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: &Multiaddr,
+    surface: &str,
+) {
+    metrics.record_discovered_address_rejected();
+    let total = metrics.record_public_discovery_unverified_address_rejected();
+    if total.is_power_of_two() {
+        log_runtime_event(
+            LogLevel::Info,
+            "public_discovery_address_rejected",
+            &[
+                ("peer", &peer.to_string()),
+                ("address", &address.to_string()),
+                ("surface", surface),
+                ("reason", "unverified_transport_scope"),
+                ("total", &total.to_string()),
+            ],
+        );
     }
 }
 
@@ -15451,16 +15555,17 @@ fn handle_behaviour_event(
                     peer,
                     address,
                     context.discovery,
-                    DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+                    DiscoveredPeerAddressSource::LocalDiscovery,
                 );
                 if context.auto_relay.should_discover_candidates() {
-                    admit_kademlia_relay_infrastructure_peer(
+                    admit_discovered_relay_infrastructure_peer(
                         swarm,
                         context.forwarder,
                         context.infrastructure_peers,
                         context.auto_relay,
                         context.metrics,
                         peer,
+                        DiscoveredPeerAddressSource::LocalDiscovery,
                         std::slice::from_ref(&infrastructure_address).iter(),
                     );
                 }
@@ -15632,8 +15737,22 @@ fn handle_identify_received(
     let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
     let kademlia_routing = context.discovery.kademlia
         && identify_protocols_include(&info.protocols, &context.discovery.kademlia_protocol);
-    let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info);
-    for address in info.listen_addrs {
+    let identify_source = if context.membership.allows(peer_id) {
+        DiscoveredPeerAddressSource::AuthenticatedPeerIdentify
+    } else {
+        DiscoveredPeerAddressSource::PublicDiscovery
+    };
+    let accepted_listen_addresses = accepted_discovery_addresses(
+        context.metrics,
+        peer_id,
+        info.listen_addrs.iter(),
+        identify_source,
+        "identify",
+    );
+    let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info, identify_source);
+    let preserve_established_infrastructure_candidate =
+        context.infrastructure_peers.contains(peer_id);
+    for address in accepted_listen_addresses {
         learn_peer_address(
             swarm,
             context.forwarder,
@@ -15641,9 +15760,9 @@ fn handle_identify_received(
             context.paths,
             context.metrics,
             peer_id,
-            address,
+            address.clone(),
             context.discovery,
-            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+            identify_source,
         );
     }
     if !context.membership.allows(peer_id)
@@ -15765,12 +15884,14 @@ fn handle_identify_received(
             ],
         );
     }
-    record_auto_relay_candidates(
-        context.auto_relay,
-        context.metrics,
-        peer_id,
-        auto_relay_candidates,
-    );
+    if !preserve_established_infrastructure_candidate {
+        record_auto_relay_candidates(
+            context.auto_relay,
+            context.metrics,
+            peer_id,
+            auto_relay_candidates,
+        );
+    }
     attempt_auto_relay_reservations(swarm, context.auto_relay, context.metrics);
     if context.discovery.autonat && observed_addr.iter().next().is_some() {
         schedule_autonat_probe(swarm, context.metrics, &observed_addr);
@@ -15987,14 +16108,22 @@ fn handle_kademlia_event(
             peer, addresses, ..
         } => {
             if !context.public_discovery_quiet {
-                admit_kademlia_relay_infrastructure_peer(
+                let addresses = accepted_discovery_addresses(
+                    context.metrics,
+                    peer,
+                    addresses.iter(),
+                    DiscoveredPeerAddressSource::PublicDiscovery,
+                    "kademlia_routing",
+                );
+                admit_discovered_relay_infrastructure_peer(
                     swarm,
                     context.forwarder,
                     context.infrastructure_peers,
                     context.auto_relay,
                     context.metrics,
                     peer,
-                    addresses.iter(),
+                    DiscoveredPeerAddressSource::PublicDiscovery,
+                    addresses,
                 );
             }
             log_runtime_event(
@@ -16234,8 +16363,15 @@ fn handle_kademlia_closest_peer_result(
     ) = result
     {
         for peer in peers {
+            let accepted_addresses = accepted_discovery_addresses(
+                metrics,
+                peer.peer_id,
+                peer.addrs.iter(),
+                DiscoveredPeerAddressSource::PublicDiscovery,
+                "kademlia_closest_peer",
+            );
             if !public_discovery_quiet {
-                for address in &peer.addrs {
+                for address in &accepted_addresses {
                     learn_peer_address(
                         swarm,
                         forwarder,
@@ -16243,21 +16379,22 @@ fn handle_kademlia_closest_peer_result(
                         paths,
                         metrics,
                         peer.peer_id,
-                        address.clone(),
+                        (*address).clone(),
                         discovery,
-                        DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+                        DiscoveredPeerAddressSource::PublicDiscovery,
                     );
                 }
             }
             if !public_discovery_quiet || auto_relay.should_discover_candidates() {
-                admit_kademlia_relay_infrastructure_peer(
+                admit_discovered_relay_infrastructure_peer(
                     swarm,
                     forwarder,
                     infrastructure_peers,
                     auto_relay,
                     metrics,
                     peer.peer_id,
-                    peer.addrs.iter(),
+                    DiscoveredPeerAddressSource::PublicDiscovery,
+                    accepted_addresses,
                 );
             }
         }
@@ -16439,6 +16576,10 @@ fn learn_peer_address(
     source: DiscoveredPeerAddressSource,
 ) {
     if peer == *swarm.local_peer_id() {
+        return;
+    }
+    if source.requires_public_transport() && !discovered_address_uses_public_transport(&address) {
+        record_public_discovery_address_rejected(metrics, peer, &address, "peer_address");
         return;
     }
     if !forwarder.is_configured_transport_peer(peer) {
@@ -20859,8 +21000,8 @@ mod tests {
         let mut discovered = DiscoveredPeerAddresses::default();
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
-        let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
-        let unconfigured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4002".parse().expect("address");
+        let configured_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("address");
+        let unconfigured_address: Multiaddr = "/ip4/1.1.1.1/tcp/4002".parse().expect("address");
         let result = kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk {
             key: configured.to_bytes(),
             peers: vec![
@@ -20988,8 +21129,8 @@ mod tests {
         let mut discovered = DiscoveredPeerAddresses::default();
         let mut paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
-        let configured_address: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("address");
-        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay}")
+        let configured_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("address");
+        let relay_address: Multiaddr = format!("/ip4/1.1.1.1/tcp/4002/p2p/{relay}")
             .parse()
             .expect("relay address");
         let result = kad::QueryResult::GetClosestPeers(Ok(kad::GetClosestPeersOk {
@@ -21389,8 +21530,13 @@ mod tests {
             format!("/ip4/192.168.0.10/tcp/4001/p2p/{relay}/p2p-circuit"),
             format!("/ip4/10.0.0.10/tcp/4001/p2p/{relay}/p2p-circuit"),
             format!("/ip4/100.64.0.10/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/0.1.2.3/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/198.18.0.1/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip4/240.0.0.1/tcp/4001/p2p/{relay}/p2p-circuit"),
             format!("/ip6/fd00::1/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip6/fec0::1/tcp/4001/p2p/{relay}/p2p-circuit"),
             format!("/ip6/fe80::1/tcp/4001/p2p/{relay}/p2p-circuit"),
+            format!("/ip6/::ffff:192.168.0.10/tcp/4001/p2p/{relay}/p2p-circuit"),
         ];
         for address in private {
             let address: Multiaddr = address.parse().expect("address");
@@ -22894,7 +23040,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_relay_candidate_addresses_prefer_same_local_subnet() {
+    fn local_relay_candidate_addresses_prefer_same_local_subnet() {
         let peer = peer_id();
         let same_subnet: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{peer}")
             .parse()
@@ -22915,12 +23061,90 @@ mod tests {
             public_address.clone(),
             same_subnet.clone(),
         ];
-        let ranked = ranked_auto_relay_candidate_addresses(peer, &addresses, &local_networks);
+        let ranked = ranked_auto_relay_candidate_addresses(
+            peer,
+            &addresses,
+            &local_networks,
+            DiscoveredPeerAddressSource::LocalDiscovery,
+        );
 
         assert_eq!(
             ranked,
             vec![same_subnet, public_address, other_private_subnet]
         );
+    }
+
+    #[test]
+    fn public_relay_candidate_addresses_reject_unverified_transports() {
+        let peer = peer_id();
+        let same_subnet: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("same-subnet relay address");
+        let carrier_grade_nat: Multiaddr = format!("/ip4/100.64.1.2/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("carrier-grade NAT relay address");
+        let unverified_dns: Multiaddr = format!("/dns4/relay.example.test/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("unverified DNS relay address");
+        let mixed_host = Multiaddr::empty()
+            .with(Protocol::Ip4(Ipv4Addr::new(192, 168, 51, 254)))
+            .with(Protocol::Tcp(4001))
+            .with(Protocol::Ip4(Ipv4Addr::new(8, 8, 8, 8)))
+            .with(Protocol::Tcp(4002))
+            .with(Protocol::P2p(peer));
+        let public_address: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("public relay address");
+        let local_networks = [LocalInterfaceNetwork {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 51, 1)),
+            netmask: IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
+        }];
+
+        let ranked = ranked_auto_relay_candidate_addresses(
+            peer,
+            &[
+                same_subnet,
+                carrier_grade_nat,
+                unverified_dns,
+                mixed_host,
+                public_address.clone(),
+            ],
+            &local_networks,
+            DiscoveredPeerAddressSource::PublicDiscovery,
+        );
+
+        assert_eq!(ranked, vec![public_address]);
+    }
+
+    #[test]
+    fn public_discovery_filters_unverified_addresses_and_counts_rejections() {
+        let peer = peer_id();
+        let private: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("private address");
+        let carrier_grade_nat: Multiaddr = format!("/ip4/100.64.1.2/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("carrier-grade NAT address");
+        let unverified_dns: Multiaddr = format!("/dns4/peer.example.test/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("unverified DNS address");
+        let public: Multiaddr = format!("/ip4/1.1.1.1/tcp/4001/p2p/{peer}")
+            .parse()
+            .expect("public address");
+        let metrics = RuntimeMetrics::default();
+
+        let accepted = accepted_discovery_addresses(
+            &metrics,
+            peer,
+            [&private, &carrier_grade_nat, &unverified_dns, &public],
+            DiscoveredPeerAddressSource::PublicDiscovery,
+            "test",
+        );
+
+        assert_eq!(accepted, vec![&public]);
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_rejected, 3);
+        assert_eq!(snapshot.public_discovery_unverified_addresses_rejected, 3);
     }
 
     #[test]
@@ -22943,6 +23167,7 @@ mod tests {
             relay,
             &[other_private_subnet, public_address, same_subnet.clone()],
             &local_networks,
+            DiscoveredPeerAddressSource::LocalDiscovery,
         );
         let mut state = AutoRelayState::new(AutoRelayConfig {
             max_candidates: 4,
@@ -23557,7 +23782,7 @@ mod tests {
         })
         .expect("node");
         let relay = peer_id();
-        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay}")
+        let relay_address: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{relay}")
             .parse()
             .expect("relay address");
         let mut infrastructure_peers = InfrastructurePeers::default();
@@ -23568,13 +23793,14 @@ mod tests {
         let config = config_with_peer(&local_identity, peer_id());
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
 
-        admit_kademlia_relay_infrastructure_peer(
+        admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
             &metrics,
             relay,
+            DiscoveredPeerAddressSource::PublicDiscovery,
             std::slice::from_ref(&relay_address).iter(),
         );
 
@@ -23649,10 +23875,10 @@ mod tests {
         })
         .expect("node");
         let relay = peer_id();
-        let stale_address: Multiaddr = format!("/ip4/192.168.51.254/tcp/4001/p2p/{relay}")
+        let stale_address: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{relay}")
             .parse()
             .expect("stale relay address");
-        let fresh_address: Multiaddr = format!("/ip4/192.168.52.254/tcp/4001/p2p/{relay}")
+        let fresh_address: Multiaddr = format!("/ip4/1.1.1.1/tcp/4001/p2p/{relay}")
             .parse()
             .expect("fresh relay address");
         let mut infrastructure_peers = InfrastructurePeers::default();
@@ -23668,13 +23894,14 @@ mod tests {
         assert_eq!(auto_relay.next_reservation_targets(now).len(), 1);
         assert!(auto_relay.release_reservation_for_retry_after(relay, now));
 
-        admit_kademlia_relay_infrastructure_peer(
+        admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
             &metrics,
             relay,
+            DiscoveredPeerAddressSource::PublicDiscovery,
             std::slice::from_ref(&fresh_address).iter(),
         );
 
@@ -23710,10 +23937,10 @@ mod tests {
         .expect("node");
         let relay_a = peer_id();
         let relay_b = peer_id();
-        let address_a: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_a}")
+        let address_a: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{relay_a}")
             .parse()
             .expect("relay address a");
-        let address_b: Multiaddr = format!("/ip4/127.0.0.1/tcp/4002/p2p/{relay_b}")
+        let address_b: Multiaddr = format!("/ip4/1.1.1.1/tcp/4002/p2p/{relay_b}")
             .parse()
             .expect("relay address b");
         let mut infrastructure_peers = InfrastructurePeers::default();
@@ -23727,22 +23954,24 @@ mod tests {
         let config = config_with_peer(&local_identity, peer_id());
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
 
-        admit_kademlia_relay_infrastructure_peer(
+        admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
             &metrics,
             relay_a,
+            DiscoveredPeerAddressSource::PublicDiscovery,
             std::slice::from_ref(&address_a).iter(),
         );
-        admit_kademlia_relay_infrastructure_peer(
+        admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
             &metrics,
             relay_b,
+            DiscoveredPeerAddressSource::PublicDiscovery,
             std::slice::from_ref(&address_b).iter(),
         );
 
@@ -23784,20 +24013,21 @@ mod tests {
         })
         .expect("node");
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let relay_address: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{configured_peer}")
+        let relay_address: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{configured_peer}")
             .parse()
             .expect("relay address");
         let mut infrastructure_peers = InfrastructurePeers::default();
         let mut auto_relay = AutoRelayState::default();
         let metrics = RuntimeMetrics::default();
 
-        admit_kademlia_relay_infrastructure_peer(
+        admit_discovered_relay_infrastructure_peer(
             &mut node.swarm,
             &forwarder,
             &mut infrastructure_peers,
             &mut auto_relay,
             &metrics,
             configured_peer,
+            DiscoveredPeerAddressSource::PublicDiscovery,
             std::slice::from_ref(&relay_address).iter(),
         );
 
@@ -24981,7 +25211,7 @@ mod tests {
             configured,
             address.clone(),
             &DiscoveryConfig::default(),
-            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+            DiscoveredPeerAddressSource::LocalDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -24990,6 +25220,55 @@ mod tests {
         assert_eq!(snapshot.discovered_address_dial_failures, 0);
         assert_eq!(snapshot.discovered_addresses_rejected, 0);
         assert_eq!(discovered.as_vec(), vec![(configured, address)]);
+    }
+
+    #[tokio::test]
+    async fn learn_peer_address_rejects_unverified_public_discovery_address() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let configured = peer_id();
+        let config = config_with_peer(&local_identity, configured);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut discovered = DiscoveredPeerAddresses::default();
+        let paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+        let address: Multiaddr = "/ip4/192.168.0.53/tcp/4001".parse().expect("address");
+
+        learn_peer_address(
+            &mut node.swarm,
+            &forwarder,
+            &mut discovered,
+            &paths,
+            &metrics,
+            configured,
+            address,
+            &DiscoveryConfig::default(),
+            DiscoveredPeerAddressSource::PublicDiscovery,
+        );
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.discovered_addresses_accepted, 0);
+        assert_eq!(snapshot.discovered_address_dial_attempts, 0);
+        assert_eq!(snapshot.discovered_addresses_rejected, 1);
+        assert_eq!(snapshot.public_discovery_unverified_addresses_rejected, 1);
+        assert!(discovered.as_vec().is_empty());
     }
 
     #[tokio::test]
@@ -25031,7 +25310,7 @@ mod tests {
             unconfigured,
             address,
             &DiscoveryConfig::default(),
-            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+            DiscoveredPeerAddressSource::LocalDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
@@ -25083,7 +25362,7 @@ mod tests {
             configured,
             address,
             &DiscoveryConfig::default(),
-            DiscoveredPeerAddressSource::UnauthenticatedDiscovery,
+            DiscoveredPeerAddressSource::LocalDiscovery,
         );
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());

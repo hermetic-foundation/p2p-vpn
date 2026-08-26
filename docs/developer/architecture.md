@@ -251,6 +251,20 @@ Bootstrap peers are runtime defaults for the public DHT profile.
 
 They are not VPN members and are not serialized into minimal configs.
 
+Address scope follows discovery provenance:
+
+| Address source | Private or unresolved DNS | Reason |
+| --- | --- | --- |
+| Static bootstrap, relay, or peer config | Accepted | The operator authorized the target. |
+| mDNS | Accepted | Link-local discovery corroborates LAN reachability. |
+| Established endpoint | Accepted | A successful secure connection proves reachability. |
+| Admitted member record or Identify | Accepted | Overlay authorization bounds the sender. |
+| Public Kademlia or unadmitted Identify | Rejected | Only globally routable literal IPs have verified scope. |
+
+Public records may contain RFC1918, carrier-grade NAT, loopback, link-local,
+ULA, documentation, or DNS addresses. They never become dial or relay candidates
+without an operator-authorized, locally corroborated, or authenticated source.
+
 Configured peer addresses are optional hints.
 
 They must not be required for normal route convergence or network movement.

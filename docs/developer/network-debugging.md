@@ -110,6 +110,25 @@ Expected behavior during the pause:
 
 Do not treat this event as a LAN failure by itself.
 
+## Public Address Pollution
+
+Public discovery must not create neighbor entries for arbitrary private hosts.
+
+```sh
+ip -4 neigh show
+sudo p2p-vpn daemon-status --socket /run/p2p-vpn/control.sock \
+  | rg '^public_discovery_unverified_addresses_rejected '
+```
+
+| Evidence | Interpretation |
+| --- | --- |
+| Rejection counter rises | Public records contained non-public transports. |
+| Small set of real LAN neighbors | Expected mDNS and established-path behavior. |
+| Many unrelated `FAILED` private neighbors | Regression in discovery-source filtering. |
+
+Rejection journal events are sampled at power-of-two totals.
+This bounds log volume while retaining the peer, address, and ingestion surface.
+
 ## Namespace Repro
 
 ```sh
