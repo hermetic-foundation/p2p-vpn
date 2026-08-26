@@ -218,6 +218,12 @@ Circuit relay is a fallback path.
 
 It also supports DCUtR setup when the topology and relay allow it.
 
+| Relay State | Policy |
+| --- | --- |
+| Reservation | Keep ready for inbound fallback and DCUtR. |
+| Peer circuit | Open only while no usable direct path exists. |
+| Alternate relay address | Try serially for one peer and relay pair. |
+
 Relay peers are not VPN members unless they also appear in `peers[]`.
 
 ## Public Discovery

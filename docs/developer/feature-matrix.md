@@ -37,7 +37,8 @@ Status is conservative.
 | Code pairing through relay | Operational | Isolated `nixos-vm-code-pairing-relay`. |
 | Code pairing approval | Operational | CLI, RPC, protocol, namespace, and VM tests. |
 | Durable pairing enrollment | Operational | Encrypted-state unit tests and service-restart VM proofs. |
-| Network-wide membership convergence | Operational | Independent-pairing four-VM full-mesh proof. |
+| Network-wide membership convergence | Operational | Delegated-admission four-VM full-mesh proof. |
+| Bounded path recovery | Operational | Coalesced dials, tracked DHT queries, and relay-pressure VM assertions. |
 | Durable learned membership | Operational | Offline restart and owner-only state tests. |
 | Membership conflict, expiry, revocation | Operational | Trust-graph and restart-safe history unit tests. |
 | Public DCUtR proof | Partial | Needs non-LAN topology evidence. |
@@ -65,7 +66,7 @@ Status is conservative.
 | 2026-08-22 | Peerless code-pairing namespace | LAN discovery, approval, and bidirectional traffic passed. |
 | 2026-08-22 | NixOS code-pairing LAN VM | Artifacts, evaluation, acknowledgment, restart, and traffic passed. |
 | 2026-08-22 | NixOS code-pairing relay VM | DHT discovery, relay transport, restart, and traffic passed. |
-| 2026-08-25 | NixOS membership convergence VM | Three admitted nodes converged without pairwise pairing. |
+| 2026-08-26 | NixOS membership convergence VM | A admitted B, B admitted C, and all three converged. |
 | 2026-08-25 | Membership restart and movement VM | Offline route restore, relay fallback, cold restart, and LAN promotion passed. |
 
 ## Main Remaining Gap

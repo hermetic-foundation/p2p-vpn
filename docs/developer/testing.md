@@ -359,9 +359,9 @@ nix build --no-link \
 Topology:
 
 ```text
-node B --pairs only with-- node A --pairs only with-- node C
-   \                         |                         /
-    +---------- shared relay infrastructure --------+
+node A --admits-- node B --admits-- node C
+   \              |                 /
+    +----- shared relay infrastructure -----+
 ```
 
 The relay has the same network name but no membership grant.
@@ -373,7 +373,7 @@ Coverage:
 | Scenario | Assertion |
 | --- | --- |
 | Minimal config | All edge configurations start with empty static peer lists. |
-| Independent admission | `B` and `C` pair only with root `A`. |
+| Delegated admission | Root `A` admits `B`; authorized member `B` then admits `C`. |
 | Full convergence | `B` and `C` learn and validate each other automatically. |
 | Derived routes | Both install the other's built-in `/32` route on `pv0`. |
 | Direct LAN | Bidirectional traffic selects direct paths. |
@@ -384,6 +384,7 @@ Coverage:
 | Cold relay restart | Relay-only traffic survives all edge daemon restarts. |
 | LAN return | Direct paths replace relay paths automatically. |
 | Persistence | Owner-only state files retain all three signed records. |
+| Recovery bounds | Relay limits remain available and dial counters never exceed `128`. |
 
 The test compares generated config hashes before and after movement.
 
