@@ -1,4 +1,4 @@
-use std::{error::Error, time::Duration};
+use std::{error::Error, num::NonZeroU8, time::Duration};
 
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, connection_limits, dcutr, dns, identify,
@@ -27,6 +27,7 @@ const PROTOCOL_VERSION: &str = "/p2p-vpn/0.1.0";
 const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
 const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
@@ -189,7 +190,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
             },
         )?
         .with_swarm_config(|config| {
-            config.with_idle_connection_timeout(SWARM_IDLE_CONNECTION_TIMEOUT)
+            config
+                .with_dial_concurrency_factor(DIAL_CONCURRENCY_FACTOR)
+                .with_idle_connection_timeout(SWARM_IDLE_CONNECTION_TIMEOUT)
         })
         .build();
 

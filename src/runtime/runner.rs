@@ -119,6 +119,7 @@ const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
 const MAX_CONCURRENT_MEMBERSHIP_SYNCS: usize = 4;
 const MAX_MEMBERSHIP_SYNC_RESTARTS: u8 = 3;
 const MEMBERSHIP_SYNC_RETRY_DELAY: Duration = Duration::from_secs(30);
+const MEMBERSHIP_PROBE_CONNECTION_TTL: Duration = Duration::from_secs(30);
 const MAX_MEMBERSHIP_SYNC_BYTES: usize = MAX_MEMBERSHIP_RECORDS * MAX_MEMBERSHIP_RECORD_ENCODED_LEN;
 const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
@@ -872,6 +873,7 @@ where
     });
     let mut active_connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint> =
         HashMap::new();
+    let mut membership_probe_connections = MembershipProbeConnections::default();
     let mut kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let mut kademlia_lookup_keys = kademlia_lookup_keys(
         &node.network_name,
@@ -1055,6 +1057,7 @@ where
                         code_pairing_sessions: &mut code_pairing_sessions,
                         pairing_state_store: pairing_state_store.as_ref(),
                         active_connections: &mut active_connections,
+                        membership_probe_connections: &mut membership_probe_connections,
                     },
                     event,
                 ).await?;
@@ -1267,13 +1270,23 @@ where
             }
             _ = timers.code_pairing.tick() => {
                 let now_unix_seconds = current_unix_seconds_lossy();
-                let actions = code_pairing_sessions.expire(now_unix_seconds, Instant::now());
+                let now = Instant::now();
+                let actions = code_pairing_sessions.expire(now_unix_seconds, now);
                 pairing_replay_tokens.replace_code_approval(
                     code_pairing_sessions
                         .active_replay_tokens(now_unix_seconds)
                         .map(str::to_owned),
                 );
                 stop_code_pairing_provider(&mut node.swarm, actions.stop_providing_locator.as_deref());
+                expire_membership_probe_connections(
+                    &mut node.swarm,
+                    &mut membership_probe_connections,
+                    &membership,
+                    &infrastructure_peers,
+                    &code_pairing_sessions,
+                    &metrics,
+                    now,
+                );
                 drive_code_pairing_discovery(
                     &mut node.swarm,
                     &mut code_pairing_sessions,
@@ -1376,6 +1389,7 @@ where
                                 code_pairing_sessions: &mut code_pairing_sessions,
                                 pairing_state_store: pairing_state_store.as_ref(),
                                 active_connections: &mut active_connections,
+                                membership_probe_connections: &mut membership_probe_connections,
                             };
                             promote_all_authenticated_overlay_connections(
                                 &mut node.swarm,
@@ -8303,6 +8317,123 @@ fn peer_has_healthy_supported_path(
         .any(|path| path.healthy && support.supports(path.kind))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MembershipProbeConnection {
+    connection_id: ConnectionId,
+    relayed: bool,
+    expires_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MembershipProbeAdmission {
+    Admitted,
+    Replaced(ConnectionId),
+    Duplicate,
+}
+
+#[derive(Debug, Default)]
+struct MembershipProbeConnections {
+    by_peer: HashMap<Libp2pPeerId, MembershipProbeConnection>,
+}
+
+impl MembershipProbeConnections {
+    fn admit(
+        &mut self,
+        peer: Libp2pPeerId,
+        connection_id: ConnectionId,
+        relayed: bool,
+        now: Instant,
+    ) -> MembershipProbeAdmission {
+        let next = MembershipProbeConnection {
+            connection_id,
+            relayed,
+            expires_at: now + MEMBERSHIP_PROBE_CONNECTION_TTL,
+        };
+        let Some(existing) = self.by_peer.get(&peer).copied() else {
+            self.by_peer.insert(peer, next);
+            return MembershipProbeAdmission::Admitted;
+        };
+        if existing.connection_id == connection_id {
+            self.by_peer.insert(peer, next);
+            return MembershipProbeAdmission::Admitted;
+        }
+        if existing.relayed && !relayed {
+            self.by_peer.insert(peer, next);
+            return MembershipProbeAdmission::Replaced(existing.connection_id);
+        }
+
+        MembershipProbeAdmission::Duplicate
+    }
+
+    fn remove(&mut self, peer: Libp2pPeerId, connection_id: ConnectionId) {
+        if self
+            .by_peer
+            .get(&peer)
+            .is_some_and(|probe| probe.connection_id == connection_id)
+        {
+            self.by_peer.remove(&peer);
+        }
+    }
+
+    fn authorize(&mut self, peer: Libp2pPeerId) {
+        self.by_peer.remove(&peer);
+    }
+
+    fn expired(&self, now: Instant) -> Vec<(Libp2pPeerId, ConnectionId)> {
+        self.by_peer
+            .iter()
+            .filter_map(|(peer, probe)| {
+                (now >= probe.expires_at).then_some((*peer, probe.connection_id))
+            })
+            .collect()
+    }
+
+    fn defer(&mut self, peer: Libp2pPeerId, connection_id: ConnectionId, now: Instant) {
+        if let Some(probe) = self.by_peer.get_mut(&peer)
+            && probe.connection_id == connection_id
+        {
+            probe.expires_at = now + MEMBERSHIP_PROBE_CONNECTION_TTL;
+        }
+    }
+}
+
+fn expire_membership_probe_connections(
+    swarm: &mut Swarm<Behaviour>,
+    probes: &mut MembershipProbeConnections,
+    membership: &OverlayMembership,
+    infrastructure_peers: &InfrastructurePeers,
+    code_pairing_sessions: &CodePairingSessions,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
+    for (peer, connection_id) in probes.expired(now) {
+        if membership.allows(peer)
+            || membership.allows_configured_infrastructure(peer)
+            || infrastructure_peers.contains(peer)
+        {
+            probes.authorize(peer);
+            continue;
+        }
+        if code_pairing_sessions.allows_pairing_probe(peer) {
+            probes.defer(peer, connection_id, now);
+            continue;
+        }
+
+        probes.remove(peer, connection_id);
+        metrics.record_unauthorized_connection_dropped();
+        let close_requested = swarm.close_connection(connection_id);
+        log_runtime_event(
+            LogLevel::Warn,
+            "membership_probe_connection_expired",
+            &[
+                ("peer", &peer.to_string()),
+                ("connection_id", &connection_id.to_string()),
+                ("close_requested", &close_requested.to_string()),
+            ],
+        );
+    }
+}
+
 struct SwarmEventContext<'a> {
     forwarder: &'a mut Forwarder,
     membership: &'a mut OverlayMembership,
@@ -8339,6 +8470,7 @@ struct SwarmEventContext<'a> {
     code_pairing_sessions: &'a mut CodePairingSessions,
     pairing_state_store: Option<&'a PairingStateStore>,
     active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    membership_probe_connections: &'a mut MembershipProbeConnections,
 }
 
 #[derive(Debug, Default)]
@@ -8461,6 +8593,7 @@ async fn handle_swarm_event(
                 context.relay_server_enabled,
             ) {
                 EstablishedConnectionAuthorization::OverlayPeer => {
+                    context.membership_probe_connections.authorize(peer_id);
                     context
                         .discovered_peer_addresses
                         .record_recovery_connection_at(peer_id, Instant::now());
@@ -8482,6 +8615,44 @@ async fn handle_swarm_event(
                     return Ok(());
                 }
                 EstablishedConnectionAuthorization::MembershipProbe => {
+                    match context.membership_probe_connections.admit(
+                        peer_id,
+                        connection_id,
+                        endpoint.is_relayed(),
+                        Instant::now(),
+                    ) {
+                        MembershipProbeAdmission::Admitted => {}
+                        MembershipProbeAdmission::Replaced(replaced_connection_id) => {
+                            let close_requested = swarm.close_connection(replaced_connection_id);
+                            log_runtime_event(
+                                LogLevel::Info,
+                                "membership_probe_connection_replaced",
+                                &[
+                                    ("peer", &peer_id.to_string()),
+                                    ("connection_id", &connection_id.to_string()),
+                                    (
+                                        "replaced_connection_id",
+                                        &replaced_connection_id.to_string(),
+                                    ),
+                                    ("close_requested", &close_requested.to_string()),
+                                ],
+                            );
+                        }
+                        MembershipProbeAdmission::Duplicate => {
+                            let close_requested = swarm.close_connection(connection_id);
+                            log_runtime_event(
+                                LogLevel::Info,
+                                "membership_probe_connection_deduplicated",
+                                &[
+                                    ("peer", &peer_id.to_string()),
+                                    ("connection_id", &connection_id.to_string()),
+                                    ("relayed", &endpoint.is_relayed().to_string()),
+                                    ("close_requested", &close_requested.to_string()),
+                                ],
+                            );
+                            return Ok(());
+                        }
+                    }
                     log_runtime_event(
                         LogLevel::Info,
                         "membership_probe_connection_established",
@@ -8596,6 +8767,9 @@ async fn handle_swarm_event(
             ..
         } => {
             context.active_connections.remove(&(peer_id, connection_id));
+            context
+                .membership_probe_connections
+                .remove(peer_id, connection_id);
             record_path_closed(
                 context.paths,
                 context.forwarder,
@@ -11446,6 +11620,7 @@ fn promote_authenticated_overlay_connection(
     if !context.forwarder.is_configured_transport_peer(peer) {
         return;
     }
+    context.membership_probe_connections.authorize(peer);
     remove_overlay_peer_from_infrastructure(
         context.infrastructure_peers,
         context.auto_relay,
@@ -23509,6 +23684,60 @@ mod tests {
         assert!(address_targets_peer(peer, &relayed_without_target));
         assert!(address_targets_peer(peer, &relayed_target));
         assert!(!address_targets_peer(peer, &relayed_other_target));
+    }
+
+    #[test]
+    fn membership_probe_connections_are_bounded_and_prefer_direct() {
+        let peer = peer_id();
+        let relay_connection = ConnectionId::new_unchecked(1);
+        let duplicate_relay_connection = ConnectionId::new_unchecked(2);
+        let direct_connection = ConnectionId::new_unchecked(3);
+        let later_relay_connection = ConnectionId::new_unchecked(4);
+        let now = Instant::now();
+        let mut probes = MembershipProbeConnections::default();
+
+        assert_eq!(
+            probes.admit(peer, relay_connection, true, now),
+            MembershipProbeAdmission::Admitted
+        );
+        assert_eq!(
+            probes.admit(peer, duplicate_relay_connection, true, now),
+            MembershipProbeAdmission::Duplicate
+        );
+        assert_eq!(
+            probes.admit(peer, direct_connection, false, now),
+            MembershipProbeAdmission::Replaced(relay_connection)
+        );
+        assert_eq!(
+            probes.admit(peer, later_relay_connection, true, now),
+            MembershipProbeAdmission::Duplicate
+        );
+        assert_eq!(probes.by_peer.len(), 1);
+
+        probes.remove(peer, relay_connection);
+        assert_eq!(probes.by_peer.len(), 1);
+        assert_eq!(
+            probes.expired(now + MEMBERSHIP_PROBE_CONNECTION_TTL),
+            vec![(peer, direct_connection)]
+        );
+
+        probes.defer(
+            peer,
+            direct_connection,
+            now + MEMBERSHIP_PROBE_CONNECTION_TTL,
+        );
+        assert!(
+            probes
+                .expired(now + MEMBERSHIP_PROBE_CONNECTION_TTL)
+                .is_empty()
+        );
+        assert_eq!(
+            probes.expired(now + MEMBERSHIP_PROBE_CONNECTION_TTL * 2),
+            vec![(peer, direct_connection)]
+        );
+
+        probes.authorize(peer);
+        assert!(probes.by_peer.is_empty());
     }
 
     #[test]
