@@ -3974,8 +3974,11 @@ EOF
               *) echo "unexpected DNS ExecStartPost: $execStartPostDns" >&2; exit 1 ;;
             esac
             case "$execStartPostDnsScript" in
-              *'dns status'*'--socket /run/p2p-vpn-node-c/control.sock --format json'*'resolvectl dns "$interface" "$listener"'*'resolvectl domain "$interface" "$zone"'*'~64.100.in-addr.arpa'*'resolvectl default-route "$interface" no'*) ;;
+              *'dns status'*'--socket /run/p2p-vpn-node-c/control.sock --format json'*'p2p-vpn-resolved.lock'*'flock 9'*'resolvectl dns "$interface" "$listener"'*'resolvectl domain "$interface" "$zone"'*'resolvectl default-route "$interface" no'*) ;;
               *) echo "unexpected DNS resolver setup script: $execStartPostDnsScript" >&2; exit 1 ;;
+            esac
+            case "$execStartPostDnsScript" in
+              *'.in-addr.arpa'*|*'.ip6.arpa'*) echo "split DNS must not claim ambiguous global reverse zones: $execStartPostDnsScript" >&2; exit 1 ;;
             esac
             case "$execStartPostJson" in
               *'p2p-vpn-node-g-configure-resolved'*) ;;

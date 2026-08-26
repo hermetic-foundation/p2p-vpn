@@ -472,16 +472,13 @@ let
     '';
 
   resolvedStateFile = name: "${runtimeDirectory name}/resolved-interface";
+  resolvedLockFile = "/run/p2p-vpn-resolved.lock";
   resolvedSetupScript =
     name: instance:
     let
       socket = instance.controlSocket;
       configFile = effectiveConfigFile name instance;
       stateFile = resolvedStateFile name;
-      reverseDomains = [
-        "~64.100.in-addr.arpa"
-        "~0.0.5.6.3.6.1.6.0.7.3.7.2.7.0.7.9.7.8.6.0.0.d.f.ip6.arpa"
-      ];
     in
     pkgs.writeShellScript "p2p-vpn-${name}-configure-resolved" ''
       set -eu
@@ -522,6 +519,23 @@ let
 
       interface="$(${pkgs.jq}/bin/jq -er '.interface.name // "pv0"' ${lib.escapeShellArg configFile})"
       ${pkgs.iproute2}/bin/ip link show dev "$interface" >/dev/null
+      exec 9> ${lib.escapeShellArg resolvedLockFile}
+      ${pkgs.util-linux}/bin/flock 9
+      for other_state in /run/p2p-vpn-*/resolved-interface; do
+        [ "$other_state" != ${lib.escapeShellArg stateFile} ] || continue
+        [ -r "$other_state" ] || continue
+        other_interface=""
+        other_zone=""
+        read -r other_interface other_zone < "$other_state" || true
+        if [ -n "$other_interface" ] && ! ${pkgs.iproute2}/bin/ip link show dev "$other_interface" >/dev/null 2>&1; then
+          rm -f "$other_state"
+          continue
+        fi
+        if [ "$other_zone" = "$zone" ]; then
+          echo "p2p-vpn DNS zone $zone is already attached to interface $other_interface" >&2
+          exit 1
+        fi
+      done
       cleanup() {
         ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
         rm -f ${lib.escapeShellArg stateFile}
@@ -530,13 +544,13 @@ let
 
       ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
       ${pkgs.systemd}/bin/resolvectl dns "$interface" "$listener"
-      ${pkgs.systemd}/bin/resolvectl domain "$interface" "$zone" ${lib.escapeShellArgs reverseDomains}
+      ${pkgs.systemd}/bin/resolvectl domain "$interface" "$zone"
       ${pkgs.systemd}/bin/resolvectl default-route "$interface" no
       ${pkgs.systemd}/bin/resolvectl llmnr "$interface" no
       ${pkgs.systemd}/bin/resolvectl mdns "$interface" no
       ${pkgs.systemd}/bin/resolvectl dnssec "$interface" no
       ${pkgs.systemd}/bin/resolvectl dnsovertls "$interface" no
-      printf '%s\n' "$interface" > ${lib.escapeShellArg stateFile}
+      printf '%s\t%s\n' "$interface" "$zone" > ${lib.escapeShellArg stateFile}
       trap - EXIT HUP INT TERM
     '';
   resolvedCleanupScript =
@@ -546,7 +560,9 @@ let
     in
     pkgs.writeShellScript "p2p-vpn-${name}-cleanup-resolved" ''
       set -u
-      if [ -r ${lib.escapeShellArg stateFile} ] && IFS= read -r interface < ${lib.escapeShellArg stateFile}; then
+      exec 9> ${lib.escapeShellArg resolvedLockFile}
+      ${pkgs.util-linux}/bin/flock 9
+      if [ -r ${lib.escapeShellArg stateFile} ] && read -r interface _ < ${lib.escapeShellArg stateFile}; then
         ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
       fi
       rm -f ${lib.escapeShellArg stateFile}
