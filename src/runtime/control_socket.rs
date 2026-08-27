@@ -10,7 +10,10 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-use crate::runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT};
+use crate::{
+    network_peer::{NETWORK_PEER_LIST_SCHEMA_VERSION, NetworkPeerList},
+    runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
+};
 
 const STATUS_REQUEST: &[u8] = b"status\n";
 const STATE_REQUEST: &[u8] = b"state\n";
@@ -19,6 +22,7 @@ const ROUTES_REQUEST: &[u8] = b"routes\n";
 const PATHS_REQUEST: &[u8] = b"paths\n";
 const MTU_REQUEST: &[u8] = b"mtu\n";
 const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
+const NETWORK_PEERS_REQUEST: &[u8] = b"network-peers-v1\n";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const PAIR_RPC_FRAME_PREFIX: &str = "rpc-v1 ";
 const MAX_REQUEST_LEN: usize = 512;
@@ -491,6 +495,9 @@ pub enum RuntimeControlRequest {
     Capabilities {
         respond_to: oneshot::Sender<Vec<String>>,
     },
+    NetworkPeers {
+        respond_to: oneshot::Sender<Result<NetworkPeerList, String>>,
+    },
     Dns {
         request: DnsControlRequest,
         respond_to: oneshot::Sender<Vec<String>>,
@@ -578,6 +585,9 @@ async fn handle_connection(
     tx: mpsc::Sender<RuntimeControlRequest>,
 ) -> io::Result<()> {
     let header = read_bounded_request(&mut stream).await?;
+    if header == NETWORK_PEERS_REQUEST {
+        return handle_network_peers_connection(&mut stream, &tx).await;
+    }
     let request = match header.as_slice() {
         STATUS_REQUEST => RequestKind::Status,
         STATE_REQUEST => RequestKind::State,
@@ -604,6 +614,45 @@ async fn handle_connection(
     };
 
     handle_legacy_connection(&mut stream, &tx, request).await
+}
+
+async fn handle_network_peers_connection(
+    stream: &mut UnixStream,
+    tx: &mpsc::Sender<RuntimeControlRequest>,
+) -> io::Result<()> {
+    let (respond_to, response) = oneshot::channel();
+    tx.send(RuntimeControlRequest::NetworkPeers { respond_to })
+        .await
+        .map_err(|_| runtime_stopped())?;
+    let response = response
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "runtime response dropped"))?;
+
+    match response {
+        Ok(peers) => {
+            let body = serde_json::to_string(&peers).map_err(invalid_data)?;
+            if body.len() > MAX_RESPONSE_LEN.saturating_sub(4) {
+                stream
+                    .write_all(b"error network peer response exceeds size limit\n")
+                    .await
+            } else {
+                stream
+                    .write_all(encode_line_response(&[body]).as_bytes())
+                    .await
+            }
+        }
+        Err(error) => {
+            let error = error.split_whitespace().collect::<Vec<_>>().join(" ");
+            let error = if error.is_empty() {
+                "network peer inventory unavailable"
+            } else {
+                error.as_str()
+            };
+            stream
+                .write_all(format!("error {error}\n").as_bytes())
+                .await
+        }
+    }
 }
 
 async fn handle_legacy_connection(
@@ -945,6 +994,28 @@ pub async fn query_capabilities(
     timeout: std::time::Duration,
 ) -> Result<Vec<String>, QueryError> {
     query_lines(path, timeout, CAPABILITIES_REQUEST).await
+}
+
+pub async fn query_network_peers(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<NetworkPeerList, QueryError> {
+    let mut lines = query_lines(path, timeout, NETWORK_PEERS_REQUEST).await?;
+    if lines.len() != 1 {
+        return Err(QueryError::InvalidResponse(format!(
+            "network peer response contains {} lines, expected one",
+            lines.len()
+        )));
+    }
+    let peers: NetworkPeerList = serde_json::from_str(&lines.remove(0))
+        .map_err(|error| QueryError::InvalidResponse(error.to_string()))?;
+    if peers.schema_version != NETWORK_PEER_LIST_SCHEMA_VERSION {
+        return Err(QueryError::InvalidResponse(format!(
+            "unsupported network peer schema version {}",
+            peers.schema_version
+        )));
+    }
+    Ok(peers)
 }
 
 pub async fn query_dns_status(
@@ -1610,6 +1681,64 @@ mod tests {
                 .expect("capabilities"),
             vec!["validated peers: 1".to_owned()]
         );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_serves_structured_network_peer_inventory() {
+        let path = test_socket_path("network-peers");
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let expected = NetworkPeerList {
+            schema_version: NETWORK_PEER_LIST_SCHEMA_VERSION,
+            network: "runners".to_owned(),
+            peers: vec![crate::network_peer::NetworkPeer {
+                peer_id: "12D3KooWPeer".to_owned(),
+                hostnames: vec!["worker-1".to_owned()],
+                ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
+                ipv6: vec!["fd00::1".parse().expect("IPv6")],
+                local: true,
+            }],
+        };
+        let response = expected.clone();
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::NetworkPeers { respond_to }) = rx.recv().await else {
+                panic!("expected network peers request");
+            };
+            respond_to
+                .send(Ok(response))
+                .expect("network peers response accepted");
+        });
+
+        assert_eq!(
+            query_network_peers(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("network peers"),
+            expected
+        );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_surfaces_network_peer_inventory_errors() {
+        let path = test_socket_path("network-peers-error");
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::NetworkPeers { respond_to }) = rx.recv().await else {
+                panic!("expected network peers request");
+            };
+            respond_to
+                .send(Err("inventory unavailable".to_owned()))
+                .expect("network peers error accepted");
+        });
+
+        assert!(matches!(
+            query_network_peers(&path, std::time::Duration::from_secs(1)).await,
+            Err(QueryError::Remote(error)) if error == "error inventory unavailable"
+        ));
         responder.await.expect("responder");
         drop(socket);
     }

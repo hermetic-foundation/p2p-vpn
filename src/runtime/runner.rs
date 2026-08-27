@@ -44,6 +44,7 @@ use crate::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
         RuntimeMetrics, RuntimeSnapshot,
     },
+    network_peer::NetworkPeerList,
     pairing::{
         MAX_PAIRING_MEMBERSHIP_RECORDS, PairingOffer, PairingRequest, PairingRequestOptions,
         PairingResponse, apply_pairing_response_to_config_at, build_named_pairing_request_at,
@@ -3442,6 +3443,18 @@ fn handle_runtime_control_request(
             );
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket capabilities response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::NetworkPeers { respond_to } => {
+            let peers = NetworkPeerList::from_config_at(
+                context.forwarder.config(),
+                context.forwarder.member_records(),
+                current_unix_seconds_lossy(),
+            )
+            .map_err(|error| format!("failed to build effective peer inventory: {error:?}"));
+            if respond_to.send(peers).is_err() {
+                eprintln!("control socket network peers response receiver dropped");
             }
             None
         }
@@ -20120,6 +20133,55 @@ mod tests {
             response.try_recv().expect("shutdown response"),
             vec!["shutdown accepted".to_owned()]
         );
+    }
+
+    #[test]
+    fn runtime_control_network_peers_reports_local_and_configured_members() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let mut config = config_with_peer(&local_identity, remote);
+        config.network.dns.hostname = Some("local-runner".to_owned());
+        config.peers[0].name = Some("remote-runner".to_owned());
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let (respond_to, mut response) = tokio::sync::oneshot::channel();
+
+        let reason = handle_runtime_control_request(
+            RuntimeControlRequest::NetworkPeers { respond_to },
+            &RuntimeControlContext {
+                forwarder: &forwarder,
+                paths: &PathSet::new(),
+                peer_capabilities: &PeerCapabilities::default(),
+                local_capabilities: &ControlCapabilities::local("lab", None, 1280),
+                metrics: &RuntimeMetrics::default(),
+                queue: crate::queue::QueueStats::default(),
+                path_stats: crate::path::PathRuntimeStats::default(),
+                packet_in_flight: PacketInFlightStats::default(),
+                auto_relay: AutoRelaySnapshot::default(),
+                public_routing_peers: 0,
+                relay_infrastructure: RelayInfrastructureSnapshot::default(),
+                packet_plane: PacketPlaneSnapshot::default(),
+                packet_plane_quic: PacketPlaneQuicSnapshot::default(),
+                packet_plane_session_ttl: Duration::from_secs(42),
+                packet_plane_replay_windows_per_session: 512,
+                dns: None,
+            },
+        );
+
+        let peers = response
+            .try_recv()
+            .expect("network peers response")
+            .expect("network peers inventory");
+        assert_eq!(reason, None);
+        assert_eq!(peers.network, "lab");
+        assert_eq!(peers.peers.len(), 2);
+        assert!(peers.peers.iter().any(|peer| {
+            peer.peer_id == local_identity.peer_id
+                && peer.hostnames == ["local-runner"]
+                && peer.local
+        }));
+        assert!(peers.peers.iter().any(|peer| {
+            peer.peer_id == remote.to_string() && peer.hostnames == ["remote-runner"] && !peer.local
+        }));
     }
 
     #[test]

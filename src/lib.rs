@@ -4,6 +4,7 @@ pub mod identity;
 pub mod invite;
 pub mod membership;
 pub mod metrics;
+pub mod network_peer;
 pub mod pairing;
 pub mod pairing_code;
 pub mod path;

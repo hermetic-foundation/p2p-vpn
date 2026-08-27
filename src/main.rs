@@ -40,6 +40,7 @@ use p2p_vpn::{
         validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
+    network_peer::NetworkPeerList,
     pairing::{
         DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingError, PairingOffer,
         PairingOfferOptions, PairingRequestOptions, PairingResponse,
@@ -62,7 +63,7 @@ use p2p_vpn::{
             PairRpcRejectionReason, PairRpcRequest, PairRpcRequestEnvelope,
             PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
             PairRpcSignedMembershipRecord, query_dns_list, query_dns_resolve, query_dns_status,
-            query_pair_rpc,
+            query_network_peers, query_pair_rpc,
         },
         dns::{DnsLookupType, DnsRuntime, MAX_DNS_CONTROL_LIST_LIMIT},
         forward::session_id_for_peer,
@@ -260,12 +261,24 @@ enum Command {
         format: MetricsFormat,
     },
     Peers {
-        #[arg(short, long, default_value = "p2p-vpn.json")]
-        config: PathBuf,
-        #[arg(long)]
+        /// Inspect a configuration file instead of a running daemon.
+        #[arg(short, long, conflicts_with_all = ["socket", "instance"])]
+        config: Option<PathBuf>,
+        /// Probe configured transport addresses when inspecting a configuration file.
+        #[arg(long, conflicts_with_all = ["socket", "instance"])]
         live: bool,
+        /// Running daemon control socket.
+        #[arg(long, conflicts_with = "instance")]
+        socket: Option<PathBuf>,
+        /// Running NixOS module instance under /run/p2p-vpn/INSTANCE/control.sock.
+        #[arg(long, conflicts_with = "socket")]
+        instance: Option<String>,
+        /// Per-operation timeout.
         #[arg(long, default_value_t = 10)]
         timeout_seconds: u64,
+        /// Output format for the effective peer inventory.
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
     Paths {
         #[arg(short, long, default_value = "p2p-vpn.json")]
@@ -649,13 +662,13 @@ enum DnsCommand {
     },
     Status {
         #[command(flatten)]
-        target: DnsDaemonTarget,
+        target: DaemonTarget,
         #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
         format: DaemonViewFormat,
     },
     List {
         #[command(flatten)]
-        target: DnsDaemonTarget,
+        target: DaemonTarget,
         #[arg(long, default_value_t = 0)]
         offset: usize,
         #[arg(long, default_value_t = MAX_DNS_CONTROL_LIST_LIMIT)]
@@ -666,7 +679,7 @@ enum DnsCommand {
     Resolve {
         input: String,
         #[command(flatten)]
-        target: DnsDaemonTarget,
+        target: DaemonTarget,
         #[arg(long = "type", value_enum, default_value_t = DnsRecordTypeArg::Auto)]
         record_type: DnsRecordTypeArg,
         #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
@@ -846,7 +859,7 @@ struct PairDaemonTarget {
 }
 
 #[derive(Clone, Debug, ClapArgs)]
-struct DnsDaemonTarget {
+struct DaemonTarget {
     /// Running daemon control socket. Defaults to /run/p2p-vpn/control.sock.
     #[arg(long, conflicts_with = "instance")]
     socket: Option<PathBuf>,
@@ -1018,8 +1031,21 @@ async fn main() -> Result<(), String> {
         Command::Peers {
             config,
             live,
+            socket,
+            instance,
             timeout_seconds,
-        } => Box::pin(peers(&config, live, timeout_seconds)).await,
+            format,
+        } => {
+            Box::pin(peers_dispatch(
+                config,
+                live,
+                socket,
+                instance,
+                timeout_seconds,
+                format,
+            ))
+            .await
+        }
         Command::Paths {
             config,
             live,
@@ -3011,7 +3037,7 @@ fn pair_daemon_target(target: &PairDaemonTarget) -> Result<(PathBuf, Duration), 
     Ok((socket, Duration::from_secs(target.rpc_timeout_seconds)))
 }
 
-fn dns_daemon_target(target: &DnsDaemonTarget) -> Result<(PathBuf, Duration), String> {
+fn daemon_target(target: &DaemonTarget) -> Result<(PathBuf, Duration), String> {
     if target.timeout_seconds == 0 || target.timeout_seconds > 300 {
         return Err("--timeout-seconds must be between 1 and 300".to_owned());
     }
@@ -5809,7 +5835,55 @@ fn metrics(path: &PathBuf, format: MetricsFormat) -> Result<(), String> {
     Ok(())
 }
 
-async fn peers(path: &PathBuf, live: bool, timeout_seconds: u64) -> Result<(), String> {
+async fn peers_dispatch(
+    config: Option<PathBuf>,
+    live: bool,
+    socket: Option<PathBuf>,
+    instance: Option<String>,
+    timeout_seconds: u64,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
+    if socket.is_some() || instance.is_some() {
+        return peers_command(
+            &DaemonTarget {
+                socket,
+                instance,
+                timeout_seconds,
+            },
+            format,
+        )
+        .await;
+    }
+
+    let config = config.unwrap_or_else(|| PathBuf::from("p2p-vpn.json"));
+    if format == DaemonViewFormat::Json {
+        if live {
+            return Err(
+                "--live cannot be combined with --format json; use --instance or --socket for a live structured inventory"
+                    .to_owned(),
+            );
+        }
+        return peers_from_config_json(&config);
+    }
+
+    peers(&config, live, timeout_seconds).await
+}
+
+fn peers_from_config_json(path: &Path) -> Result<(), String> {
+    let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
+    config
+        .validate_runtime()
+        .map_err(|error| format!("config is not runtime-ready: {error:?}"))?;
+    let peers = NetworkPeerList::from_config_at(
+        &config,
+        &config.network.member_records,
+        current_unix_seconds_lossy(),
+    )
+    .map_err(|error| format!("failed to build effective peer inventory: {error:?}"))?;
+    write_network_peer_list(&peers, DaemonViewFormat::Json)
+}
+
+async fn peers(path: &Path, live: bool, timeout_seconds: u64) -> Result<(), String> {
     let config = Config::load(path).map_err(|error| format!("failed to load config: {error:?}"))?;
     config
         .validate_runtime()
@@ -8151,7 +8225,7 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
             return dns_guard_command(listen, &ready_file).await;
         }
         DnsCommand::Status { target, format } => {
-            let (socket, timeout) = dns_daemon_target(&target)?;
+            let (socket, timeout) = daemon_target(&target)?;
             let lines = query_dns_status(&socket, timeout)
                 .await
                 .map_err(|error| format!("daemon DNS status query failed: {error:?}"))?;
@@ -8163,7 +8237,7 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
             limit,
             format,
         } => {
-            let (socket, timeout) = dns_daemon_target(&target)?;
+            let (socket, timeout) = daemon_target(&target)?;
             let lines = query_dns_list(&socket, timeout, offset, limit)
                 .await
                 .map_err(|error| format!("daemon DNS list query failed: {error:?}"))?;
@@ -8175,7 +8249,7 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
             record_type,
             format,
         } => {
-            let (socket, timeout) = dns_daemon_target(&target)?;
+            let (socket, timeout) = daemon_target(&target)?;
             let lines = query_dns_resolve(&socket, timeout, &input, record_type.into())
                 .await
                 .map_err(|error| format!("daemon DNS resolution query failed: {error:?}"))?;
@@ -8183,6 +8257,88 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
         }
     };
     write_daemon_view_output(view, &lines, format)
+}
+
+async fn peers_command(target: &DaemonTarget, format: DaemonViewFormat) -> Result<(), String> {
+    let (socket, timeout) = daemon_target(target)?;
+    let peers = query_network_peers(&socket, timeout)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to list network peers through {}: {error:?}",
+                socket.display()
+            )
+        })?;
+    write_network_peer_list(&peers, format)
+}
+
+fn write_network_peer_list(
+    peers: &NetworkPeerList,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
+    match format {
+        DaemonViewFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(peers)
+                .map_err(|error| format!("failed to encode network peer list: {error}"))?
+        ),
+        DaemonViewFormat::Text => print!("{}", network_peer_list_text(peers)),
+    }
+    Ok(())
+}
+
+fn network_peer_list_text(peers: &NetworkPeerList) -> String {
+    let rows = peers
+        .peers
+        .iter()
+        .map(|peer| {
+            let hostnames = if peer.hostnames.is_empty() {
+                "-".to_owned()
+            } else {
+                peer.hostnames.join(",")
+            };
+            let ipv4 = if peer.ipv4.is_empty() {
+                "-".to_owned()
+            } else {
+                peer.ipv4
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            (hostnames, ipv4, peer)
+        })
+        .collect::<Vec<_>>();
+    let hostname_width = rows
+        .iter()
+        .map(|(hostname, _, _)| hostname.len())
+        .max()
+        .unwrap_or(0)
+        .max("HOSTNAMES".len());
+    let ipv4_width = rows
+        .iter()
+        .map(|(_, ipv4, _)| ipv4.len())
+        .max()
+        .unwrap_or(0)
+        .max("IPV4".len());
+    let mut lines = vec![
+        format!("network: {}", peers.network),
+        format!("peers: {}", peers.peers.len()),
+        String::new(),
+        format!(
+            "{:<hostname_width$}  {:<ipv4_width$}  LOCAL  PEER_ID",
+            "HOSTNAMES", "IPV4"
+        ),
+    ];
+    for (hostnames, ipv4, peer) in rows {
+        lines.push(format!(
+            "{hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {:<5}  {}",
+            if peer.local { "yes" } else { "no" },
+            peer.peer_id
+        ));
+    }
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 async fn dns_guard_command(listen: SocketAddr, ready_file: &Path) -> Result<(), String> {
@@ -10810,15 +10966,115 @@ mod tests {
         let Command::Peers {
             config,
             live,
+            socket,
+            instance,
             timeout_seconds,
+            format,
         } = cli.command
         else {
             panic!("expected peers command");
         };
 
-        assert_eq!(config, PathBuf::from("node-a.json"));
+        assert_eq!(config, Some(PathBuf::from("node-a.json")));
         assert!(live);
+        assert_eq!(socket, None);
+        assert_eq!(instance, None);
         assert_eq!(timeout_seconds, 3);
+        assert_eq!(format, DaemonViewFormat::Text);
+    }
+
+    #[test]
+    fn cli_parses_live_network_peer_inventory_target() {
+        let cli = Cli::try_parse_from([
+            "p2p-vpn",
+            "peers",
+            "--instance",
+            "runner-mesh",
+            "--timeout-seconds",
+            "3",
+            "--format",
+            "json",
+        ])
+        .expect("cli");
+
+        let Command::Peers {
+            config,
+            live,
+            socket,
+            instance,
+            timeout_seconds,
+            format,
+        } = cli.command
+        else {
+            panic!("expected peers command");
+        };
+
+        assert_eq!(config, None);
+        assert!(!live);
+        assert_eq!(socket, None);
+        assert_eq!(instance.as_deref(), Some("runner-mesh"));
+        assert_eq!(timeout_seconds, 3);
+        assert_eq!(format, DaemonViewFormat::Json);
+    }
+
+    #[test]
+    fn cli_rejects_mixed_config_and_daemon_peer_targets() {
+        assert!(
+            Cli::try_parse_from([
+                "p2p-vpn",
+                "peers",
+                "--config",
+                "node-a.json",
+                "--instance",
+                "runner-mesh",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn network_peer_text_lists_hostname_ipv4_identity_and_local_state() {
+        let peers = NetworkPeerList {
+            schema_version: 1,
+            network: "runner-mesh".to_owned(),
+            peers: vec![p2p_vpn::network_peer::NetworkPeer {
+                peer_id: "12D3KooWWorker".to_owned(),
+                hostnames: vec!["worker-1".to_owned()],
+                ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
+                ipv6: vec!["fd00::1".parse().expect("IPv6")],
+                local: true,
+            }],
+        };
+
+        let output = network_peer_list_text(&peers);
+
+        assert!(output.starts_with("network: runner-mesh\npeers: 1\n\n"));
+        assert!(output.contains("HOSTNAMES  IPV4"));
+        assert!(output.contains("worker-1   100.64.0.1  yes"));
+        assert!(output.contains("12D3KooWWorker"));
+    }
+
+    #[test]
+    fn network_peer_json_has_a_versioned_structured_shape() {
+        let peers = NetworkPeerList {
+            schema_version: 1,
+            network: "runner-mesh".to_owned(),
+            peers: vec![p2p_vpn::network_peer::NetworkPeer {
+                peer_id: "12D3KooWWorker".to_owned(),
+                hostnames: vec!["worker-1".to_owned()],
+                ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
+                ipv6: vec!["fd00::1".parse().expect("IPv6")],
+                local: false,
+            }],
+        };
+
+        let output = serde_json::to_value(peers).expect("peer list JSON");
+
+        assert_eq!(output["schema_version"], 1);
+        assert_eq!(output["network"], "runner-mesh");
+        assert_eq!(output["peers"][0]["hostnames"][0], "worker-1");
+        assert_eq!(output["peers"][0]["ipv4"][0], "100.64.0.1");
+        assert_eq!(output["peers"][0]["ipv6"][0], "fd00::1");
     }
 
     #[test]

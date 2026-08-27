@@ -295,6 +295,7 @@ The daemon exposes text and JSON views:
 
 | View | Command |
 | --- | --- |
+| Effective network directory | `peers --instance NAME` |
 | Metrics | `daemon-status` |
 | State | `daemon-state` |
 | Peers | `daemon-peers` |
@@ -305,6 +306,11 @@ The daemon exposes text and JSON views:
 | DNS status | `dns status` |
 | DNS records | `dns list` |
 | DNS resolution | `dns resolve` |
+
+The network directory uses the bounded `network-peers-v1` control request.
+
+Its compact JSON response is schema-versioned before the CLI renders text or
+passes structured JSON to callers.
 
 Membership persistence and paging add counters for loads, saves, records, pages,
 snapshot restarts, and failures.

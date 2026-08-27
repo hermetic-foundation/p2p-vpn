@@ -51,6 +51,54 @@ sudo p2p-vpn instance show monarchic-runners --format json
 NixOS runtime configurations are root-only because they contain injected
 credentials. These commands emit public identity metadata only.
 
+### Network Peers
+
+List the effective members of a NixOS network:
+
+```sh
+sudo p2p-vpn peers --instance monarchic-runners
+```
+
+The table includes local, explicitly configured, and transitive signed members.
+
+| Column | Value |
+| --- | --- |
+| `HOSTNAMES` | Authenticated short names; `-` when unnamed |
+| `IPV4` | Identity-derived and explicit IPv4 host addresses |
+| `LOCAL` | Whether the row is this daemon |
+| `PEER_ID` | libp2p public identity |
+
+Use a control socket outside the NixOS module:
+
+```sh
+sudo p2p-vpn peers --socket /run/p2p-vpn/control.sock
+```
+
+Use JSON for IPv4, IPv6, and stable field names:
+
+```sh
+sudo p2p-vpn peers \
+  --instance monarchic-runners \
+  --format json
+```
+
+| JSON field | Type |
+| --- | --- |
+| `schema_version` | Integer; currently `1` |
+| `network` | Network name |
+| `peers[].peer_id` | libp2p peer ID |
+| `peers[].hostnames` | Sorted hostname array |
+| `peers[].ipv4` | Sorted IPv4 array |
+| `peers[].ipv6` | Sorted IPv6 array |
+| `peers[].local` | Boolean |
+
+Legacy config inspection remains available:
+
+```sh
+p2p-vpn peers --config p2p-vpn.json
+p2p-vpn peers --config p2p-vpn.json --live
+```
+
 ## Pairing Operations
 
 Use `--instance NAME` to target a NixOS daemon.
@@ -80,6 +128,7 @@ See [Pairing](pairing.md) for the complete approval and persistence workflow.
 
 | Command | Output |
 | --- | --- |
+| `peers --instance NAME` | Effective peer names, addresses, and identities. |
 | `daemon-status` | Metrics counters. |
 | `daemon-state` | Runtime state summary. |
 | `daemon-peers` | Peer membership and validation. |
@@ -157,6 +206,8 @@ sudo p2p-vpn daemon-paths \
   --socket /run/p2p-vpn/control.sock \
   --format json
 ```
+
+`peers --format json` returns structured fields rather than diagnostic lines.
 
 ## Remote Views
 

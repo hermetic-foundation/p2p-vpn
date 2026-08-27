@@ -280,6 +280,7 @@ This preserves Nix evaluation purity while supporting offline restart recovery.
 
 | View | Membership Evidence |
 | --- | --- |
+| `peers --instance NAME` | Local, static, and effective signed members with derived addresses. |
 | `daemon-capabilities` | Local record count and snapshot inventory. |
 | `daemon-peers` | Effective peer validation. |
 | `daemon-routes` | Derived route owner and resolution. |

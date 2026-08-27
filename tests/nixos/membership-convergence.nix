@@ -421,6 +421,34 @@ pkgs.testers.nixosTest {
                 "and .local_peer == \"" + peer + "\" and (.records | length) == 3' "
                 "/var/lib/p2p-vpn/${instance}/membership-state.json"
             )
+        expected_inventory = {
+            "${nodeA.peerId}": ("${nodeA.hostname}", "${nodeA.vpnIp}"),
+            "${nodeB.peerId}": ("${nodeB.hostname}", "${nodeB.vpnIp}"),
+            "${nodeC.peerId}": ("${nodeC.hostname}", "${nodeC.vpnIp}"),
+        }
+        for node, local_peer in [
+            (node_a, "${nodeA.peerId}"),
+            (node_b, "${nodeB.peerId}"),
+            (node_c, "${nodeC.peerId}"),
+        ]:
+            inventory = json.loads(
+                node.succeed("p2p-vpn peers --instance ${instance} --format json")
+            )
+            assert inventory["schema_version"] == 1
+            assert inventory["network"] == "${networkName}"
+            assert len(inventory["peers"]) == 3
+            by_peer = {peer["peer_id"]: peer for peer in inventory["peers"]}
+            assert set(by_peer) == set(expected_inventory)
+            for peer_id, (hostname, vpn_ip) in expected_inventory.items():
+                peer = by_peer[peer_id]
+                assert hostname in peer["hostnames"]
+                assert vpn_ip in peer["ipv4"]
+                assert peer["local"] == (peer_id == local_peer)
+            text = node.succeed("p2p-vpn peers --instance ${instance}")
+            for peer_id, (hostname, vpn_ip) in expected_inventory.items():
+                assert hostname in text
+                assert vpn_ip in text
+                assert peer_id in text
 
     with subtest("B restores C membership and route while every source is offline"):
         node_a.succeed("systemctl stop p2p-vpn-${instance}.service")

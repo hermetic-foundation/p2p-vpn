@@ -158,6 +158,18 @@ resolvectl query PEER_HOSTNAME
 resolvectl query PEER_HOSTNAME.lab.p2p-vpn.internal
 ```
 
+List every effective member with its hostname, address, and peer ID:
+
+```sh
+sudo p2p-vpn peers --instance lab
+```
+
+Use structured output for automation:
+
+```sh
+sudo p2p-vpn peers --instance lab --format json
+```
+
 See [Overlay DNS](dns.md) for naming and diagnostics.
 
 ## Defaults Used
