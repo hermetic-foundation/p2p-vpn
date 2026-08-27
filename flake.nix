@@ -50,6 +50,7 @@
           src = rustSource;
           cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
+          RUST_MIN_STACK = "8388608";
         };
         checkFast = pkgs.writeShellApplication {
           name = "p2p-vpn-check-fast";
@@ -68,6 +69,7 @@
             fi
 
             export RUST_BACKTRACE="''${RUST_BACKTRACE:-1}"
+            export RUST_MIN_STACK="''${RUST_MIN_STACK:-8388608}"
             cargo fmt -- --check
             cargo test
             cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
@@ -5007,6 +5009,7 @@ EOF
           ];
 
           RUST_BACKTRACE = "1";
+          RUST_MIN_STACK = "8388608";
         };
       }
     );
