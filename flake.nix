@@ -52,6 +52,19 @@
           nativeBuildInputs = [ pkgs.pkg-config ];
           RUST_MIN_STACK = "8388608";
         };
+        vmPackage = package.overrideAttrs (_: {
+          doCheck = false;
+        });
+        vmSelf = self // {
+          packages = self.packages // {
+            ${system} = self.packages.${system} // {
+              default = vmPackage;
+            };
+          };
+          nixosModules = self.nixosModules // {
+            default = import ./nix/nixos-module.nix { self = vmSelf; };
+          };
+        };
         checkFast = pkgs.writeShellApplication {
           name = "p2p-vpn-check-fast";
           runtimeInputs = [
@@ -3415,10 +3428,11 @@ EOF
           nodes.machine =
             { pkgs, ... }:
             {
-              imports = [ self.nixosModules.default ];
+              imports = [ vmSelf.nixosModules.default ];
 
               system.stateVersion = "25.11";
-              environment.systemPackages = [ package ];
+              environment.systemPackages = [ vmPackage ];
+              services.p2p-vpn.package = vmPackage;
 
               services.p2p-vpn.instances.smoke = {
                 enable = true;
@@ -3472,34 +3486,54 @@ EOF
           '';
         };
         nixosVmModuleLifecycle = import ./tests/nixos/module-lifecycle.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmMesh = import ./tests/nixos/mesh.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmPairing = import ./tests/nixos/pairing.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmCodePairingLan = import ./tests/nixos/code-pairing-lan.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmCodePairingRelay = import ./tests/nixos/code-pairing-relay.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmMembershipConvergence = import ./tests/nixos/membership-convergence.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmQuicDatagram = import ./tests/nixos/quic-datagram.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmQuicStream = import ./tests/nixos/quic-stream.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmForcedRelay = import ./tests/nixos/forced-relay.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         nixosVmNetworkMove = import ./tests/nixos/network-move.nix {
-          inherit self pkgs package;
+          inherit pkgs;
+          self = vmSelf;
+          package = vmPackage;
         };
         namespaceSmokePreflighted = pkgs.rustPlatform.buildRustPackage {
           pname = "p2p-vpn-namespace-smoke-preflighted";

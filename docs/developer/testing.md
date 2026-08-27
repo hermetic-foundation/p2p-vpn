@@ -52,6 +52,11 @@ This keeps CI stable across nixpkgs Clippy updates.
 nix flake check
 ```
 
+Focused VM checks use a release package with duplicate Rust tests disabled.
+
+Run `nix run .#check-fast` before the VM check. `nix flake check` still builds the
+normal package target with its Rust test phase enabled.
+
 ## Operational Release Gate
 
 Run the local Hyprspace-replacement gate:
