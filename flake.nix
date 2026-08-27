@@ -3211,7 +3211,7 @@ EOF
           p2p-vpn = self;
         };
         consumerEval = consumerFlakeOutputs.nixosConfigurations."consumer-${system}";
-        moduleAssertionMessages = instances:
+        moduleConfigAssertionMessages = serviceConfig:
           let
             evaluated = lib.nixosSystem {
               inherit system;
@@ -3219,7 +3219,7 @@ EOF
                 self.nixosModules.default
                 {
                   system.stateVersion = "25.11";
-                  services.p2p-vpn.instances = instances;
+                  services.p2p-vpn = serviceConfig;
                 }
               ];
             };
@@ -3229,6 +3229,7 @@ EOF
               entry: !entry.assertion && lib.hasPrefix "services.p2p-vpn" entry.message
             ) evaluated.config.assertions
           );
+        moduleAssertionMessages = instances: moduleConfigAssertionMessages { inherit instances; };
         invalidModuleAssertions = {
           mixedModes = moduleAssertionMessages {
             mixed = {
@@ -3390,6 +3391,20 @@ EOF
                 enable = true;
                 listen = "127.0.0.1:5533";
               };
+            };
+          };
+          invalidResolvedGuardInterface = moduleConfigAssertionMessages {
+            resolvedGuardInterface = "p2p-vpn-dns-guard-interface";
+            instances.guard-test = {
+              enable = true;
+              dns.enable = true;
+            };
+          };
+          resolvedGuardInterfaceCollision = moduleConfigAssertionMessages {
+            resolvedGuardInterface = "pv0";
+            instances.guard-test = {
+              enable = true;
+              dns.enable = true;
             };
           };
         };
@@ -3863,21 +3878,55 @@ EOF
             execStartPreJsonScript = builtins.readFile (
               builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPre
             );
-            execStartPostDisabled = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPost;
-            execStartPostDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStartPost;
-            execStartPostDnsScript = builtins.readFile (
-              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStartPost
+            execStartPostDisabled = builtins.toJSON (
+              moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPost or [ ]
             );
-            execStartPostJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPost;
-            execStartPostJsonScript = builtins.readFile (
-              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPost
+            execStartPostDns = builtins.toJSON (
+              moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStartPost or [ ]
             );
-            execStopPostDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost;
-            execStopPostDnsScript = builtins.readFile (
-              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost
+            execStartPostJson = builtins.toJSON (
+              moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPost or [ ]
+            );
+            execStopPostDns = builtins.toJSON (
+              moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost or [ ]
+            );
+            resolvedExecStartDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStart;
+            resolvedExecStartDnsScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStart
+            );
+            resolvedExecStartJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g-resolved.serviceConfig.ExecStart;
+            resolvedExecStartJsonScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g-resolved.serviceConfig.ExecStart
+            );
+            resolvedExecStopDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStop;
+            resolvedExecStopDnsScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStop
             );
             dnsAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.after;
             dnsWants = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.wants;
+            dnsBindsTo = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.bindsTo;
+            dnsPartOf = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.partOf;
+            dnsUpholds = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.unitConfig.Upholds;
+            resolvedAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.after;
+            resolvedBindsTo = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.bindsTo;
+            resolvedPartOf = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.partOf;
+            resolvedRemainAfterExit = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.RemainAfterExit;
+            dnsGuardExecStart = moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStart;
+            dnsGuardExecStartPreScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPre
+            );
+            dnsGuardExecStartPostScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPost
+            );
+            dnsGuardExecStopPostScript = builtins.readFile (
+              builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStopPost
+            );
+            dnsGuardAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.after;
+            dnsGuardBindsTo = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.bindsTo;
+            dnsGuardPartOf = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.partOf;
+            dnsGuardRuntimeDirectoryPreserve =
+              moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.RuntimeDirectoryPreserve;
+            dhcpcdDenyInterfaces = builtins.toJSON moduleEval.config.networking.dhcpcd.denyInterfaces;
             resolvedEnabled = builtins.toJSON moduleEval.config.services.resolved.enable;
             loadCredential = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.LoadCredential;
             stateDirectory = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.StateDirectory;
@@ -3969,35 +4018,69 @@ EOF
               *) echo "unexpected JSON config check: $execStartPreJsonScript" >&2; exit 1 ;;
             esac
             test "$execStartPostDisabled" = '[]'
-            case "$execStartPostDns" in
+            test "$execStartPostDns" = '[]'
+            test "$execStartPostJson" = '[]'
+            test "$execStopPostDns" = '[]'
+            case "$resolvedExecStartDns" in
               *'p2p-vpn-node-c-configure-resolved'*) ;;
-              *) echo "unexpected DNS ExecStartPost: $execStartPostDns" >&2; exit 1 ;;
+              *) echo "unexpected DNS registration ExecStart: $resolvedExecStartDns" >&2; exit 1 ;;
             esac
-            case "$execStartPostDnsScript" in
-              *'dns status'*'--socket /run/p2p-vpn-node-c/control.sock --format json'*'p2p-vpn-resolved.lock'*'flock 9'*'resolvectl dns "$interface" "$listener"'*'resolvectl domain "$interface" "$zone"'*'resolvectl default-route "$interface" no'*) ;;
-              *) echo "unexpected DNS resolver setup script: $execStartPostDnsScript" >&2; exit 1 ;;
+            case "$resolvedExecStartDnsScript" in
+              *'dns status'*'--socket /run/p2p-vpn-node-c/control.sock --format json'*'p2p-vpn-dns-guard/listener'*'p2p-vpn-resolved.lock'*'flock 9'*'resolvectl dns "$interface" "$listener"'*'resolvectl domain "$interface" "$zone"'*'resolvectl default-route "$interface" no'*) ;;
+              *) echo "unexpected DNS resolver setup script: $resolvedExecStartDnsScript" >&2; exit 1 ;;
             esac
-            case "$execStartPostDnsScript" in
-              *'.in-addr.arpa'*|*'.ip6.arpa'*) echo "split DNS must not claim ambiguous global reverse zones: $execStartPostDnsScript" >&2; exit 1 ;;
+            case "$resolvedExecStartDnsScript" in
+              *'.in-addr.arpa'*|*'.ip6.arpa'*) echo "split DNS must not claim ambiguous global reverse zones: $resolvedExecStartDnsScript" >&2; exit 1 ;;
             esac
-            case "$execStartPostJson" in
+            case "$resolvedExecStartJson" in
               *'p2p-vpn-node-g-configure-resolved'*) ;;
-              *) echo "unexpected JSON DNS ExecStartPost: $execStartPostJson" >&2; exit 1 ;;
+              *) echo "unexpected JSON DNS registration ExecStart: $resolvedExecStartJson" >&2; exit 1 ;;
             esac
-            case "$execStartPostJsonScript" in
+            case "$resolvedExecStartJsonScript" in
               *'.interface.name // "pv0"'*'/run/secrets/p2p-vpn/node-g.json'*) ;;
-              *) echo "JSON DNS setup does not honor the minimal interface default: $execStartPostJsonScript" >&2; exit 1 ;;
+              *) echo "JSON DNS setup does not honor the minimal interface default: $resolvedExecStartJsonScript" >&2; exit 1 ;;
             esac
-            case "$execStopPostDns" in
+            case "$resolvedExecStopDns" in
               *'p2p-vpn-node-c-cleanup-resolved'*) ;;
-              *) echo "unexpected DNS ExecStopPost: $execStopPostDns" >&2; exit 1 ;;
+              *) echo "unexpected DNS registration ExecStop: $resolvedExecStopDns" >&2; exit 1 ;;
             esac
-            case "$execStopPostDnsScript" in
+            case "$resolvedExecStopDnsScript" in
               *'resolved-interface'*'resolvectl revert "$interface"'*) ;;
-              *) echo "unexpected DNS resolver cleanup script: $execStopPostDnsScript" >&2; exit 1 ;;
+              *) echo "unexpected DNS resolver cleanup script: $resolvedExecStopDnsScript" >&2; exit 1 ;;
             esac
-            test "$dnsAfter" = '["network-online.target","systemd-resolved.service"]'
-            test "$dnsWants" = '["network-online.target","systemd-resolved.service"]'
+            test "$dnsAfter" = '["network-online.target"]'
+            test "$dnsWants" = '["network-online.target","p2p-vpn-node-c-resolved.service"]'
+            test "$dnsBindsTo" = '[]'
+            test "$dnsPartOf" = '[]'
+            test "$dnsUpholds" = '["p2p-vpn-node-c-resolved.service"]'
+            test "$resolvedAfter" = '["p2p-vpn-node-c.service","systemd-resolved.service","p2p-vpn-dns-guard.service"]'
+            test "$resolvedBindsTo" = '["p2p-vpn-node-c.service","systemd-resolved.service","p2p-vpn-dns-guard.service"]'
+            test "$resolvedPartOf" = '["p2p-vpn-node-c.service","systemd-resolved.service"]'
+            test "$resolvedRemainAfterExit" = true
+            case "$dnsGuardExecStart" in
+              *'p2p-vpn dns guard --listen 127.0.0.1:0 --ready-file /run/p2p-vpn-dns-guard/listener'*) ;;
+              *) echo "unexpected private DNS guard ExecStart: $dnsGuardExecStart" >&2; exit 1 ;;
+            esac
+            case "$dnsGuardExecStartPreScript" in
+              *'owned-interface'*'ip link add name "$interface" type dummy'*'addrgenmode none'*'ip -6 address replace fd70:3270:2d76:706e::53/128 dev "$interface" nodad'*) ;;
+              *) echo "unexpected private DNS guard link setup: $dnsGuardExecStartPreScript" >&2; exit 1 ;;
+            esac
+            case "$dnsGuardExecStartPostScript" in
+              *'p2p-vpn-dns-guard/listener'*'resolvectl dns "$interface" "$listener"'*'~p2p-vpn.internal'*) ;;
+              *) echo "unexpected private DNS guard resolver setup: $dnsGuardExecStartPostScript" >&2; exit 1 ;;
+            esac
+            case "$dnsGuardExecStopPostScript" in
+              *'SERVICE_RESULT:-success'*'resolvectl revert "$interface"'*'ip link delete dev "$interface"'*'owned-interface'*) ;;
+              *) echo "unexpected private DNS guard cleanup: $dnsGuardExecStopPostScript" >&2; exit 1 ;;
+            esac
+            test "$dnsGuardAfter" = '["systemd-resolved.service"]'
+            test "$dnsGuardBindsTo" = '["systemd-resolved.service"]'
+            test "$dnsGuardPartOf" = '["systemd-resolved.service"]'
+            test "$dnsGuardRuntimeDirectoryPreserve" = restart
+            case "$dhcpcdDenyInterfaces" in
+              *'pvdns0'*) ;;
+              *) echo "private DNS guard interface is not denied to dhcpcd: $dhcpcdDenyInterfaces" >&2; exit 1 ;;
+            esac
             test "$resolvedEnabled" = true
             printf '%s' "$generatedSettings" > generated-settings.json
             jq -e '
@@ -4088,6 +4171,8 @@ EOF
               and (.invalidDnsTtl | index("services.p2p-vpn.instances.invalid-dns-ttl.dns.ttlSeconds cannot exceed 300.")) != null
               and (.duplicateDnsNetworks | index("services.p2p-vpn DNS-enabled native instances must use unique networkName values.")) != null
               and (.duplicateDnsListeners | index("services.p2p-vpn DNS-enabled native instances must use unique fixed DNS listeners.")) != null
+              and (.invalidResolvedGuardInterface | index("services.p2p-vpn.resolvedGuardInterface must be a valid Linux interface name.")) != null
+              and (.resolvedGuardInterfaceCollision | index("services.p2p-vpn.resolvedGuardInterface must not collide with a native instance interface.")) != null
             ' >/dev/null
             case "$execStop" in
               *"p2p-vpn daemon-shutdown --socket /run/p2p-vpn-node-a/control.sock"*) ;;

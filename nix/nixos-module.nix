@@ -37,6 +37,14 @@ let
     instance: instance.resolvedIntegration && (!nixMode instance || instance.dns.enable);
   resolvedInstances = filterAttrs (_: instance: resolvedIntegrationEnabled instance) enabledInstances;
   nativeResolvedInstances = filterAttrs (_: instance: nixMode instance) resolvedInstances;
+  resolvedGuardUnit = "p2p-vpn-dns-guard.service";
+  resolvedGuardRuntimeDirectory = "p2p-vpn-dns-guard";
+  resolvedGuardReadyFile = "/run/${resolvedGuardRuntimeDirectory}/listener";
+  resolvedGuardOwnedFile = "/run/${resolvedGuardRuntimeDirectory}/owned-interface";
+  resolvedGuardAddress = "fd70:3270:2d76:706e::53";
+  instanceServiceUnit = name: "p2p-vpn-${name}.service";
+  resolvedServiceName = name: "p2p-vpn-${name}-resolved";
+  resolvedServiceUnit = name: "${resolvedServiceName name}.service";
   instanceIndex = name: lib.lists.findFirstIndex (candidate: candidate == name) 0 nativeNames;
   instancePort = name: 4001 + instanceIndex name;
   instancePacketPort = name: 51820 + instanceIndex name;
@@ -516,6 +524,10 @@ let
         echo "p2p-vpn DNS status omitted its listener or zone for instance ${name}" >&2
         exit 1
       fi
+      if [ ! -s ${lib.escapeShellArg resolvedGuardReadyFile} ]; then
+        echo "p2p-vpn private DNS suffix guard is not ready for instance ${name}" >&2
+        exit 1
+      fi
 
       interface="$(${pkgs.jq}/bin/jq -er '.interface.name // "pv0"' ${lib.escapeShellArg configFile})"
       ${pkgs.iproute2}/bin/ip link show dev "$interface" >/dev/null
@@ -568,6 +580,126 @@ let
       rm -f ${lib.escapeShellArg stateFile}
       exit 0
     '';
+
+  resolvedGuardCreateScript = pkgs.writeShellScript "p2p-vpn-dns-guard-create-interface" ''
+    set -eu
+    interface=${lib.escapeShellArg cfg.resolvedGuardInterface}
+    rm -f ${lib.escapeShellArg resolvedGuardReadyFile}
+    if ${pkgs.iproute2}/bin/ip link show dev "$interface" >/dev/null 2>&1; then
+      if [ ! -e ${lib.escapeShellArg resolvedGuardOwnedFile} ]; then
+        echo "p2p-vpn DNS guard interface $interface already exists and is not owned by p2p-vpn" >&2
+        exit 1
+      fi
+    else
+      ${pkgs.iproute2}/bin/ip link add name "$interface" type dummy
+      touch ${lib.escapeShellArg resolvedGuardOwnedFile}
+    fi
+    ${pkgs.iproute2}/bin/ip link set dev "$interface" addrgenmode none
+    ${pkgs.iproute2}/bin/ip -6 address replace ${resolvedGuardAddress}/128 dev "$interface" nodad
+    ${pkgs.iproute2}/bin/ip link set dev "$interface" up
+  '';
+  resolvedGuardSetupScript = pkgs.writeShellScript "p2p-vpn-dns-guard-configure-resolved" ''
+    set -eu
+    listener=""
+    attempt=0
+    while [ "$attempt" -lt 100 ]; do
+      if [ -s ${lib.escapeShellArg resolvedGuardReadyFile} ]; then
+        read -r listener < ${lib.escapeShellArg resolvedGuardReadyFile}
+        break
+      fi
+      attempt=$((attempt + 1))
+      sleep 0.1
+    done
+    if [ -z "$listener" ]; then
+      echo "p2p-vpn DNS guard listener did not become available" >&2
+      exit 1
+    fi
+
+    interface=${lib.escapeShellArg cfg.resolvedGuardInterface}
+    ${pkgs.iproute2}/bin/ip link show dev "$interface" >/dev/null
+    exec 9> ${lib.escapeShellArg resolvedLockFile}
+    ${pkgs.util-linux}/bin/flock 9
+    ${pkgs.systemd}/bin/resolvectl dns "$interface" "$listener"
+    ${pkgs.systemd}/bin/resolvectl domain "$interface" '~p2p-vpn.internal'
+    ${pkgs.systemd}/bin/resolvectl default-route "$interface" no
+    ${pkgs.systemd}/bin/resolvectl llmnr "$interface" no
+    ${pkgs.systemd}/bin/resolvectl mdns "$interface" no
+    ${pkgs.systemd}/bin/resolvectl dnssec "$interface" no
+    ${pkgs.systemd}/bin/resolvectl dnsovertls "$interface" no
+  '';
+  resolvedGuardCleanupScript = pkgs.writeShellScript "p2p-vpn-dns-guard-cleanup" ''
+    set -u
+    if [ "''${SERVICE_RESULT:-success}" != success ]; then
+      rm -f ${lib.escapeShellArg resolvedGuardReadyFile}
+      exit 0
+    fi
+    interface=${lib.escapeShellArg cfg.resolvedGuardInterface}
+    exec 9> ${lib.escapeShellArg resolvedLockFile}
+    ${pkgs.util-linux}/bin/flock 9
+    if [ -e ${lib.escapeShellArg resolvedGuardOwnedFile} ]; then
+      ${pkgs.systemd}/bin/resolvectl revert "$interface" >/dev/null 2>&1 || true
+      ${pkgs.iproute2}/bin/ip link delete dev "$interface" >/dev/null 2>&1 || true
+    fi
+    rm -f ${lib.escapeShellArg resolvedGuardOwnedFile} ${lib.escapeShellArg resolvedGuardReadyFile}
+    exit 0
+  '';
+  resolvedGuardService = {
+    description = "p2p-vpn private DNS suffix guard";
+    after = [ "systemd-resolved.service" ];
+    bindsTo = [ "systemd-resolved.service" ];
+    partOf = [ "systemd-resolved.service" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ pkgs.iproute2 ];
+
+    serviceConfig = {
+      Type = "simple";
+      ExecStartPre = [ resolvedGuardCreateScript ];
+      ExecStart = lib.escapeShellArgs [
+        "${cfg.package}/bin/p2p-vpn"
+        "dns"
+        "guard"
+        "--listen"
+        "127.0.0.1:0"
+        "--ready-file"
+        resolvedGuardReadyFile
+      ];
+      ExecStartPost = [ resolvedGuardSetupScript ];
+      ExecStopPost = [ resolvedGuardCleanupScript ];
+      Restart = "on-failure";
+      RestartSec = "1s";
+      KillSignal = "SIGTERM";
+      TimeoutStopSec = "10s";
+      AmbientCapabilities = [ "CAP_NET_ADMIN" ];
+      CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
+      DevicePolicy = "closed";
+      RuntimeDirectory = resolvedGuardRuntimeDirectory;
+      RuntimeDirectoryMode = "0700";
+      RuntimeDirectoryPreserve = "restart";
+      NoNewPrivileges = true;
+      LockPersonality = true;
+      MemoryDenyWriteExecute = true;
+      PrivateTmp = true;
+      ProtectClock = true;
+      ProtectControlGroups = true;
+      ProtectHome = true;
+      ProtectHostname = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
+      ProtectProc = "invisible";
+      ProtectSystem = "strict";
+      RestrictAddressFamilies = [
+        "AF_INET"
+        "AF_INET6"
+        "AF_NETLINK"
+        "AF_UNIX"
+      ];
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      SystemCallArchitectures = "native";
+      UMask = "0077";
+    };
+  };
 
   packetPlaneOptions = {
     listen = mkOption {
@@ -1164,27 +1296,20 @@ let
     in
     nameValuePair "p2p-vpn-${name}" {
       description = "p2p-vpn mesh VPN instance ${name}";
-      after = [
-        "network-online.target"
-      ]
-      ++ optionals (resolvedIntegrationEnabled instance) [
-        "systemd-resolved.service"
-      ];
+      after = [ "network-online.target" ];
       wants = [
         "network-online.target"
       ]
-      ++ optionals (resolvedIntegrationEnabled instance) [
-        "systemd-resolved.service"
-      ];
+      ++ optionals (resolvedIntegrationEnabled instance) [ (resolvedServiceUnit name) ];
       wantedBy = [ "multi-user.target" ];
       path = [ pkgs.iproute2 ];
+      unitConfig = optionalAttrs (resolvedIntegrationEnabled instance) {
+        Upholds = [ (resolvedServiceUnit name) ];
+      };
 
       serviceConfig = {
         Type = "simple";
         ExecStartPre = [ configPreparation ];
-        ExecStartPost = optionals (resolvedIntegrationEnabled instance) [
-          (resolvedSetupScript name instance)
-        ];
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/p2p-vpn"
@@ -1217,9 +1342,6 @@ let
             "--socket"
             instance.controlSocket
           ])
-        ];
-        ExecStopPost = optionals (resolvedIntegrationEnabled instance) [
-          (resolvedCleanupScript name)
         ];
         LoadCredential =
           optionals (nixMode instance && instance.privateKeyFile != null) [
@@ -1276,6 +1398,59 @@ let
         ReadWritePaths = [ (instanceStateDirectory name instance) ];
       };
     };
+
+  resolvedServiceForInstance =
+    name: instance:
+    nameValuePair (resolvedServiceName name) {
+      description = "p2p-vpn split DNS registration for instance ${name}";
+      after = [
+        (instanceServiceUnit name)
+        "systemd-resolved.service"
+        resolvedGuardUnit
+      ];
+      bindsTo = [
+        (instanceServiceUnit name)
+        "systemd-resolved.service"
+        resolvedGuardUnit
+      ];
+      partOf = [
+        (instanceServiceUnit name)
+        "systemd-resolved.service"
+      ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = [ (resolvedSetupScript name instance) ];
+        ExecStop = [ (resolvedCleanupScript name) ];
+        RemainAfterExit = true;
+        Restart = "on-failure";
+        RestartSec = "1s";
+        TimeoutStartSec = "15s";
+        TimeoutStopSec = "10s";
+        DevicePolicy = "closed";
+        NoNewPrivileges = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        PrivateTmp = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        ProtectHome = true;
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        ProtectProc = "invisible";
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [
+          "AF_NETLINK"
+          "AF_UNIX"
+        ];
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        SystemCallArchitectures = "native";
+        UMask = "0077";
+      };
+    };
 in
 {
   options.services.p2p-vpn = {
@@ -1284,6 +1459,11 @@ in
       default = packageForSystem;
       defaultText = "self.packages.\${pkgs.stdenv.hostPlatform.system}.default";
       description = "p2p-vpn package to run.";
+    };
+    resolvedGuardInterface = mkOption {
+      type = types.str;
+      default = "pvdns0";
+      description = "Dedicated link reserved for the private DNS suffix leak guard.";
     };
     instances = mkOption {
       type = types.attrsOf (types.submodule instanceOptions);
@@ -1339,6 +1519,18 @@ in
       {
         assertion = builtins.length nativeNames <= (65535 - 51820 + 1);
         message = "services.p2p-vpn has too many instances for automatic listener ports.";
+      }
+      {
+        assertion =
+          resolvedInstances == { }
+          || builtins.match "^[A-Za-z0-9_.-]{1,15}$" cfg.resolvedGuardInterface != null;
+        message = "services.p2p-vpn.resolvedGuardInterface must be a valid Linux interface name.";
+      }
+      {
+        assertion =
+          resolvedInstances == { }
+          || !(lib.elem cfg.resolvedGuardInterface (mapAttrsToList effectiveInterfaceName nativeInstances));
+        message = "services.p2p-vpn.resolvedGuardInterface must not collide with a native instance interface.";
       }
       {
         assertion =
@@ -1521,6 +1713,9 @@ in
 
     environment.systemPackages = [ cfg.package ];
     services.resolved.enable = mkIf (resolvedInstances != { }) true;
+    networking.dhcpcd.denyInterfaces = optionals (resolvedInstances != { }) [
+      cfg.resolvedGuardInterface
+    ];
     services.p2p-vpn.generatedConfigs = mapAttrs generatedSettings nativeInstances;
     services.p2p-vpn.effectiveInterfaces = mapAttrs effectiveInterfaceName nativeInstances;
     services.p2p-vpn.effectiveListenAddresses = mapAttrs effectiveListenAddresses nativeInstances;
@@ -1535,7 +1730,12 @@ in
       filterAttrs (_: instance: instance.controlSocket != null) enabledInstances
     );
     services.p2p-vpn.membershipStateFiles = mapAttrs membershipStateFile enabledInstances;
-    systemd.services = mapAttrs' serviceForInstance enabledInstances;
+    systemd.services =
+      mapAttrs' serviceForInstance enabledInstances
+      // mapAttrs' resolvedServiceForInstance resolvedInstances
+      // optionalAttrs (resolvedInstances != { }) {
+        "p2p-vpn-dns-guard" = resolvedGuardService;
+      };
     systemd.tmpfiles.rules = concatMap (
       name:
       let
