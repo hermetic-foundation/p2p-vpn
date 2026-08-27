@@ -246,6 +246,7 @@ struct JoinOperation {
     selected_transport: Option<PairingTransport>,
     poll_transport_failures: u16,
     selected_inviter: Option<Libp2pPeerId>,
+    pending_submission: Option<PendingSubmission>,
     remote_approval: Option<RemoteApproval>,
     requested_vpn_ip: Option<String>,
     requested_routes: Vec<RouteConfig>,
@@ -336,6 +337,26 @@ struct RemoteApproval {
     poll_in_flight: bool,
     consecutive_transport_failures: u16,
     route_recovery_started_at: Option<Instant>,
+}
+
+struct PendingSubmission {
+    peer: Libp2pPeerId,
+    request: PairingRequest,
+    offer: PairingOffer,
+    transcript_sha256: String,
+    next_submit_at: Instant,
+    submit_in_flight: bool,
+    consecutive_transport_failures: u16,
+    route_recovery_started_at: Option<Instant>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingRemoteSubmission {
+    pub operation_id: String,
+    pub peer: Libp2pPeerId,
+    pub request: PairingRequest,
+    pub offer: PairingOffer,
+    pub transcript_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -628,6 +649,7 @@ impl CodePairingSessions {
             selected_transport: None,
             poll_transport_failures: 0,
             selected_inviter: None,
+            pending_submission: None,
             remote_approval: None,
             requested_vpn_ip,
             requested_routes,
@@ -928,6 +950,7 @@ impl CodePairingSessions {
             .filter(|operation| operation.id == operation_id)
             .ok_or(CodePairingSessionError::NotFound)?;
         operation.code.take();
+        operation.pending_submission = None;
         operation.remote_approval = None;
         operation.completed = Some((offer, response));
         self.clear_transient_handshakes();
@@ -1123,19 +1146,28 @@ impl CodePairingSessions {
         {
             return Err(CodePairingSessionError::Conflict);
         }
-        let remote = operation.remote_approval.as_ref().ok_or_else(|| {
-            invalid_recovery("prepared joiner enrollment is missing its remote approval")
-        })?;
+        let matches_remote_approval = operation.remote_approval.as_ref().is_some_and(|remote| {
+            remote.peer == inviter
+                && &remote.offer == offer
+                && remote.transcript_sha256 == enrollment.transcript_sha256
+                && validate_pairing_ticket(&remote.ticket).is_ok()
+        });
+        let matches_pending_submission =
+            operation
+                .pending_submission
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.peer == inviter
+                        && &pending.offer == offer
+                        && pending.transcript_sha256 == enrollment.transcript_sha256
+                });
         if operation.selected_inviter != Some(inviter)
-            || remote.peer != inviter
-            || &remote.offer != offer
-            || remote.transcript_sha256 != enrollment.transcript_sha256
+            || !(matches_remote_approval || matches_pending_submission)
         {
             return Err(invalid_recovery(
-                "prepared joiner enrollment does not match its remote approval",
+                "prepared joiner enrollment does not match its remote pairing state",
             ));
         }
-        validate_pairing_ticket(&remote.ticket)?;
 
         Ok(())
     }
@@ -1156,6 +1188,7 @@ impl CodePairingSessions {
             .expect("operation was validated immediately above");
         operation.code.take();
         operation.selected_inviter = None;
+        operation.pending_submission = None;
         operation.remote_approval = None;
         operation.completed = Some((offer.clone(), enrollment.response.clone()));
         operation.terminal = None;
@@ -1765,9 +1798,7 @@ impl CodePairingSessions {
     pub fn should_start_join_lookup(&self, now: Instant) -> Option<&str> {
         let operation = self.active_join()?;
         let discovery_started_at = operation
-            .remote_approval
-            .as_ref()
-            .and_then(|approval| approval.route_recovery_started_at)
+            .route_recovery_started_at()
             .unwrap_or(operation.started_at);
         let lan_elapsed = now.saturating_duration_since(discovery_started_at);
         let lan_phase_complete = lan_elapsed >= CODE_PAIRING_LAN_GRACE
@@ -2060,6 +2091,159 @@ impl CodePairingSessions {
         Ok(response)
     }
 
+    pub fn set_pending_submission(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        request: PairingRequest,
+        offer: PairingOffer,
+        transcript_sha256: String,
+        now: Instant,
+    ) -> Result<(), CodePairingSessionError> {
+        validate_transcript_sha256(&transcript_sha256, false)?;
+        if crate::pairing_code::pairing_request_transcript_sha256(&request)? != transcript_sha256
+            || request
+                .offer
+                .as_ref()
+                .is_some_and(|embedded| embedded != &offer)
+            || offer.payload.inviter_peer != peer.to_string()
+            || request.payload.inviter_peer != offer.payload.inviter_peer
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        let operation = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+            .ok_or(CodePairingSessionError::NotFound)?;
+        if operation
+            .selected_inviter
+            .is_some_and(|selected| selected != peer)
+            || operation.remote_approval.is_some()
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
+        if let Some(pending) = operation.pending_submission.as_mut() {
+            if pending.peer != peer
+                || pending.request != request
+                || pending.offer != offer
+                || pending.transcript_sha256 != transcript_sha256
+            {
+                return Err(CodePairingSessionError::Conflict);
+            }
+            pending.next_submit_at = now;
+            pending.submit_in_flight = false;
+            return Ok(());
+        }
+        operation.selected_inviter = Some(peer);
+        if let Some(attempt) = operation.peer_attempts.get_mut(&peer) {
+            attempt.in_flight = false;
+        }
+        operation.pending_submission = Some(PendingSubmission {
+            peer,
+            request,
+            offer,
+            transcript_sha256,
+            next_submit_at: now,
+            submit_in_flight: false,
+            consecutive_transport_failures: 0,
+            route_recovery_started_at: None,
+        });
+        Ok(())
+    }
+
+    pub fn due_pending_submission(&mut self, now: Instant) -> Option<PendingRemoteSubmission> {
+        let operation = self.active_join_mut()?;
+        let pending = operation.pending_submission.as_mut()?;
+        if pending.submit_in_flight || now < pending.next_submit_at {
+            return None;
+        }
+        pending.submit_in_flight = true;
+        pending.next_submit_at = now + CODE_PAIRING_POLL_INTERVAL;
+        Some(PendingRemoteSubmission {
+            operation_id: operation.id.clone(),
+            peer: pending.peer,
+            request: pending.request.clone(),
+            offer: pending.offer.clone(),
+            transcript_sha256: pending.transcript_sha256.clone(),
+        })
+    }
+
+    pub fn release_pending_submission(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        now: Instant,
+    ) {
+        if let Some(pending) = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+            .and_then(|operation| operation.pending_submission.as_mut())
+            .filter(|pending| pending.peer == peer)
+        {
+            pending.submit_in_flight = false;
+            pending.next_submit_at = pending.next_submit_at.max(now + CODE_PAIRING_POLL_INTERVAL);
+        }
+    }
+
+    pub fn record_pending_submission_transport_failure(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        now: Instant,
+    ) {
+        if let Some(operation) = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+            && operation
+                .pending_submission
+                .as_ref()
+                .is_some_and(|pending| pending.peer == peer)
+        {
+            operation.poll_transport_failures = operation.poll_transport_failures.saturating_add(1);
+            let pending = operation
+                .pending_submission
+                .as_mut()
+                .expect("pending submission checked immediately above");
+            pending.submit_in_flight = false;
+            pending.consecutive_transport_failures =
+                pending.consecutive_transport_failures.saturating_add(1);
+            pending.next_submit_at = now
+                + code_pairing_retry_delay(
+                    &peer.to_bytes(),
+                    pending.consecutive_transport_failures,
+                );
+            pending.route_recovery_started_at.get_or_insert(now);
+        }
+    }
+
+    pub fn abandon_pending_submission(
+        &mut self,
+        operation_id: &str,
+        peer: Libp2pPeerId,
+        now: Instant,
+    ) {
+        let Some(operation) = self
+            .active_join_mut()
+            .filter(|operation| operation.id == operation_id)
+        else {
+            return;
+        };
+        if !operation
+            .pending_submission
+            .as_ref()
+            .is_some_and(|pending| pending.peer == peer)
+        {
+            return;
+        }
+        operation.pending_submission = None;
+        operation.selected_inviter = None;
+        if let Some(state) = operation.peer_attempts.get_mut(&peer) {
+            state.in_flight = false;
+            state.next_attempt_at =
+                now + code_pairing_retry_delay(&peer.to_bytes(), state.attempts);
+        }
+    }
+
     pub fn set_remote_pending(
         &mut self,
         operation_id: &str,
@@ -2081,6 +2265,17 @@ impl CodePairingSessions {
         {
             return Err(CodePairingSessionError::Conflict);
         }
+        if operation
+            .pending_submission
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.peer != peer
+                    || pending.offer != offer
+                    || pending.transcript_sha256 != transcript_sha256
+            })
+        {
+            return Err(CodePairingSessionError::Conflict);
+        }
         operation.selected_inviter = Some(peer);
         if let Some(attempt) = operation.peer_attempts.get_mut(&peer) {
             attempt.in_flight = false;
@@ -2097,8 +2292,10 @@ impl CodePairingSessions {
             remote.poll_in_flight = false;
             remote.consecutive_transport_failures = 0;
             remote.route_recovery_started_at = None;
+            operation.pending_submission = None;
             return Ok(());
         }
+        operation.pending_submission = None;
         operation.remote_approval = Some(RemoteApproval {
             peer,
             ticket,
@@ -2263,6 +2460,7 @@ impl CodePairingSessions {
     fn deactivate_join(&mut self, terminal: TerminalStatus) {
         if let Some(operation) = &mut self.join {
             operation.code.take();
+            operation.pending_submission = None;
             operation.remote_approval = None;
             operation.terminal = Some(terminal);
         }
@@ -2379,9 +2577,18 @@ impl JoinOperation {
     }
 
     fn route_recovery_needed(&self) -> bool {
-        self.remote_approval
+        self.route_recovery_started_at().is_some()
+    }
+
+    fn route_recovery_started_at(&self) -> Option<Instant> {
+        self.pending_submission
             .as_ref()
-            .is_some_and(|approval| approval.route_recovery_started_at.is_some())
+            .and_then(|pending| pending.route_recovery_started_at)
+            .or_else(|| {
+                self.remote_approval
+                    .as_ref()
+                    .and_then(|approval| approval.route_recovery_started_at)
+            })
     }
 
     fn discovery_stage(&self) -> PairingDiscoveryStage {
@@ -2802,6 +3009,8 @@ struct PersistedJoinOperation {
     requested_vpn_ip: Option<String>,
     requested_routes: Vec<RouteConfig>,
     #[serde(default)]
+    pending_submission: Option<PersistedPendingSubmission>,
+    #[serde(default)]
     remote_approval: Option<PersistedRemoteApproval>,
     completed: Option<(PairingOffer, PairingResponse)>,
     terminal: Option<TerminalStatus>,
@@ -2837,6 +3046,15 @@ struct PersistedInboundTicket {
 struct PersistedRemoteApproval {
     peer: String,
     ticket: String,
+    offer: PairingOffer,
+    #[serde(default)]
+    transcript_sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedPendingSubmission {
+    peer: String,
+    request: PairingRequest,
     offer: PairingOffer,
     #[serde(default)]
     transcript_sha256: String,
@@ -2971,6 +3189,10 @@ impl PersistedJoinOperation {
             poll_transport_failures: operation.poll_transport_failures,
             requested_vpn_ip: operation.requested_vpn_ip.clone(),
             requested_routes: operation.requested_routes.clone(),
+            pending_submission: operation
+                .pending_submission
+                .as_ref()
+                .map(PersistedPendingSubmission::from_runtime),
             remote_approval: operation
                 .remote_approval
                 .as_ref()
@@ -3000,13 +3222,25 @@ impl PersistedJoinOperation {
                 "join code locator does not match".to_owned(),
             ));
         }
+        let pending_submission = self
+            .pending_submission
+            .map(|submission| submission.into_runtime(network_name, &self.locator, resumed_at))
+            .transpose()?;
         let remote_approval = self
             .remote_approval
             .map(|approval| approval.into_runtime(resumed_at))
             .transpose()?;
+        if pending_submission.is_some() && remote_approval.is_some() {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "join operation has both a pending submission and approval ticket".to_owned(),
+            ));
+        }
         let peer_attempts =
             restore_peer_attempts(self.peer_attempts, self.total_peer_attempts, resumed_at)?;
-        let selected_inviter = remote_approval.as_ref().map(|approval| approval.peer);
+        let selected_inviter = pending_submission
+            .as_ref()
+            .map(|submission| submission.peer)
+            .or_else(|| remote_approval.as_ref().map(|approval| approval.peer));
         let mut operation = JoinOperation {
             id: self.id,
             code,
@@ -3025,6 +3259,7 @@ impl PersistedJoinOperation {
             selected_transport: self.selected_transport,
             poll_transport_failures: self.poll_transport_failures,
             selected_inviter,
+            pending_submission,
             remote_approval,
             requested_vpn_ip: self.requested_vpn_ip,
             requested_routes: self.requested_routes,
@@ -3047,6 +3282,7 @@ impl PersistedJoinOperation {
             || (operation.terminal.is_some() && !preserve_remote_approval_for_recovery)
         {
             operation.selected_inviter = None;
+            operation.pending_submission = None;
             operation.remote_approval = None;
         }
         Ok(operation)
@@ -3157,6 +3393,67 @@ impl PersistedRemoteApproval {
             transcript_sha256: self.transcript_sha256,
             next_poll_at: resumed_at,
             poll_in_flight: false,
+            consecutive_transport_failures: 0,
+            route_recovery_started_at: Some(resumed_at),
+        })
+    }
+}
+
+impl PersistedPendingSubmission {
+    fn from_runtime(submission: &PendingSubmission) -> Self {
+        Self {
+            peer: submission.peer.to_string(),
+            request: submission.request.clone(),
+            offer: submission.offer.clone(),
+            transcript_sha256: submission.transcript_sha256.clone(),
+        }
+    }
+
+    fn into_runtime(
+        self,
+        network_name: &str,
+        locator: &str,
+        resumed_at: Instant,
+    ) -> Result<PendingSubmission, CodePairingSessionError> {
+        validate_transcript_sha256(&self.transcript_sha256, false)?;
+        let peer = self.peer.parse().map_err(|_| {
+            CodePairingSessionError::InvalidPersistedState(
+                "pending submission has an invalid peer ID".to_owned(),
+            )
+        })?;
+        let transcript = crate::pairing_code::pairing_request_transcript_sha256(&self.request)?;
+        let authentication_locator = self
+            .request
+            .code_authentication
+            .as_ref()
+            .map(|authentication| authentication.locator.as_str());
+        if transcript != self.transcript_sha256
+            || self
+                .request
+                .offer
+                .as_ref()
+                .is_some_and(|embedded| embedded != &self.offer)
+            || self.offer.payload.network_name != network_name
+            || self.offer.payload.inviter_peer != self.peer
+            || self.request.payload.network_name != network_name
+            || self.request.payload.inviter_peer != self.offer.payload.inviter_peer
+            || authentication_locator != Some(locator)
+            || self
+                .request
+                .verify_for_offer_at(&self.offer, self.request.payload.issued_at_unix_seconds)
+                .is_err()
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "pending submission does not match its signed pairing transcript".to_owned(),
+            ));
+        }
+        Ok(PendingSubmission {
+            peer,
+            request: self.request,
+            offer: self.offer,
+            transcript_sha256: self.transcript_sha256,
+            next_submit_at: resumed_at,
+            submit_in_flight: false,
             consecutive_transport_failures: 0,
             route_recovery_started_at: Some(resumed_at),
         })
@@ -3351,11 +3648,17 @@ fn pairing_approval_id(request: &PairingRequest) -> Result<String, serde_json::E
 mod tests {
     use std::net::Ipv4Addr;
 
+    use base64::engine::general_purpose::STANDARD;
+    use serde_json::json;
+
     use crate::{
-        config::DiscoveryConfig,
+        config::{Config, DiscoveryConfig},
+        identity::NodeIdentity,
+        pairing::PairingCodeAuthentication,
         pairing::{
-            PairingAcceptanceMode, PairingOfferPayload, PairingProtocols, PairingRequestPayload,
-            PairingResponsePayload,
+            PairingAcceptanceMode, PairingOfferOptions, PairingOfferPayload, PairingProtocols,
+            PairingRequestOptions, PairingRequestPayload, PairingResponsePayload,
+            build_pairing_request_at, export_code_pairing_offer_at,
         },
     };
 
@@ -3453,6 +3756,57 @@ mod tests {
 
     fn test_rendezvous_token() -> String {
         URL_SAFE_NO_PAD.encode([0x24; RENDEZVOUS_TOKEN_BYTES])
+    }
+
+    fn signed_submission_fixture() -> (
+        PairingCode,
+        Libp2pPeerId,
+        PairingOffer,
+        PairingRequest,
+        String,
+    ) {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let config: Config = serde_json::from_value(json!({
+            "network": {
+                "name": "runners",
+                "local_peer": inviter.peer_id,
+                "private_key": inviter.private_key,
+            }
+        }))
+        .expect("minimal inviter config");
+        let offer = export_code_pairing_offer_at(
+            &config,
+            PairingOfferOptions {
+                expires_in_seconds: 600,
+                rendezvous_token: None,
+            },
+            1_000,
+        )
+        .expect("signed offer");
+        let mut request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: Some("10.42.0.2".to_owned()),
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("signed request");
+        let code = PairingCode::generate();
+        request.code_authentication = Some(PairingCodeAuthentication {
+            locator: code.locator("runners").expect("locator"),
+            confirmation: STANDARD.encode([0x53; 32]),
+        });
+        let transcript_sha256 = crate::pairing_code::pairing_request_transcript_sha256(&request)
+            .expect("request transcript");
+        let inviter_peer = config
+            .local_peer()
+            .expect("inviter peer")
+            .parse()
+            .expect("libp2p inviter peer");
+        (code, inviter_peer, offer, request, transcript_sha256)
     }
 
     fn test_preparation(
@@ -4408,6 +4762,103 @@ mod tests {
         )
         .expect("restore");
         assert_eq!(restored.poll_response(joiner, &ticket, 1_012), accepted);
+    }
+
+    #[test]
+    fn pending_submission_retries_exact_request_after_disconnect_and_restart() {
+        let (code, inviter, offer, request, transcript_sha256) = signed_submission_fixture();
+        let now = Instant::now();
+        let mut sessions = CodePairingSessions::new();
+        let started = sessions
+            .join("runners", code, None, Vec::new(), 600, 1_000, now)
+            .expect("join");
+        sessions
+            .set_pending_submission(
+                &started.operation_id,
+                inviter,
+                request.clone(),
+                offer.clone(),
+                transcript_sha256.clone(),
+                now,
+            )
+            .expect("pending submission");
+
+        let first = sessions
+            .due_pending_submission(now)
+            .expect("initial submission");
+        assert_eq!(first.peer, inviter);
+        assert_eq!(first.request, request);
+        assert_eq!(first.offer, offer);
+        assert_eq!(first.transcript_sha256, transcript_sha256);
+        sessions.record_pending_submission_transport_failure(
+            &started.operation_id,
+            inviter,
+            now + Duration::from_secs(1),
+        );
+        assert!(
+            sessions
+                .due_pending_submission(now + Duration::from_secs(1))
+                .is_none()
+        );
+
+        let resumed_at = now + Duration::from_secs(10);
+        let encoded = sessions.encode_persisted("runners").expect("encode");
+        let mut restored =
+            CodePairingSessions::restore_persisted(&encoded, "runners", 1_010, resumed_at)
+                .expect("restore");
+        let resumed = restored
+            .due_pending_submission(resumed_at)
+            .expect("resumed submission");
+        assert_eq!(resumed.operation_id, started.operation_id);
+        assert_eq!(resumed.peer, inviter);
+        assert_eq!(resumed.request, request);
+        assert_eq!(resumed.offer, offer);
+        assert_eq!(resumed.transcript_sha256, transcript_sha256);
+        assert!(
+            restored
+                .diagnostics(&started.operation_id)
+                .expect("diagnostics")
+                .route_recovery_active
+        );
+    }
+
+    #[test]
+    fn pending_submission_transitions_to_remote_polling() {
+        let (code, inviter, offer, request, transcript_sha256) = signed_submission_fixture();
+        let now = Instant::now();
+        let mut sessions = CodePairingSessions::new();
+        let started = sessions
+            .join("runners", code, None, Vec::new(), 600, 1_000, now)
+            .expect("join");
+        sessions
+            .set_pending_submission(
+                &started.operation_id,
+                inviter,
+                request,
+                offer.clone(),
+                transcript_sha256.clone(),
+                now,
+            )
+            .expect("pending submission");
+        let _ = sessions
+            .due_pending_submission(now)
+            .expect("submission in flight");
+        let ticket = fresh_pairing_ticket();
+        sessions
+            .set_remote_pending(
+                &started.operation_id,
+                inviter,
+                offer,
+                transcript_sha256,
+                ticket.clone(),
+                now,
+            )
+            .expect("remote pending");
+
+        assert!(sessions.due_pending_submission(now).is_none());
+        let poll = sessions.due_remote_poll(now).expect("approval poll");
+        assert_eq!(poll.peer, inviter);
+        assert_eq!(poll.ticket, ticket);
     }
 
     #[test]

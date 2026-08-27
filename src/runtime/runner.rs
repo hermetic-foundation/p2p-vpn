@@ -1875,6 +1875,29 @@ fn drive_code_pairing_discovery(
         );
     }
 
+    if let Some(submission) = sessions.due_pending_submission(now) {
+        let request_id = swarm.behaviour_mut().pairing_code.send_request(
+            &submission.peer,
+            PairingCodeRequest::Submit {
+                request: Box::new(submission.request),
+            },
+        );
+        if sessions
+            .insert_outbound_submit(
+                request_id,
+                OutboundPairing {
+                    operation_id: submission.operation_id.clone(),
+                    peer: submission.peer,
+                    offer: submission.offer,
+                    transcript_sha256: submission.transcript_sha256,
+                },
+            )
+            .is_err()
+        {
+            sessions.release_pending_submission(&submission.operation_id, submission.peer, now);
+        }
+    }
+
     if let Some(poll) = sessions.due_remote_poll(now) {
         metrics.record_code_pairing_poll();
         let request_id = swarm.behaviour_mut().pairing_code.send_request(
@@ -11154,11 +11177,13 @@ fn handle_pairing_code_event(
                         );
                     }
                     OutboundCodeRequest::Submit(pairing) => {
-                        context.code_pairing_sessions.release_peer_attempt(
-                            &pairing.operation_id,
-                            pairing.peer,
-                            Instant::now(),
-                        );
+                        context
+                            .code_pairing_sessions
+                            .record_pending_submission_transport_failure(
+                                &pairing.operation_id,
+                                pairing.peer,
+                                Instant::now(),
+                            );
                     }
                     OutboundCodeRequest::Poll(pairing) => {
                         context
@@ -11567,26 +11592,15 @@ fn handle_pairing_code_response(
                 .map_err(CodePairingSessionError::InvalidCode)?;
             let transcript_sha256 = pairing_request_transcript_sha256(&request)
                 .map_err(CodePairingSessionError::InvalidCode)?;
-            let submit_id = swarm.behaviour_mut().pairing_code.send_request(
-                &peer,
-                PairingCodeRequest::Submit {
-                    request: Box::new(request),
-                },
-            );
             let operation_id = outbound.operation_id;
-            if context
-                .code_pairing_sessions
-                .insert_outbound_submit(
-                    submit_id,
-                    OutboundPairing {
-                        operation_id: operation_id.clone(),
-                        peer,
-                        offer,
-                        transcript_sha256,
-                    },
-                )
-                .is_err()
-            {
+            if let Err(error) = context.code_pairing_sessions.set_pending_submission(
+                &operation_id,
+                peer,
+                request,
+                offer,
+                transcript_sha256,
+                Instant::now(),
+            ) {
                 context.code_pairing_sessions.release_peer_attempt(
                     &operation_id,
                     peer,
@@ -11594,9 +11608,22 @@ fn handle_pairing_code_response(
                 );
                 log_runtime_event(
                     LogLevel::Warn,
-                    "pairing_code_submit_untracked",
-                    &[("peer", &peer.to_string()), ("reason", "capacity")],
+                    "pairing_code_submission_rejected",
+                    &[("peer", &peer.to_string()), ("reason", &error.to_string())],
                 );
+                return Ok(());
+            }
+            if let Err(error) = persist_code_pairing_sessions(
+                context.pairing_state_store,
+                context.code_pairing_sessions,
+                &context.local_capabilities.network_name,
+            ) {
+                log_pairing_persistence_failure("pending_submission", &error);
+                fail_code_pairing_join(
+                    context,
+                    &operation_id,
+                    "pairing request could not be recorded durably",
+                )?;
             }
         }
         (
@@ -11820,11 +11847,15 @@ fn handle_pairing_code_response(
         (OutboundCodeRequest::Submit(outbound), PairingCodeResponse::Rejected { reason }) => {
             if matches!(
                 reason,
-                PairingCodeRejectionReason::Unavailable
-                    | PairingCodeRejectionReason::RateLimited
-                    | PairingCodeRejectionReason::Busy
+                PairingCodeRejectionReason::RateLimited | PairingCodeRejectionReason::Busy
             ) {
-                context.code_pairing_sessions.release_peer_attempt(
+                context.code_pairing_sessions.release_pending_submission(
+                    &outbound.operation_id,
+                    outbound.peer,
+                    Instant::now(),
+                );
+            } else if reason == PairingCodeRejectionReason::Unavailable {
+                context.code_pairing_sessions.abandon_pending_submission(
                     &outbound.operation_id,
                     outbound.peer,
                     Instant::now(),
@@ -11895,7 +11926,11 @@ fn release_outbound_code_request(
             sessions.release_peer_attempt(&outbound.operation_id, outbound.peer, Instant::now());
         }
         OutboundCodeRequest::Submit(outbound) => {
-            sessions.release_peer_attempt(&outbound.operation_id, outbound.peer, Instant::now());
+            sessions.release_pending_submission(
+                &outbound.operation_id,
+                outbound.peer,
+                Instant::now(),
+            );
         }
         OutboundCodeRequest::Poll(outbound) => {
             sessions.release_remote_poll(&outbound.operation_id, outbound.peer, Instant::now());
