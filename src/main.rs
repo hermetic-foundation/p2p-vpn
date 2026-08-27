@@ -36,8 +36,8 @@ use p2p_vpn::{
     membership::{
         MAX_MEMBERSHIP_RECORD_INTEGER, MembershipRecordIssueOptions, MembershipRecordMergeStats,
         MembershipRecordPayload, MembershipRecordSubject, MembershipRole, SignedMembershipRecord,
-        issue_membership_record_for_subject_at, validate_membership_record_history,
-        validate_membership_records_at,
+        issue_membership_record_for_subject_at, issue_named_membership_record_for_subject_at,
+        validate_membership_record_history, validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
@@ -462,6 +462,8 @@ enum Command {
         roles: Vec<MembershipRecordRoleArg>,
         #[arg(long = "route-grant")]
         route_grants: Vec<LocalRouteArg>,
+        #[arg(long)]
+        hostname: Option<String>,
         #[arg(long)]
         revoked: bool,
         #[arg(long)]
@@ -1387,6 +1389,7 @@ async fn main() -> Result<(), String> {
             sequence,
             roles,
             route_grants,
+            hostname,
             revoked,
             expires_at_unix_seconds,
             force,
@@ -1402,6 +1405,7 @@ async fn main() -> Result<(), String> {
             sequence,
             roles,
             route_grants,
+            hostname,
             revoked,
             expires_at_unix_seconds,
             force,
@@ -1689,6 +1693,7 @@ struct MembershipRecordIssueArgs {
     sequence: u64,
     roles: Vec<MembershipRecordRoleArg>,
     route_grants: Vec<LocalRouteArg>,
+    hostname: Option<String>,
     revoked: bool,
     expires_at_unix_seconds: Option<u64>,
     force: bool,
@@ -2190,6 +2195,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
         .identity()
         .map_err(|error| format!("failed to read issuer identity: {error:?}"))?;
     let member = membership_record_subject_from_args(&args, &issuer)?;
+    let hostname = args.hostname;
     let route_grants = args
         .route_grants
         .into_iter()
@@ -2198,10 +2204,12 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
     let roles = if args.revoked {
         if !args.roles.is_empty()
             || !route_grants.is_empty()
+            || hostname.is_some()
             || args.expires_at_unix_seconds.is_some()
         {
             return Err(
-                "revoked membership records cannot carry roles, route grants, or expiry".to_owned(),
+                "revoked membership records cannot carry hostname, roles, route grants, or expiry"
+                    .to_owned(),
             );
         }
         Vec::new()
@@ -2211,7 +2219,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
     let network_name = args
         .network
         .unwrap_or_else(|| issuer_config.network.name.clone());
-    let record = issue_membership_record_for_subject_at(
+    let record = issue_named_membership_record_for_subject_at(
         &issuer,
         MembershipRecordIssueOptions {
             network_name,
@@ -2223,6 +2231,7 @@ fn membership_record_issue(args: MembershipRecordIssueArgs) -> Result<(), String
             route_grants,
             expires_at_unix_seconds: args.expires_at_unix_seconds,
         },
+        hostname.as_deref(),
         current_unix_seconds_lossy(),
     )
     .map_err(|error| format!("failed to issue membership record: {error:?}"))?;
@@ -15398,6 +15407,8 @@ mod tests {
             "overlay-member",
             "--route-grant",
             "10.77.0.0/24,55",
+            "--hostname",
+            "member-one",
             "--revoked",
             "--force",
         ])
@@ -15411,6 +15422,7 @@ mod tests {
             sequence,
             roles,
             route_grants,
+            hostname,
             revoked,
             force,
             ..
@@ -15428,6 +15440,7 @@ mod tests {
         assert_eq!(roles, vec![MembershipRecordRoleArg::OverlayMember]);
         assert_eq!(route_grants[0].route.prefix, "10.77.0.0/24");
         assert_eq!(route_grants[0].route.metric, 55);
+        assert_eq!(hostname.as_deref(), Some("member-one"));
         assert!(revoked);
         assert!(force);
 
@@ -15580,6 +15593,7 @@ mod tests {
                     metric: 55,
                 },
             }],
+            hostname: Some("member-one".to_owned()),
             revoked: false,
             expires_at_unix_seconds: None,
             force: false,
@@ -15606,6 +15620,7 @@ mod tests {
                 .contains(&MembershipRole::RouteAuthority)
         );
         assert_eq!(record.payload.route_grants[0].prefix, "10.77.0.0/24");
+        assert_eq!(record.payload.hostname.as_deref(), Some("member-one"));
         record.payload.sequence += 1;
         let rendered = serde_json::to_string_pretty(&record).expect("render tampered record");
         fs::write(&record_path, format!("{rendered}\n")).expect("write tampered record");
@@ -15624,6 +15639,7 @@ mod tests {
             sequence: 43,
             roles: vec![MembershipRecordRoleArg::OverlayMember],
             route_grants: Vec::new(),
+            hostname: None,
             revoked: false,
             expires_at_unix_seconds: None,
             force: true,
@@ -15676,6 +15692,7 @@ mod tests {
             sequence: 1,
             roles: vec![MembershipRecordRoleArg::OverlayMember],
             route_grants: Vec::new(),
+            hostname: None,
             revoked: false,
             expires_at_unix_seconds: None,
             force: false,
@@ -15703,6 +15720,7 @@ mod tests {
             sequence: 2,
             roles: vec![MembershipRecordRoleArg::OverlayMember],
             route_grants: Vec::new(),
+            hostname: None,
             revoked: false,
             expires_at_unix_seconds: None,
             force: false,
@@ -15785,6 +15803,7 @@ mod tests {
             sequence: 43,
             roles: Vec::new(),
             route_grants: Vec::new(),
+            hostname: None,
             revoked: true,
             expires_at_unix_seconds: None,
             force: false,
@@ -15811,6 +15830,7 @@ mod tests {
             sequence: 44,
             roles: vec![MembershipRecordRoleArg::OverlayMember],
             route_grants: Vec::new(),
+            hostname: Some("revoked-member".to_owned()),
             revoked: true,
             expires_at_unix_seconds: None,
             force: true,
@@ -15873,6 +15893,7 @@ mod tests {
                     metric: 100,
                 },
             }],
+            hostname: None,
             revoked: false,
             expires_at_unix_seconds: None,
             force: false,
@@ -16006,6 +16027,7 @@ mod tests {
             sequence: 1,
             roles: vec![MembershipRecordRoleArg::OverlayMember],
             route_grants: Vec::new(),
+            hostname: None,
             revoked: false,
             expires_at_unix_seconds: None,
             force: false,
