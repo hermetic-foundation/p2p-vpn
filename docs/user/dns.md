@@ -23,6 +23,10 @@ NixOS registers the network zone as a search domain.
 
 This also permits the short query `midi-desktop-1`.
 
+Short names follow the host resolver's search-domain order.
+
+Use canonical names when LAN or VPN DNS owns the same short label.
+
 ## Minimal NixOS Setup
 
 Use the same instance name on every member:
