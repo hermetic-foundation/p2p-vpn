@@ -8917,9 +8917,14 @@ fn rejected_control_probe_reason(
     response: &ControlResponse,
     membership: &OverlayMembership,
     peer: Libp2pPeerId,
+    allow_pairing_probe: bool,
 ) -> Option<ControlRejectionReason> {
     match response {
-        ControlResponse::CapabilitiesRejected(reason) if !membership.allows(peer) => Some(*reason),
+        ControlResponse::CapabilitiesRejected(reason)
+            if !membership.allows(peer) && !allow_pairing_probe =>
+        {
+            Some(*reason)
+        }
         _ => None,
     }
 }
@@ -10884,7 +10889,32 @@ async fn handle_control_request(
                 | ControlResponse::MembershipRecordsPage(_)
                 | ControlResponse::MembershipRecordsRejected(_) => {}
             }
-            let rejected_probe = rejected_control_probe_reason(&response, context.membership, peer);
+            let allow_pairing_probe = context.code_pairing_sessions.allows_pairing_probe(peer);
+            let rejected_probe = rejected_control_probe_reason(
+                &response,
+                context.membership,
+                peer,
+                allow_pairing_probe,
+            );
+            if allow_pairing_probe
+                && !context.membership.allows(peer)
+                && let ControlResponse::CapabilitiesRejected(reason) = &response
+            {
+                // Pairing still rejects overlay capabilities, but its protocol stream must be
+                // able to return the approved enrollment before this transport is closed.
+                context
+                    .membership_probe_connections
+                    .defer(peer, connection_id, Instant::now());
+                log_runtime_event(
+                    LogLevel::Info,
+                    "rejected_control_probe_retained",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("reason", control_rejection_name(*reason)),
+                        ("scope", "pairing_protocol_only"),
+                    ],
+                );
+            }
             send_control_response_nonfatal(swarm, context.metrics, peer, channel, response);
             if let Some(reason) = rejected_probe {
                 quarantine_rejected_control_probe(swarm, context, peer, connection_id, reason);
@@ -25037,22 +25067,35 @@ mod tests {
     }
 
     #[test]
-    fn only_unauthorized_capability_rejections_quarantine_transport_probes() {
+    fn only_unauthorized_capability_rejections_outside_pairing_quarantine_transport_probes() {
         let peer = peer_id();
         let authorized = OverlayMembership {
             peers: HashSet::from([peer]),
             configured_infrastructure_peers: HashSet::new(),
         };
         let unauthorized = OverlayMembership::default();
+        let mut active_pairing = CodePairingSessions::new();
+        active_pairing
+            .open("lab", 600, 1_000, Instant::now())
+            .expect("open pairing");
         let response =
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer);
 
         assert_eq!(
-            rejected_control_probe_reason(&response, &unauthorized, peer),
+            rejected_control_probe_reason(&response, &unauthorized, peer, false),
             Some(ControlRejectionReason::UnauthorizedPeer)
         );
         assert_eq!(
-            rejected_control_probe_reason(&response, &authorized, peer),
+            rejected_control_probe_reason(&response, &authorized, peer, false),
+            None
+        );
+        assert_eq!(
+            rejected_control_probe_reason(
+                &response,
+                &unauthorized,
+                peer,
+                active_pairing.allows_pairing_probe(peer),
+            ),
             None
         );
         assert_eq!(
@@ -25062,6 +25105,7 @@ mod tests {
                 )),
                 &unauthorized,
                 peer,
+                false,
             ),
             None
         );
