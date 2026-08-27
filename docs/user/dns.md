@@ -220,6 +220,7 @@ Records use a short TTL so clients stop using stale answers quickly.
 | Recursion | Never performed |
 | Unrelated forward query | Refused |
 | Unrelated reverse query | Refused |
+| DNSSEC | Not used; signed membership authenticates records before they are served |
 | Public bootstrap peer | Never receives an overlay record by discovery alone |
 | Signed claim | Validated through the membership trust graph |
 | Private suffix guard | Prevents unmatched `p2p-vpn.internal` queries from leaking |

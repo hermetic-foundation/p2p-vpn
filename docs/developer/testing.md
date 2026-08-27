@@ -425,6 +425,39 @@ Public IPFS discovery also supplied private-address claims from unrelated peers.
 
 The source-aware filter rejected those claims. Local mDNS candidates remained eligible.
 
+## Physical Authenticated DNS Audit
+
+The 2026-08-26 audit enabled DNS through the shared native NixOS instance.
+
+No host added a static peer address, overlay address, route, or DNS hostname.
+
+| Host | Friendly Record | Overlay IPv4 |
+| --- | --- | --- |
+| `midi-framework-laptop` | Local configuration and signed membership | `100.64.63.174` |
+| `midi-thinkpad-250` | Signed membership | `100.64.39.219` |
+| `midi-thinkpad-120` | Signed membership | `100.64.124.157` |
+| `midi-desktop-1` | Signed membership | `100.64.50.33` |
+
+| Assertion | Evidence |
+| --- | --- |
+| Default naming | Pairing requested each joiner's `networking.hostName` without a CLI override. |
+| Default addressing | Pairing requested no explicit VPN IP; identity-derived addresses remained stable. |
+| Signed convergence | Every audited daemon reported 8 record sets, 8 PTRs, and 0 conflicts. |
+| Unique fallback | Each member retained its peer-ID fallback beside its friendly record. |
+| Indirect peers | The two ThinkPads resolved and pinged each other after pairing only with the framework host. |
+| Short names | Both ThinkPads resolved `midi-desktop-1` to `100.64.50.33` and its overlay IPv6 address. |
+| Canonical names | Both resolved `midi-desktop-1.monarchic-runners.p2p-vpn.internal`. |
+| IPv4 traffic | Each ThinkPad delivered 5 of 5 ICMP packets to the desktop overlay address. |
+| IPv6 traffic | Each ThinkPad opened desktop TCP port 22 through the resolved overlay IPv6 address. |
+| Reverse records | Both ThinkPads resolved `100.64.50.33` to the desktop canonical name through the CLI. |
+| Daemon restart | ThinkPad 250 restored signed names and traffic without re-pairing. |
+| Resolver restart | ThinkPad 120 reapplied split DNS without changing the VPN daemon PID. |
+| Resolver health | All instance, suffix-guard, and `systemd-resolved` units remained active. |
+
+The active zone was `monarchic-runners.p2p-vpn.internal` on every host.
+
+Each `pv0` link used a loopback-only instance resolver and no default DNS route.
+
 ## Offline Pairing Integration
 
 Run direct live pairing:

@@ -45,7 +45,7 @@ Status is conservative.
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
 | Signed membership records | Operational | Unit, DHT, code-pairing, restart, and revocation tests. |
-| Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, and transitive four-VM proof. |
+| Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, transitive VM, and physical four-host proofs. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Release archive | Operational | Release archive sanity check. |
 
@@ -74,6 +74,7 @@ Status is conservative.
 | 2026-08-26 | Physical desktop restart | Routes and three direct path classes recovered; 120/120 probes passed. |
 | 2026-08-26 | Public discovery address hygiene | Unverified private IPFS addresses were rejected without failed-neighbor growth. |
 | 2026-08-26 | IPv6 first activation | `nodad` removed the route-source race; the service started with zero retries. |
+| 2026-08-26 | Physical authenticated DNS mesh | Four signed names converged; short, canonical, PTR, IPv4, IPv6, and restart checks passed. |
 
 ## Main Remaining Gap
 
