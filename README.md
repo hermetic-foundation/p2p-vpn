@@ -19,6 +19,7 @@ protocols and bounded queues.
 - [NixOS Module](docs/user/nixos.md)
 - [Pairing](docs/user/pairing.md)
 - [Network Membership](docs/user/membership.md)
+- [Overlay DNS](docs/user/dns.md)
 - [Configuration](docs/user/configuration.md)
 - [Operations](docs/user/operations.md)
 - [Public libp2p/IPFS Reachability](docs/user/public-libp2p.md)
@@ -35,6 +36,7 @@ protocols and bounded queues.
 | NixOS module | Operational with typed service instances and sane defaults. |
 | Code pairing | Operational with LAN-first discovery, approval, relay fallback, and native Nix artifacts. |
 | Network-wide membership | Operational with signed convergence, durable learned state, and derived routes. |
+| Authenticated overlay DNS | Operational with split DNS, transitive names, and lifecycle tests. |
 | Static LAN peers | Operational in VM and recorded two-host tests. |
 | Network move recovery | Operational in VM tests with LAN-first rediscovery. |
 | Circuit relay fallback | Operational in VM and recorded forced-relay tests. |

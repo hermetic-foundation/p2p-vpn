@@ -37,6 +37,7 @@ Set it only to assert the key belongs to an expected peer ID.
 | `network.listen_addresses` | `/ip4/0.0.0.0/tcp/4001` |
 | `network.external_addresses` | empty |
 | `network.bootstrap_peers` | empty in JSON; public defaults at runtime |
+| `network.dns` | disabled |
 | `network.discovery` | public discovery defaults |
 | `network.relay` | disabled relay server, no reservations |
 | `network.packet_plane` | UDP packet plane listens on `0.0.0.0:0` |
@@ -119,6 +120,8 @@ Addresses and routes are optional.
 
 Use peer IDs as the core trust boundary.
 
+When DNS is enabled, `name` becomes that statically authorized peer's hostname.
+
 Use `ip` for ordinary LAN peers on the default port.
 
 Use `addresses` for custom ports, DNS, QUIC, or relay paths.
@@ -141,6 +144,32 @@ Use `vpn_ip` for stable, chosen host addresses.
 Use explicit route entries for prefixes.
 
 Without them, peers still get built-in host routes.
+
+## Overlay DNS
+
+Enable the loopback authoritative resolver:
+
+```json
+{
+  "network": {
+    "name": "lab",
+    "private_key": "BASE64_PRIVATE_KEY",
+    "dns": {
+      "enabled": true,
+      "hostname": "worker-1"
+    }
+  }
+}
+```
+
+| Field | Default | Rule |
+| --- | --- | --- |
+| `enabled` | `false` | Keeps existing configurations unchanged |
+| `hostname` | unset | Required when enabled |
+| `listen` | `127.0.0.1:0` | Numeric loopback socket only |
+| `ttl_seconds` | `30` | Range `1` through `300` |
+
+See [Overlay DNS](dns.md) for split DNS, signed names, and JSON integration.
 
 ## Discovery
 

@@ -30,6 +30,8 @@ After convergence, all three nodes know the same signed membership history.
 
 See [Pairing](pairing.md) for the code and approval workflow.
 
+See [Overlay DNS](dns.md) for hostname conflicts, fallbacks, and expiry behavior.
+
 ## Authorization Boundary
 
 A matching network name is only a discovery scope.
@@ -42,6 +44,7 @@ It never grants membership, packet access, or route authority.
 | libp2p identity | Which peer owns the transport connection. |
 | Signed member record | The peer is admitted by an authorized issuer. |
 | Route grant | Which address or prefix that member may originate. |
+| Signed hostname | Which overlay DNS label that member may claim. |
 | Optional membership key | Additional shared overlay scope, not membership by itself. |
 
 Public bootstrap and relay nodes provide reachability only.
@@ -81,6 +84,7 @@ When a new record is accepted, the daemon automatically:
 5. Starts LAN-first and public-path discovery.
 6. Uses direct datagrams or streams when available.
 7. Falls back through circuit relay when required.
+8. Publishes authenticated DNS names when DNS is enabled.
 
 No generated runtime address is written back into user configuration.
 
@@ -116,7 +120,7 @@ It carries no roles, routes, or expiry and remains as a non-expiring tombstone.
 | Member revocation | Removes that issuer's grant to the member. |
 | Issuer revocation | Removes authority derived through that issuer. |
 | Root revocation | Removes the root and its delegated descendants. |
-| Grant expiry | Deactivates the grant after its deadline. |
+| Grant expiry | Deactivates the grant at its deadline. |
 | Newer expired grant | Does not revive an older grant after restart. |
 
 Removing a record from one config is not a network-wide revocation.

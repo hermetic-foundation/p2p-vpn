@@ -11,6 +11,7 @@ Use these docs when you want to run `p2p-vpn`.
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
 | [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |
 | [Network Membership](membership.md) | Understand whole-overlay convergence, trust, routes, and recovery. |
+| [Overlay DNS](dns.md) | Resolve authenticated members by short and canonical names. |
 | [Operations](operations.md) | Inspect a daemon, health-check it, and stop it. |
 | [Public libp2p/IPFS](public-libp2p.md) | Use public bootstrap and relay infrastructure safely. |
 
@@ -38,6 +39,8 @@ Continue with [NixOS Module](nixos.md).
 The default pairing workflow transfers only a one-time human-readable code.
 
 Pair once with an authorized member; signed membership then converges across the overlay.
+
+Enable `dns.enable` to resolve converged members by hostname.
 
 ## JSON First Command
 

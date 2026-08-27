@@ -37,11 +37,16 @@ Use the same instance name on both hosts:
 {
   imports = [ inputs.p2p-vpn.nixosModules.default ];
 
-  services.p2p-vpn.instances.lab.enable = true;
+  services.p2p-vpn.instances.lab = {
+    enable = true;
+    dns.enable = true;
+  };
 }
 ```
 
 This is the complete pre-pairing configuration.
+
+DNS uses `networking.hostName` and the instance name by default.
 
 The module supplies identity storage, listeners, discovery, relay fallback, and state.
 
@@ -146,11 +151,21 @@ sudo nixos-rebuild switch
 
 Follow [Pairing](pairing.md) to acknowledge the matching receipt on each host.
 
+After membership converges, resolve a peer by short name or canonical name:
+
+```sh
+resolvectl query PEER_HOSTNAME
+resolvectl query PEER_HOSTNAME.lab.p2p-vpn.internal
+```
+
+See [Overlay DNS](dns.md) for naming and diagnostics.
+
 ## Defaults Used
 
 | Resource | Default |
 | --- | --- |
 | Network name | Instance name, `lab` |
+| DNS | Enabled; hostname from `networking.hostName` |
 | Identity | Persistent per-instance key |
 | Interface | `pv0` for the first native instance |
 | Overlay addresses | Derived from each peer ID |

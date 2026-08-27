@@ -87,6 +87,9 @@ See [Pairing](pairing.md) for the complete approval and persistence workflow.
 | `daemon-paths` | Direct, datagram, and relay paths. |
 | `daemon-mtu` | MTU and fragmentation policy. |
 | `daemon-capabilities` | Local and peer capability state. |
+| `dns status` | Resolver listener, zone, counters, and refresh state. |
+| `dns list` | Forward records, PTR records, and conflicts. |
+| `dns resolve` | Controlled short-name, FQDN, or reverse lookup. |
 
 `daemon-paths` and `daemon-state` include `connection_id` for live paths.
 
@@ -133,6 +136,17 @@ Example:
 sudo p2p-vpn daemon-paths \
   --socket /run/p2p-vpn/control.sock
 ```
+
+Overlay DNS examples:
+
+```sh
+sudo p2p-vpn dns status --instance monarchic-runners
+sudo p2p-vpn dns list --instance monarchic-runners
+sudo p2p-vpn dns resolve midi-desktop-1 \
+  --instance monarchic-runners
+```
+
+See [Overlay DNS](dns.md) for resolver and conflict diagnostics.
 
 ## JSON Output
 
@@ -187,6 +201,8 @@ sudo p2p-vpn daemon-shutdown \
 | Public discovery idle | bootstrap peers, Kademlia, AutoNAT status. |
 | Mesh inventory differs | membership record count and sync failure counters. |
 | Learned routes vanish on restart | membership state path and `membership_state_load_*`. |
+| Overlay name does not resolve | `dns status`, `dns list`, and `resolvectl query`. |
+| DNS conflict | `dns resolve` reports `status=conflict`; use peer fallbacks. |
 | Rejected peer reconnects continuously | `unauthorized_connections_dropped`, `public_routing_peers`, and quarantine journal events. |
 
 See [Network Membership](membership.md) for convergence and state recovery.

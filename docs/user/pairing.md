@@ -117,6 +117,7 @@ Verify these fields before approval:
 | --- | --- |
 | `candidate peer` | Joiner's `instance show` peer ID. |
 | `candidate key fingerprint` | A second channel when available. |
+| `requested hostname` | Joiner's authenticated overlay DNS label. |
 | `requested VPN IP` | The address the joiner requested. |
 | `requested route` | Prefixes the joiner wants to originate. |
 
@@ -131,6 +132,8 @@ sudo p2p-vpn pair approve \
 ```
 
 The requested VPN IP is accepted unless `--vpn-ip` overrides it.
+
+The requested hostname is accepted unless `--hostname` overrides it.
 
 Requested routes require explicit grants:
 

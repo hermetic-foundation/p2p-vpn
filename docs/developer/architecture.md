@@ -22,6 +22,7 @@ TUN interface
 | Packet | `/p2p-vpn/packet/1` | Framed packet forwarding. |
 | Service | `/p2p-vpn/service/1` | Peer status and live views. |
 | Daemon socket | local Unix socket | Operator inspection and shutdown. |
+| DNS | loopback UDP/TCP | Authoritative per-overlay names. |
 
 ## Identity
 
@@ -62,6 +63,25 @@ Accepted records automatically update transport peers, TUN routes, and discovery
 A matching network name never authorizes a peer.
 
 See [Membership Convergence](membership.md) for merge and persistence invariants.
+
+## DNS
+
+DNS is derived from local configuration and effective signed membership.
+
+| Input | Output |
+| --- | --- |
+| Local or signed hostname | Canonical forward name |
+| Derived or explicit host address | `A` and `AAAA` records |
+| Preferred peer name | `PTR` record |
+| Ambiguous hostname | No address; explicit control-plane conflict |
+| Expired or revoked grant | No effective DNS records |
+
+The responder binds loopback, is authoritative only, and never recurses.
+
+NixOS attaches each zone and search domain to its TUN link through
+`systemd-resolved`.
+
+See [DNS Architecture](dns.md) for protocol limits and lifecycle details.
 
 ## Pairing
 
@@ -282,6 +302,9 @@ The daemon exposes text and JSON views:
 | Paths | `daemon-paths` |
 | MTU | `daemon-mtu` |
 | Capabilities | `daemon-capabilities` |
+| DNS status | `dns status` |
+| DNS records | `dns list` |
+| DNS resolution | `dns resolve` |
 
 Membership persistence and paging add counters for loads, saves, records, pages,
 snapshot restarts, and failures.

@@ -29,7 +29,10 @@ Add the same instance name on each host:
 
 ```nix
 {
-  services.p2p-vpn.instances.runners.enable = true;
+  services.p2p-vpn.instances.runners = {
+    enable = true;
+    dns.enable = true;
+  };
 }
 ```
 
@@ -107,6 +110,8 @@ Defaults are assigned by the sorted native instance index `N`.
 | Identity | `/var/lib/p2p-vpn/<instance>/private.key` |
 | Pairing state | `/var/lib/p2p-vpn/<instance>/pairing-state.json` |
 | Learned membership | `/var/lib/p2p-vpn/<instance>/membership-state.json` |
+| DNS hostname | `networking.hostName` |
+| DNS zone | `<instance>.p2p-vpn.internal` |
 | Interface | `pvN` |
 | TUN MTU | `1280` |
 | libp2p TCP | `0.0.0.0:4001+N` |
@@ -118,6 +123,9 @@ Defaults are assigned by the sorted native instance index `N`.
 | NAT traversal | AutoNAT and DCUtR |
 | Relay fallback | Automatic relay candidates |
 | Firewall | Required derived ports are opened |
+
+DNS is opt-in. With `dns.enable = true`, the module configures per-link split
+DNS and a search domain through `systemd-resolved`.
 
 Pin interface and port options before changing instance names or adding an
 instance that sorts before an existing one.
@@ -465,6 +473,7 @@ Set `controlSocket = null` to disable local daemon control commands.
 | --- | --- |
 | Identity | `stateDirectory`, `localPeer`, `privateKeyFile` |
 | Membership | `membershipKeyFile`, `previousMembershipTags`, `memberRecords` |
+| DNS | `dns`, `resolvedIntegration` |
 | Addressing | `vpnIp`, `routes`, `interfaceName`, `mtu` |
 | libp2p | `listenAddresses`, `externalAddresses`, `bootstrapPeers` |
 | Discovery | `discovery`, `autoRelay`, `relayReservations` |
@@ -505,6 +514,9 @@ Back up `membership-state.json` when the full learned mesh must restore offline.
 
 See [Network Membership](membership.md) for state and upgrade behavior.
 
+See [Overlay DNS](dns.md) for names, multi-instance behavior, and resolver
+lifecycle.
+
 ## Evaluation Guards
 
 The module rejects these configurations before activation:
@@ -523,6 +535,9 @@ The module rejects these configurations before activation:
 | Unit fails before start | `journalctl -u p2p-vpn-<instance>` |
 | Identity changed | Restore the original `private.key` |
 | No LAN peer | UDP `5353` and the libp2p port |
+| Hostname does not resolve | `p2p-vpn dns status --instance <instance>` |
+| Short name does not resolve | `resolvectl domain <interface>` |
+| Name is ambiguous | `p2p-vpn dns list --instance <instance>` |
 | No public fallback | Kademlia, AutoNAT, and relay status |
 | No overlay route | Peer grant, `vpnIp`, or route ownership |
 | Pairing output exists | Remove it or use `--force` deliberately |

@@ -67,6 +67,7 @@ An observer of the provider key cannot complete the PAKE without the code.
 | Provider result arrives | Dial the returned peer and known addresses. |
 | Relay address is selected | Carry code messages through the circuit. |
 | Transport fails | Release attempt and retry another path. |
+| `Submit` response is lost | Persist and retry the exact authenticated request. |
 | Operation completes | Stop advertising the locator. |
 
 LAN candidates are sorted by prior attempt count and peer ID.

@@ -45,6 +45,7 @@ Status is conservative.
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
 | Signed membership records | Operational | Unit, DHT, code-pairing, restart, and revocation tests. |
+| Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, and transitive four-VM proof. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Release archive | Operational | Release archive sanity check. |
 
@@ -68,6 +69,7 @@ Status is conservative.
 | 2026-08-22 | NixOS code-pairing relay VM | DHT discovery, relay transport, restart, and traffic passed. |
 | 2026-08-25 | Membership restart and movement VM | Offline route restore, relay fallback, cold restart, and LAN promotion passed. |
 | 2026-08-26 | NixOS membership convergence VM | A admitted B, B admitted C, and all three converged. |
+| 2026-08-26 | Authenticated DNS lifecycle VM | Transitive names, relay, restart, expiry, conflict, rename, and revocation passed. |
 | 2026-08-26 | Physical four-member LAN | Four signed histories converged; 240/240 directed TCP probes passed. |
 | 2026-08-26 | Physical desktop restart | Routes and three direct path classes recovered; 120/120 probes passed. |
 | 2026-08-26 | Public discovery address hygiene | Unverified private IPFS addresses were rejected without failed-neighbor growth. |

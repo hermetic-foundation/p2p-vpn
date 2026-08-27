@@ -385,6 +385,9 @@ Coverage:
 | LAN return | Direct paths replace relay paths automatically. |
 | Persistence | Owner-only state files retain all three signed records. |
 | Recovery bounds | Relay limits remain available and dial counters never exceed `128`. |
+| DNS convergence | Short and canonical names resolve on every edge node. |
+| Indirect DNS traffic | Never-paired `A` and `C` ping one another by name. |
+| DNS lifecycle | Expiry, conflict, rename, revocation, and restart fail closed. |
 
 The test compares generated config hashes before and after movement.
 
@@ -506,7 +509,7 @@ Coverage:
 | Minimal LAN | `nixos-vm-minimal-lan` passed. |
 | Code pairing LAN | One-time code, inviter approval, traffic, and restart recovery passed. |
 | Code pairing relay | DHT discovery, relay transport, approval, and traffic passed. |
-| Membership convergence | Independent pairings formed a three-member mesh. |
+| Membership convergence | Independent pairings formed a three-member mesh with authenticated DNS. |
 | Durable membership | Offline restart restored learned members and routes. |
 | Membership movement | Direct LAN, isolated relay, cold restart, and LAN return passed. |
 | Pairing artifacts | Secret-free native Nix output evaluated with agenix paths. |
