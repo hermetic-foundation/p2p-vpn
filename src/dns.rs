@@ -803,6 +803,14 @@ mod tests {
                 .record("ephemeral.runners.p2p-vpn.internal")
                 .is_some()
         );
+        let at_expiry = DnsZone::from_config_at(&config, &config.network.member_records, 1_010)
+            .expect("zone at expiry");
+        assert_eq!(at_expiry.next_refresh_unix_seconds(), None);
+        assert!(
+            at_expiry
+                .record("ephemeral.runners.p2p-vpn.internal")
+                .is_none()
+        );
         let after = DnsZone::from_config_at(&config, &config.network.member_records, 1_011)
             .expect("zone after expiry");
         assert_eq!(after.next_refresh_unix_seconds(), None);

@@ -33,7 +33,7 @@ impl SignedMembershipRecord {
     pub fn is_expired_at(&self, now_unix_seconds: u64) -> bool {
         self.payload
             .expires_at_unix_seconds
-            .is_some_and(|expires_at| now_unix_seconds > expires_at)
+            .is_some_and(|expires_at| now_unix_seconds >= expires_at)
     }
 
     fn verify_with_time(&self, now_unix_seconds: Option<u64>) -> Result<(), MembershipRecordError> {
@@ -768,7 +768,7 @@ fn validate_payload_time(
     now_unix_seconds: u64,
 ) -> Result<(), MembershipRecordError> {
     if let Some(expires_at) = payload.expires_at_unix_seconds
-        && now_unix_seconds > expires_at
+        && now_unix_seconds >= expires_at
     {
         return Err(MembershipRecordError::Expired {
             expired_at: expires_at,
@@ -1318,6 +1318,22 @@ mod tests {
         assert!(matches!(
             record.verify_at(1_500),
             Err(MembershipRecordError::ExpiredBeforeIssued)
+        ));
+    }
+
+    #[test]
+    fn membership_record_expires_at_its_deadline() {
+        let (_issuer, _member, record) = test_record();
+
+        assert!(!record.is_expired_at(1_999));
+        assert!(record.is_expired_at(2_000));
+        record.verify_at(1_999).expect("record before expiry");
+        assert!(matches!(
+            record.verify_at(2_000),
+            Err(MembershipRecordError::Expired {
+                expired_at: 2_000,
+                now: 2_000,
+            })
         ));
     }
 
