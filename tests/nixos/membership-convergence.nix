@@ -8,18 +8,21 @@ let
   instance = "mesh";
   membershipKey = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=";
   nodeA = {
+    hostname = "mesh-a";
     peerId = "12D3KooWLgQHZofqKG3dcgJhSjMX5szux1v2xgbDZaReqw7qnEKr";
     privateKey = "CAESQNzMbqxrZLUOXHgvRi+GcFXQE0HkxXeivjBL7s+lpls3oWZN2qwxhfFaTxEj+lTry+D3vQbk8up80HLC7VI4f2E=";
     vpnIp = "10.50.0.1";
     lanIp = "192.168.65.1";
   };
   nodeB = {
+    hostname = "mesh-b";
     peerId = "12D3KooWNCwpbady3Gq6zuVJDPH3RRByh39UrKLtDfpibeMB9rAA";
     privateKey = "CAESQIu/iBs6BjqSmRmeCDb8xvs+fx4FnGVq+lZFcB69Y2nWuBUScvSDZruGp7jMKwXQenwFzzlEmqMY5OZgBCSK7Zc=";
     vpnIp = "10.50.0.2";
     lanIp = "192.168.65.2";
   };
   nodeC = {
+    hostname = "mesh-c";
     peerId = "12D3KooWLddBSSTE39542CEtbZG2CN3sJu6bkxbYTxy19ZterSbq";
     privateKey = "CAESQIrtTosx6EJrcoppcZL+8ijzijdnHHqOcIXNkjeVZVK5oLAkMkt53aaP6enVFBdg7I1jMVnywfWmfgEzzEH4bEA=";
     vpnIp = "10.50.0.3";
@@ -106,6 +109,10 @@ let
           dcutr = false;
           autonat = false;
         };
+        dns = {
+          enable = true;
+          hostname = local.hostname;
+        };
         relayReservations = [ relayCircuitLan ] ++ pkgs.lib.optionals movable [ relayCircuitMoved ];
         autoRelay = {
           maxCandidates = 0;
@@ -160,6 +167,7 @@ let
   pair = command: "p2p-vpn pair ${command} --instance ${instance}";
   state = "p2p-vpn daemon-state --socket ${socket}";
   capabilities = "p2p-vpn daemon-capabilities --socket ${socket}";
+  zone = "${networkName}.p2p-vpn.internal";
 in
 pkgs.testers.nixosTest {
   name = "p2p-vpn-nixos-vm-membership-convergence";
@@ -172,6 +180,9 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
+    import json
+    import shlex
+
     start_all()
 
     relay.wait_for_unit("p2p-vpn-relay.service")
@@ -182,9 +193,13 @@ pkgs.testers.nixosTest {
     node_a.wait_for_file("${socket}")
     node_b.wait_for_file("${socket}")
     node_c.wait_for_file("${socket}")
+    for node in [node_a, node_b, node_c]:
+        node.wait_for_unit("systemd-resolved.service")
+        node.wait_for_unit("p2p-vpn-dns-guard.service")
+        node.wait_for_unit("p2p-vpn-${instance}-resolved.service")
     node_c.succeed("ip link set eth2 down")
 
-    def pair_with_inviter(inviter, joiner, expected_peer, vpn_ip, label):
+    def pair_with_inviter(inviter, joiner, expected_peer, hostname, vpn_ip, label):
         open_file = "/tmp/open-%s.json" % label
         join_file = "/tmp/join-%s.json" % label
         open_status = "/tmp/open-status-%s.json" % label
@@ -205,7 +220,8 @@ pkgs.testers.nixosTest {
         approval = inviter.succeed("jq -r .candidate.approval_id " + open_status).strip()
         inviter.succeed(
             "${pair "approve"} " + open_operation + " " + approval
-            + " --vpn-ip " + vpn_ip + " --format json > /tmp/approve-" + label + ".json"
+            + " --hostname " + hostname + " --vpn-ip " + vpn_ip
+            + " --format json > /tmp/approve-" + label + ".json"
         )
         joiner.wait_until_succeeds(
             "${pair "status"} " + join_operation
@@ -213,11 +229,111 @@ pkgs.testers.nixosTest {
             timeout=120,
         )
 
-    def wait_for_three_records(node):
+    def wait_for_record_count(node, count):
         node.wait_until_succeeds(
-            "${capabilities} | grep -q '^local capability membership record count: 3$'",
+            "${capabilities} | grep -q '^local capability membership record count: "
+            + str(count) + "$'",
             timeout=120,
         )
+
+    def wait_for_three_records(node):
+        wait_for_record_count(node, 3)
+
+    def dns_resolve(name):
+        return "p2p-vpn dns resolve " + name + " --socket ${socket} --type a"
+
+    def wait_for_dns(node, hostname, vpn_ip, timeout=120):
+        node.wait_until_succeeds(
+            dns_resolve(hostname) + " | grep -F 'status=ok' | grep -F '" + vpn_ip + "'",
+            timeout=timeout,
+        )
+        node.wait_until_succeeds(
+            "resolvectl query " + hostname + " | grep -F '" + vpn_ip + "'",
+            timeout=timeout,
+        )
+        node.wait_until_succeeds(
+            "resolvectl query " + hostname + ".${zone} | grep -F '" + vpn_ip + "'",
+            timeout=timeout,
+        )
+
+    def wait_for_dns_status(node, name, status, timeout=120):
+        node.wait_until_succeeds(
+            dns_resolve(name) + " | grep -F 'status=" + status + "'",
+            timeout=timeout,
+        )
+
+    def peer_fallback_name(node, peer_id):
+        output = node.succeed("p2p-vpn dns list --socket ${socket}")
+        for line in output.splitlines():
+            if not line.startswith("dns_record "):
+                continue
+            fields = dict(field.split("=", 1) for field in line.split()[1:])
+            if fields.get("transport_peer") == peer_id and fields.get("fallback") == "true":
+                return fields["name"].split(".", 1)[0]
+        raise AssertionError("missing DNS fallback for peer " + peer_id)
+
+    def latest_membership_record(node, issuer_peer, member_peer):
+        command = (
+            "jq -c --arg issuer " + shlex.quote(issuer_peer)
+            + " --arg member " + shlex.quote(member_peer)
+            + " '[.records[] | select(.payload.issuer_peer == $issuer "
+            + "and .payload.member_peer == $member)] "
+            + "| sort_by(.payload.membership_epoch, .payload.sequence) | last' "
+            + "/var/lib/p2p-vpn/${instance}/membership-state.json"
+        )
+        record = json.loads(node.succeed(command))
+        assert record is not None
+        return record
+
+    def issue_membership_record(
+        node,
+        issuer_peer,
+        member_peer,
+        output,
+        hostname=None,
+        vpn_ip=None,
+        expires_at=None,
+        revoked=False,
+    ):
+        current = latest_membership_record(node, issuer_peer, member_peer)["payload"]
+        command = (
+            "p2p-vpn membership-record-issue"
+            + " --issuer-config /run/p2p-vpn-${instance}/config.json"
+            + " --member-peer " + shlex.quote(member_peer)
+            + " --member-public-key " + shlex.quote(current["member_public_key"])
+            + " --membership-epoch " + str(current["membership_epoch"])
+            + " --sequence " + str(current["sequence"] + 1)
+            + " --output " + shlex.quote(output)
+            + " --force"
+        )
+        if revoked:
+            command += " --revoked"
+        else:
+            assert hostname is not None
+            assert vpn_ip is not None
+            command += " --hostname " + shlex.quote(hostname)
+            command += " --route-grant " + shlex.quote(vpn_ip + "/32")
+            if expires_at is not None:
+                command += " --expires-at-unix-seconds " + str(expires_at)
+        node.succeed(command)
+
+    def replace_persisted_record(node, issuer_peer, member_peer, record_path, label):
+        state_path = "/var/lib/p2p-vpn/${instance}/membership-state.json"
+        next_path = "/tmp/membership-state-" + label + ".json"
+        node.succeed("systemctl stop p2p-vpn-${instance}.service")
+        node.succeed(
+            "jq --slurpfile incoming " + shlex.quote(record_path)
+            + " --arg issuer " + shlex.quote(issuer_peer)
+            + " --arg member " + shlex.quote(member_peer)
+            + " '.records = ([.records[] | select(.payload.issuer_peer != $issuer "
+            + "or .payload.member_peer != $member)] + $incoming)' "
+            + state_path + " > " + next_path
+        )
+        node.succeed("install -m 0600 " + next_path + " " + state_path)
+        node.succeed("systemctl start p2p-vpn-${instance}.service")
+        node.wait_for_unit("p2p-vpn-${instance}.service")
+        node.wait_for_unit("p2p-vpn-${instance}-resolved.service")
+        node.wait_for_file("${socket}")
 
     def assert_metric_never_exceeds(node, metric, maximum):
         node.succeed(
@@ -236,16 +352,45 @@ pkgs.testers.nixosTest {
             )
 
     with subtest("root A admits B, then delegated member B admits C"):
-        pair_with_inviter(node_a, node_b, "${nodeB.peerId}", "${nodeB.vpnIp}", "b")
+        pair_with_inviter(
+            node_a,
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeB.hostname}",
+            "${nodeB.vpnIp}",
+            "b",
+        )
         node_b.wait_until_succeeds(
             "${capabilities} | grep -q '^local capability membership record count: 2$'",
             timeout=120,
         )
-        pair_with_inviter(node_b, node_c, "${nodeC.peerId}", "${nodeC.vpnIp}", "c")
+        pair_with_inviter(
+            node_b,
+            node_c,
+            "${nodeC.peerId}",
+            "${nodeC.hostname}",
+            "${nodeC.vpnIp}",
+            "c",
+        )
 
-    with subtest("B and C converge without pairwise pairing"):
+    with subtest("A and C converge without pairwise pairing"):
         for node in [node_a, node_b, node_c]:
             wait_for_three_records(node)
+        for observer in [node_a, node_b, node_c]:
+            for hostname, vpn_ip in [
+                ("${nodeA.hostname}", "${nodeA.vpnIp}"),
+                ("${nodeB.hostname}", "${nodeB.vpnIp}"),
+                ("${nodeC.hostname}", "${nodeC.vpnIp}"),
+            ]:
+                wait_for_dns(observer, hostname, vpn_ip)
+        node_a.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeC.hostname}", timeout=120
+        )
+        node_c.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeA.hostname}.${zone}", timeout=120
+        )
+        node_a.wait_until_succeeds("${state} | grep -q '${nodeC.peerId}'", timeout=120)
+        node_c.wait_until_succeeds("${state} | grep -q '${nodeA.peerId}'", timeout=120)
         node_b.wait_until_succeeds("${state} | grep -q '${nodeC.peerId}'", timeout=120)
         node_c.wait_until_succeeds("${state} | grep -q '${nodeB.peerId}'", timeout=120)
         node_b.wait_until_succeeds(
@@ -285,6 +430,7 @@ pkgs.testers.nixosTest {
         wait_for_three_records(node_b)
         node_b.succeed("${state} | grep -q '${nodeC.peerId}'")
         node_b.succeed("ip -4 route show ${nodeC.vpnIp}/32 dev pv0 | grep -q '${nodeC.vpnIp}'")
+        wait_for_dns(node_b, "${nodeC.hostname}", "${nodeC.vpnIp}")
         node_b.succeed(
             "journalctl -u p2p-vpn-${instance}.service -b --no-pager"
             " | grep -q 'event=membership_state_loaded'"
@@ -307,6 +453,9 @@ pkgs.testers.nixosTest {
         node_c.succeed("ip link set eth1 down")
         node_b.fail("ping -c 1 -W 1 ${nodeC.lanIp}")
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeC.vpnIp}", timeout=180)
+        node_b.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeC.hostname}.${zone}", timeout=180
+        )
         node_c.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=180)
         node_b.wait_until_succeeds(
             "${state} | grep -E 'peer state: [^ ]+ transport ${nodeC.peerId} .*selected_path circuit_relay .*relay_paths [1-9]'",
@@ -355,5 +504,131 @@ pkgs.testers.nixosTest {
             assert_metric_never_exceeds(node, "packet_plane_path_recovery_dial_attempts", 128)
             assert_metric_never_exceeds(node, "kademlia_provider_lookups", 128)
             assert_metric_never_exceeds(node, "redial_attempts", 128)
+
+    with subtest("signed DNS claims disappear automatically after expiry"):
+        node_c_fallback = peer_fallback_name(node_a, "${nodeC.peerId}")
+        wait_for_dns(node_a, node_c_fallback, "${nodeC.vpnIp}")
+        expires_at = int(node_b.succeed("date +%s").strip()) + 30
+        issue_membership_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/expire-c.json",
+            hostname="${nodeC.hostname}",
+            vpn_ip="${nodeC.vpnIp}",
+            expires_at=expires_at,
+        )
+        replace_persisted_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/expire-c.json",
+            "expire-c",
+        )
+        for node in [node_a, node_b, node_c]:
+            wait_for_three_records(node)
+        wait_for_dns(node_a, "${nodeC.hostname}", "${nodeC.vpnIp}")
+        node_a.wait_until_succeeds(
+            "jq -e --argjson expires " + str(expires_at)
+            + " --arg issuer '${nodeB.peerId}' --arg member '${nodeC.peerId}' "
+            + "'.records[] | select(.payload.issuer_peer == $issuer "
+            + "and .payload.member_peer == $member "
+            + "and .payload.expires_at_unix_seconds == $expires)' "
+            + "/var/lib/p2p-vpn/${instance}/membership-state.json",
+            timeout=120,
+        )
+        for node in [node_a, node_b]:
+            wait_for_dns_status(node, "${nodeC.hostname}", "nxdomain", timeout=120)
+            wait_for_dns_status(node, node_c_fallback, "nxdomain", timeout=120)
+            wait_for_three_records(node)
+        node_a.wait_until_succeeds(
+            "! resolvectl query ${nodeC.hostname}.${zone}", timeout=120
+        )
+        node_a.wait_until_succeeds(
+            "! ip -4 route show ${nodeC.vpnIp}/32 dev pv0 | grep -q '${nodeC.vpnIp}'",
+            timeout=120,
+        )
+
+    with subtest("ambiguous signed hostnames fail closed with unique fallbacks"):
+        pair_with_inviter(
+            node_b,
+            node_c,
+            "${nodeC.peerId}",
+            "${nodeB.hostname}",
+            "${nodeC.vpnIp}",
+            "conflict-c",
+        )
+        for node in [node_a, node_b, node_c]:
+            wait_for_three_records(node)
+            node.wait_until_succeeds(
+                dns_resolve("${nodeB.hostname}")
+                + " | grep -F 'status=conflict' | grep -F 'peers_total=2'",
+                timeout=120,
+            )
+        node_a.wait_until_succeeds(
+            "p2p-vpn dns list --socket ${socket} "
+            "| grep -F 'dns_conflict name=${nodeB.hostname}.${zone}.' "
+            "| grep -F 'peers_total=2'",
+            timeout=120,
+        )
+        node_a.wait_until_succeeds(
+            "! resolvectl query ${nodeB.hostname}.${zone}", timeout=120
+        )
+        wait_for_dns(node_a, node_c_fallback, "${nodeC.vpnIp}")
+
+    with subtest("a signed rename resolves the conflict on every node"):
+        pair_with_inviter(
+            node_b,
+            node_c,
+            "${nodeC.peerId}",
+            "${nodeC.hostname}",
+            "${nodeC.vpnIp}",
+            "rename-c",
+        )
+        for node in [node_a, node_b, node_c]:
+            wait_for_three_records(node)
+            wait_for_dns(node, "${nodeB.hostname}", "${nodeB.vpnIp}")
+            wait_for_dns(node, "${nodeC.hostname}", "${nodeC.vpnIp}")
+
+    with subtest("signed revocation removes names routes and fallback after restart"):
+        issue_membership_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/revoke-c.json",
+            revoked=True,
+        )
+        replace_persisted_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/revoke-c.json",
+            "revoke-c",
+        )
+        for node in [node_a, node_b]:
+            wait_for_three_records(node)
+            wait_for_dns_status(node, "${nodeC.hostname}", "nxdomain")
+            wait_for_dns_status(node, node_c_fallback, "nxdomain")
+            node.wait_until_succeeds(
+                "! ip -4 route show ${nodeC.vpnIp}/32 dev pv0 | grep -q '${nodeC.vpnIp}'",
+                timeout=120,
+            )
+        node_a.wait_until_succeeds(
+            "jq -e --arg issuer '${nodeB.peerId}' --arg member '${nodeC.peerId}' "
+            + "'.records[] | select(.payload.issuer_peer == $issuer "
+            + "and .payload.member_peer == $member and .payload.revoked)' "
+            + "/var/lib/p2p-vpn/${instance}/membership-state.json",
+            timeout=120,
+        )
+        node_a.succeed("systemctl restart p2p-vpn-${instance}.service")
+        node_a.wait_for_unit("p2p-vpn-${instance}.service")
+        node_a.wait_for_unit("p2p-vpn-${instance}-resolved.service")
+        node_a.wait_for_file("${socket}")
+        wait_for_three_records(node_a)
+        wait_for_dns_status(node_a, "${nodeC.hostname}", "nxdomain")
+        wait_for_dns_status(node_a, node_c_fallback, "nxdomain")
+        node_a.wait_until_succeeds(
+            "! resolvectl query ${nodeC.hostname}.${zone}", timeout=120
+        )
   '';
 }
