@@ -9239,22 +9239,15 @@ async fn handle_swarm_event(
                         }
                         MembershipProbeAdmission::Duplicate => {
                             let close_requested = swarm.close_connection(connection_id);
-                            context.metrics.record_unauthorized_connection_dropped();
-                            quarantine_membership_probe_peer(
-                                swarm,
-                                context.membership_probe_connections,
-                                peer_id,
-                                now,
-                                "duplicate_connection",
-                            );
                             log_runtime_event(
-                                LogLevel::Warn,
+                                LogLevel::Info,
                                 "membership_probe_connection_deduplicated",
                                 &[
                                     ("peer", &peer_id.to_string()),
                                     ("connection_id", &connection_id.to_string()),
                                     ("relayed", &endpoint.is_relayed().to_string()),
                                     ("close_requested", &close_requested.to_string()),
+                                    ("action", "retry_allowed"),
                                 ],
                             );
                             return Ok(());
@@ -9446,16 +9439,17 @@ async fn handle_swarm_event(
                     peer_id,
                     "authorized_connection_closed",
                 );
-            } else if membership_probe_closed
-                && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
-            {
-                context.metrics.record_unauthorized_connection_dropped();
-                quarantine_membership_probe_peer(
-                    swarm,
-                    context.membership_probe_connections,
-                    peer_id,
-                    Instant::now(),
-                    "probe_closed_before_authorization",
+            } else if membership_probe_closed {
+                // A remote close is not an authorization failure. An immediate retry may be
+                // the pairing client replacing another process that uses the same node key.
+                log_runtime_event(
+                    LogLevel::Info,
+                    "membership_probe_connection_closed",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("connection_id", &connection_id.to_string()),
+                        ("action", "retry_allowed"),
+                    ],
                 );
             }
             if routing_peer_closed {
@@ -24820,6 +24814,26 @@ mod tests {
 
         probes.authorize(peer);
         assert!(probes.by_peer.is_empty());
+    }
+
+    #[test]
+    fn closed_membership_probe_can_retry_immediately() {
+        let peer = peer_id();
+        let first_connection = ConnectionId::new_unchecked(1);
+        let retry_connection = ConnectionId::new_unchecked(2);
+        let now = Instant::now();
+        let mut probes = MembershipProbeConnections::default();
+
+        assert_eq!(
+            probes.admit(peer, first_connection, false, now),
+            MembershipProbeAdmission::Admitted
+        );
+        assert!(probes.remove(peer, first_connection));
+        assert_eq!(
+            probes.admit(peer, retry_connection, false, now),
+            MembershipProbeAdmission::Admitted
+        );
+        assert!(probes.quarantines.is_empty());
     }
 
     #[test]
