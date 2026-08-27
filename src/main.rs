@@ -36,8 +36,8 @@ use p2p_vpn::{
     membership::{
         MAX_MEMBERSHIP_RECORD_INTEGER, MembershipRecordIssueOptions, MembershipRecordMergeStats,
         MembershipRecordPayload, MembershipRecordSubject, MembershipRole, SignedMembershipRecord,
-        issue_membership_record_for_subject_at, issue_named_membership_record_for_subject_at,
-        validate_membership_record_history, validate_membership_records_at,
+        issue_named_membership_record_for_subject_at, validate_membership_record_history,
+        validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
     pairing::{
@@ -76,6 +76,9 @@ use p2p_vpn::{
     },
     wire::{HEADER_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION},
 };
+
+#[cfg(test)]
+use p2p_vpn::membership::issue_membership_record_for_subject_at;
 use serde::{Deserialize, Serialize};
 
 const RELAY_CHECK_CAPPED_INPUT_LIMIT: usize = 256;
