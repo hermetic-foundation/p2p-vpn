@@ -275,4 +275,7 @@ records. Rename every member and re-pair the overlay.
 | Resolver unit failed | `journalctl -u p2p-vpn-INSTANCE-resolved.service` |
 | DNS daemon errors | `p2p-vpn dns status --instance INSTANCE` |
 
+`dns status` reports `degraded=true` when a failed zone refresh has temporarily
+removed all answers. The daemon retries the bounded rebuild every five seconds.
+
 See [Network Membership](membership.md) for trust and convergence behavior.

@@ -119,7 +119,7 @@ Refresh triggers:
 | Pairing enrollment | Rebuild immediately |
 | Revocation | Rebuild immediately |
 | Next claim expiry | Timed rebuild at the deadline |
-| Invalid replacement | Keep old zone and increment failure metric |
+| Invalid replacement | Publish an empty fail-closed zone and retry after 5 seconds |
 
 UDP and TCP tasks read the current `Arc<DnsZone>` without locking per record.
 

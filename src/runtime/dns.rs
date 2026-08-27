@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -35,6 +35,7 @@ pub const MAX_DNS_TCP_CONNECTIONS: usize = 64;
 pub const MAX_DNS_TCP_QUERIES_PER_CONNECTION: usize = 32;
 pub const DNS_TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_DNS_CONTROL_LIST_LIMIT: usize = 256;
+const DNS_ZONE_REFRESH_RETRY_SECONDS: u64 = 5;
 const DNS_CONTROL_ADDRESS_PREVIEW: usize = 8;
 const DNS_CONTROL_PEER_PREVIEW: usize = 8;
 
@@ -67,6 +68,7 @@ pub struct DnsRuntime {
     shutdown_tx: watch::Sender<bool>,
     metrics: Arc<DnsRuntimeMetrics>,
     last_refresh_attempt_unix_seconds: AtomicU64,
+    refresh_failed: AtomicBool,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -128,6 +130,7 @@ impl DnsRuntime {
             shutdown_tx,
             metrics,
             last_refresh_attempt_unix_seconds: AtomicU64::new(0),
+            refresh_failed: AtomicBool::new(false),
             tasks,
         })
     }
@@ -144,15 +147,15 @@ impl DnsRuntime {
 
     #[must_use]
     pub fn refresh_due(&self, now_unix_seconds: u64) -> bool {
+        let last_attempt = self
+            .last_refresh_attempt_unix_seconds
+            .load(Ordering::Relaxed);
+        if self.refresh_failed.load(Ordering::Relaxed) {
+            return now_unix_seconds >= last_attempt.saturating_add(DNS_ZONE_REFRESH_RETRY_SECONDS);
+        }
         self.zone()
             .next_refresh_unix_seconds()
-            .is_some_and(|expires_at| {
-                expires_at <= now_unix_seconds
-                    && self
-                        .last_refresh_attempt_unix_seconds
-                        .load(Ordering::Relaxed)
-                        < expires_at
-            })
+            .is_some_and(|expires_at| expires_at <= now_unix_seconds && last_attempt < expires_at)
     }
 
     pub fn refresh_at(
@@ -169,10 +172,14 @@ impl DnsRuntime {
                 self.metrics
                     .zone_refresh_failures
                     .fetch_add(1, Ordering::Relaxed);
+                let fail_closed = self.zone().fail_closed();
+                self.zone_tx.send_replace(Arc::new(fail_closed));
+                self.refresh_failed.store(true, Ordering::Relaxed);
                 return Err(error.into());
             }
         };
         self.zone_tx.send_replace(Arc::new(zone));
+        self.refresh_failed.store(false, Ordering::Relaxed);
         self.metrics.zone_refreshes.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -202,6 +209,7 @@ impl DnsRuntime {
             io_errors: self.metrics.io_errors.load(Ordering::Relaxed),
             zone_refreshes: self.metrics.zone_refreshes.load(Ordering::Relaxed),
             zone_refresh_failures: self.metrics.zone_refresh_failures.load(Ordering::Relaxed),
+            degraded: self.refresh_failed.load(Ordering::Relaxed),
         }
     }
 
@@ -231,8 +239,8 @@ impl DnsRuntime {
                 snapshot.io_errors,
             ),
             format!(
-                "dns_refresh successful={} failed={}",
-                snapshot.zone_refreshes, snapshot.zone_refresh_failures
+                "dns_refresh successful={} failed={} degraded={}",
+                snapshot.zone_refreshes, snapshot.zone_refresh_failures, snapshot.degraded
             ),
         ]
     }
@@ -408,6 +416,7 @@ pub struct DnsRuntimeSnapshot {
     pub io_errors: u64,
     pub zone_refreshes: u64,
     pub zone_refresh_failures: u64,
+    pub degraded: bool,
 }
 
 #[derive(Debug)]
@@ -1222,7 +1231,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_refresh_keeps_the_last_valid_zone() {
+    async fn failed_refresh_fails_closed_and_retries() {
         let mut config = config("worker-1");
         let runtime = DnsRuntime::bind_at(&config, &[], 1_000)
             .await
@@ -1235,11 +1244,26 @@ mod tests {
             runtime
                 .zone()
                 .record("worker-1.runner-mesh.p2p-vpn.internal.")
-                .is_some()
+                .is_none()
         );
         let snapshot = runtime.snapshot();
         assert_eq!(snapshot.zone_refreshes, 0);
         assert_eq!(snapshot.zone_refresh_failures, 1);
+        assert!(snapshot.degraded);
+        assert!(!runtime.refresh_due(1_005));
+        assert!(runtime.refresh_due(1_006));
+
+        config.network.dns.hostname = Some("worker-2".to_owned());
+        runtime
+            .refresh_at(&config, &[], 1_006)
+            .expect("valid retry");
+        assert!(
+            runtime
+                .zone()
+                .record("worker-2.runner-mesh.p2p-vpn.internal.")
+                .is_some()
+        );
+        assert!(!runtime.snapshot().degraded);
     }
 
     #[tokio::test]

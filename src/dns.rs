@@ -207,6 +207,19 @@ impl DnsZone {
         }
     }
 
+    #[must_use]
+    pub(crate) fn fail_closed(&self) -> Self {
+        Self {
+            network_name: self.network_name.clone(),
+            zone: self.zone.clone(),
+            ttl_seconds: self.ttl_seconds,
+            next_refresh_unix_seconds: None,
+            records: Vec::new(),
+            conflicts: Vec::new(),
+            reverse: BTreeMap::new(),
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn from_config_at(
         config: &Config,

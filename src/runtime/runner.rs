@@ -1566,7 +1566,7 @@ fn refresh_dns_zone_if_needed(
             "dns_zone_refresh_failed",
             &[
                 ("reason", &error.to_string()),
-                ("action", "retaining_last_valid_zone"),
+                ("action", "publishing_fail_closed_zone"),
             ],
         );
     }
