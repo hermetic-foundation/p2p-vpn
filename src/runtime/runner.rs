@@ -11048,15 +11048,42 @@ fn handle_service_request(
                     audit_service_status_rejection(peer, *reason);
                 }
             }
-            swarm
-                .behaviour_mut()
-                .service
-                .send_response(channel, response)
-                .map_err(|_| RunnerError::ServiceResponseDropped)?;
+            send_service_response_nonfatal(swarm, context.metrics, peer, channel, response);
         }
     }
 
     Ok(())
+}
+
+fn send_service_response_nonfatal(
+    swarm: &mut Swarm<Behaviour>,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    channel: request_response::ResponseChannel<ServiceResponse>,
+    response: ServiceResponse,
+) {
+    if let Err(response) = swarm
+        .behaviour_mut()
+        .service
+        .send_response(channel, response)
+    {
+        metrics.record_service_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "service_response_dropped",
+            &[
+                ("peer", &peer.to_string()),
+                ("response", service_response_name(&response)),
+            ],
+        );
+    }
+}
+
+const fn service_response_name(response: &ServiceResponse) -> &'static str {
+    match response {
+        ServiceResponse::Status(_) => "status",
+        ServiceResponse::Rejected(_) => "rejected",
+    }
 }
 
 fn handle_pairing_event(
@@ -17640,7 +17667,6 @@ pub enum RunnerError {
     PacketResponseDropped,
     ControlResponseDropped,
     PairingResponseDropped,
-    ServiceResponseDropped,
     Pairing(crate::pairing::PairingError),
     PairingStateStore(PairingStateStoreError),
     MembershipStateStore(MembershipStateStoreError),
