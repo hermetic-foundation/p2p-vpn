@@ -34,6 +34,8 @@ sha2 = "0.11.0"
 sha2_010 = { package = "sha2", version = "0.10.9" }
 spake2 = "0.4.0"
 tokio = { version = "1.53.1", features = ["full"] }
-tun = "0.8.14"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 if-addrs = "0.15.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tun = "0.8.14"

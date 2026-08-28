@@ -12,6 +12,84 @@ use crate::{
     route::{IpCidr, Route, builtin_ipv4, builtin_ipv6},
 };
 
+/// Blocking packet source used by the platform-neutral runtime.
+///
+/// Implementations should arrange for a blocked read to wake periodically so
+/// the owning runtime can shut down without leaking a worker thread.
+pub trait PacketRead: Send + 'static {
+    fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
+}
+
+/// Blocking packet sink used by the platform-neutral runtime.
+pub trait PacketWrite: Send + 'static {
+    fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize>;
+}
+
+pub struct PacketReader {
+    inner: Box<dyn PacketRead>,
+}
+
+pub struct PacketWriter {
+    inner: Box<dyn PacketWrite>,
+}
+
+/// A split packet device supplied by the host platform.
+pub struct PacketIo {
+    reader: PacketReader,
+    writer: PacketWriter,
+}
+
+impl PacketIo {
+    #[must_use]
+    pub fn new(reader: impl PacketRead, writer: impl PacketWrite) -> Self {
+        Self {
+            reader: PacketReader {
+                inner: Box::new(reader),
+            },
+            writer: PacketWriter {
+                inner: Box::new(writer),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn split(self) -> (PacketReader, PacketWriter) {
+        (self.reader, self.writer)
+    }
+}
+
+impl PacketReader {
+    pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
+        let length = self
+            .inner
+            .read_packet(buffer)
+            .map_err(TunRuntimeError::Io)?;
+        if length > buffer.len() {
+            return Err(TunRuntimeError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "packet reader returned more bytes than its buffer",
+            )));
+        }
+        Ok(length)
+    }
+}
+
+impl PacketWriter {
+    pub fn write_packet(&mut self, packet: &[u8]) -> Result<usize, TunRuntimeError> {
+        let length = self
+            .inner
+            .write_packet(packet)
+            .map_err(TunRuntimeError::Io)?;
+        if length != packet.len() {
+            return Err(TunRuntimeError::Io(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "packet writer did not consume the complete packet",
+            )));
+        }
+        Ok(length)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TunAddresses {
     pub ipv4: Ipv4Addr,
@@ -608,12 +686,25 @@ impl TunDevice {
         let (reader, writer) = self.device.split();
         (TunReader { reader }, TunWriter { writer })
     }
+
+    #[must_use]
+    pub fn into_packet_io(self) -> PacketIo {
+        let (reader, writer) = self.split();
+        PacketIo::new(reader, writer)
+    }
 }
 
 #[cfg(target_os = "linux")]
 impl TunReader {
     pub fn read_packet(&mut self, buffer: &mut [u8]) -> Result<usize, TunRuntimeError> {
         Ok(self.reader.read(buffer)?)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PacketRead for TunReader {
+    fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buffer)
     }
 }
 
@@ -625,9 +716,18 @@ impl TunWriter {
     }
 }
 
+#[cfg(target_os = "linux")]
+impl PacketWrite for TunWriter {
+    fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
+        self.writer.write_all(packet)?;
+        Ok(packet.len())
+    }
+}
+
 #[derive(Debug)]
 pub enum TunRuntimeError {
     Config(crate::config::ConfigError),
+    #[cfg(target_os = "linux")]
     Tun(tun::Error),
     Io(io::Error),
     NonAdditiveUpdate(&'static str),
@@ -639,6 +739,7 @@ impl From<crate::config::ConfigError> for TunRuntimeError {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl From<tun::Error> for TunRuntimeError {
     fn from(error: tun::Error) -> Self {
         Self::Tun(error)
@@ -653,7 +754,10 @@ impl From<io::Error> for TunRuntimeError {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
+    use std::{
+        net::Ipv4Addr,
+        sync::{Arc, Mutex},
+    };
 
     use crate::{
         config::{
@@ -669,6 +773,77 @@ mod tests {
     };
 
     use super::*;
+
+    struct TestPacketReader(Vec<u8>);
+
+    impl PacketRead for TestPacketReader {
+        fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let length = self.0.len();
+            buffer[..length].copy_from_slice(&self.0);
+            Ok(length)
+        }
+    }
+
+    struct TestPacketWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl PacketWrite for TestPacketWriter {
+        fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("packet writer lock").extend(packet);
+            Ok(packet.len())
+        }
+    }
+
+    struct InvalidLengthReader;
+
+    impl PacketRead for InvalidLengthReader {
+        fn read_packet(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(buffer.len() + 1)
+        }
+    }
+
+    struct ShortPacketWriter;
+
+    impl PacketWrite for ShortPacketWriter {
+        fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
+            Ok(packet.len().saturating_sub(1))
+        }
+    }
+
+    #[test]
+    fn packet_io_adapts_platform_readers_and_writers() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let packet_io = PacketIo::new(
+            TestPacketReader(vec![1, 2, 3]),
+            TestPacketWriter(Arc::clone(&written)),
+        );
+        let (mut reader, mut writer) = packet_io.split();
+        let mut buffer = [0_u8; 8];
+
+        assert_eq!(reader.read_packet(&mut buffer).expect("read packet"), 3);
+        assert_eq!(&buffer[..3], &[1, 2, 3]);
+        assert_eq!(writer.write_packet(&[4, 5]).expect("write packet"), 2);
+        assert_eq!(*written.lock().expect("written packet lock"), [4, 5]);
+    }
+
+    #[test]
+    fn packet_io_rejects_invalid_adapter_lengths() {
+        let packet_io = PacketIo::new(InvalidLengthReader, ShortPacketWriter);
+        let (mut reader, mut writer) = packet_io.split();
+
+        let read_error = reader
+            .read_packet(&mut [0_u8; 1])
+            .expect_err("oversized read must fail");
+        assert!(
+            matches!(read_error, TunRuntimeError::Io(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+
+        let write_error = writer
+            .write_packet(&[1])
+            .expect_err("short packet write must fail");
+        assert!(
+            matches!(write_error, TunRuntimeError::Io(error) if error.kind() == io::ErrorKind::WriteZero)
+        );
+    }
 
     fn peer_hex(seed: u8) -> String {
         format!("{seed:02x}").repeat(32)

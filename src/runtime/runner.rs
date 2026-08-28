@@ -106,12 +106,15 @@ use crate::{
             ServiceStatusResponse, validate_status_request, validate_status_response,
         },
         tun::{
-            IpCommand, TunDevice, TunReader, TunRouteUpdate, TunRuntimeConfig, TunRuntimeError,
-            TunWriter, packet_too_big,
+            IpCommand, PacketIo, PacketReader, PacketWriter, TunRouteUpdate, TunRuntimeConfig,
+            TunRuntimeError, packet_too_big,
         },
     },
     wire::{Frame, PayloadType},
 };
+
+#[cfg(target_os = "linux")]
+use crate::runtime::tun::TunDevice;
 
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
@@ -504,14 +507,23 @@ fn take_rate_limit_token(bucket: &mut PacketRateBucket, limit: u32, now: Instant
     true
 }
 
+#[cfg(target_os = "linux")]
 pub async fn run_config(
     config: Config,
     device: TunDevice,
     metrics_interval: Option<Duration>,
 ) -> Result<(), RunnerError> {
-    run_config_until(
+    run_config_with_packet_io(config, device.into_packet_io(), metrics_interval).await
+}
+
+pub async fn run_config_with_packet_io(
+    config: Config,
+    packet_io: PacketIo,
+    metrics_interval: Option<Duration>,
+) -> Result<(), RunnerError> {
+    run_config_until_with_packet_io(
         config,
-        device,
+        packet_io,
         metrics_interval,
         None,
         None,
@@ -520,6 +532,7 @@ pub async fn run_config(
     .await
 }
 
+#[cfg(target_os = "linux")]
 pub async fn run_config_until<Shutdown>(
     config: Config,
     device: TunDevice,
@@ -531,9 +544,31 @@ pub async fn run_config_until<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
-    run_config_until_with_membership_state(
+    run_config_until_with_packet_io(
         config,
-        device,
+        device.into_packet_io(),
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        shutdown,
+    )
+    .await
+}
+
+pub async fn run_config_until_with_packet_io<Shutdown>(
+    config: Config,
+    packet_io: PacketIo,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
+    run_config_until_with_membership_state_and_packet_io(
+        config,
+        packet_io,
         metrics_interval,
         control_socket,
         pairing_state_path,
@@ -543,9 +578,34 @@ where
     .await
 }
 
+#[cfg(target_os = "linux")]
 pub async fn run_config_until_with_membership_state<Shutdown>(
     config: Config,
     device: TunDevice,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    membership_state_path: Option<PathBuf>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
+    run_config_until_with_membership_state_and_packet_io(
+        config,
+        device.into_packet_io(),
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        membership_state_path,
+        shutdown,
+    )
+    .await
+}
+
+pub async fn run_config_until_with_membership_state_and_packet_io<Shutdown>(
+    config: Config,
+    packet_io: PacketIo,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
     pairing_state_path: Option<PathBuf>,
@@ -618,7 +678,7 @@ where
         forwarder,
         membership,
         previous_membership_tags,
-        device,
+        packet_io,
         config.effective_packet_mtu(),
         config.queue,
         config.resources,
@@ -657,6 +717,7 @@ impl ShutdownReason {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub async fn run_node(
     node: P2pNode,
     forwarder: Forwarder,
@@ -664,12 +725,29 @@ pub async fn run_node(
     device: TunDevice,
     options: RuntimeNodeOptions,
 ) -> Result<(), RunnerError> {
-    Box::pin(run_node_until(
+    run_node_with_packet_io(
+        node,
+        forwarder,
+        membership,
+        device.into_packet_io(),
+        options,
+    )
+    .await
+}
+
+pub async fn run_node_with_packet_io(
+    node: P2pNode,
+    forwarder: Forwarder,
+    membership: OverlayMembership,
+    packet_io: PacketIo,
+    options: RuntimeNodeOptions,
+) -> Result<(), RunnerError> {
+    Box::pin(run_node_until_with_packet_io(
         node,
         forwarder,
         membership,
         Vec::new(),
-        device,
+        packet_io,
         options.mtu,
         options.queue,
         options.resources,
@@ -700,6 +778,7 @@ pub struct RuntimeNodeOptions {
     pub auto_relay: AutoRelayConfig,
 }
 
+#[cfg(target_os = "linux")]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 pub async fn run_node_until<Shutdown>(
@@ -727,12 +806,64 @@ pub async fn run_node_until<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    Box::pin(run_node_until_with_packet_io(
+        node,
+        forwarder,
+        membership,
+        previous_membership_tags,
+        device.into_packet_io(),
+        mtu,
+        queue_config,
+        resources,
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        packet_plane,
+        packet_plane_quic,
+        packet_plane_quic_external_endpoints,
+        packet_plane_session_ttl,
+        packet_plane_replay_windows_per_session,
+        auto_relay_config,
+        public_bootstrap_defaults,
+        public_discovery_holdoff_until,
+        shutdown,
+    ))
+    .await
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_node_until_with_packet_io<Shutdown>(
+    node: P2pNode,
+    forwarder: Forwarder,
+    membership: OverlayMembership,
+    previous_membership_tags: Vec<String>,
+    packet_io: PacketIo,
+    mtu: u16,
+    queue_config: QueueConfig,
+    resources: ResourceConfig,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    packet_plane: PacketPlaneRuntime,
+    packet_plane_quic: Option<PacketPlaneQuicRuntime>,
+    packet_plane_quic_external_endpoints: Vec<String>,
+    packet_plane_session_ttl: Duration,
+    packet_plane_replay_windows_per_session: usize,
+    auto_relay_config: AutoRelayConfig,
+    public_bootstrap_defaults: bool,
+    public_discovery_holdoff_until: Option<Instant>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
     Box::pin(run_node_until_with_membership_state(
         node,
         forwarder,
         membership,
         previous_membership_tags,
-        device,
+        packet_io,
         mtu,
         queue_config,
         resources,
@@ -760,7 +891,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
     mut forwarder: Forwarder,
     mut membership: OverlayMembership,
     previous_membership_tags: Vec<String>,
-    device: TunDevice,
+    packet_io: PacketIo,
     mtu: u16,
     queue_config: QueueConfig,
     resources: ResourceConfig,
@@ -781,7 +912,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
-    let (reader, mut writer) = device.split();
+    let (reader, mut writer) = packet_io.split();
     let metrics = Arc::new(RuntimeMetrics::default());
     let mut tun_rx = spawn_tun_reader(reader, Arc::clone(&metrics), mtu);
     let mut queues = PeerQueues::with_packet_ttl(
@@ -7599,7 +7730,7 @@ fn relay_peer_from_relayed_address(address: &Multiaddr) -> Option<Libp2pPeerId> 
 }
 
 fn spawn_tun_reader(
-    mut reader: TunReader,
+    mut reader: PacketReader,
     metrics: Arc<RuntimeMetrics>,
     mtu: u16,
 ) -> mpsc::Receiver<Vec<u8>> {
@@ -7635,7 +7766,7 @@ struct RuntimeOutboundDrain<'a> {
     paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
     queue_runtime: &'a mut QueueRuntimeState,
-    writer: &'a mut TunWriter,
+    writer: &'a mut PacketWriter,
     packet_plane: &'a PacketPlaneRuntime,
     packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
     metrics: &'a RuntimeMetrics,
@@ -8079,7 +8210,7 @@ struct QueueDrainContext<'a> {
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
     last_blocked_queue_redial: &'a mut Option<Instant>,
-    writer: Option<&'a mut TunWriter>,
+    writer: Option<&'a mut PacketWriter>,
     packet_plane: Option<&'a PacketPlaneRuntime>,
     packet_plane_quic: Option<&'a PacketPlaneQuicRuntime>,
     metrics: &'a RuntimeMetrics,
@@ -9017,7 +9148,7 @@ struct SwarmEventContext<'a> {
     tun_runtime: &'a mut TunRuntimeConfig,
     infrastructure_peers: &'a mut InfrastructurePeers,
     routing_infrastructure_peers: &'a mut RoutingInfrastructurePeers,
-    writer: &'a mut TunWriter,
+    writer: &'a mut PacketWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a mut PeerCapabilities,
     relay_readiness: &'a mut RelayReadiness,
@@ -10463,7 +10594,7 @@ fn packet_rejection_reason_name(reason: PacketRejectionReason) -> &'static str {
 
 struct PacketPlaneInboundContext<'a> {
     forwarder: &'a mut Forwarder,
-    writer: &'a mut TunWriter,
+    writer: &'a mut PacketWriter,
     paths: &'a mut PathSet,
     peer_capabilities: &'a PeerCapabilities,
     inbound_packet_rate_limiters: &'a mut PeerRateLimiters,
