@@ -48,7 +48,7 @@ Status is conservative.
 | Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, transitive VM, and physical four-host proofs. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Android Nix build | Operational | Rust tests, cross build, Java tests, lint, APK, signature, and manifest gate. |
-| Android pair and connect | Operational | API 35 emulator/Linux pairing, dual-stack traffic, persistence, and recovery proof. |
+| Android pair and connect | Partial | API 35 code pairing and bidirectional dual-stack traffic proven; recovery and hardware remain. |
 | Release archive | Operational | Release archive sanity check. |
 
 ## Current Recorded Evidence
@@ -77,13 +77,13 @@ Status is conservative.
 | 2026-08-26 | Public discovery address hygiene | Unverified private IPFS addresses were rejected without failed-neighbor growth. |
 | 2026-08-26 | IPv6 first activation | `nodad` removed the route-source race; the service started with zero retries. |
 | 2026-08-26 | Physical authenticated DNS mesh | Four signed names converged; short, canonical, PTR, IPv4, IPv6, and restart checks passed. |
-| 2026-08-29 | Android/Linux emulator E2E | Relay pairing, bidirectional dual-stack traffic, reinstall persistence, and underlay recovery passed. |
+| 2026-08-29 | Android/Linux emulator E2E | Code pairing with no overlay peer address and four 5/5 dual-stack traffic checks passed. |
 
-## Main Remaining Gap
+## Main Remaining Gaps
 
-Real public-internet code pairing remains an external evidence target.
-
-The local release gate proves the same state machine on isolated LAN and relay VMs.
-
-A public run should pair two fresh hosts from only the code, require approval,
-and capture bidirectional overlay traffic without manual routes.
+| Gap | Required Evidence |
+| --- | --- |
+| Public code pairing | Two fresh hosts pair from only a code and pass traffic without manual routes. |
+| Android recovery | Emulator survives process death and controlled underlay changes. |
+| Android path modes | QUIC stream, TCP fallback, and relay-only scenarios pass separately. |
+| Android hardware | Physical arm64 device pairs, reconnects, and passes dual-stack traffic. |

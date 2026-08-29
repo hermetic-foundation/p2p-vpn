@@ -269,6 +269,22 @@ nix run .#android-e2e -- \
 
 An uninstall or application-data clear still destroys the identity by design.
 
+Run isolated Linux pairing and traffic coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario pairing-traffic \
+  --output ./android-pairing-evidence
+```
+
+| Check | Assertion |
+| --- | --- |
+| Enrollment | Android receives only a code, not an overlay peer address |
+| Discovery | A private Kademlia bootstrap locates the Linux inviter |
+| Traffic | IPv4 and IPv6 pass 5/5 in both directions |
+| Evidence | Logs are redacted, capped, and contain no pairing secret |
+| Cleanup | Emulator, fixture, and private runtime state are removed |
+
 Run capability checks without starting Android:
 
 ```sh
@@ -283,7 +299,9 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 | `77` | Explicit preflight or `--allow-skip` skipped |
 
 `evidence.json` records preflight checks, the device contract, scenario steps,
-and cleanup results. `emulator.log` is redacted and capped at 1 MiB.
+and cleanup results.
+
+`emulator.log` and `fixture.log` are redacted and capped at 1 MiB each.
 
 ### Storage Safety
 
@@ -355,6 +373,10 @@ Responses are schema-versioned JSON encoded as base64 in broadcast result data.
 Status never includes config JSON, private keys, membership keys, or receipts.
 It can include an active pairing code; the harness keeps that in private state.
 
+The isolated E2E scenario can also supply one private bootstrap router.
+
+That debug-only input never configures the Linux overlay peer as a static peer.
+
 ## Verification
 
 Run the complete Android gate:
@@ -390,19 +412,18 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The 2026-08-29 run used an API 35 x86_64 emulator and a Linux daemon.
+The 2026-08-29 run used an API 35 x86_64 emulator and a rootless Linux fixture.
 
-No static peer address or forced remote peer was configured.
+Android was given one private discovery bootstrap and no overlay peer address.
 
 ### Pairing
 
 | Check | Result |
 | --- | --- |
 | Android workflow | Created profile, connected VPN, joined by code |
-| Discovery | LAN candidate observed; public providers queried |
-| Pairing path | Circuit relay selected |
+| Discovery | Private Kademlia provider lookup found the inviter |
 | Approval | Linux verified and approved the Android candidate |
-| Persistence | APK reinstall restored identity and membership |
+| Enrollment | Android applied artifacts and reconnected automatically |
 
 ### Overlay Traffic
 
@@ -413,19 +434,22 @@ No static peer address or forced remote peer was configured.
 | Android to Linux | IPv4 ICMP | 5/5 replies |
 | Android to Linux | IPv6 ICMP | 5/5 replies |
 
-The steady data path promoted to direct TCP stream fallback.
+The final status reported one direct QUIC stream and one direct TCP stream path.
 
-### Underlay Recovery
+### Cleanup
 
-| Transition | Result |
+| Check | Result |
 | --- | --- |
-| Emulator Wi-Fi to cellular | VPN rebuilt; both traffic directions recovered |
-| Emulator cellular to Wi-Fi | VPN rebuilt; both traffic directions recovered |
-| LAN-first grace | Public discovery resumed after 60 seconds |
+| Readiness | All four one-packet probes passed on the first attempt |
+| Steady traffic | Every direction and address family passed 5/5 |
+| Processes | Emulator and Linux fixture stopped |
+| Private state | Pairing code, keys, and runtime state removed |
+| Evidence | Both redacted logs remained below 1 MiB |
 
-This proves Android integration and lifecycle recovery in the emulator.
+This proves isolated emulator pairing and bidirectional dual-stack traffic.
 
-It does not prove physical-device behavior or a hostile public NAT topology.
+It does not prove underlay changes, relay-only paths, public NAT traversal,
+or physical-device behavior.
 
 ## Current Exclusions
 
@@ -437,3 +461,5 @@ It does not prove physical-device behavior or a hostile public NAT topology.
 | Custom route-grant UI | Excluded |
 | Identity import/export UI | Excluded |
 | Play Store release pipeline | Excluded |
+| Automated emulator underlay changes | Not yet proven |
+| Physical arm64 device | Not yet proven |

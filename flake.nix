@@ -384,6 +384,7 @@
                   "$test_root/tmp" \
                   "$test_root/evidence" \
                   "$test_root/persistence-evidence" \
+                  "$test_root/pairing-evidence" \
                   "$test_root/skip-evidence"
                 touch "$test_root/fake.apk"
 
@@ -400,10 +401,91 @@
                 EOF
                 chmod +x "$test_root/bin/fake-emulator"
 
+                cat > "$test_root/bin/fake-fixture" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                case "''${1:-}" in
+                  run)
+                    shift
+                    state_dir=""
+                    while [[ $# -gt 0 ]]; do
+                      case "$1" in
+                        --state-dir) state_dir="$2"; shift 2 ;;
+                        *) shift ;;
+                      esac
+                    done
+                    : "''${state_dir:?}"
+                    mkdir -p "$state_dir"
+                    touch "$state_dir/peer-control.sock" "$state_dir/packet-control.sock"
+                    jq -n \
+                      --arg control "$state_dir/peer-control.sock" \
+                      --arg packet "$state_dir/packet-control.sock" \
+                      '{
+                        schema_version: 1,
+                        network: "android-e2e",
+                        bootstrap: {
+                          peer_id: "12D3KooWFakeBootstrapPeer",
+                          android_address: "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWFakeBootstrapPeer",
+                          kademlia_protocol: "/p2p-vpn/kad/1"
+                        },
+                        peer: {
+                          peer_id: "12D3KooWFakeLinuxPeer",
+                          ipv4: "100.64.0.2",
+                          ipv6: "fd42::2",
+                          control_socket: $control
+                        },
+                        packet_control_socket: $packet
+                      }' > "$state_dir/fixture.json"
+                    printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
+                    trap 'exit 0' INT TERM
+                    while :; do sleep 1; done
+                    ;;
+                  probe)
+                    family=ipv4
+                    count=5
+                    while [[ $# -gt 0 ]]; do
+                      if [[ "$1" == --source && "''${2:-}" == *:* ]]; then family=ipv6; fi
+                      if [[ "$1" == --count ]]; then count="$2"; fi
+                      shift
+                    done
+                    jq -cn --arg family "$family" --argjson count "$count" \
+                      '{schema_version: 1, ok: true, family: $family, sent: $count, received: $count}'
+                    ;;
+                  *) exit 2 ;;
+                esac
+                EOF
+                chmod +x "$test_root/bin/fake-fixture"
+
+                cat > "$test_root/bin/fake-p2p-vpn" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                case "$*" in
+                  'pair open '* )
+                    jq -cn '{operation_id: "fake-operation", code: "ABCD-EFGH-JKLM-NPQR"}'
+                    ;;
+                  'pair status fake-operation '* )
+                    jq -cn '{
+                      operation_id: "fake-operation",
+                      phase: "awaiting_approval",
+                      candidate: {
+                        approval_id: "fake-approval",
+                        peer_id: "12D3KooWFakeAndroidPeer"
+                      }
+                    }'
+                    ;;
+                  'pair approve fake-operation fake-approval '* )
+                    jq -cn '{operation_id: "fake-operation", phase: "completed"}'
+                    ;;
+                  *) exit 2 ;;
+                esac
+                EOF
+                chmod +x "$test_root/bin/fake-p2p-vpn"
+
                 cat > "$test_root/bin/fake-adb" <<'EOF'
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 if [[ "''${1:-}" == -s ]]; then shift 2; fi
+                pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
                 case "$*" in
                   get-state) printf 'device\n' ;;
                   'shell getprop ro.build.version.sdk') printf '35\n' ;;
@@ -415,7 +497,52 @@
                     printf 'org.hermeticfoundation.p2pvpn.MainActivity\n'
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command status')
-                    if [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
+                    if [[ -n "$pairing_state" && -f "$pairing_state" ]]; then
+                      state="$(< "$pairing_state")"
+                      connected=false
+                      pairing_detail='No pairing operation'
+                      connected_peers=0
+                      direct_tcp_stream=0
+                      if [[ "$state" == connected || "$state" == paired ]]; then
+                        connected=true
+                      fi
+                      if [[ "$state" == paired ]]; then
+                        pairing_detail='Paired with 12D3KooWFakeLinuxPeer'
+                        connected_peers=1
+                        direct_tcp_stream=1
+                      fi
+                      response="$(jq -cn \
+                        --argjson connected "$connected" \
+                        --arg pairing_detail "$pairing_detail" \
+                        --argjson connected_peers "$connected_peers" \
+                        --argjson direct_tcp_stream "$direct_tcp_stream" \
+                        '{
+                          schema_version: 1,
+                          ok: true,
+                          value: {
+                            service_ready: true,
+                            snapshot: {
+                              has_profile: true,
+                              profile_stored: true,
+                              busy: false,
+                              connected: $connected,
+                              network_name: "android-e2e",
+                              peer_id: "12D3KooWFakeAndroidPeer",
+                              addresses: ["100.64.0.9/32", "fd42::9/128"],
+                              pairing_detail: $pairing_detail,
+                              paths: {
+                                connected_peers: $connected_peers,
+                                direct_udp_datagram: 0,
+                                direct_quic_datagram: 0,
+                                direct_quic_stream: 0,
+                                direct_tcp_stream: $direct_tcp_stream,
+                                relay: 0,
+                                public_routing_peers: 0
+                              }
+                            }
+                          }
+                        }')"
+                    elif [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
                       && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
                       response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":true,"profile_stored":true,"busy":false,"network_name":"android-e2e","peer_id":"12D3KooWFakeAndroidPeer","addresses":["100.64.0.9/32","fd42::9/128"],"paths":{"connected_peers":0}}}}'
                     else
@@ -428,6 +555,37 @@
                     touch "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE"
                     response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"create-profile"}}'
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command create-profile --es network android-e2e --es bootstrap_peer_id '*)
+                    : "''${pairing_state:?}"
+                    printf 'profile\n' > "$pairing_state"
+                    response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"create-profile"}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell appops set org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow') ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command connect')
+                    : "''${pairing_state:?}"
+                    printf 'connected\n' > "$pairing_state"
+                    response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"connect"}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command join-pairing --es code '*)
+                    : "''${pairing_state:?}"
+                    printf 'paired\n' > "$pairing_state"
+                    response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"join-pairing"}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  shell\ ping\ -c\ 5\ -W\ 5\ *)
+                    printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
+                    ;;
+                  shell\ ping6\ -c\ 5\ -W\ 5\ *)
+                    printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
+                    ;;
+                  shell\ ping\ -c\ 1\ -W\ 2\ *)
+                    printf '1 packet transmitted, 1 packet received, 0%% packet loss\n'
+                    ;;
+                  shell\ ping6\ -c\ 1\ -W\ 2\ *)
+                    printf '1 packet transmitted, 1 packet received, 0%% packet loss\n'
                     ;;
                   'shell am force-stop org.hermeticfoundation.p2pvpn.debug') ;;
                   'shell am start -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity')
@@ -501,6 +659,50 @@
                   .cleanup.private_state_removed
                 ' "$test_root/persistence-evidence/evidence.json" >/dev/null
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
+
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE="$test_root/fake-pairing" \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                  P2P_VPN_ANDROID_E2E_FIXTURE="$test_root/bin/fake-fixture" \
+                  P2P_VPN_BIN="$test_root/bin/fake-p2p-vpn" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario pairing-traffic \
+                    --output "$test_root/pairing-evidence"
+                pairing_status=$?
+                set -e
+
+                if [[ "$pairing_status" -ne 0 ]]; then
+                  jq . "$test_root/pairing-evidence/evidence.json" >&2
+                  cat "$test_root/pairing-evidence/fixture.log" >&2
+                  exit "$pairing_status"
+                fi
+                jq -e '
+                  .scenario == "pairing-traffic" and
+                  .status == "passed" and
+                  .device.pairing_traffic.code_only_enrollment and
+                  .device.pairing_traffic.configured_overlay_peer_addresses == 0 and
+                  .device.pairing_traffic.readiness_attempts.linux_to_android_ipv4 == 1 and
+                  .device.pairing_traffic.readiness_attempts.linux_to_android_ipv6 == 1 and
+                  .device.pairing_traffic.readiness_attempts.android_to_linux_ipv4 == 1 and
+                  .device.pairing_traffic.readiness_attempts.android_to_linux_ipv6 == 1 and
+                  .device.pairing_traffic.linux_to_android.ipv4.received == 5 and
+                  .device.pairing_traffic.linux_to_android.ipv6.received == 5 and
+                  .device.pairing_traffic.android_to_linux.ipv4.received == 5 and
+                  .device.pairing_traffic.android_to_linux.ipv6.received == 5 and
+                  .device.pairing_traffic.paths.direct_tcp_stream == 1 and
+                  .cleanup.emulator_stopped and
+                  .cleanup.fixture_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/pairing-evidence/evidence.json" >/dev/null
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
+                test "$(wc -c < "$test_root/pairing-evidence/fixture.log")" -le ${toString (1024 * 1024)}
+                ! grep -Fq 'ABCD-EFGH-JKLM-NPQR' "$test_root/pairing-evidence/fixture.log"
+                ! grep -Fq "$test_root/tmp/p2p-vpn-android-e2e-state." \
+                  "$test_root/pairing-evidence/fixture.log"
 
                 set +e
                 TMPDIR="$test_root/tmp" \

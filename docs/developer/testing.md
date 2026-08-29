@@ -141,7 +141,7 @@ Run the non-interactive clean-emulator smoke gate:
 nix run .#android-e2e -- --scenario boot-smoke --output ./android-e2e-evidence
 ```
 
-The gate emits bounded `evidence.json` and `emulator.log` artifacts.
+The gate emits bounded JSON, emulator-log, and fixture-log evidence.
 
 Run encrypted profile persistence coverage:
 
@@ -150,6 +150,18 @@ nix run .#android-e2e -- \
   --scenario profile-persistence \
   --output ./android-profile-evidence
 ```
+
+Run code pairing and bidirectional packet coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario pairing-traffic \
+  --output ./android-pairing-evidence
+```
+
+The scenario uses a private discovery router and a rootless Linux endpoint.
+
+It requires 5/5 IPv4 and IPv6 replies in both traffic directions.
 
 Check the harness contract without KVM:
 
