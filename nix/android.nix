@@ -441,6 +441,14 @@ let
           set -o pipefail
           emulator_pid=$!
 
+          ready_file="''${P2P_VPN_ANDROID_EMULATOR_READY_FILE:-}"
+          if [[ -n "$ready_file" ]]; then
+            mkdir -p "$(dirname "$ready_file")"
+            ready_file_tmp="$ready_file.tmp.$$"
+            printf '%s\n' "$ANDROID_SERIAL" > "$ready_file_tmp"
+            mv -f "$ready_file_tmp" "$ready_file"
+          fi
+
           printf 'Emulator ready: %s\n' "$ANDROID_SERIAL" >&2
           printf 'Press Ctrl-C to stop it and remove temporary state.\n' >&2
           while "$ANDROID_HOME/platform-tools/adb" -s "$ANDROID_SERIAL" get-state >/dev/null 2>&1; do

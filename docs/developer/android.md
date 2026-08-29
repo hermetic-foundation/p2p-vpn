@@ -188,6 +188,7 @@ Android outputs exist on `x86_64-linux`.
 | `.#android-native` | Combined arm64 and x86_64 libraries |
 | `.#android-rust-tests` | Host-side bridge tests |
 | `.#android-debug-apk` | Signed dual-ABI debug APK |
+| `.#android-e2e` | Managed Android/Linux E2E harness |
 | `.#android-emulator` | API 35 x86_64 emulator package |
 | `.#android-sdk` | Pinned SDK and platform tools |
 | `devShells.android` | Gradle, JDK, SDK, NDK, and ADB |
@@ -238,6 +239,33 @@ Use the printed serial from another shell:
 ```sh
 ANDROID_SERIAL=EMULATOR_SERIAL nix develop .#android -c adb shell
 ```
+
+## Automated Emulator Gate
+
+Run the clean-emulator smoke scenario:
+
+```sh
+nix run .#android-e2e -- --scenario boot-smoke --output ./android-e2e-evidence
+```
+
+The command boots API 35, installs the real debug APK, checks the active app,
+then removes the temporary emulator state.
+
+Run capability checks without starting Android:
+
+```sh
+nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
+```
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | Scenario or preflight passed |
+| `1` | Scenario started and failed |
+| `2` | Invalid use or unavailable required capability |
+| `77` | Explicit preflight or `--allow-skip` skipped |
+
+`evidence.json` records preflight checks, the device contract, scenario steps,
+and cleanup results. `emulator.log` is redacted and capped at 1 MiB.
 
 ## Verification
 

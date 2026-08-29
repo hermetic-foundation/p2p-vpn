@@ -318,6 +318,141 @@
             exec bash ${./scripts/debug-bundle.sh} "$@"
           '';
         };
+        androidE2e =
+          if androidSupported then
+            pkgs.writeShellApplication {
+              name = "p2p-vpn-android-e2e";
+              runtimeInputs = [
+                android.androidEmulator
+                android.androidSdk
+                package
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.gnugrep
+                pkgs.gnused
+                pkgs.jq
+                pkgs.procps
+              ];
+              text = ''
+                export P2P_VPN_ANDROID_EMULATOR=${android.androidEmulator}/bin/run-test-emulator
+                export P2P_VPN_ADB=${android.androidSdk}/bin/adb
+                export P2P_VPN_BIN=${package}/bin/p2p-vpn
+                exec bash ${./scripts/android-e2e.sh} "$@"
+              '';
+            }
+          else
+            null;
+        androidE2eStructure =
+          if androidSupported then
+            pkgs.runCommand "p2p-vpn-android-e2e-structure"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.gnugrep
+                  pkgs.gnused
+                  pkgs.jq
+                  pkgs.shellcheck
+                ];
+              }
+              ''
+                shellcheck ${./scripts/android-e2e.sh}
+
+                test_root="$TMPDIR/android-e2e-test"
+                mkdir -p \
+                  "$test_root/bin" \
+                  "$test_root/tmp" \
+                  "$test_root/evidence" \
+                  "$test_root/skip-evidence"
+
+                cat > "$test_root/bin/fake-emulator" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                ready_file="''${P2P_VPN_ANDROID_EMULATOR_READY_FILE:?}"
+                printf 'Sending adb public key test-user@test-host\n'
+                printf 'Crash data: /tmp/android-test-user/crash.db\n'
+                printf 'emulator-test\n' > "$ready_file.tmp"
+                mv "$ready_file.tmp" "$ready_file"
+                trap 'exit 0' INT TERM
+                while :; do sleep 1; done
+                EOF
+                chmod +x "$test_root/bin/fake-emulator"
+
+                cat > "$test_root/bin/fake-adb" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                if [[ "''${1:-}" == -s ]]; then shift 2; fi
+                case "$*" in
+                  get-state) printf 'device\n' ;;
+                  'shell getprop ro.build.version.sdk') printf '35\n' ;;
+                  'shell getprop ro.product.cpu.abi') printf 'x86_64\n' ;;
+                  'shell pm path org.hermeticfoundation.p2pvpn.debug')
+                    printf 'package:/data/app/p2p-vpn/base.apk\n'
+                    ;;
+                  'shell dumpsys activity activities')
+                    printf 'org.hermeticfoundation.p2pvpn.MainActivity\n'
+                    ;;
+                  *) printf 'unexpected fake ADB call: %s\n' "$*" >&2; exit 2 ;;
+                esac
+                EOF
+                chmod +x "$test_root/bin/fake-adb"
+
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario boot-smoke \
+                    --output "$test_root/evidence"
+                harness_status=$?
+                set -e
+
+                if [[ "$harness_status" -ne 0 ]]; then
+                  jq . "$test_root/evidence/evidence.json" >&2
+                  exit "$harness_status"
+                fi
+                jq -e '
+                  .schema_version == 1 and
+                  .kind == "p2p-vpn-android-e2e" and
+                  .scenario == "boot-smoke" and
+                  .status == "passed" and
+                  .device.api_level == "35" and
+                  .device.abi == "x86_64" and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/evidence/evidence.json" >/dev/null
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
+                test "$(wc -c < "$test_root/evidence/emulator.log")" -le ${toString (1024 * 1024)}
+                ! grep -Fq 'Sending adb public key' "$test_root/evidence/emulator.log"
+                ! grep -Fq 'test-user' "$test_root/evidence/emulator.log"
+                grep -Fq '/tmp/android-REDACTED/crash.db' "$test_root/evidence/emulator.log"
+
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/missing-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --preflight \
+                    --output "$test_root/skip-evidence"
+                skip_status=$?
+                set -e
+
+                test "$skip_status" -eq 77
+                jq -e '
+                  .status == "skipped" and
+                  .detail == "Missing requirements: emulator_command" and
+                  (.preflight[] | select(.name == "emulator_command") | .available == false) and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/skip-evidence/evidence.json" >/dev/null
+                test ! -s "$test_root/skip-evidence/emulator.log"
+
+                touch "$out"
+              ''
+          else
+            null;
         publicRelayRepro = pkgs.writeShellApplication {
           name = "p2p-vpn-public-relay-repro";
           runtimeInputs = [
@@ -3661,7 +3796,9 @@
                 cp ${./nix/android-gradle-deps.json} "$release_dir/nix/android-gradle-deps.json"
                 cp ${./nix/nixos-module.nix} "$release_dir/nix/nixos-module.nix"
                 cp ${./scripts/debug-bundle.sh} "$release_dir/scripts/debug-bundle.sh"
+                cp ${./scripts/android-e2e.sh} "$release_dir/scripts/android-e2e.sh"
                 cp ${./scripts/membership-record-repro.sh} "$release_dir/scripts/membership-record-repro.sh"
+                chmod +x "$release_dir/scripts/android-e2e.sh"
                 chmod +x "$release_dir/scripts/debug-bundle.sh"
                 chmod +x "$release_dir/scripts/membership-record-repro.sh"
                 tar --sort=name --mtime="UTC 1970-01-01" \
@@ -3675,6 +3812,7 @@
           android-native-x86_64 = android.androidNativeX86_64;
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
+          android-e2e = androidE2e;
           android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
         }
@@ -3726,6 +3864,13 @@
           };
         }
         // lib.optionalAttrs androidSupported {
+          android-e2e = {
+            type = "app";
+            program = "${androidE2e}/bin/p2p-vpn-android-e2e";
+            meta = {
+              description = "Run the managed Android/Linux E2E harness";
+            };
+          };
           android-emulator = {
             type = "app";
             program = "${android.androidEmulator}/bin/run-test-emulator";
@@ -3868,6 +4013,7 @@
                   "$root/nix/android-gradle-deps.json" \
                   "$root/nix/nixos-module.nix" \
                   "$root/scripts/debug-bundle.sh" \
+                  "$root/scripts/android-e2e.sh" \
                   "$root/scripts/membership-record-repro.sh"
                 do
                   grep -Fx "$path" entries >/dev/null || {
@@ -3878,6 +4024,8 @@
 
                 tar -xzf "$archive" "$root/scripts/debug-bundle.sh"
                 test -x "$root/scripts/debug-bundle.sh"
+                tar -xzf "$archive" "$root/scripts/android-e2e.sh"
+                test -x "$root/scripts/android-e2e.sh"
                 tar -xzf "$archive" "$root/scripts/membership-record-repro.sh"
                 test -x "$root/scripts/membership-record-repro.sh"
 
@@ -3926,6 +4074,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android = android.androidCheck;
+          android-e2e-structure = androidE2eStructure;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nixos-consumer-flake =

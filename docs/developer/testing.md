@@ -135,6 +135,20 @@ nix run .#android-emulator
 The launcher installs the APK, stays attached, and cleans its temporary AVD
 when interrupted.
 
+Run the non-interactive clean-emulator smoke gate:
+
+```sh
+nix run .#android-e2e -- --scenario boot-smoke --output ./android-e2e-evidence
+```
+
+The gate emits bounded `evidence.json` and `emulator.log` artifacts.
+
+Check the harness contract without KVM:
+
+```sh
+nix build .#checks.x86_64-linux.android-e2e-structure -L
+```
+
 See [Android Architecture](android.md) for the E2E procedure and recorded
 2026-08-29 Linux/emulator evidence.
 
