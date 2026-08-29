@@ -151,7 +151,8 @@ public final class P2pVpnService extends VpnService {
         desiredConnected = false;
         cancel(reconnectFuture);
         reconnectFuture = null;
-        activePairing = null;
+        cancelActivePairingBestEffort();
+        clearActivePairing();
         cancel(pairingFuture);
         pairingFuture = null;
         stopNativeRuntime();
@@ -227,7 +228,7 @@ public final class P2pVpnService extends VpnService {
             connectionDetail = "Connected";
             scheduleStatusPoll();
             if (activePairing != null) {
-                schedulePairingPoll(PAIRING_POLL_MILLIS);
+                schedulePairingResume(0);
             }
             updateForegroundNotification();
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
@@ -351,6 +352,17 @@ public final class P2pVpnService extends VpnService {
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             connectionDetail = failureMessage(error);
         }
+        try {
+            if (profileStore.exists() && profileStore.pairingExists()) {
+                activePairing = ActivePairing.fromJson(profileStore.loadPairing());
+                pairingDetail = "Interrupted pairing will resume after connecting";
+            } else if (profileStore.pairingExists()) {
+                profileStore.clearPairing();
+            }
+        } catch (P2pVpnException | RuntimeException error) {
+            profileStore.clearPairing();
+            pairingDetail = "Discarded an unreadable pairing operation";
+        }
         publishSnapshot();
     }
 
@@ -392,20 +404,13 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         try {
-            PairRpc.Result result =
-                    PairRpc.call(
-                            PairRpc.open(
-                                    UUID.randomUUID().toString(), PAIRING_TIMEOUT_SECONDS));
-            if (!"open_started".equals(result.kind)) {
-                throw new P2pVpnException("Pairing RPC did not start an invitation");
-            }
-            String operationId = result.value.getString("operation_id");
-            String code = result.value.getString("code");
-            activePairing = new ActivePairing(operationId, code);
-            pairingDetail = "Waiting for a pairing request";
+            activePairing = ActivePairing.inviter(UUID.randomUUID().toString());
+            persistActivePairing();
+            pairingDetail = "Creating a pairing code";
             publishSnapshot();
-            schedulePairingPoll(0);
-        } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
+            resumeActivePairing();
+        } catch (P2pVpnException | RuntimeException error) {
+            clearActivePairing();
             pairingDetail = failureMessage(error);
             publishSnapshot();
         }
@@ -422,23 +427,67 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         try {
-            PairRpc.Result result =
-                    PairRpc.call(
-                            PairRpc.join(
-                                    UUID.randomUUID().toString(),
-                                    normalized,
-                                    PAIRING_TIMEOUT_SECONDS));
-            if (!"join_started".equals(result.kind)) {
-                throw new P2pVpnException("Pairing RPC did not start the join operation");
+            activePairing = ActivePairing.joiner(UUID.randomUUID().toString(), normalized);
+            persistActivePairing();
+            pairingDetail = "Starting the join operation";
+            publishSnapshot();
+            resumeActivePairing();
+        } catch (P2pVpnException | RuntimeException error) {
+            clearActivePairing();
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void resumeActivePairing() {
+        pairingFuture = null;
+        if (activePairing == null || !connected) {
+            return;
+        }
+        try {
+            if (activePairing.transcriptSha256 != null) {
+                acknowledgeAppliedPairing();
+                return;
             }
-            String operationId = result.value.getString("operation_id");
-            activePairing = new ActivePairing(operationId, null);
-            pairingDetail = "Finding the inviting peer";
+            if (!activePairing.started) {
+                PairRpc.Result result =
+                        activePairing.role == ActivePairing.Role.INVITER
+                                ? PairRpc.call(
+                                        PairRpc.open(
+                                                activePairing.operationId,
+                                                PAIRING_TIMEOUT_SECONDS))
+                                : PairRpc.call(
+                                        PairRpc.join(
+                                                activePairing.operationId,
+                                                activePairing.code,
+                                                PAIRING_TIMEOUT_SECONDS));
+                String expectedKind =
+                        activePairing.role == ActivePairing.Role.INVITER
+                                ? "open_started"
+                                : "join_started";
+                if (!expectedKind.equals(result.kind)
+                        || !activePairing.operationId.equals(
+                                result.value.getString("operation_id"))) {
+                    throw new P2pVpnException("Pairing RPC started a different operation");
+                }
+                if (activePairing.role == ActivePairing.Role.INVITER) {
+                    activePairing.code = result.value.getString("code");
+                }
+                activePairing.started = true;
+            }
+            persistActivePairing();
+            pairingDetail =
+                    activePairing.role == ActivePairing.Role.INVITER
+                            ? "Waiting for a pairing request"
+                            : "Finding the inviting peer";
             publishSnapshot();
             schedulePairingPoll(0);
         } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
             pairingDetail = failureMessage(error);
             publishSnapshot();
+            if (activePairing != null && connected) {
+                schedulePairingResume(PAIRING_POLL_MILLIS);
+            }
         }
     }
 
@@ -480,7 +529,7 @@ public final class P2pVpnService extends VpnService {
                                     activePairing.candidate.approvalId));
             PairRpc.operationStatus(result);
             pairingDetail = "Pairing request rejected";
-            activePairing = null;
+            clearActivePairing();
             cancel(pairingFuture);
             pairingFuture = null;
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
@@ -509,9 +558,19 @@ public final class P2pVpnService extends VpnService {
                 worker.schedule(this::pollPairing, delayMillis, TimeUnit.MILLISECONDS);
     }
 
+    private void schedulePairingResume(long delayMillis) {
+        cancel(pairingFuture);
+        pairingFuture =
+                worker.schedule(this::resumeActivePairing, delayMillis, TimeUnit.MILLISECONDS);
+    }
+
     private void pollPairing() {
         pairingFuture = null;
         if (activePairing == null || !connected) {
+            return;
+        }
+        if (activePairing.transcriptSha256 != null) {
+            resumeActivePairing();
             return;
         }
         try {
@@ -536,7 +595,7 @@ public final class P2pVpnService extends VpnService {
                         status.failureMessage == null
                                 ? "Pairing ended: " + status.phase
                                 : status.failureMessage;
-                activePairing = null;
+                clearActivePairing();
                 publishSnapshot();
                 return;
             } else {
@@ -580,26 +639,10 @@ public final class P2pVpnService extends VpnService {
             // Durably save the new identity bindings before compacting native enrollment state.
             profileStore.save(updated.configJson);
             profile = updated;
-
-            PairRpc.Result acknowledged =
-                    PairRpc.call(
-                            PairRpc.acknowledge(activePairing.operationId, transcript));
-            if (!"acknowledged".equals(acknowledged.kind)) {
-                throw new P2pVpnException("Pairing RPC did not acknowledge enrollment");
-            }
-
-            activePairing = null;
-            pairingDetail = "Paired with " + remotePeer;
-            publishSnapshot();
-
-            if (desiredConnected) {
-                operationInProgress = true;
-                connectionDetail = "Restarting with paired profile";
-                publishSnapshot();
-                stopNativeRuntime();
-                operationInProgress = false;
-                startConnection("Restarting with paired profile");
-            }
+            activePairing.transcriptSha256 = transcript;
+            activePairing.remotePeer = remotePeer;
+            persistActivePairing();
+            acknowledgeAppliedPairing();
         } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
             pairingDetail = failureMessage(error);
             publishSnapshot();
@@ -607,6 +650,57 @@ public final class P2pVpnService extends VpnService {
                 schedulePairingPoll(PAIRING_POLL_MILLIS);
             }
         }
+    }
+
+    private void acknowledgeAppliedPairing()
+            throws P2pVpnException, JSONException {
+        if (activePairing == null || activePairing.transcriptSha256 == null) {
+            throw new P2pVpnException("No applied pairing is awaiting acknowledgement");
+        }
+        PairRpc.Result acknowledged =
+                PairRpc.call(
+                        PairRpc.acknowledge(
+                                activePairing.operationId, activePairing.transcriptSha256));
+        if (!"acknowledged".equals(acknowledged.kind)) {
+            throw new P2pVpnException("Pairing RPC did not acknowledge enrollment");
+        }
+
+        String remotePeer = activePairing.remotePeer;
+        clearActivePairing();
+        pairingDetail = remotePeer == null ? "Pairing complete" : "Paired with " + remotePeer;
+        publishSnapshot();
+
+        if (desiredConnected) {
+            operationInProgress = true;
+            connectionDetail = "Restarting with paired profile";
+            publishSnapshot();
+            stopNativeRuntime();
+            operationInProgress = false;
+            startConnection("Restarting with paired profile");
+        }
+    }
+
+    private void persistActivePairing() throws P2pVpnException {
+        if (activePairing == null) {
+            throw new P2pVpnException("No pairing operation is active");
+        }
+        profileStore.savePairing(activePairing.toJson());
+    }
+
+    private void cancelActivePairingBestEffort() {
+        if (activePairing == null || !connected || !activePairing.started) {
+            return;
+        }
+        try {
+            PairRpc.call(PairRpc.cancel(activePairing.operationId));
+        } catch (P2pVpnException | RuntimeException | LinkageError ignored) {
+            // The runtime is stopping and durable pairing state expires independently.
+        }
+    }
+
+    private void clearActivePairing() {
+        activePairing = null;
+        profileStore.clearPairing();
     }
 
     private void prepareRuntimeDirectory() {
@@ -787,7 +881,7 @@ public final class P2pVpnService extends VpnService {
                         connectionDetail,
                         peerDetail,
                         pairingDetail,
-                        activePairing == null ? null : activePairing.code,
+                        activePairing == null ? null : activePairing.displayCode(),
                         candidate == null ? null : candidate.peerId,
                         candidate == null ? null : candidate.fingerprint,
                         candidate == null ? null : candidate.requestedHostname,
@@ -934,7 +1028,7 @@ public final class P2pVpnService extends VpnService {
                     false,
                     false,
                     false,
-                    false,
+                    true,
                     null,
                     null,
                     "Loading",
@@ -949,13 +1043,113 @@ public final class P2pVpnService extends VpnService {
     }
 
     private static final class ActivePairing {
+        private static final int VERSION = 1;
+
+        enum Role {
+            INVITER,
+            JOINER
+        }
+
         final String operationId;
-        final String code;
+        final Role role;
+        String code;
+        boolean started;
+        String transcriptSha256;
+        String remotePeer;
         PairRpc.Candidate candidate;
 
-        ActivePairing(String operationId, String code) {
+        private ActivePairing(String operationId, Role role, String code) {
             this.operationId = operationId;
+            this.role = role;
             this.code = code;
+        }
+
+        static ActivePairing inviter(String operationId) {
+            return new ActivePairing(operationId, Role.INVITER, null);
+        }
+
+        static ActivePairing joiner(String operationId, String code) {
+            return new ActivePairing(operationId, Role.JOINER, code);
+        }
+
+        String displayCode() {
+            return role == Role.INVITER ? code : null;
+        }
+
+        String toJson() throws P2pVpnException {
+            try {
+                JSONObject value = new JSONObject();
+                value.put("version", VERSION);
+                value.put("operation_id", operationId);
+                value.put("role", role == Role.INVITER ? "inviter" : "joiner");
+                value.put("code", code == null ? JSONObject.NULL : code);
+                value.put("started", started);
+                value.put(
+                        "transcript_sha256",
+                        transcriptSha256 == null ? JSONObject.NULL : transcriptSha256);
+                value.put("remote_peer", remotePeer == null ? JSONObject.NULL : remotePeer);
+                return value.toString();
+            } catch (JSONException error) {
+                throw new P2pVpnException("Failed to encode pairing recovery state", error);
+            }
+        }
+
+        static ActivePairing fromJson(String encoded) throws P2pVpnException {
+            try {
+                JSONObject value = new JSONObject(encoded);
+                if (value.getInt("version") != VERSION) {
+                    throw new P2pVpnException("Saved pairing operation has an unknown version");
+                }
+                String operationId = value.getString("operation_id");
+                String roleName = value.getString("role");
+                Role role;
+                if ("inviter".equals(roleName)) {
+                    role = Role.INVITER;
+                } else if ("joiner".equals(roleName)) {
+                    role = Role.JOINER;
+                } else {
+                    throw new P2pVpnException("Saved pairing operation has an invalid role");
+                }
+                String code = nullableString(value, "code");
+                boolean started = value.getBoolean("started");
+                String transcript = nullableString(value, "transcript_sha256");
+                String remotePeer = nullableString(value, "remote_peer");
+                if (operationId.isEmpty() || operationId.length() > 128) {
+                    throw new P2pVpnException("Saved pairing operation ID is invalid");
+                }
+                if (code != null && (code.isEmpty() || code.length() > 64)) {
+                    throw new P2pVpnException("Saved pairing code is invalid");
+                }
+                if ((role == Role.JOINER && code == null)
+                        || (role == Role.INVITER && started && code == null)) {
+                    throw new P2pVpnException("Saved pairing operation is incomplete");
+                }
+                if (transcript != null && !transcript.matches("[0-9a-f]{64}")) {
+                    throw new P2pVpnException("Saved pairing receipt is invalid");
+                }
+                if (transcript != null && (remotePeer == null || remotePeer.length() > 256)) {
+                    throw new P2pVpnException("Saved pairing peer is invalid");
+                }
+                if ((transcript != null && !started)
+                        || (transcript == null && remotePeer != null)) {
+                    throw new P2pVpnException("Saved pairing recovery phase is invalid");
+                }
+                ActivePairing pairing = new ActivePairing(operationId, role, code);
+                pairing.started = started;
+                pairing.transcriptSha256 = transcript;
+                pairing.remotePeer = remotePeer;
+                return pairing;
+            } catch (JSONException error) {
+                throw new P2pVpnException("Saved pairing operation is malformed", error);
+            }
+        }
+
+        private static String nullableString(JSONObject value, String key) {
+            if (value.isNull(key)) {
+                return null;
+            }
+            String result = value.optString(key, null);
+            return result == null || result.isEmpty() ? null : result;
         }
     }
 }
