@@ -9,11 +9,17 @@ let
   inherit (pkgs) lib;
 
   pname = "p2p-vpn-android";
-  abi = "arm64-v8a";
+  arm64Abi = "arm64-v8a";
+  x86_64Abi = "x86_64";
+  abis = [
+    arm64Abi
+    x86_64Abi
+  ];
   minimumSdkVersion = "26";
   platformVersion = "37";
   buildToolsVersion = "37.0.0";
   ndkVersion = "28.2.13676358";
+  emulatorPlatformVersion = "35";
 
   androidNixpkgsConfig = {
     allowUnfree = true;
@@ -34,7 +40,8 @@ let
     crossSystem = androidCrossSystem;
     config = androidNixpkgsConfig;
   };
-  rustTarget = androidCrossPkgs.stdenv.hostPlatform.rust.rustcTarget;
+  arm64RustTarget = androidCrossPkgs.stdenv.hostPlatform.rust.rustcTarget;
+  x86_64RustTarget = "x86_64-linux-android";
 
   jdk = androidPkgs.jdk17;
   gradle = androidPkgs.gradle_9.override { java = jdk; };
@@ -90,7 +97,7 @@ let
     ];
   };
 
-  androidNative =
+  androidNativeArm64 =
     if nativeSourcesPresent then
       assert lib.assertMsg (
         androidCrossPkgs.stdenv.hostPlatform.androidSdkVersion == minimumSdkVersion
@@ -101,7 +108,8 @@ let
       assert lib.assertMsg (androidCrossPkgs.stdenv.hostPlatform.useAndroidPrebuilt or false
       ) "p2p-vpn Android Rust cross target must retain the nixpkgs prebuilt Android toolchain";
       androidCrossPkgs.rustPlatform.buildRustPackage {
-        inherit pname version;
+        pname = "${pname}-arm64";
+        inherit version;
         src = nativeSource;
         cargoLock.lockFile = rootLock;
         cargoBuildFlags = [
@@ -115,7 +123,7 @@ let
         installPhase = ''
           runHook preInstall
 
-          shared_library="target/${rustTarget}/release/libp2p_vpn_android.so"
+          shared_library="target/${arm64RustTarget}/release/libp2p_vpn_android.so"
           if [[ ! -s "$shared_library" ]]; then
             echo "missing Android JNI library: $shared_library" >&2
             exit 1
@@ -123,14 +131,15 @@ let
 
           install -Dm755 \
             "$shared_library" \
-            "$out/lib/${abi}/libp2p_vpn_android.so"
+            "$out/lib/${arm64Abi}/libp2p_vpn_android.so"
 
           runHook postInstall
         '';
 
         passthru = {
           available = true;
-          inherit abi rustTarget;
+          abi = arm64Abi;
+          rustTarget = arm64RustTarget;
           minimumSdk = lib.toInt minimumSdkVersion;
           toolchainNdkMajor = 27;
         };
@@ -140,6 +149,111 @@ let
         "The Rust Android source is incomplete under ${toString src}; "
         + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
       );
+
+  # Nixpkgs only provides a prebuilt Rust standard library for Android arm64.
+  # Build std for x86_64 with the pinned NDK so the APK can run in a KVM emulator.
+  x86_64RustcSysroot = pkgs.symlinkJoin {
+    name = "rustc-with-android-libsrc";
+    paths = [ pkgs.rustc.unwrapped ];
+    postBuild = ''
+      mkdir -p "$out/lib/rustlib/src/rust"
+      ln -s ${pkgs.rustPlatform.rustLibSrc} "$out/lib/rustlib/src/rust/library"
+    '';
+  };
+  x86_64Rustc = pkgs.rustc.override { sysroot = x86_64RustcSysroot; };
+  x86_64RustPlatform = pkgs.makeRustPlatform {
+    cargo = pkgs.cargo;
+    rustc = x86_64Rustc;
+  };
+  x86_64BaseCargoDeps = x86_64RustPlatform.importCargoLock { lockFile = rootLock; };
+  x86_64CargoDeps = pkgs.symlinkJoin {
+    # importCargoLock's config resolves this relative directory name.
+    name = "cargo-vendor-dir";
+    paths = [ x86_64BaseCargoDeps ];
+    postBuild = ''
+      for crate in ${pkgs.rustPlatform.rustLibSrc}/vendor/*; do
+        name="$(basename "$crate")"
+        if [[ ! -e "$out/$name" ]]; then
+          ln -s "$crate" "$out/$name"
+        fi
+      done
+    '';
+  };
+  x86_64Linker = "${androidNdkRoot}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${minimumSdkVersion}-clang";
+
+  androidNativeX86_64 =
+    if nativeSourcesPresent then
+      x86_64RustPlatform.buildRustPackage {
+        pname = "${pname}-x86_64";
+        inherit version;
+        src = nativeSource;
+        cargoDeps = x86_64CargoDeps;
+        doCheck = false;
+        strictDeps = true;
+        auditable = false;
+
+        env = {
+          RUSTC_BOOTSTRAP = "1";
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = x86_64Linker;
+          CC_x86_64_linux_android = x86_64Linker;
+        };
+
+        buildPhase = ''
+          runHook preBuild
+
+          cargo build \
+            -Z build-std=std,panic_abort \
+            --target ${x86_64RustTarget} \
+            --offline \
+            --release \
+            --package p2p-vpn-android \
+            --lib
+
+          runHook postBuild
+        '';
+
+        installPhase = ''
+          runHook preInstall
+
+          shared_library="target/${x86_64RustTarget}/release/libp2p_vpn_android.so"
+          if [[ ! -s "$shared_library" ]]; then
+            echo "missing Android JNI library: $shared_library" >&2
+            exit 1
+          fi
+
+          install -Dm755 \
+            "$shared_library" \
+            "$out/lib/${x86_64Abi}/libp2p_vpn_android.so"
+
+          runHook postInstall
+        '';
+
+        passthru = {
+          available = true;
+          abi = x86_64Abi;
+          rustTarget = x86_64RustTarget;
+          minimumSdk = lib.toInt minimumSdkVersion;
+          toolchainNdkMajor = 28;
+        };
+      }
+    else
+      unavailable "${pname}-x86_64-native-source-missing" (
+        "The Rust Android source is incomplete under ${toString src}; "
+        + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
+      );
+
+  androidNative = pkgs.symlinkJoin {
+    name = "${pname}-native-${version}";
+    paths = [
+      androidNativeArm64
+      androidNativeX86_64
+    ];
+    passthru = {
+      available = nativeSourcesPresent;
+      inherit abis androidNativeArm64 androidNativeX86_64;
+      minimumSdk = lib.toInt minimumSdkVersion;
+    };
+  };
 
   androidRustTests =
     if nativeSourcesPresent then
@@ -200,11 +314,13 @@ let
         };
 
         postPatch = ''
-          mkdir -p app/src/main/jniLibs/${abi}
-          rm -f app/src/main/jniLibs/${abi}/libp2p_vpn_android.so
-          install -m755 \
-            ${androidNative}/lib/${abi}/libp2p_vpn_android.so \
-            app/src/main/jniLibs/${abi}/libp2p_vpn_android.so
+          for abi in ${lib.escapeShellArgs abis}; do
+            mkdir -p "app/src/main/jniLibs/$abi"
+            rm -f "app/src/main/jniLibs/$abi/libp2p_vpn_android.so"
+            install -m755 \
+              "${androidNative}/lib/$abi/libp2p_vpn_android.so" \
+              "app/src/main/jniLibs/$abi/libp2p_vpn_android.so"
+          done
 
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
           export HOME="$TMPDIR/home"
@@ -239,7 +355,8 @@ let
         passthru = {
           available = true;
           apkName = "p2p-vpn-debug.apk";
-          inherit abi androidNative;
+          abi = arm64Abi;
+          inherit abis androidNative;
           minimumSdk = lib.toInt minimumSdkVersion;
           updateScript = finalAttrs.mitmCache.updateScript;
         };
@@ -248,6 +365,30 @@ let
       unavailable "${pname}-project-missing" (
         "The Android Gradle project does not exist at ${toString androidProject}; "
         + "add android/ before building the debug APK."
+      );
+
+  androidEmulator =
+    if androidProjectPresent then
+      androidPkgs.androidenv.emulateApp {
+        name = "${pname}-emulator";
+        platformVersion = emulatorPlatformVersion;
+        abiVersion = x86_64Abi;
+        systemImageType = "default";
+        app = "${androidDebugApk}/p2p-vpn-debug.apk";
+        package = "org.hermeticfoundation.p2pvpn.debug";
+        activity = "org.hermeticfoundation.p2pvpn.MainActivity";
+        deviceName = "p2p-vpn";
+        androidEmulatorFlags = "-no-window -no-audio -no-snapshot -gpu swiftshader_indirect -netdelay none -netspeed full";
+        configOptions = {
+          "disk.dataPartition.size" = "2G";
+          "hw.keyboard" = "yes";
+          "hw.ramSize" = "2048";
+        };
+      }
+    else
+      unavailable "${pname}-emulator-project-missing" (
+        "The Android Gradle project does not exist at ${toString androidProject}; "
+        + "add android/ before running the emulator."
       );
 
   androidDevShell = androidPkgs.mkShellNoCC {
@@ -278,17 +419,32 @@ let
       ''
         test -e ${androidRustTests}
 
-        native=${androidNative}/lib/${abi}/libp2p_vpn_android.so
-        if [[ ! -s "$native" ]]; then
-          echo "missing Android JNI library: $native" >&2
+        arm64_native=${androidNative}/lib/${arm64Abi}/libp2p_vpn_android.so
+        if [[ ! -s "$arm64_native" ]]; then
+          echo "missing Android JNI library: $arm64_native" >&2
           exit 1
         fi
 
-        native_description="$(${pkgs.file}/bin/file -b "$native")"
-        case "$native_description" in
+        arm64_description="$(${pkgs.file}/bin/file -Lb "$arm64_native")"
+        case "$arm64_description" in
           *"ARM aarch64"*"for Android ${minimumSdkVersion}"*"built by NDK r27"*) ;;
           *)
-            echo "unexpected Android JNI ABI: $native_description" >&2
+            echo "unexpected Android JNI ABI: $arm64_description" >&2
+            exit 1
+            ;;
+        esac
+
+        x86_64_native=${androidNative}/lib/${x86_64Abi}/libp2p_vpn_android.so
+        if [[ ! -s "$x86_64_native" ]]; then
+          echo "missing Android JNI library: $x86_64_native" >&2
+          exit 1
+        fi
+
+        x86_64_description="$(${pkgs.file}/bin/file -Lb "$x86_64_native")"
+        case "$x86_64_description" in
+          *"x86-64"*"for Android ${minimumSdkVersion}"*"built by NDK r28"*) ;;
+          *)
+            echo "unexpected Android JNI ABI: $x86_64_description" >&2
             exit 1
             ;;
         esac
@@ -301,10 +457,12 @@ let
             fi
 
             apk_files="$(${androidSdk}/bin/apkanalyzer files list "$apk")"
-            if ! grep -F '/lib/${abi}/libp2p_vpn_android.so' <<<"$apk_files" >/dev/null; then
-              echo "APK is missing /lib/${abi}/libp2p_vpn_android.so" >&2
-              exit 1
-            fi
+            for abi in ${lib.escapeShellArgs abis}; do
+              if ! grep -F "/lib/$abi/libp2p_vpn_android.so" <<<"$apk_files" >/dev/null; then
+                echo "APK is missing /lib/$abi/libp2p_vpn_android.so" >&2
+                exit 1
+              fi
+            done
 
             apk_application_id="$(${androidSdk}/bin/apkanalyzer manifest application-id "$apk")"
             if [[ "$apk_application_id" != org.hermeticfoundation.p2pvpn.debug ]]; then
@@ -339,7 +497,7 @@ let
         ''}
 
         mkdir -p "$out"
-        printf '%s\n' "$native_description" > "$out/native-abi.txt"
+        printf '%s\n' "$arm64_description" "$x86_64_description" > "$out/native-abi.txt"
         printf '%s\n' ${
           lib.escapeShellArg (
             if androidProjectPresent then "native-and-apk" else "native-only; android/ is not present"
@@ -387,21 +545,30 @@ in
     androidCheck
     androidDebugApk
     androidDevShell
+    androidEmulator
     androidInstall
     androidNative
+    androidNativeArm64
+    androidNativeX86_64
     androidRustTests
     androidSdk
     androidUpdateDeps
     ;
 
   androidBuildConfig = {
+    abi = arm64Abi;
+    rustTarget = arm64RustTarget;
     inherit
-      abi
+      abis
       buildToolsVersion
+      emulatorPlatformVersion
       ndkVersion
       platformVersion
-      rustTarget
       ;
+    rustTargets = {
+      arm64 = arm64RustTarget;
+      x86_64 = x86_64RustTarget;
+    };
     minimumSdk = lib.toInt minimumSdkVersion;
     inherit androidProjectPresent nativeSourcesPresent;
     gradleVersion = gradle.version;

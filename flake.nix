@@ -3671,8 +3671,11 @@
         }
         // lib.optionalAttrs androidSupported {
           android-native = android.androidNative;
+          android-native-arm64 = android.androidNativeArm64;
+          android-native-x86_64 = android.androidNativeX86_64;
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
+          android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
@@ -3723,6 +3726,13 @@
           };
         }
         // lib.optionalAttrs androidSupported {
+          android-emulator = {
+            type = "app";
+            program = "${android.androidEmulator}/bin/run-test-emulator";
+            meta = {
+              description = "Boot a headless emulator and install the p2p-vpn debug APK";
+            };
+          };
           android-install = {
             type = "app";
             program = "${android.androidInstall}/bin/p2p-vpn-android-install";

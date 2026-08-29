@@ -107,13 +107,15 @@ use crate::{
             ServiceStatusResponse, validate_status_request, validate_status_response,
         },
         tun::{
-            IpCommand, PacketIo, PacketReader, PacketWriter, TunRouteUpdate, TunRuntimeConfig,
+            PacketIo, PacketReader, PacketWriter, TunRouteUpdate, TunRuntimeConfig,
             TunRuntimeError, packet_too_big,
         },
     },
     wire::{Frame, PayloadType},
 };
 
+#[cfg(any(target_os = "linux", test))]
+use crate::runtime::tun::IpCommand;
 #[cfg(target_os = "linux")]
 use crate::runtime::tun::TunDevice;
 
