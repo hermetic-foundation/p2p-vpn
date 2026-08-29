@@ -9,6 +9,7 @@ readonly maximum_log_bytes=$((1024 * 1024))
 readonly default_minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
 
 scenario=boot-smoke
+path_mode=automatic
 preflight_only=0
 allow_skip=0
 output_dir="${P2P_VPN_ANDROID_E2E_DIR:-}"
@@ -31,6 +32,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, or pairing-traffic.
+  --path-mode MODE       Select automatic, quic-stream, or tcp-stream for pairing traffic.
   --preflight            Check requirements without starting an emulator.
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
@@ -61,6 +63,14 @@ while [[ $# -gt 0 ]]; do
     --preflight)
       preflight_only=1
       shift
+      ;;
+    --path-mode)
+      [[ $# -ge 2 ]] || {
+        echo "--path-mode requires a value" >&2
+        exit 2
+      }
+      path_mode="$2"
+      shift 2
       ;;
     --allow-skip)
       allow_skip=1
@@ -93,6 +103,18 @@ case "$scenario" in
     exit 2
     ;;
 esac
+
+case "$path_mode" in
+  automatic|quic-stream|tcp-stream) ;;
+  *)
+    echo "unsupported Android E2E path mode: $path_mode" >&2
+    exit 2
+    ;;
+esac
+if [[ "$scenario" != pairing-traffic && "$path_mode" != automatic ]]; then
+  echo "--path-mode is supported only by pairing-traffic" >&2
+  exit 2
+fi
 
 if [[ ! "$minimum_free_bytes" =~ ^[0-9]{1,18}$ ]]; then
   echo "P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES must be an integer from 0 to 999999999999999999" >&2
@@ -568,7 +590,9 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fixture_state_dir="$state_dir/fixture"
   mkdir -p "$fixture_state_dir"
   fixture_metadata="$fixture_state_dir/fixture.json"
-  "$fixture_command" run --state-dir "$fixture_state_dir" > "$fixture_log" 2>&1 &
+  "$fixture_command" run \
+    --state-dir "$fixture_state_dir" \
+    --path-mode "$path_mode" > "$fixture_log" 2>&1 &
   fixture_pid=$!
   record_step fixture_start started "Waiting for private discovery and rootless Linux peer"
   for _ in $(seq 1 60); do
@@ -583,9 +607,10 @@ if [[ "$scenario" == pairing-traffic ]]; then
     fi
     sleep 1
   done
-  if [[ ! -s "$fixture_metadata" ]] || ! jq -e '
+  if [[ ! -s "$fixture_metadata" ]] || ! jq -e --arg path_mode "$path_mode" '
     .schema_version == 1 and
     (.network | type == "string" and length > 0 and length <= 128) and
+    .path_mode == $path_mode and
     (.bootstrap.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
     (.bootstrap.android_address | type == "string" and test("^/[^[:space:]]+$") and length <= 1024) and
     (.bootstrap.kademlia_protocol | type == "string" and test("^/[^[:space:]]+$") and length <= 128) and
@@ -984,8 +1009,29 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
   record_step android_to_linux_ipv6 passed "Android received 5 of 5 IPv6 replies"
 
+  case "$path_mode" in
+    automatic)
+      path_predicate='.value.snapshot.paths.connected_peers >= 1'
+      ;;
+    quic-stream)
+      path_predicate='(.value.snapshot.paths.direct_quic_stream >= 1) and (.value.snapshot.paths.direct_tcp_stream == 0) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.relay == 0)'
+      ;;
+    tcp-stream)
+      path_predicate='(.value.snapshot.paths.direct_tcp_stream >= 1) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.relay == 0)'
+      ;;
+  esac
+  final_status="$state_dir/status-final.json"
+  if ! wait_for_automation_status "$final_status" "$path_predicate" 60; then
+    outcome=failed
+    outcome_detail="Android did not retain the required $path_mode path isolation"
+    record_step path_isolation failed "$outcome_detail"
+    exit 1
+  fi
+  record_step path_isolation passed "Final runtime status matched $path_mode requirements"
+
   jq \
-    --argjson paths "$(jq '.value.snapshot.paths' "$paired_status")" \
+    --arg path_mode "$path_mode" \
+    --argjson paths "$(jq '.value.snapshot.paths' "$final_status")" \
     --argjson fixture_ipv4_ready_attempts "$fixture_ipv4_ready_attempts" \
     --argjson fixture_ipv6_ready_attempts "$fixture_ipv6_ready_attempts" \
     --argjson android_ipv4_ready_attempts "$android_ipv4_ready_attempts" \
@@ -994,6 +1040,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
       pairing_traffic: {
         code_only_enrollment: true,
         configured_overlay_peer_addresses: 0,
+        path_mode: $path_mode,
         readiness_attempts: {
           linux_to_android_ipv4: $fixture_ipv4_ready_attempts,
           linux_to_android_ipv6: $fixture_ipv6_ready_attempts,
@@ -1009,7 +1056,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
   mv -f "$device_file.updated" "$device_file"
 
   outcome=passed
-  outcome_detail="Code pairing and bidirectional dual-stack overlay traffic passed"
+  outcome_detail="Code pairing, $path_mode path isolation, and dual-stack traffic passed"
   exit 0
 fi
 

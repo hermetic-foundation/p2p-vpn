@@ -285,6 +285,21 @@ nix run .#android-e2e -- \
 | Evidence | Logs are redacted, capped, and contain no pairing secret |
 | Cleanup | Emulator, fixture, and private runtime state are removed |
 
+Select one compatibility stream path:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario pairing-traffic \
+  --path-mode quic-stream \
+  --output ./android-quic-stream-evidence
+```
+
+| Mode | Required Final Path |
+| --- | --- |
+| `automatic` | Any supported path selected by the runtime |
+| `quic-stream` | QUIC stream healthy; TCP, datagram, and relay paths absent |
+| `tcp-stream` | TCP stream healthy; QUIC, datagram, and relay paths absent |
+
 Run capability checks without starting Android:
 
 ```sh
@@ -446,7 +461,14 @@ Android was given one private discovery bootstrap and no overlay peer address.
 | Android to Linux | IPv4 ICMP | 5/5 replies |
 | Android to Linux | IPv6 ICMP | 5/5 replies |
 
-The final status reported one direct QUIC stream and one direct TCP stream path.
+### Stream Path Isolation
+
+Each isolated run repeated all four traffic checks.
+
+| Mode | Required Path | Excluded Paths | Result |
+| --- | --- | --- | --- |
+| `quic-stream` | One direct QUIC stream | TCP, datagram, relay | 20/20 replies |
+| `tcp-stream` | One direct TCP stream | QUIC, datagram, relay | 20/20 replies |
 
 ### Cleanup
 
@@ -458,10 +480,11 @@ The final status reported one direct QUIC stream and one direct TCP stream path.
 | Private state | Pairing code, keys, and runtime state removed |
 | Evidence | Both redacted logs remained below 1 MiB |
 
-This proves isolated emulator pairing and bidirectional dual-stack traffic.
+This proves isolated emulator pairing, bidirectional dual-stack traffic, and
+the direct QUIC-stream and TCP-stream compatibility paths.
 
-It does not prove underlay changes, relay-only paths, public NAT traversal,
-or physical-device behavior.
+It does not prove underlay changes, owned QUIC, relay-only operation,
+relay-to-direct promotion, public NAT traversal, or physical-device behavior.
 
 ## Current Exclusions
 

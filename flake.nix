@@ -408,9 +408,11 @@
                   run)
                     shift
                     state_dir=""
+                    path_mode=automatic
                     while [[ $# -gt 0 ]]; do
                       case "$1" in
                         --state-dir) state_dir="$2"; shift 2 ;;
+                        --path-mode) path_mode="$2"; shift 2 ;;
                         *) shift ;;
                       esac
                     done
@@ -420,9 +422,11 @@
                     jq -n \
                       --arg control "$state_dir/peer-control.sock" \
                       --arg packet "$state_dir/packet-control.sock" \
+                      --arg path_mode "$path_mode" \
                       '{
                         schema_version: 1,
                         network: "android-e2e",
+                        path_mode: $path_mode,
                         bootstrap: {
                           peer_id: "12D3KooWFakeBootstrapPeer",
                           android_address: "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWFakeBootstrapPeer",
@@ -486,6 +490,7 @@
                 set -euo pipefail
                 if [[ "''${1:-}" == -s ]]; then shift 2; fi
                 pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
+                path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
                 case "$*" in
                   get-state) printf 'device\n' ;;
                   'shell getprop ro.build.version.sdk') printf '35\n' ;;
@@ -502,6 +507,7 @@
                       connected=false
                       pairing_detail='No pairing operation'
                       connected_peers=0
+                      direct_quic_stream=0
                       direct_tcp_stream=0
                       if [[ "$state" == connected || "$state" == paired ]]; then
                         connected=true
@@ -509,12 +515,16 @@
                       if [[ "$state" == paired ]]; then
                         pairing_detail='Paired with 12D3KooWFakeLinuxPeer'
                         connected_peers=1
-                        direct_tcp_stream=1
+                        case "$path_mode" in
+                          quic-stream) direct_quic_stream=1 ;;
+                          *) direct_tcp_stream=1 ;;
+                        esac
                       fi
                       response="$(jq -cn \
                         --argjson connected "$connected" \
                         --arg pairing_detail "$pairing_detail" \
                         --argjson connected_peers "$connected_peers" \
+                        --argjson direct_quic_stream "$direct_quic_stream" \
                         --argjson direct_tcp_stream "$direct_tcp_stream" \
                         '{
                           schema_version: 1,
@@ -534,7 +544,7 @@
                                 connected_peers: $connected_peers,
                                 direct_udp_datagram: 0,
                                 direct_quic_datagram: 0,
-                                direct_quic_stream: 0,
+                                direct_quic_stream: $direct_quic_stream,
                                 direct_tcp_stream: $direct_tcp_stream,
                                 relay: 0,
                                 public_routing_peers: 0
@@ -685,6 +695,7 @@
                   .status == "passed" and
                   .device.pairing_traffic.code_only_enrollment and
                   .device.pairing_traffic.configured_overlay_peer_addresses == 0 and
+                  .device.pairing_traffic.path_mode == "automatic" and
                   .device.pairing_traffic.readiness_attempts.linux_to_android_ipv4 == 1 and
                   .device.pairing_traffic.readiness_attempts.linux_to_android_ipv6 == 1 and
                   .device.pairing_traffic.readiness_attempts.android_to_linux_ipv4 == 1 and
@@ -703,6 +714,47 @@
                 ! grep -Fq 'ABCD-EFGH-JKLM-NPQR' "$test_root/pairing-evidence/fixture.log"
                 ! grep -Fq "$test_root/tmp/p2p-vpn-android-e2e-state." \
                   "$test_root/pairing-evidence/fixture.log"
+
+                for path_mode in quic-stream tcp-stream; do
+                  path_state="$test_root/fake-pairing-$path_mode"
+                  path_evidence="$test_root/path-$path_mode-evidence"
+                  set +e
+                  TMPDIR="$test_root/tmp" \
+                    P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                    P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE="$path_state" \
+                    P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE="$path_mode" \
+                    P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                    P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                    P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                    P2P_VPN_ANDROID_E2E_FIXTURE="$test_root/bin/fake-fixture" \
+                    P2P_VPN_BIN="$test_root/bin/fake-p2p-vpn" \
+                    bash ${./scripts/android-e2e.sh} \
+                      --scenario pairing-traffic \
+                      --path-mode "$path_mode" \
+                      --output "$path_evidence"
+                  path_status=$?
+                  set -e
+
+                  if [[ "$path_status" -ne 0 ]]; then
+                    jq . "$path_evidence/evidence.json" >&2
+                    exit "$path_status"
+                  fi
+                  jq -e --arg path_mode "$path_mode" '
+                    .status == "passed" and
+                    .device.pairing_traffic.path_mode == $path_mode and
+                    (if $path_mode == "quic-stream" then
+                      .device.pairing_traffic.paths.direct_quic_stream == 1 and
+                      .device.pairing_traffic.paths.direct_tcp_stream == 0
+                    else
+                      .device.pairing_traffic.paths.direct_quic_stream == 0 and
+                      .device.pairing_traffic.paths.direct_tcp_stream == 1
+                    end) and
+                    .cleanup.emulator_stopped and
+                    .cleanup.fixture_stopped and
+                    .cleanup.private_state_removed
+                  ' "$path_evidence/evidence.json" >/dev/null
+                  test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
+                done
 
                 set +e
                 TMPDIR="$test_root/tmp" \

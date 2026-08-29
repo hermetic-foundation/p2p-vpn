@@ -163,6 +163,12 @@ The scenario uses a private discovery router and a rootless Linux endpoint.
 
 It requires 5/5 IPv4 and IPv6 replies in both traffic directions.
 
+Add `--path-mode quic-stream` or `--path-mode tcp-stream` to isolate a
+compatibility transport. The final status must exclude every other data path.
+
+Both modes passed on API 35 on 2026-08-29. Each run completed four 5/5
+dual-stack traffic checks and removed all emulator, fixture, and private state.
+
 Check the harness contract without KVM:
 
 ```sh
