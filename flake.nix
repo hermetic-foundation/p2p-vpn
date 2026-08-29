@@ -392,6 +392,10 @@
                   'shell dumpsys activity activities')
                     printf 'org.hermeticfoundation.p2pvpn.MainActivity\n'
                     ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command status')
+                    response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
                   *) printf 'unexpected fake ADB call: %s\n' "$*" >&2; exit 2 ;;
                 esac
                 EOF
@@ -419,6 +423,7 @@
                   .status == "passed" and
                   .device.api_level == "35" and
                   .device.abi == "x86_64" and
+                  .device.debug_automation and
                   .cleanup.emulator_stopped and
                   .cleanup.private_state_removed
                 ' "$test_root/evidence/evidence.json" >/dev/null

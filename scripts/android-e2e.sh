@@ -128,6 +128,29 @@ record_step() {
     >> "$steps_file"
 }
 
+android_automation() {
+  local command="$1"
+  shift
+  local broadcast encoded
+  if ! broadcast="$(
+    "${adb[@]}" shell am broadcast \
+      --receiver-foreground \
+      -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION \
+      -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver \
+      --es command "$command" \
+      "$@"
+  )"; then
+    return 1
+  fi
+  encoded="$(
+    sed -nE \
+      's/^Broadcast completed: result=[^,]+, data="([A-Za-z0-9+\/=]+)".*$/\1/p' \
+      <<< "$broadcast"
+  )"
+  [[ -n "$encoded" ]] || return 1
+  printf '%s' "$encoded" | base64 --decode
+}
+
 bound_file() {
   local path="$1"
   [[ -f "$path" ]] || return 0
@@ -402,9 +425,38 @@ if ! grep -Fq org.hermeticfoundation.p2pvpn.MainActivity <<< "$activity_state"; 
   exit 1
 fi
 
+automation_status_file="$state_dir/automation-status.json"
+for _ in $(seq 1 30); do
+  if android_automation status > "$automation_status_file" \
+    && jq -e \
+      '.schema_version == 1 and .ok and .value.service_ready' \
+      "$automation_status_file" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if ! jq -e '
+  .schema_version == 1 and
+  .ok and
+  .value.service_ready and
+  (.value.snapshot.has_profile | not) and
+  (.value.snapshot.profile_stored | not) and
+  (.value.snapshot.addresses | length == 0) and
+  .value.snapshot.paths.connected_peers == 0
+' "$automation_status_file" >/dev/null 2>&1; then
+  outcome=failed
+  outcome_detail="Protected debug automation status is unavailable or invalid"
+  record_step debug_automation failed "$outcome_detail"
+  exit 1
+fi
+
+jq '. + {debug_automation: true}' "$device_file" > "$device_file.updated"
+mv -f "$device_file.updated" "$device_file"
+
 record_step device_contract passed "API 35 x86_64 device contract verified"
 record_step package passed "Debug package is installed"
 record_step activity passed "Main activity is running"
+record_step debug_automation passed "ADB-authorized structured status is available"
 outcome=passed
 outcome_detail="Clean emulator boot and application smoke test passed"
 exit 0

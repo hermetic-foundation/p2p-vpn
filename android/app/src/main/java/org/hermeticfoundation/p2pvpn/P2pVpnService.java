@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -36,6 +37,9 @@ import org.json.JSONObject;
 public final class P2pVpnService extends VpnService {
     static final String ACTION_CONNECT = "org.hermeticfoundation.p2pvpn.CONNECT";
     static final String ACTION_DISCONNECT = "org.hermeticfoundation.p2pvpn.DISCONNECT";
+    static final String ACTION_DEBUG_COMMAND = "org.hermeticfoundation.p2pvpn.debug.COMMAND";
+    static final String EXTRA_DEBUG_COMMAND = "command";
+    static final String EXTRA_DEBUG_VALUE = "value";
 
     private static final String NOTIFICATION_CHANNEL = "p2p-vpn-connection";
     private static final int NOTIFICATION_ID = 1;
@@ -44,6 +48,7 @@ public final class P2pVpnService extends VpnService {
     private static final long STATUS_POLL_MILLIS = 2_000;
     private static final long NETWORK_RECONNECT_DELAY_MILLIS = 1_500;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000;
+    private static volatile P2pVpnService debugInstance;
 
     private final LocalBinder localBinder = new LocalBinder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -75,12 +80,14 @@ public final class P2pVpnService extends VpnService {
     private String peerDetail = "Overlay peers: unavailable";
     private String pairingDetail = "No pairing operation";
     private String reconnectDetail = "Recovering connection";
+    private RuntimeSummary latestRuntimeSummary = RuntimeSummary.empty();
     private int reconnectAttempts;
     private volatile Snapshot snapshot = Snapshot.initial();
 
     @Override
     public void onCreate() {
         super.onCreate();
+        debugInstance = this;
         worker = new ScheduledThreadPoolExecutor(1);
         worker.setRemoveOnCancelPolicy(true);
         profileStore = new ProfileStore(this);
@@ -100,6 +107,12 @@ public final class P2pVpnService extends VpnService {
             worker.execute(this::connectRequested);
         } else if (ACTION_DISCONNECT.equals(action)) {
             worker.execute(this::disconnectRequested);
+        } else if (ACTION_DEBUG_COMMAND.equals(action) && isDebuggable()) {
+            String command = intent.getStringExtra(EXTRA_DEBUG_COMMAND);
+            String value = intent.getStringExtra(EXTRA_DEBUG_VALUE);
+            if (command != null) {
+                worker.execute(() -> executeDebugCommand(command, value));
+            }
         }
         return START_NOT_STICKY;
     }
@@ -136,6 +149,9 @@ public final class P2pVpnService extends VpnService {
                 releaseMulticastLock();
             }
             worker.shutdownNow();
+        }
+        if (debugInstance == this) {
+            debugInstance = null;
         }
         super.onDestroy();
     }
@@ -258,6 +274,7 @@ public final class P2pVpnService extends VpnService {
         }
         connected = false;
         peerDetail = "Overlay peers: unavailable";
+        latestRuntimeSummary = RuntimeSummary.empty();
         releaseMulticastLock();
     }
 
@@ -326,7 +343,8 @@ public final class P2pVpnService extends VpnService {
             } else {
                 connectionDetail = capitalize(phase);
             }
-            peerDetail = runtimeSummary(status).describe();
+            latestRuntimeSummary = runtimeSummary(status);
+            peerDetail = latestRuntimeSummary.describe();
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             runtimeFailed = true;
             failure = failureMessage(error);
@@ -403,6 +421,31 @@ public final class P2pVpnService extends VpnService {
         } finally {
             operationInProgress = false;
             publishSnapshot();
+        }
+    }
+
+    private void executeDebugCommand(String command, String value) {
+        switch (command) {
+            case "ensure":
+                publishSnapshot();
+                break;
+            case "create-profile":
+                createProfile(value == null ? "" : value);
+                break;
+            case "open-pairing":
+                openPairing();
+                break;
+            case "join-pairing":
+                joinPairing(value == null ? "" : value);
+                break;
+            case "approve-pairing":
+                approvePairing(value);
+                break;
+            case "reject-pairing":
+                rejectPairing();
+                break;
+            default:
+                break;
         }
     }
 
@@ -919,6 +962,8 @@ public final class P2pVpnService extends VpnService {
                         operationInProgress,
                         profile == null ? null : profile.networkName,
                         profile == null ? null : profile.peerId,
+                        profileAddresses(profile),
+                        latestRuntimeSummary,
                         connectionDetail,
                         peerDetail,
                         pairingDetail,
@@ -934,6 +979,26 @@ public final class P2pVpnService extends VpnService {
                         listener.onSnapshot(current);
                     }
                 });
+    }
+
+    private static List<String> profileAddresses(AndroidProfile currentProfile) {
+        if (currentProfile == null) {
+            return Collections.emptyList();
+        }
+        List<String> addresses = new ArrayList<>(currentProfile.addresses.size());
+        for (AndroidProfile.Cidr address : currentProfile.addresses) {
+            addresses.add(address.address + "/" + address.prefixLength);
+        }
+        return addresses;
+    }
+
+    static Snapshot debugSnapshot() {
+        P2pVpnService current = debugInstance;
+        return current == null ? null : current.snapshot;
+    }
+
+    private boolean isDebuggable() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
     private static String pairingProgress(PairRpc.OperationStatus status) {
@@ -1030,6 +1095,8 @@ public final class P2pVpnService extends VpnService {
         final boolean busy;
         final String networkName;
         final String peerId;
+        final List<String> addresses;
+        final RuntimeSummary runtimeSummary;
         final String connectionDetail;
         final String peerDetail;
         final String pairingDetail;
@@ -1048,6 +1115,8 @@ public final class P2pVpnService extends VpnService {
                 boolean busy,
                 String networkName,
                 String peerId,
+                List<String> addresses,
+                RuntimeSummary runtimeSummary,
                 String connectionDetail,
                 String peerDetail,
                 String pairingDetail,
@@ -1064,6 +1133,8 @@ public final class P2pVpnService extends VpnService {
             this.busy = busy;
             this.networkName = networkName;
             this.peerId = peerId;
+            this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
+            this.runtimeSummary = runtimeSummary;
             this.connectionDetail = connectionDetail;
             this.peerDetail = peerDetail;
             this.pairingDetail = pairingDetail;
@@ -1084,6 +1155,8 @@ public final class P2pVpnService extends VpnService {
                     true,
                     null,
                     null,
+                    Collections.emptyList(),
+                    RuntimeSummary.empty(),
                     "Loading",
                     "Overlay peers: unavailable",
                     "No pairing operation",

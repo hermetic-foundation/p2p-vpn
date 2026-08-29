@@ -26,6 +26,7 @@ MainActivity
 | `android/app/src/main/java/.../P2pVpnService.java` | VPN and recovery lifecycle |
 | `android/app/src/main/java/.../ProfileStore.java` | Keystore-backed persistence |
 | `android/app/src/main/java/.../PairRpc.java` | Existing pairing RPC shapes |
+| `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
 | `crates/p2p-vpn-android/src/lib.rs` | JNI and runtime adapter |
 | `src/runtime/tun.rs` | Platform-neutral packet I/O and route hooks |
 | `src/runtime/control.rs` | In-process runtime control channel |
@@ -267,6 +268,29 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 `evidence.json` records preflight checks, the device contract, scenario steps,
 and cleanup results. `emulator.log` is redacted and capped at 1 MiB.
 
+## Debug Automation
+
+The debug APK exposes one ordered-broadcast receiver for the E2E harness.
+
+The receiver requires `android.permission.DUMP`, which authorized ADB shell
+holds. It is absent from non-debug source sets.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `status` | None | Structured profile, connection, pairing, and path state |
+| `create-profile` | `network` | Queues normal encrypted profile creation |
+| `connect` | None | Starts the normal VPN flow after user consent |
+| `disconnect` | None | Stops the normal VPN flow |
+| `open-pairing` | None | Opens the existing pairing protocol |
+| `join-pairing` | `code` | Joins through the existing pairing protocol |
+| `approve-pairing` | Optional `hostname` | Approves the visible candidate |
+| `reject-pairing` | None | Rejects the visible candidate |
+
+Responses are schema-versioned JSON encoded as base64 in broadcast result data.
+
+Status never includes config JSON, private keys, membership keys, or receipts.
+It can include an active pairing code; the harness keeps that in private state.
+
 ## Verification
 
 Run the complete Android gate:
@@ -284,7 +308,7 @@ The gate covers:
 | Java unit tests | RPC JSON, approval, status parsing, recovery policy |
 | Android lint | Debug variant static analysis |
 | APK | Dual ABI, JNI entry, debug ID, signing, min/target SDK |
-| Manifest | Always-on VPN explicitly disabled |
+| Manifest | Always-on disabled; debug automation protected by `DUMP` |
 
 ## Device E2E
 

@@ -562,6 +562,17 @@ let
             echo "APK must explicitly opt out of unsupported always-on VPN mode" >&2
             exit 1
           fi
+
+          if ! grep -F 'org.hermeticfoundation.p2pvpn.DebugAutomationReceiver' \
+            apk-manifest.xml >/dev/null \
+            || ! grep -F 'android:permission="android.permission.DUMP"' \
+              apk-manifest.xml >/dev/null \
+            || ! grep -F 'org.hermeticfoundation.p2pvpn.debug.AUTOMATION' \
+              apk-manifest.xml >/dev/null
+          then
+            echo "debug APK is missing the ADB-protected automation receiver" >&2
+            exit 1
+          fi
         ''}
 
         mkdir -p "$out"

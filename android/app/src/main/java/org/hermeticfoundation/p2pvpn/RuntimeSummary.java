@@ -5,20 +5,44 @@ import java.util.Locale;
 final class RuntimeSummary {
     final long connectedPeers;
     final long directPaths;
+    final long directUdpDatagramPaths;
+    final long directQuicDatagramPaths;
+    final long directQuicStreamPaths;
+    final long directTcpStreamPaths;
     final long relayPaths;
     final long publicRoutingPeers;
 
     private RuntimeSummary(
-            long connectedPeers, long directPaths, long relayPaths, long publicRoutingPeers) {
+            long connectedPeers,
+            long directUdpDatagramPaths,
+            long directQuicDatagramPaths,
+            long directQuicStreamPaths,
+            long directTcpStreamPaths,
+            long relayPaths,
+            long publicRoutingPeers) {
         this.connectedPeers = connectedPeers;
-        this.directPaths = directPaths;
+        this.directUdpDatagramPaths = directUdpDatagramPaths;
+        this.directQuicDatagramPaths = directQuicDatagramPaths;
+        this.directQuicStreamPaths = directQuicStreamPaths;
+        this.directTcpStreamPaths = directTcpStreamPaths;
+        this.directPaths =
+                saturatingAdd(
+                        saturatingAdd(directUdpDatagramPaths, directQuicDatagramPaths),
+                        saturatingAdd(directQuicStreamPaths, directTcpStreamPaths));
         this.relayPaths = relayPaths;
         this.publicRoutingPeers = publicRoutingPeers;
     }
 
+    static RuntimeSummary empty() {
+        return new RuntimeSummary(0, 0, 0, 0, 0, 0, 0);
+    }
+
     static RuntimeSummary fromLines(Iterable<String> lines) {
         long connectedPeers = 0;
-        long directPaths = 0;
+        long directUdpDatagramPaths = 0;
+        long directQuicDatagramPaths = 0;
+        long directQuicStreamPaths = 0;
+        long directTcpStreamPaths = 0;
         long relayPaths = 0;
         long publicRoutingPeers = 0;
         for (String line : lines) {
@@ -40,10 +64,16 @@ final class RuntimeSummary {
                     connectedPeers = value;
                     break;
                 case "path_healthy_direct_udp_datagram_paths":
+                    directUdpDatagramPaths = saturatingAdd(directUdpDatagramPaths, value);
+                    break;
                 case "path_healthy_direct_quic_datagram_paths":
+                    directQuicDatagramPaths = saturatingAdd(directQuicDatagramPaths, value);
+                    break;
                 case "path_healthy_direct_quic_stream_paths":
+                    directQuicStreamPaths = saturatingAdd(directQuicStreamPaths, value);
+                    break;
                 case "path_healthy_direct_tcp_stream_paths":
-                    directPaths = saturatingAdd(directPaths, value);
+                    directTcpStreamPaths = saturatingAdd(directTcpStreamPaths, value);
                     break;
                 case "path_healthy_relay_paths":
                     relayPaths = value;
@@ -55,7 +85,14 @@ final class RuntimeSummary {
                     break;
             }
         }
-        return new RuntimeSummary(connectedPeers, directPaths, relayPaths, publicRoutingPeers);
+        return new RuntimeSummary(
+                connectedPeers,
+                directUdpDatagramPaths,
+                directQuicDatagramPaths,
+                directQuicStreamPaths,
+                directTcpStreamPaths,
+                relayPaths,
+                publicRoutingPeers);
     }
 
     String describe() {

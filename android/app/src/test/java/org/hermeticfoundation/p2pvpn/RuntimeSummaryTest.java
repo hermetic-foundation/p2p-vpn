@@ -2,8 +2,9 @@ package org.hermeticfoundation.p2pvpn;
 
 import static org.junit.Assert.assertEquals;
 
-import java.util.Arrays;
 import org.junit.Test;
+
+import java.util.Arrays;
 
 public final class RuntimeSummaryTest {
     @Test
@@ -12,13 +13,20 @@ public final class RuntimeSummaryTest {
                 RuntimeSummary.fromLines(
                         Arrays.asList(
                                 "path_peers_with_supported_path 2",
+                                "path_healthy_direct_udp_datagram_paths 1",
+                                "path_healthy_direct_quic_datagram_paths 2",
                                 "path_healthy_direct_quic_stream_paths 1",
+                                "path_healthy_direct_quic_stream_paths 2",
                                 "path_healthy_direct_tcp_stream_paths 1",
                                 "path_healthy_relay_paths 3",
                                 "public_routing_peers 4"));
 
         assertEquals(2, summary.connectedPeers);
-        assertEquals(2, summary.directPaths);
+        assertEquals(7, summary.directPaths);
+        assertEquals(1, summary.directUdpDatagramPaths);
+        assertEquals(2, summary.directQuicDatagramPaths);
+        assertEquals(3, summary.directQuicStreamPaths);
+        assertEquals(1, summary.directTcpStreamPaths);
         assertEquals(3, summary.relayPaths);
         assertEquals(4, summary.publicRoutingPeers);
     }
