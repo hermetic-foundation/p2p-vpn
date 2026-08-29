@@ -19,8 +19,22 @@ const BUILTIN_IPV4_PREFIX: u8 = 16;
 const BUILTIN_IPV6_NETWORK: Ipv6Addr =
     Ipv6Addr::new(0xfd00, 0x6879, 0x7072, 0x7370, 0x6163, 0x6500, 0, 0);
 const BUILTIN_IPV6_PREFIX: u8 = 96;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[cfg(any(target_os = "android", test))]
+fn block_on_control<T>(
+    future: impl std::future::Future<Output = std::io::Result<T>>,
+) -> Result<T, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to create control runtime: {error}"))?;
+    runtime
+        .block_on(async move { tokio::time::timeout(CONTROL_TIMEOUT, future).await })
+        .map_err(|_| "runtime control request timed out".to_owned())?
+        .map_err(|error| format!("runtime control request failed: {error}"))
+}
 
 #[derive(Serialize)]
 pub struct AndroidProfile {
@@ -310,11 +324,10 @@ fn upsert_peer(peers: &mut Vec<PeerConfig>, peer: PeerConfig) {
 mod android {
     use std::{
         fs::File,
-        future::Future,
         io,
         io::{Read as _, Write as _},
         os::fd::{AsRawFd as _, FromRawFd as _},
-        panic::{AssertUnwindSafe, catch_unwind},
+        panic::{AssertUnwindSafe, catch_unwind, set_hook},
         ptr,
         sync::{
             Arc, Mutex, Once,
@@ -705,17 +718,6 @@ mod android {
         block_on_control(control.pair_rpc(request))
     }
 
-    fn block_on_control<T>(future: impl Future<Output = io::Result<T>>) -> Result<T, String> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| format!("failed to create control runtime: {error}"))?;
-        runtime
-            .block_on(tokio::time::timeout(CONTROL_TIMEOUT, future))
-            .map_err(|_| "runtime control request timed out".to_owned())?
-            .map_err(|error| format!("runtime control request failed: {error}"))
-    }
-
     fn read_string(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<String, String> {
         env.get_string(value)
             .map(String::from)
@@ -726,6 +728,7 @@ mod android {
         env: &mut JNIEnv<'_>,
         operation: impl FnOnce(&mut JNIEnv<'_>) -> Result<T, String>,
     ) -> jstring {
+        init_logging();
         let result = catch_unwind(AssertUnwindSafe(|| operation(env)))
             .map_err(|_| "native operation panicked".to_owned())
             .and_then(|result| result);
@@ -755,6 +758,18 @@ mod android {
                     .with_tag("p2p-vpn")
                     .with_max_level(log::LevelFilter::Info),
             );
+            set_hook(Box::new(|panic| {
+                if let Some(location) = panic.location() {
+                    log::error!(
+                        "event=native_panic file={} line={} column={}",
+                        location.file(),
+                        location.line(),
+                        location.column()
+                    );
+                } else {
+                    log::error!("event=native_panic location=unknown");
+                }
+            }));
         });
     }
 }
@@ -768,6 +783,14 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn control_timeout_is_created_inside_the_runtime() {
+        let response =
+            block_on_control(async { Ok::<_, std::io::Error>("ready") }).expect("control response");
+
+        assert_eq!(response, "ready");
+    }
 
     #[test]
     fn generated_profile_is_minimal_valid_and_has_overlay_routes() {
