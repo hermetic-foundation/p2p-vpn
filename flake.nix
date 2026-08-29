@@ -39,6 +39,7 @@
           fileset = lib.fileset.unions [
             ./Cargo.toml
             ./Cargo.lock
+            ./crates/p2p-vpn-android
             ./src
             ./tests/pair_cli.rs
             ./tests/tun_namespace.rs
