@@ -9,6 +9,12 @@ final class NativeBridge {
 
     static native String nativeCreateProfile(String networkName);
 
+    static native String nativeCreateE2eProfile(
+            String networkName,
+            String bootstrapPeerId,
+            String bootstrapAddress,
+            String kademliaProtocol);
+
     static native String nativeInspectProfile(String configJson);
 
     static native String nativeStart(

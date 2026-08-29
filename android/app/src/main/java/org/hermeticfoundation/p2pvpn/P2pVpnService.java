@@ -397,6 +397,28 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void createProfile(String networkName) {
+        createProfile(networkName, null, null, null);
+    }
+
+    private void createE2eProfile(String encodedSettings) {
+        try {
+            JSONObject settings = new JSONObject(encodedSettings);
+            createProfile(
+                    requiredDebugSetting(settings, "network", 128),
+                    requiredDebugSetting(settings, "bootstrap_peer_id", 256),
+                    requiredDebugSetting(settings, "bootstrap_address", 1_024),
+                    requiredDebugSetting(settings, "kademlia_protocol", 128));
+        } catch (P2pVpnException | JSONException | RuntimeException error) {
+            connectionDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void createProfile(
+            String networkName,
+            String bootstrapPeerId,
+            String bootstrapAddress,
+            String kademliaProtocol) {
         if (operationInProgress) {
             return;
         }
@@ -410,7 +432,13 @@ public final class P2pVpnService extends VpnService {
             AndroidProfile created =
                     AndroidProfile.fromNative(
                             NativeResponse.objectValue(
-                                    NativeBridge.nativeCreateProfile(networkName.trim())));
+                                    bootstrapPeerId == null
+                                            ? NativeBridge.nativeCreateProfile(networkName.trim())
+                                            : NativeBridge.nativeCreateE2eProfile(
+                                                    networkName.trim(),
+                                                    bootstrapPeerId,
+                                                    bootstrapAddress,
+                                                    kademliaProtocol)));
             profileStore.save(created.configJson);
             profile = created;
             profilePresent = true;
@@ -431,6 +459,9 @@ public final class P2pVpnService extends VpnService {
                 break;
             case "create-profile":
                 createProfile(value == null ? "" : value);
+                break;
+            case "create-e2e-profile":
+                createE2eProfile(value == null ? "" : value);
                 break;
             case "open-pairing":
                 openPairing();
@@ -1024,6 +1055,15 @@ public final class P2pVpnService extends VpnService {
     private static String normalizeHostname(String hostname) {
         String normalized = hostname == null ? "" : hostname.trim().toLowerCase(Locale.ROOT);
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String requiredDebugSetting(JSONObject value, String key, int maximumLength)
+            throws JSONException, P2pVpnException {
+        String result = value.getString(key).trim();
+        if (result.isEmpty() || result.length() > maximumLength) {
+            throw new P2pVpnException("Debug profile setting is invalid: " + key);
+        }
+        return result;
     }
 
     private static String failureMessage(Throwable error) {

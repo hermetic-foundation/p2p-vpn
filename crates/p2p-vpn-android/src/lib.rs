@@ -6,7 +6,7 @@ use std::{
 };
 
 use p2p_vpn::{
-    config::{Config, PeerConfig, RouteConfig},
+    config::{BootstrapPeerConfig, Config, DiscoveryConfig, PeerConfig, RouteConfig},
     identity::NodeIdentity,
     membership::SignedMembershipRecord,
     route::IpCidr,
@@ -83,7 +83,49 @@ pub fn create_profile(network_name: &str) -> Result<AndroidProfile, String> {
     let network_name = validate_network_name(network_name)?;
     let identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate identity: {error:?}"))?;
-    let config_json = serde_json::to_string(&serde_json::json!({
+    create_profile_with_identity(network_name, identity, None)
+}
+
+pub fn create_profile_with_bootstrap(
+    network_name: &str,
+    bootstrap_peer_id: &str,
+    bootstrap_address: &str,
+    kademlia_protocol: &str,
+) -> Result<AndroidProfile, String> {
+    let network_name = validate_network_name(network_name)?;
+    let bootstrap_peer_id = validate_bootstrap_value("bootstrap peer ID", bootstrap_peer_id, 256)?;
+    let bootstrap_address =
+        validate_bootstrap_value("bootstrap address", bootstrap_address, 1_024)?;
+    let kademlia_protocol = validate_bootstrap_value("Kademlia protocol", kademlia_protocol, 128)?;
+    let identity = NodeIdentity::generate_ed25519()
+        .map_err(|error| format!("failed to generate identity: {error:?}"))?;
+    let discovery = DiscoveryConfig {
+        mdns: false,
+        kademlia: true,
+        kademlia_provider_advertisement: true,
+        kademlia_protocol: kademlia_protocol.to_owned(),
+        dcutr: true,
+        autonat: true,
+    };
+    create_profile_with_identity(
+        network_name,
+        identity,
+        Some((
+            BootstrapPeerConfig {
+                id: bootstrap_peer_id.to_owned(),
+                address: bootstrap_address.to_owned(),
+            },
+            discovery,
+        )),
+    )
+}
+
+fn create_profile_with_identity(
+    network_name: &str,
+    identity: NodeIdentity,
+    bootstrap: Option<(BootstrapPeerConfig, DiscoveryConfig)>,
+) -> Result<AndroidProfile, String> {
+    let mut config: Config = serde_json::from_value(serde_json::json!({
         "network": {
             "name": network_name,
             "private_key": identity.private_key,
@@ -93,7 +135,13 @@ pub fn create_profile(network_name: &str) -> Result<AndroidProfile, String> {
             ]
         }
     }))
-    .map_err(|error| format!("failed to encode profile: {error}"))?;
+    .map_err(|error| format!("failed to create profile: {error}"))?;
+    if let Some((bootstrap_peer, discovery)) = bootstrap {
+        config.network.bootstrap_peers = vec![bootstrap_peer];
+        config.network.discovery = discovery;
+    }
+    let config_json = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode profile: {error}"))?;
 
     inspect_profile(&config_json)
 }
@@ -297,6 +345,18 @@ fn validate_network_name(network_name: &str) -> Result<&str, String> {
     Ok(network_name)
 }
 
+fn validate_bootstrap_value<'a>(
+    label: &str,
+    value: &'a str,
+    maximum_length: usize,
+) -> Result<&'a str, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > maximum_length || value.chars().any(char::is_control) {
+        return Err(format!("{label} is invalid"));
+    }
+    Ok(value)
+}
+
 fn push_unique(prefixes: &mut Vec<AndroidCidr>, prefix: AndroidCidr) {
     if !prefixes.contains(&prefix) {
         prefixes.push(prefix);
@@ -432,6 +492,29 @@ mod android {
         jni_response(&mut env, |env| {
             let network_name = read_string(env, &network_name)?;
             create_profile(&network_name)
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeCreateE2eProfile(
+        mut env: JNIEnv,
+        _class: JClass,
+        network_name: JString,
+        bootstrap_peer_id: JString,
+        bootstrap_address: JString,
+        kademlia_protocol: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let network_name = read_string(env, &network_name)?;
+            let bootstrap_peer_id = read_string(env, &bootstrap_peer_id)?;
+            let bootstrap_address = read_string(env, &bootstrap_address)?;
+            let kademlia_protocol = read_string(env, &kademlia_protocol)?;
+            create_profile_with_bootstrap(
+                &network_name,
+                &bootstrap_peer_id,
+                &bootstrap_address,
+                &kademlia_protocol,
+            )
         })
     }
 
@@ -809,6 +892,62 @@ mod tests {
             address: BUILTIN_IPV6_NETWORK.to_string(),
             prefix_length: BUILTIN_IPV6_PREFIX,
         }));
+    }
+
+    #[test]
+    fn fixture_profile_configures_only_its_bootstrap_router() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let address = format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id);
+        let profile = create_profile_with_bootstrap(
+            "android-e2e",
+            &bootstrap.peer_id,
+            &address,
+            "/p2p-vpn/kad/1",
+        )
+        .expect("fixture profile");
+        let config: Config = serde_json::from_str(&profile.config_json).expect("profile config");
+
+        assert!(config.peers.is_empty());
+        assert_eq!(config.network.bootstrap_peers.len(), 1);
+        assert_eq!(config.network.bootstrap_peers[0].id, bootstrap.peer_id);
+        assert_eq!(config.network.bootstrap_peers[0].address, address);
+        assert!(!config.network.discovery.mdns);
+        assert_eq!(config.network.discovery.kademlia_protocol, "/p2p-vpn/kad/1");
+        assert!(!config.uses_public_ipfs_bootstrap_defaults());
+    }
+
+    #[test]
+    fn fixture_profile_rejects_invalid_bootstrap_settings() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let address = format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id);
+
+        assert!(
+            create_profile_with_bootstrap(
+                "android-e2e",
+                "not-a-peer-id",
+                &address,
+                "/p2p-vpn/kad/1"
+            )
+            .is_err()
+        );
+        assert!(
+            create_profile_with_bootstrap(
+                "android-e2e",
+                &bootstrap.peer_id,
+                "/ip4/10.0.2.2/tcp/not-a-port",
+                "/p2p-vpn/kad/1"
+            )
+            .is_err()
+        );
+        assert!(
+            create_profile_with_bootstrap(
+                "android-e2e",
+                &bootstrap.peer_id,
+                &address,
+                "p2p-vpn/kad/1"
+            )
+            .is_err()
+        );
     }
 
     #[test]

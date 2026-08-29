@@ -31,7 +31,7 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                     status(context);
                     return;
                 case "create-profile":
-                    enqueue(context, command, requiredExtra(intent, "network", 128));
+                    createProfile(context, intent);
                     return;
                 case "join-pairing":
                     enqueue(context, command, requiredExtra(intent, "code", 64));
@@ -79,6 +79,29 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         }
         startService(context, P2pVpnService.ACTION_CONNECT);
         accepted("connect");
+    }
+
+    private void createProfile(Context context, Intent intent) throws JSONException {
+        String network = requiredExtra(intent, "network", 128);
+        String bootstrapPeerId = optionalExtra(intent, "bootstrap_peer_id", 256);
+        String bootstrapAddress = optionalExtra(intent, "bootstrap_address", 1024);
+        String kademliaProtocol = optionalExtra(intent, "kademlia_protocol", 128);
+        boolean customBootstrap =
+                bootstrapPeerId != null || bootstrapAddress != null || kademliaProtocol != null;
+        if (!customBootstrap) {
+            enqueue(context, "create-profile", network);
+            return;
+        }
+        if (bootstrapPeerId == null || bootstrapAddress == null || kademliaProtocol == null) {
+            throw new IllegalArgumentException("incomplete_bootstrap");
+        }
+        JSONObject settings = new JSONObject();
+        settings.put("network", network);
+        settings.put("bootstrap_peer_id", bootstrapPeerId);
+        settings.put("bootstrap_address", bootstrapAddress);
+        settings.put("kademlia_protocol", kademliaProtocol);
+        enqueueService(context, "create-e2e-profile", settings.toString());
+        accepted("create-profile");
     }
 
     private void enqueue(Context context, String command, String value) throws JSONException {
