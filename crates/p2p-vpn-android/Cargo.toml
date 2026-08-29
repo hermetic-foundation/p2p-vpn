@@ -1,0 +1,24 @@
+[package]
+name = "p2p-vpn-android"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Android JNI bridge for p2p-vpn"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints.rust]
+unsafe_code = "allow"
+
+[dependencies]
+jni = "0.21.1"
+libc = "0.2.183"
+p2p-vpn = { path = "../.." }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15.1"
+log = "0.4.29"

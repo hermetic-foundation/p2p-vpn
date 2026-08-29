@@ -5,6 +5,11 @@ edition = "2024"
 license = "Apache-2.0"
 description = "A Rust foundation for a libp2p-native packet-oriented mesh VPN"
 
+[workspace]
+members = [".", "crates/p2p-vpn-android"]
+default-members = ["."]
+resolver = "3"
+
 [lints.rust]
 unsafe_code = "forbid"
 

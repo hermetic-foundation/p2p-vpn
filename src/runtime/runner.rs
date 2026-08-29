@@ -12775,6 +12775,7 @@ fn commit_pairing_runtime_enrollment_with_route_update(
     Ok(remote_peer)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn execute_tun_route_update(
     update: &TunRouteUpdate,
     mut execute: impl FnMut(&IpCommand) -> Result<(), RunnerError>,
@@ -12799,6 +12800,7 @@ fn execute_tun_route_update(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn execute_ip_command(command: &IpCommand) -> Result<(), RunnerError> {
     let status = command.execute().map_err(TunRuntimeError::Io)?;
     if status.success() {

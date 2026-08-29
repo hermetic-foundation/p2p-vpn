@@ -1,10 +1,12 @@
 use std::{
-    fmt, fs,
-    io::{self, Read, Write},
+    fmt, fs, io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     process::{Command, ExitStatus},
 };
+
+#[cfg(target_os = "linux")]
+use std::io::{Read as _, Write as _};
 
 use crate::{
     PeerId,
