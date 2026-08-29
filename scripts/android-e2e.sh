@@ -26,7 +26,7 @@ usage() {
 Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
-  --scenario boot-smoke  Select the E2E scenario (default: boot-smoke).
+  --scenario NAME        Select boot-smoke or profile-persistence.
   --preflight            Check requirements without starting an emulator.
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
@@ -78,10 +78,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$scenario" != boot-smoke ]]; then
-  echo "unsupported Android E2E scenario: $scenario" >&2
-  exit 2
-fi
+case "$scenario" in
+  boot-smoke|profile-persistence) ;;
+  *)
+    echo "unsupported Android E2E scenario: $scenario" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "$output_dir" ]]; then
   output_dir="$(mktemp -d -t p2p-vpn-android-e2e-evidence.XXXXXXXX)"
@@ -149,6 +152,27 @@ android_automation() {
   )"
   [[ -n "$encoded" ]] || return 1
   printf '%s' "$encoded" | base64 --decode
+}
+
+wait_for_automation_status() {
+  local path="$1"
+  local predicate="$2"
+  local attempts="${3:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if android_automation status > "$path" \
+      && jq -e ".schema_version == 1 and .ok and .value.service_ready and ($predicate)" \
+        "$path" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+start_main_activity() {
+  "${adb[@]}" shell am start \
+    -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity \
+    >/dev/null
 }
 
 bound_file() {
@@ -284,6 +308,7 @@ missing_requirements=()
 test_mode="${P2P_VPN_ANDROID_E2E_TEST_MODE:-0}"
 emulator_command="${P2P_VPN_ANDROID_EMULATOR:-}"
 adb_command="${P2P_VPN_ADB:-adb}"
+android_apk="${P2P_VPN_ANDROID_APK:-}"
 
 if [[ "$(uname -s)" == Linux ]]; then
   record_check host_linux true true "Linux host"
@@ -311,6 +336,17 @@ if [[ -x "$adb_command" ]] || command -v "$adb_command" >/dev/null 2>&1; then
 else
   record_check adb true false "ADB is unavailable"
   missing_requirements+=(adb)
+fi
+
+if [[ "$scenario" == profile-persistence ]]; then
+  if [[ -n "$android_apk" && -f "$android_apk" ]]; then
+    record_check android_apk true true "Reproducible debug APK is available"
+  else
+    record_check android_apk true false "P2P_VPN_ANDROID_APK is unavailable"
+    missing_requirements+=(android_apk)
+  fi
+else
+  record_check android_apk false false "boot-smoke does not reinstall the APK"
 fi
 
 if [[ "$test_mode" == 1 ]]; then
@@ -341,7 +377,7 @@ if (( ${#missing_requirements[@]} > 0 )); then
   exit 2
 fi
 
-record_step preflight passed "Required boot-smoke capabilities are available"
+record_step preflight passed "Required Android E2E capabilities are available"
 
 if [[ "$preflight_only" -eq 1 ]]; then
   outcome=passed
@@ -426,15 +462,14 @@ if ! grep -Fq org.hermeticfoundation.p2pvpn.MainActivity <<< "$activity_state"; 
 fi
 
 automation_status_file="$state_dir/automation-status.json"
-for _ in $(seq 1 30); do
-  if android_automation status > "$automation_status_file" \
-    && jq -e \
-      '.schema_version == 1 and .ok and .value.service_ready' \
-      "$automation_status_file" >/dev/null; then
-    break
-  fi
-  sleep 1
-done
+if ! wait_for_automation_status \
+  "$automation_status_file" \
+  '(.value.snapshot.has_profile | not)'; then
+  outcome=failed
+  outcome_detail="Protected debug automation status did not become ready"
+  record_step debug_automation failed "$outcome_detail"
+  exit 1
+fi
 if ! jq -e '
   .schema_version == 1 and
   .ok and
@@ -457,6 +492,97 @@ record_step device_contract passed "API 35 x86_64 device contract verified"
 record_step package passed "Debug package is installed"
 record_step activity passed "Main activity is running"
 record_step debug_automation passed "ADB-authorized structured status is available"
+
+if [[ "$scenario" == boot-smoke ]]; then
+  outcome=passed
+  outcome_detail="Clean emulator boot and application smoke test passed"
+  exit 0
+fi
+
+baseline_profile="$state_dir/profile-baseline.json"
+command_response="$state_dir/automation-command.json"
+if ! android_automation create-profile --es network android-e2e > "$command_response" \
+  || ! jq -e \
+    '.schema_version == 1 and .ok and .value.accepted and .value.command == "create-profile"' \
+    "$command_response" >/dev/null; then
+  outcome=failed
+  outcome_detail="Debug automation did not accept profile creation"
+  record_step profile_creation failed "$outcome_detail"
+  exit 1
+fi
+if ! wait_for_automation_status \
+  "$baseline_profile" \
+  '.value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.busy | not)'; then
+  outcome=failed
+  outcome_detail="Encrypted profile creation did not complete"
+  record_step profile_creation failed "$outcome_detail"
+  exit 1
+fi
+if ! jq -e '
+  (.value.snapshot.peer_id | type == "string" and length > 0 and length <= 256) and
+  (.value.snapshot.addresses | any(contains("."))) and
+  (.value.snapshot.addresses | any(contains(":")))
+' "$baseline_profile" >/dev/null; then
+  outcome=failed
+  outcome_detail="Created profile does not expose valid dual-stack identity metadata"
+  record_step profile_creation failed "$outcome_detail"
+  exit 1
+fi
+record_step profile_creation passed "Encrypted dual-stack profile created through the real app"
+
+assert_profile_unchanged() {
+  local current="$1"
+  jq -e -s '
+    .[0].value.snapshot.peer_id == .[1].value.snapshot.peer_id and
+    .[0].value.snapshot.network_name == .[1].value.snapshot.network_name and
+    .[0].value.snapshot.addresses == .[1].value.snapshot.addresses
+  ' "$baseline_profile" "$current" >/dev/null
+}
+
+"${adb[@]}" shell am force-stop org.hermeticfoundation.p2pvpn.debug
+start_main_activity
+process_profile="$state_dir/profile-after-process-death.json"
+if ! wait_for_automation_status "$process_profile" '.value.snapshot.has_profile' \
+  || ! assert_profile_unchanged "$process_profile"; then
+  outcome=failed
+  outcome_detail="Profile identity changed after process death"
+  record_step process_death failed "$outcome_detail"
+  exit 1
+fi
+record_step process_death passed "Encrypted profile restored after process death"
+
+for install_kind in update reinstall; do
+  if ! "${adb[@]}" install -r "$android_apk" >/dev/null; then
+    outcome=failed
+    outcome_detail="ADB replacement install failed during $install_kind"
+    record_step "$install_kind" failed "$outcome_detail"
+    exit 1
+  fi
+  start_main_activity
+  installed_profile="$state_dir/profile-after-$install_kind.json"
+  if ! wait_for_automation_status "$installed_profile" '.value.snapshot.has_profile' \
+    || ! assert_profile_unchanged "$installed_profile"; then
+    outcome=failed
+    outcome_detail="Profile identity changed after $install_kind"
+    record_step "$install_kind" failed "$outcome_detail"
+    exit 1
+  fi
+  record_step "$install_kind" passed "Encrypted profile survived replacement install"
+done
+
+jq '
+  . + {
+    profile_persistence: {
+      process_death: true,
+      update_install: true,
+      replacement_reinstall: true,
+      ipv4: true,
+      ipv6: true
+    }
+  }
+' "$device_file" > "$device_file.updated"
+mv -f "$device_file.updated" "$device_file"
+
 outcome=passed
-outcome_detail="Clean emulator boot and application smoke test passed"
+outcome_detail="Encrypted profile identity survived process death and replacement installs"
 exit 0

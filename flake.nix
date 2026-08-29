@@ -336,6 +336,7 @@
               text = ''
                 export P2P_VPN_ANDROID_EMULATOR=${android.androidEmulator}/bin/run-test-emulator
                 export P2P_VPN_ADB=${android.androidSdk}/bin/adb
+                export P2P_VPN_ANDROID_APK=${android.androidDebugApk}/p2p-vpn-debug.apk
                 export P2P_VPN_BIN=${package}/bin/p2p-vpn
                 exec bash ${./scripts/android-e2e.sh} "$@"
               '';
@@ -363,7 +364,9 @@
                   "$test_root/bin" \
                   "$test_root/tmp" \
                   "$test_root/evidence" \
+                  "$test_root/persistence-evidence" \
                   "$test_root/skip-evidence"
+                touch "$test_root/fake.apk"
 
                 cat > "$test_root/bin/fake-emulator" <<'EOF'
                 #!${pkgs.bash}/bin/bash
@@ -393,9 +396,25 @@
                     printf 'org.hermeticfoundation.p2pvpn.MainActivity\n'
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command status')
-                    response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
+                    if [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
+                      && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
+                      response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":true,"profile_stored":true,"busy":false,"network_name":"android-e2e","peer_id":"12D3KooWFakeAndroidPeer","addresses":["100.64.0.9/32","fd42::9/128"],"paths":{"connected_peers":0}}}}'
+                    else
+                      response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
+                    fi
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
                     ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command create-profile --es network android-e2e')
+                    : "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:?}"
+                    touch "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE"
+                    response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"create-profile"}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell am force-stop org.hermeticfoundation.p2pvpn.debug') ;;
+                  'shell am start -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity')
+                    printf 'Starting: Intent\n'
+                    ;;
+                  install\ -r\ *) printf 'Success\n' ;;
                   *) printf 'unexpected fake ADB call: %s\n' "$*" >&2; exit 2 ;;
                 esac
                 EOF
@@ -432,6 +451,36 @@
                 ! grep -Fq 'Sending adb public key' "$test_root/evidence/emulator.log"
                 ! grep -Fq 'test-user' "$test_root/evidence/emulator.log"
                 grep -Fq '/tmp/android-REDACTED/crash.db' "$test_root/evidence/emulator.log"
+
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE="$test_root/fake-profile" \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario profile-persistence \
+                    --output "$test_root/persistence-evidence"
+                persistence_status=$?
+                set -e
+
+                if [[ "$persistence_status" -ne 0 ]]; then
+                  jq . "$test_root/persistence-evidence/evidence.json" >&2
+                  exit "$persistence_status"
+                fi
+                jq -e '
+                  .scenario == "profile-persistence" and
+                  .status == "passed" and
+                  .device.profile_persistence.process_death and
+                  .device.profile_persistence.update_install and
+                  .device.profile_persistence.replacement_reinstall and
+                  .device.profile_persistence.ipv4 and
+                  .device.profile_persistence.ipv6 and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/persistence-evidence/evidence.json" >/dev/null
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 set +e
                 TMPDIR="$test_root/tmp" \

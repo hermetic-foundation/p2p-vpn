@@ -143,6 +143,14 @@ nix run .#android-e2e -- --scenario boot-smoke --output ./android-e2e-evidence
 
 The gate emits bounded `evidence.json` and `emulator.log` artifacts.
 
+Run encrypted profile persistence coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario profile-persistence \
+  --output ./android-profile-evidence
+```
+
 Check the harness contract without KVM:
 
 ```sh

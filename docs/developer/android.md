@@ -252,6 +252,23 @@ nix run .#android-e2e -- --scenario boot-smoke --output ./android-e2e-evidence
 The command boots API 35, installs the real debug APK, checks the active app,
 then removes the temporary emulator state.
 
+Run encrypted profile lifecycle coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario profile-persistence \
+  --output ./android-profile-evidence
+```
+
+| Check | Assertion |
+| --- | --- |
+| Profile | Real JNI creates encrypted dual-stack identity state |
+| Process death | Activity and service restore the same identity |
+| Update | `adb install -r` preserves the same identity |
+| Reinstall | A repeated replacement install preserves the same identity |
+
+An uninstall or application-data clear still destroys the identity by design.
+
 Run capability checks without starting Android:
 
 ```sh
