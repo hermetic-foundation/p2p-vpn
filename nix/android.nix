@@ -367,7 +367,7 @@ let
         + "add android/ before building the debug APK."
       );
 
-  androidEmulator =
+  androidEmulatorLauncher =
     if androidProjectPresent then
       androidPkgs.androidenv.emulateApp {
         name = "${pname}-emulator";
@@ -390,6 +390,66 @@ let
         "The Android Gradle project does not exist at ${toString androidProject}; "
         + "add android/ before running the emulator."
       );
+
+  androidEmulator =
+    if androidProjectPresent then
+      pkgs.writeShellApplication {
+        name = "run-test-emulator";
+        runtimeInputs = [ pkgs.coreutils ];
+        text = ''
+          export TMPDIR="''${TMPDIR:-/tmp}"
+          export NIX_ANDROID_EMULATOR_FLAGS="''${NIX_ANDROID_EMULATOR_FLAGS:-}"
+          export NIX_ANDROID_AVD_FLAGS="''${NIX_ANDROID_AVD_FLAGS:-}"
+
+          emulator_pid=""
+          cleanup() {
+            local serial="''${ANDROID_SERIAL:-}"
+            local android_home="''${ANDROID_HOME:-}"
+            local user_home="''${ANDROID_USER_HOME:-}"
+
+            if [[ -n "$serial" && -n "$android_home" ]]; then
+              "$android_home/platform-tools/adb" -s "$serial" emu kill >/dev/null 2>&1 || true
+            fi
+            if [[ -n "$emulator_pid" ]]; then
+              for _ in $(seq 1 15); do
+                if ! kill -0 "$emulator_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$emulator_pid" 2>/dev/null; then
+                kill "$emulator_pid" 2>/dev/null || true
+              fi
+              wait "$emulator_pid" 2>/dev/null || true
+            fi
+            case "$user_home" in
+              "$TMPDIR"/nix-android-user-home-*)
+                chmod -R u+w "$user_home" 2>/dev/null || true
+                rm -rf -- "$user_home"
+                ;;
+            esac
+          }
+
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          launcher=${androidEmulatorLauncher}/bin/run-test-emulator
+          set +o pipefail
+          # shellcheck disable=SC1090
+          source "$launcher"
+          set -o pipefail
+          emulator_pid=$!
+
+          printf 'Emulator ready: %s\n' "$ANDROID_SERIAL" >&2
+          printf 'Press Ctrl-C to stop it and remove temporary state.\n' >&2
+          while "$ANDROID_HOME/platform-tools/adb" -s "$ANDROID_SERIAL" get-state >/dev/null 2>&1; do
+            sleep 2
+          done
+        '';
+      }
+    else
+      androidEmulatorLauncher;
 
   androidDevShell = androidPkgs.mkShellNoCC {
     packages = [
