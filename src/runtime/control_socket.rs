@@ -39,6 +39,12 @@ pub struct PairRpcRequestEnvelope {
     pub request: PairRpcRequest,
 }
 
+#[derive(Serialize)]
+struct PairRpcRequestEnvelopeRef<'a> {
+    version: u8,
+    request: &'a PairRpcRequest,
+}
+
 impl PairRpcRequestEnvelope {
     #[must_use]
     pub const fn new(request: PairRpcRequest) -> Self {
@@ -511,6 +517,148 @@ pub enum RuntimeControlRequest {
     },
 }
 
+/// Sends control requests directly to a running p2p-vpn runtime.
+///
+/// This is the platform-neutral equivalent of connecting to [`ControlSocket`].
+#[derive(Clone, Debug)]
+pub struct RuntimeControlHandle {
+    tx: mpsc::Sender<RuntimeControlRequest>,
+}
+
+/// Runtime-owned side of an in-process control channel.
+#[derive(Debug)]
+pub struct RuntimeControlReceiver {
+    handle: RuntimeControlHandle,
+    rx: mpsc::Receiver<RuntimeControlRequest>,
+}
+
+/// Creates a bounded in-process control channel.
+#[must_use]
+pub fn runtime_control_channel() -> (RuntimeControlHandle, RuntimeControlReceiver) {
+    let (tx, rx) = mpsc::channel(REQUEST_CHANNEL);
+    let handle = RuntimeControlHandle { tx };
+    let receiver = RuntimeControlReceiver {
+        handle: handle.clone(),
+        rx,
+    };
+    (handle, receiver)
+}
+
+impl RuntimeControlHandle {
+    pub async fn status(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Status { respond_to })
+            .await
+    }
+
+    pub async fn state(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::State { respond_to })
+            .await
+    }
+
+    pub async fn peers(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Peers { respond_to })
+            .await
+    }
+
+    pub async fn routes(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Routes { respond_to })
+            .await
+    }
+
+    pub async fn paths(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Paths { respond_to })
+            .await
+    }
+
+    pub async fn mtu(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Mtu { respond_to })
+            .await
+    }
+
+    pub async fn capabilities(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Capabilities { respond_to })
+            .await
+    }
+
+    pub async fn network_peers(&self) -> io::Result<NetworkPeerList> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::NetworkPeers { respond_to })
+            .await?;
+        response
+            .await
+            .map_err(|_| runtime_response_dropped())?
+            .map_err(io::Error::other)
+    }
+
+    pub async fn dns(&self, request: DnsControlRequest) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Dns {
+            request,
+            respond_to,
+        })
+        .await
+    }
+
+    pub async fn shutdown(&self) -> io::Result<Vec<String>> {
+        self.request_lines(|respond_to| RuntimeControlRequest::Shutdown { respond_to })
+            .await
+    }
+
+    pub async fn pair_rpc(&self, request: PairRpcRequest) -> io::Result<PairRpcResponseEnvelope> {
+        let encoded_len = serde_json::to_vec(&PairRpcRequestEnvelopeRef {
+            version: PAIR_RPC_VERSION,
+            request: &request,
+        })
+        .map_err(invalid_data)?
+        .len();
+        if encoded_len > MAX_PAIR_RPC_REQUEST_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pair RPC request exceeds the 64 KiB limit",
+            ));
+        }
+
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::PairRpc {
+            request,
+            respond_to,
+        })
+        .await?;
+        let response = response.await.map_err(|_| runtime_response_dropped())?;
+        if response.encoded_len().map_err(invalid_data)? > MAX_PAIR_RPC_RESPONSE_LEN {
+            return Ok(PairRpcResponseEnvelope::error(
+                PairRpcErrorCode::ResponseTooLarge,
+                "pair RPC response exceeds the 256 KiB limit",
+                false,
+            ));
+        }
+        Ok(response)
+    }
+
+    async fn request_lines(
+        &self,
+        request: impl FnOnce(oneshot::Sender<Vec<String>>) -> RuntimeControlRequest,
+    ) -> io::Result<Vec<String>> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(request(respond_to)).await?;
+        response.await.map_err(|_| runtime_response_dropped())
+    }
+
+    async fn send(&self, request: RuntimeControlRequest) -> io::Result<()> {
+        self.tx.send(request).await.map_err(|_| runtime_stopped())
+    }
+}
+
+impl RuntimeControlReceiver {
+    #[must_use]
+    pub fn handle(&self) -> RuntimeControlHandle {
+        self.handle.clone()
+    }
+
+    pub(crate) async fn recv(&mut self) -> Option<RuntimeControlRequest> {
+        self.rx.recv().await
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DnsControlRequest {
     Status,
@@ -539,6 +687,18 @@ impl ControlSocket {
         let task = tokio::spawn(serve(listener, tx));
 
         Ok((Self { path, task }, rx))
+    }
+
+    /// Binds a Unix control socket to an existing in-process runtime channel.
+    pub fn bind_with_handle(
+        path: impl Into<PathBuf>,
+        handle: &RuntimeControlHandle,
+    ) -> io::Result<Self> {
+        let path = path.into();
+        let listener = UnixListener::bind(&path)?;
+        let task = tokio::spawn(serve(listener, handle.tx.clone()));
+
+        Ok(Self { path, task })
     }
 
     #[must_use]
@@ -869,6 +1029,10 @@ fn parse_pair_rpc_frame_length(header: &[u8], limit: usize) -> Result<usize, Pai
 
 fn runtime_stopped() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "runtime control loop stopped")
+}
+
+fn runtime_response_dropped() -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "runtime response dropped")
 }
 
 fn invalid_data(error: impl std::fmt::Display) -> io::Error {
@@ -1516,6 +1680,114 @@ mod tests {
                 .expect("response JSON")
                 .contains(code)
         );
+    }
+
+    #[tokio::test]
+    async fn in_process_control_channel_round_trips_runtime_requests() {
+        let (handle, mut receiver) = runtime_control_channel();
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::Status { respond_to }) = receiver.recv().await else {
+                panic!("expected status request");
+            };
+            respond_to
+                .send(vec!["network lab".to_owned()])
+                .expect("status response accepted");
+
+            let Some(RuntimeControlRequest::PairRpc {
+                request,
+                respond_to,
+            }) = receiver.recv().await
+            else {
+                panic!("expected pair RPC request");
+            };
+            assert_eq!(
+                request,
+                PairRpcRequest::PairStatus {
+                    operation_id: "pair-operation".to_owned(),
+                }
+            );
+            respond_to
+                .send(PairRpcResponseEnvelope::error(
+                    PairRpcErrorCode::NotFound,
+                    "operation not found",
+                    false,
+                ))
+                .expect("pair response accepted");
+
+            let Some(RuntimeControlRequest::Shutdown { respond_to }) = receiver.recv().await else {
+                panic!("expected shutdown request");
+            };
+            respond_to
+                .send(vec!["shutdown accepted".to_owned()])
+                .expect("shutdown response accepted");
+        });
+
+        assert_eq!(
+            handle.status().await.expect("status"),
+            vec!["network lab".to_owned()]
+        );
+        let response = handle
+            .pair_rpc(PairRpcRequest::PairStatus {
+                operation_id: "pair-operation".to_owned(),
+            })
+            .await
+            .expect("pair response");
+        assert!(matches!(
+            response.outcome,
+            PairRpcOutcome::Error {
+                error: PairRpcError {
+                    code: PairRpcErrorCode::NotFound,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(
+            handle.shutdown().await.expect("shutdown"),
+            vec!["shutdown accepted".to_owned()]
+        );
+        responder.await.expect("responder");
+    }
+
+    #[tokio::test]
+    async fn control_socket_can_share_an_in_process_channel() {
+        let path = test_socket_path("shared-channel");
+        let _ = std::fs::remove_file(&path);
+        let (handle, mut receiver) = runtime_control_channel();
+        let socket = ControlSocket::bind_with_handle(&path, &handle).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::Status { respond_to }) = receiver.recv().await else {
+                panic!("expected status request");
+            };
+            respond_to
+                .send(vec!["network shared".to_owned()])
+                .expect("status response accepted");
+        });
+
+        assert_eq!(
+            query_status(&path, std::time::Duration::from_secs(1))
+                .await
+                .expect("query"),
+            vec!["network shared".to_owned()]
+        );
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn in_process_control_channel_rejects_oversized_pair_requests() {
+        let (handle, _receiver) = runtime_control_channel();
+        let error = handle
+            .pair_rpc(PairRpcRequest::PairJoin {
+                operation_id: "join-operation".to_owned(),
+                code: "X".repeat(MAX_PAIR_RPC_REQUEST_LEN),
+                timeout_seconds: 600,
+                requested_vpn_ip: None,
+                requested_routes: None,
+            })
+            .await
+            .expect_err("oversized request rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[tokio::test]

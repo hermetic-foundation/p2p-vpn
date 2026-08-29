@@ -73,7 +73,8 @@ use crate::{
             PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan,
             PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
             PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
-            PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlRequest,
+            PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlReceiver,
+            RuntimeControlRequest, runtime_control_channel,
         },
         dns::{DnsRuntime, DnsRuntimeError},
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
@@ -532,6 +533,30 @@ impl TunRouteController for PreconfiguredTunRoutes {
     }
 }
 
+/// Host integrations needed by the platform-neutral runtime.
+pub struct RuntimePlatform {
+    packet_io: PacketIo,
+    route_controller: Box<dyn TunRouteController>,
+    control: Option<RuntimeControlReceiver>,
+}
+
+impl RuntimePlatform {
+    #[must_use]
+    pub fn new(packet_io: PacketIo, route_controller: impl TunRouteController) -> Self {
+        Self {
+            packet_io,
+            route_controller: Box::new(route_controller),
+            control: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_control(mut self, control: RuntimeControlReceiver) -> Self {
+        self.control = Some(control);
+        self
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LinuxTunRoutes;
@@ -725,6 +750,35 @@ pub async fn run_config_until_with_membership_state_and_platform<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    run_config_until_with_runtime_platform(
+        config,
+        RuntimePlatform::new(packet_io, route_controller),
+        metrics_interval,
+        control_socket,
+        pairing_state_path,
+        membership_state_path,
+        shutdown,
+    )
+    .await
+}
+
+pub async fn run_config_until_with_runtime_platform<Shutdown>(
+    config: Config,
+    platform: RuntimePlatform,
+    metrics_interval: Option<Duration>,
+    control_socket: Option<PathBuf>,
+    pairing_state_path: Option<PathBuf>,
+    membership_state_path: Option<PathBuf>,
+    shutdown: Shutdown,
+) -> Result<(), RunnerError>
+where
+    Shutdown: Future<Output = ShutdownReason> + Send,
+{
+    let RuntimePlatform {
+        packet_io,
+        route_controller,
+        control,
+    } = platform;
     let identity = config.identity()?;
     let public_bootstrap_defaults = config.uses_public_ipfs_bootstrap_defaults();
     let effective_bootstrap_peers = config.effective_bootstrap_multiaddrs()?;
@@ -789,12 +843,13 @@ where
         membership,
         previous_membership_tags,
         packet_io,
-        Box::new(route_controller),
+        route_controller,
         config.effective_packet_mtu(),
         config.queue,
         config.resources,
         metrics_interval,
         control_socket,
+        control,
         pairing_state_path,
         membership_state_path,
         packet_plane,
@@ -1057,6 +1112,7 @@ where
         resources,
         metrics_interval,
         control_socket,
+        None,
         pairing_state_path,
         None,
         packet_plane,
@@ -1086,6 +1142,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
     resources: ResourceConfig,
     metrics_interval: Option<Duration>,
     control_socket: Option<PathBuf>,
+    control: Option<RuntimeControlReceiver>,
     pairing_state_path: Option<PathBuf>,
     membership_state_path: Option<PathBuf>,
     mut packet_plane: PacketPlaneRuntime,
@@ -1277,23 +1334,24 @@ where
     local_capabilities = refreshed_local_capabilities(&local_capabilities, &forwarder);
     timers.prime().await;
     let discovery = node.discovery.clone();
-    let (control_socket_guard, mut control_rx) = match control_socket {
-        Some(path) => {
-            let (socket, rx) = ControlSocket::bind(path)?;
+    let mut control_rx = control;
+    let mut control_socket_guard = None;
+    if let Some(path) = control_socket {
+        if control_rx.is_none() {
+            let (_handle, receiver) = runtime_control_channel();
+            control_rx = Some(receiver);
+        }
+        if let Some(receiver) = control_rx.as_ref() {
+            let socket = ControlSocket::bind_with_handle(path, &receiver.handle())?;
             log_runtime_event(
                 LogLevel::Info,
                 "control_socket_listening",
                 &[("path", &socket.path().display().to_string())],
             );
-            (Some(socket), Some(rx))
+            control_socket_guard = Some(socket);
         }
-        None => (None, None),
-    };
-    if let Some(socket) = control_socket_guard {
-        // The socket accept task must live for the daemon lifetime.  The runtime
-        // command removes stale socket paths before binding in managed runs.
-        std::mem::forget(socket);
     }
+    let _control_socket_guard = control_socket_guard;
 
     log_startup_status(node.startup);
     log_packet_plane_status(packet_plane.snapshot());
