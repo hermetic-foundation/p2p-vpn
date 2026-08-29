@@ -183,12 +183,16 @@ Android outputs exist on `x86_64-linux`.
 
 | Output | Purpose |
 | --- | --- |
-| `packages.android-native` | API 26 arm64 JNI library |
-| `packages.android-rust-tests` | Host-side bridge tests |
-| `packages.android-debug-apk` | Signed installable debug APK |
-| `packages.android-sdk` | Pinned SDK and platform tools |
+| `.#android-native-arm64` | API 26 arm64 JNI library |
+| `.#android-native-x86_64` | API 26 x86_64 JNI library |
+| `.#android-native` | Combined arm64 and x86_64 libraries |
+| `.#android-rust-tests` | Host-side bridge tests |
+| `.#android-debug-apk` | Signed dual-ABI debug APK |
+| `.#android-emulator` | API 35 x86_64 emulator package |
+| `.#android-sdk` | Pinned SDK and platform tools |
 | `devShells.android` | Gradle, JDK, SDK, NDK, and ADB |
 | `apps.android-install` | Build and install through ADB |
+| `apps.android-emulator` | Boot the managed test emulator |
 | `apps.android-update-deps` | Refresh pinned Gradle dependencies |
 | `checks.android` | Full Android build and verification gate |
 
@@ -196,10 +200,12 @@ Android outputs exist on `x86_64-linux`.
 
 | Layer | Version |
 | --- | --- |
-| Rust target | `aarch64-unknown-linux-android` |
+| Rust targets | `aarch64-unknown-linux-android`, `x86_64-linux-android` |
 | Rust minimum API | 26 |
-| Rust NDK toolchain | NDK 27 prebuilt |
+| Arm64 Rust toolchain | nixpkgs prebuilt NDK 27 target |
+| x86_64 Rust toolchain | `build-std` with NDK 28.2 |
 | Android compile/target SDK | 37 |
+| Emulator image | Android 15 / API 35, x86_64 |
 | Android build tools | 37.0.0 |
 | Gradle | 9.5.1 |
 | Android Gradle Plugin | 9.3.2 |
@@ -211,6 +217,26 @@ Refresh them only after an intentional Gradle dependency change:
 
 ```sh
 nix run .#android-update-deps
+```
+
+## Managed Emulator
+
+Boot the headless emulator and install the debug APK:
+
+```sh
+nix run .#android-emulator
+```
+
+The command prints the ADB serial after Android and the app are ready.
+
+It remains attached to the emulator session.
+
+Press `Ctrl-C` to stop the emulator and remove its temporary AVD state.
+
+Use the printed serial from another shell:
+
+```sh
+ANDROID_SERIAL=EMULATOR_SERIAL nix develop .#android -c adb shell
 ```
 
 ## Verification
@@ -225,11 +251,11 @@ The gate covers:
 
 | Layer | Assertions |
 | --- | --- |
-| Rust host tests | Profile generation, artifacts, validation, secret unlink |
-| Rust cross build | arm64, API 26, NDK 27 JNI library |
+| Rust host tests | Profile, artifacts, validation, secret unlink, runtime context |
+| Rust cross build | arm64 and x86_64 API 26 JNI libraries |
 | Java unit tests | RPC JSON, approval, status parsing, recovery policy |
 | Android lint | Debug variant static analysis |
-| APK | JNI entry, debug ID, signing, min/target SDK |
+| APK | Dual ABI, JNI entry, debug ID, signing, min/target SDK |
 | Manifest | Always-on VPN explicitly disabled |
 
 ## Device E2E
@@ -245,6 +271,45 @@ The gate covers:
 Record peer IDs, overlay addresses, selected paths, and packet counts.
 
 Do not record the private identity, membership key, or pairing code.
+
+## Recorded E2E
+
+The 2026-08-29 run used an API 35 x86_64 emulator and a Linux daemon.
+
+No static peer address or forced remote peer was configured.
+
+### Pairing
+
+| Check | Result |
+| --- | --- |
+| Android workflow | Created profile, connected VPN, joined by code |
+| Discovery | LAN candidate observed; public providers queried |
+| Pairing path | Circuit relay selected |
+| Approval | Linux verified and approved the Android candidate |
+| Persistence | APK reinstall restored identity and membership |
+
+### Overlay Traffic
+
+| Direction | Protocol | Result |
+| --- | --- | --- |
+| Linux to Android | IPv4 ICMP | 5/5 replies |
+| Linux to Android | IPv6 ICMP | 5/5 replies |
+| Android to Linux | IPv4 ICMP | 5/5 replies |
+| Android to Linux | IPv6 ICMP | 5/5 replies |
+
+The steady data path promoted to direct TCP stream fallback.
+
+### Underlay Recovery
+
+| Transition | Result |
+| --- | --- |
+| Emulator Wi-Fi to cellular | VPN rebuilt; both traffic directions recovered |
+| Emulator cellular to Wi-Fi | VPN rebuilt; both traffic directions recovered |
+| LAN-first grace | Public discovery resumed after 60 seconds |
+
+This proves Android integration and lifecycle recovery in the emulator.
+
+It does not prove physical-device behavior or a hostile public NAT topology.
 
 ## Current Exclusions
 

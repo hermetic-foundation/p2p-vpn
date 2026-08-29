@@ -48,7 +48,7 @@ Status is conservative.
 | Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, transitive VM, and physical four-host proofs. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Android Nix build | Operational | Rust tests, cross build, Java tests, lint, APK, signature, and manifest gate. |
-| Android pair and connect | Partial | Implementation complete; physical Android/Linux E2E pending. |
+| Android pair and connect | Operational | API 35 emulator/Linux pairing, dual-stack traffic, persistence, and recovery proof. |
 | Release archive | Operational | Release archive sanity check. |
 
 ## Current Recorded Evidence
@@ -77,6 +77,7 @@ Status is conservative.
 | 2026-08-26 | Public discovery address hygiene | Unverified private IPFS addresses were rejected without failed-neighbor growth. |
 | 2026-08-26 | IPv6 first activation | `nodad` removed the route-source race; the service started with zero retries. |
 | 2026-08-26 | Physical authenticated DNS mesh | Four signed names converged; short, canonical, PTR, IPv4, IPv6, and restart checks passed. |
+| 2026-08-29 | Android/Linux emulator E2E | Relay pairing, bidirectional dual-stack traffic, reinstall persistence, and underlay recovery passed. |
 
 ## Main Remaining Gap
 

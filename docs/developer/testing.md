@@ -119,14 +119,24 @@ Coverage:
 
 | Layer | Assertion |
 | --- | --- |
-| Rust bridge | Four host-side profile and artifact tests pass. |
-| Native library | arm64 API 26 JNI output uses NDK 27. |
+| Rust bridge | Profile, artifact, validation, secret, and context tests pass. |
+| Native library | arm64 and x86_64 API 26 JNI outputs pass ABI checks. |
 | Java | Pairing, approval, status, and recovery tests pass. |
 | Lint | Android debug lint has no errors. |
-| APK | JNI library, signature, debug ID, and SDK levels match. |
+| APK | Both JNI ABIs, signature, debug ID, and SDK levels match. |
 | Manifest | Unsupported always-on VPN mode is disabled. |
 
-See [Android Architecture](android.md) for the physical device E2E procedure.
+Run the managed API 35 emulator:
+
+```sh
+nix run .#android-emulator
+```
+
+The launcher installs the APK, stays attached, and cleans its temporary AVD
+when interrupted.
+
+See [Android Architecture](android.md) for the E2E procedure and recorded
+2026-08-29 Linux/emulator evidence.
 
 ## NixOS Module Check
 

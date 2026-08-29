@@ -20,7 +20,7 @@ Use these docs when you want to run `p2p-vpn`.
 
 | Requirement | Why |
 | --- | --- |
-| Linux/NixOS or Android | Run the Linux daemon or arm64 Android app. |
+| Linux/NixOS or Android | Run the Linux daemon or supported Android APK. |
 | `/dev/net/tun` | Required on Linux for packet forwarding. |
 | `CAP_NET_ADMIN` or root | Required on Linux to configure TUN. |
 | Android VPN approval | Required on Android to establish the TUN. |

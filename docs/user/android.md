@@ -10,7 +10,7 @@ The current artifact is a debug build for test environments.
 | Item | Requirement |
 | --- | --- |
 | Build host | `x86_64-linux` with Nix flakes |
-| Android device | `arm64-v8a` |
+| Android ABI | `arm64-v8a` or `x86_64` |
 | Android version | Android 8.0 / API 26 or newer |
 | Installation | ADB with the device authorized |
 | Application ID | `org.hermeticfoundation.p2pvpn.debug` |
@@ -193,6 +193,10 @@ runtime and retries with bounded backoff.
 The Rust runtime then performs LAN-first discovery, public routing, hole
 punching, and relay fallback using the saved configuration.
 
+Public discovery starts after a 60-second LAN-first grace period.
+
+Traffic may pause during that convergence window after an underlay change.
+
 ## Stored Data
 
 | Data | Storage |
@@ -219,3 +223,4 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 | Custom route grants | No Android UI |
 | Identity import/export | No Android UI |
 | Release distribution | Debug APK only |
+| Hardware validation | API 35 x86_64 emulator; physical device not recorded |

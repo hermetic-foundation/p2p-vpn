@@ -35,7 +35,7 @@ protocols and bounded queues.
 | --- | --- |
 | Minimal config | Operational in NixOS VM mesh tests without peer addresses. |
 | NixOS module | Operational with typed service instances and sane defaults. |
-| Android pair and connect | Debug APK implemented; physical Android/Linux proof pending. |
+| Android pair and connect | Operational in an API 35 emulator/Linux E2E; debug APK only. |
 | Code pairing | Operational with LAN-first discovery, approval, relay fallback, and native Nix artifacts. |
 | Network-wide membership | Operational with signed convergence, durable learned state, and derived routes. |
 | Authenticated overlay DNS | Operational with split DNS, transitive names, and lifecycle tests. |
