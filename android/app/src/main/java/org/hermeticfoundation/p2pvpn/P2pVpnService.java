@@ -25,7 +25,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -444,7 +443,7 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         try {
-            activePairing = ActivePairing.inviter(UUID.randomUUID().toString());
+            activePairing = ActivePairing.inviter(PairingOperationId.generate());
             persistActivePairing();
             pairingDetail = "Creating a pairing code";
             publishSnapshot();
@@ -467,7 +466,7 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         try {
-            activePairing = ActivePairing.joiner(UUID.randomUUID().toString(), normalized);
+            activePairing = ActivePairing.joiner(PairingOperationId.generate(), normalized);
             persistActivePairing();
             pairingDetail = "Starting the join operation";
             publishSnapshot();
