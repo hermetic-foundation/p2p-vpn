@@ -1,0 +1,964 @@
+package org.hermeticfoundation.p2pvpn;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.VpnService;
+import android.net.wifi.WifiManager;
+import android.os.Binder;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+public final class P2pVpnService extends VpnService {
+    static final String ACTION_CONNECT = "org.hermeticfoundation.p2pvpn.CONNECT";
+    static final String ACTION_DISCONNECT = "org.hermeticfoundation.p2pvpn.DISCONNECT";
+
+    private static final String NOTIFICATION_CHANNEL = "p2p-vpn-connection";
+    private static final int NOTIFICATION_ID = 1;
+    private static final long PAIRING_TIMEOUT_SECONDS = 600;
+    private static final long PAIRING_POLL_MILLIS = 1_000;
+    private static final long STATUS_POLL_MILLIS = 2_000;
+    private static final long NETWORK_RECONNECT_DELAY_MILLIS = 1_500;
+    private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000;
+
+    private final LocalBinder localBinder = new LocalBinder();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Set<Listener> listeners =
+            Collections.newSetFromMap(new ConcurrentHashMap<Listener, Boolean>());
+    private final ReconnectPolicy reconnectPolicy = new ReconnectPolicy();
+
+    private ScheduledThreadPoolExecutor worker;
+    private ProfileStore profileStore;
+    private File runtimeDirectory;
+    private File pairingStateFile;
+    private File membershipStateFile;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private WifiManager.MulticastLock multicastLock;
+    private ScheduledFuture<?> reconnectFuture;
+    private ScheduledFuture<?> statusFuture;
+    private ScheduledFuture<?> pairingFuture;
+
+    private AndroidProfile profile;
+    private ActivePairing activePairing;
+    private boolean desiredConnected;
+    private boolean connected;
+    private boolean operationInProgress;
+    private String connectionDetail = "Disconnected";
+    private String peerDetail = "Overlay peers: unavailable";
+    private String pairingDetail = "No pairing operation";
+    private String reconnectDetail = "Recovering connection";
+    private int reconnectAttempts;
+    private volatile Snapshot snapshot = Snapshot.initial();
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        worker = new ScheduledThreadPoolExecutor(1);
+        worker.setRemoveOnCancelPolicy(true);
+        profileStore = new ProfileStore(this);
+        prepareRuntimeDirectory();
+        createNotificationChannel();
+        registerNetworkCallback();
+        worker.execute(this::loadProfileMetadata);
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent == null ? null : intent.getAction();
+        if (ACTION_CONNECT.equals(action)) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(getString(R.string.notification_connecting)));
+            worker.execute(this::connectRequested);
+        } else if (ACTION_DISCONNECT.equals(action)) {
+            worker.execute(this::disconnectRequested);
+        }
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        if (intent != null && SERVICE_INTERFACE.equals(intent.getAction())) {
+            return super.onBind(intent);
+        }
+        return localBinder;
+    }
+
+    @Override
+    public void onRevoke() {
+        worker.execute(this::disconnectRequested);
+    }
+
+    @Override
+    public void onDestroy() {
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (IllegalArgumentException ignored) {
+                // The callback may already have been unregistered during process teardown.
+            }
+        }
+        cancel(reconnectFuture);
+        cancel(statusFuture);
+        cancel(pairingFuture);
+        if (worker != null && !worker.isShutdown()) {
+            try {
+                worker.submit(this::stopNativeRuntime).get(6, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                releaseMulticastLock();
+            }
+            worker.shutdownNow();
+        }
+        super.onDestroy();
+    }
+
+    private void connectRequested() {
+        desiredConnected = true;
+        startConnection("Connecting");
+    }
+
+    private void disconnectRequested() {
+        desiredConnected = false;
+        cancel(reconnectFuture);
+        reconnectFuture = null;
+        activePairing = null;
+        cancel(pairingFuture);
+        pairingFuture = null;
+        stopNativeRuntime();
+        connectionDetail = "Disconnected";
+        peerDetail = "Overlay peers: unavailable";
+        pairingDetail = "No pairing operation";
+        publishSnapshot();
+        mainHandler.post(
+                () -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    stopSelf();
+                });
+    }
+
+    private void startConnection(String initialDetail) {
+        if (!desiredConnected || operationInProgress) {
+            return;
+        }
+        operationInProgress = true;
+        connectionDetail = initialDetail;
+        peerDetail = "Overlay peers: discovering";
+        publishSnapshot();
+        boolean recoveryRequired = false;
+        try {
+            loadProfile();
+            acquireMulticastLock();
+            Builder builder = new Builder();
+            builder.setSession(profile.networkName);
+            builder.setMtu(profile.mtu);
+            builder.setBlocking(true);
+            for (AndroidProfile.Cidr address : profile.addresses) {
+                builder.addAddress(address.inetAddress, address.prefixLength);
+            }
+            for (AndroidProfile.Cidr route : profile.routes) {
+                builder.addRoute(route.inetAddress, route.prefixLength);
+            }
+            Intent configureIntent = new Intent(this, MainActivity.class);
+            PendingIntent pendingIntent =
+                    PendingIntent.getActivity(
+                            this,
+                            0,
+                            configureIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            builder.setConfigureIntent(pendingIntent);
+
+            ParcelFileDescriptor descriptor = builder.establish();
+            if (descriptor == null) {
+                throw new P2pVpnException("Android did not establish the VPN interface");
+            }
+            int tunFd;
+            try {
+                tunFd = descriptor.detachFd();
+            } finally {
+                try {
+                    descriptor.close();
+                } catch (IOException ignored) {
+                    // detachFd transferred ownership of the descriptor to the native runtime.
+                }
+            }
+            NativeResponse.objectValue(
+                    NativeBridge.nativeStart(
+                            profile.configJson,
+                            tunFd,
+                            pairingStateFile.getAbsolutePath(),
+                            membershipStateFile.getAbsolutePath()));
+            connected = true;
+            reconnectAttempts = 0;
+            cancel(reconnectFuture);
+            reconnectFuture = null;
+            connectionDetail = "Connected";
+            scheduleStatusPoll();
+            if (activePairing != null) {
+                schedulePairingPoll(PAIRING_POLL_MILLIS);
+            }
+            updateForegroundNotification();
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            String failure = failureMessage(error);
+            // nativeStart may have accepted the detached descriptor before reporting failure.
+            stopNativeRuntime();
+            connectionDetail = failure;
+            recoveryRequired = desiredConnected;
+            updateForegroundNotification();
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+            if (recoveryRequired) {
+                scheduleReconnect("Retrying after startup failure", false);
+            }
+        }
+    }
+
+    private void stopNativeRuntime() {
+        cancel(statusFuture);
+        statusFuture = null;
+        try {
+            NativeResponse.objectValue(NativeBridge.nativeStop());
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        }
+        connected = false;
+        peerDetail = "Overlay peers: unavailable";
+        releaseMulticastLock();
+    }
+
+    private void reconnectAfterNetworkChange() {
+        reconnectFuture = null;
+        if (!desiredConnected) {
+            return;
+        }
+        if (operationInProgress) {
+            reconnectFuture =
+                    worker.schedule(
+                            this::reconnectAfterNetworkChange,
+                            NETWORK_RECONNECT_DELAY_MILLIS,
+                            TimeUnit.MILLISECONDS);
+            return;
+        }
+        operationInProgress = true;
+        connectionDetail = reconnectDetail;
+        publishSnapshot();
+        stopNativeRuntime();
+        operationInProgress = false;
+        startConnection(reconnectDetail);
+    }
+
+    private void scheduleReconnect(String detail, boolean resetBackoff) {
+        if (!desiredConnected) {
+            return;
+        }
+        reconnectDetail = detail;
+        if (resetBackoff) {
+            reconnectAttempts = 0;
+        }
+        int exponent = Math.min(reconnectAttempts, 4);
+        long delay =
+                Math.min(
+                        NETWORK_RECONNECT_DELAY_MILLIS * (1L << exponent),
+                        MAX_RECONNECT_DELAY_MILLIS);
+        reconnectAttempts++;
+        cancel(reconnectFuture);
+        reconnectFuture =
+                worker.schedule(this::reconnectAfterNetworkChange, delay, TimeUnit.MILLISECONDS);
+    }
+
+    private void scheduleStatusPoll() {
+        cancel(statusFuture);
+        statusFuture =
+                worker.schedule(this::pollNativeStatus, STATUS_POLL_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    private void pollNativeStatus() {
+        statusFuture = null;
+        if (!connected) {
+            return;
+        }
+        boolean runtimeFailed = false;
+        String failure = null;
+        try {
+            JSONObject status = NativeResponse.objectValue(NativeBridge.nativeStatus());
+            String phase = status.optString("phase", "running");
+            String detail = status.optString("detail", "");
+            if ("failed".equals(phase) || "stopped".equals(phase)) {
+                runtimeFailed = true;
+                failure = detail.isEmpty() ? "Native runtime stopped" : detail;
+            } else if (!detail.isEmpty()) {
+                connectionDetail = capitalize(phase) + ": " + detail;
+            } else {
+                connectionDetail = capitalize(phase);
+            }
+            peerDetail = runtimeSummary(status).describe();
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            runtimeFailed = true;
+            failure = failureMessage(error);
+        }
+        if (runtimeFailed) {
+            stopNativeRuntime();
+            connectionDetail = failure;
+            updateForegroundNotification();
+            publishSnapshot();
+            scheduleReconnect("Recovering native runtime", false);
+            return;
+        }
+        publishSnapshot();
+        if (connected) {
+            scheduleStatusPoll();
+        }
+    }
+
+    private void loadProfileMetadata() {
+        try {
+            if (profileStore.exists()) {
+                loadProfile();
+            }
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        }
+        publishSnapshot();
+    }
+
+    private void loadProfile() throws P2pVpnException {
+        String configJson = profileStore.load();
+        profile =
+                AndroidProfile.fromNative(
+                        NativeResponse.objectValue(NativeBridge.nativeInspectProfile(configJson)));
+    }
+
+    private void createProfile(String networkName) {
+        if (operationInProgress) {
+            return;
+        }
+        operationInProgress = true;
+        connectionDetail = "Creating profile";
+        publishSnapshot();
+        try {
+            if (profileStore.exists()) {
+                throw new P2pVpnException("This device already has a p2p-vpn profile");
+            }
+            AndroidProfile created =
+                    AndroidProfile.fromNative(
+                            NativeResponse.objectValue(
+                                    NativeBridge.nativeCreateProfile(networkName.trim())));
+            profileStore.save(created.configJson);
+            profile = created;
+            connectionDetail = "Profile ready";
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+        }
+    }
+
+    private void openPairing() {
+        if (!requireConnectedForPairing()) {
+            return;
+        }
+        try {
+            PairRpc.Result result =
+                    PairRpc.call(
+                            PairRpc.open(
+                                    UUID.randomUUID().toString(), PAIRING_TIMEOUT_SECONDS));
+            if (!"open_started".equals(result.kind)) {
+                throw new P2pVpnException("Pairing RPC did not start an invitation");
+            }
+            String operationId = result.value.getString("operation_id");
+            String code = result.value.getString("code");
+            activePairing = new ActivePairing(operationId, code);
+            pairingDetail = "Waiting for a pairing request";
+            publishSnapshot();
+            schedulePairingPoll(0);
+        } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void joinPairing(String code) {
+        if (!requireConnectedForPairing()) {
+            return;
+        }
+        String normalized = code.trim().toUpperCase(Locale.ROOT);
+        if (normalized.isEmpty() || normalized.length() > 64) {
+            pairingDetail = "Enter a valid pairing code";
+            publishSnapshot();
+            return;
+        }
+        try {
+            PairRpc.Result result =
+                    PairRpc.call(
+                            PairRpc.join(
+                                    UUID.randomUUID().toString(),
+                                    normalized,
+                                    PAIRING_TIMEOUT_SECONDS));
+            if (!"join_started".equals(result.kind)) {
+                throw new P2pVpnException("Pairing RPC did not start the join operation");
+            }
+            String operationId = result.value.getString("operation_id");
+            activePairing = new ActivePairing(operationId, null);
+            pairingDetail = "Finding the inviting peer";
+            publishSnapshot();
+            schedulePairingPoll(0);
+        } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void approvePairing(String hostname) {
+        if (activePairing == null || activePairing.candidate == null) {
+            pairingDetail = "No pairing request is awaiting approval";
+            publishSnapshot();
+            return;
+        }
+        try {
+            PairRpc.Result result =
+                    PairRpc.call(
+                            PairRpc.approve(
+                                    activePairing.operationId,
+                                    activePairing.candidate.approvalId,
+                                    normalizeHostname(hostname)));
+            PairRpc.operationStatus(result);
+            activePairing.candidate = null;
+            pairingDetail = "Finalizing pairing";
+            publishSnapshot();
+            schedulePairingPoll(0);
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void rejectPairing() {
+        if (activePairing == null || activePairing.candidate == null) {
+            pairingDetail = "No pairing request is awaiting approval";
+            publishSnapshot();
+            return;
+        }
+        try {
+            PairRpc.Result result =
+                    PairRpc.call(
+                            PairRpc.reject(
+                                    activePairing.operationId,
+                                    activePairing.candidate.approvalId));
+            PairRpc.operationStatus(result);
+            pairingDetail = "Pairing request rejected";
+            activePairing = null;
+            cancel(pairingFuture);
+            pairingFuture = null;
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+        }
+        publishSnapshot();
+    }
+
+    private boolean requireConnectedForPairing() {
+        if (!connected) {
+            pairingDetail = "Connect before pairing";
+            publishSnapshot();
+            return false;
+        }
+        if (activePairing != null) {
+            pairingDetail = "A pairing operation is already active";
+            publishSnapshot();
+            return false;
+        }
+        return true;
+    }
+
+    private void schedulePairingPoll(long delayMillis) {
+        cancel(pairingFuture);
+        pairingFuture =
+                worker.schedule(this::pollPairing, delayMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private void pollPairing() {
+        pairingFuture = null;
+        if (activePairing == null || !connected) {
+            return;
+        }
+        try {
+            PairRpc.OperationStatus status =
+                    PairRpc.operationStatus(
+                            PairRpc.call(PairRpc.status(activePairing.operationId)));
+            if (!activePairing.operationId.equals(status.operationId)) {
+                throw new P2pVpnException("Pairing status belongs to another operation");
+            }
+            EnrollmentDecision.Action action =
+                    EnrollmentDecision.evaluate(
+                            status.phase, status.artifactsReady, status.candidate != null);
+            if (action == EnrollmentDecision.Action.APPLY_ARTIFACTS) {
+                applyPairingArtifacts();
+                return;
+            }
+            if (action == EnrollmentDecision.Action.AWAIT_APPROVAL) {
+                activePairing.candidate = status.candidate;
+                pairingDetail = "Review the pairing request";
+            } else if (action == EnrollmentDecision.Action.TERMINAL) {
+                pairingDetail =
+                        status.failureMessage == null
+                                ? "Pairing ended: " + status.phase
+                                : status.failureMessage;
+                activePairing = null;
+                publishSnapshot();
+                return;
+            } else {
+                pairingDetail = pairingProgress(status);
+            }
+            publishSnapshot();
+            schedulePairingPoll(PAIRING_POLL_MILLIS);
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+            if (activePairing != null && connected) {
+                schedulePairingPoll(PAIRING_POLL_MILLIS);
+            }
+        }
+    }
+
+    private void applyPairingArtifacts() {
+        if (activePairing == null) {
+            return;
+        }
+        try {
+            PairRpc.Result result =
+                    PairRpc.call(PairRpc.artifacts(activePairing.operationId));
+            if (!"artifacts".equals(result.kind)) {
+                throw new P2pVpnException("Pairing RPC did not return enrollment artifacts");
+            }
+            JSONObject artifacts = result.value;
+            JSONObject receipt = artifacts.getJSONObject("receipt");
+            String transcript = receipt.getString("transcript_sha256");
+            String remotePeer = receipt.getString("remote_peer");
+
+            String currentConfig = profileStore.load();
+            AndroidProfile updated =
+                    AndroidProfile.fromNative(
+                            NativeResponse.objectValue(
+                                    NativeBridge.nativeApplyPairingArtifacts(
+                                            currentConfig, artifacts.toString())));
+
+            // Durably save the new identity bindings before compacting native enrollment state.
+            profileStore.save(updated.configJson);
+            profile = updated;
+
+            PairRpc.Result acknowledged =
+                    PairRpc.call(
+                            PairRpc.acknowledge(activePairing.operationId, transcript));
+            if (!"acknowledged".equals(acknowledged.kind)) {
+                throw new P2pVpnException("Pairing RPC did not acknowledge enrollment");
+            }
+
+            removeManagedMembershipKey(artifacts);
+            activePairing = null;
+            pairingDetail = "Paired with " + remotePeer;
+            publishSnapshot();
+
+            if (desiredConnected) {
+                operationInProgress = true;
+                connectionDetail = "Restarting with paired profile";
+                publishSnapshot();
+                stopNativeRuntime();
+                operationInProgress = false;
+                startConnection("Restarting with paired profile");
+            }
+        } catch (P2pVpnException | JSONException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+            if (activePairing != null && connected) {
+                schedulePairingPoll(PAIRING_POLL_MILLIS);
+            }
+        }
+    }
+
+    private void removeManagedMembershipKey(JSONObject artifacts) {
+        try {
+            String path = artifacts.getJSONObject("nix").optString("membership_key_file", "");
+            if (path.isEmpty()) {
+                return;
+            }
+            File managed = new File(path).getCanonicalFile();
+            File root = runtimeDirectory.getCanonicalFile();
+            String rootPath = root.getPath() + File.separator;
+            if (managed.getPath().startsWith(rootPath)) {
+                // Failure to remove this transient copy must not undo acknowledged enrollment.
+                managed.delete();
+            }
+        } catch (IOException | JSONException ignored) {
+            // The encrypted profile is already durable and native enrollment is acknowledged.
+        }
+    }
+
+    private void prepareRuntimeDirectory() {
+        runtimeDirectory = new File(getNoBackupFilesDir(), "runtime");
+        if (!runtimeDirectory.isDirectory() && !runtimeDirectory.mkdirs()) {
+            connectionDetail = "Failed to create private runtime storage";
+        }
+        runtimeDirectory.setReadable(false, false);
+        runtimeDirectory.setWritable(false, false);
+        runtimeDirectory.setExecutable(false, false);
+        runtimeDirectory.setReadable(true, true);
+        runtimeDirectory.setWritable(true, true);
+        runtimeDirectory.setExecutable(true, true);
+        pairingStateFile = new File(runtimeDirectory, "pairing-state.json");
+        membershipStateFile = new File(runtimeDirectory, "membership-state.json");
+    }
+
+    private void acquireMulticastLock() {
+        try {
+            if (multicastLock != null && multicastLock.isHeld()) {
+                return;
+            }
+            WifiManager wifi =
+                    (WifiManager)
+                            getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi == null) {
+                return;
+            }
+            multicastLock = wifi.createMulticastLock("p2p-vpn-lan-discovery");
+            multicastLock.setReferenceCounted(false);
+            multicastLock.acquire();
+        } catch (RuntimeException error) {
+            // LAN discovery is an optimization; public discovery must remain available.
+            releaseMulticastLock();
+        }
+    }
+
+    private void releaseMulticastLock() {
+        try {
+            if (multicastLock != null && multicastLock.isHeld()) {
+                multicastLock.release();
+            }
+        } catch (RuntimeException ignored) {
+            // The Wi-Fi subsystem can disappear during a network transition.
+        }
+        multicastLock = null;
+    }
+
+    private void registerNetworkCallback() {
+        connectivityManager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) {
+            return;
+        }
+        networkCallback =
+                new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        handlePhysicalNetwork(
+                                network, connectivityManager.getNetworkCapabilities(network));
+                    }
+
+                    @Override
+                    public void onCapabilitiesChanged(
+                            Network network, NetworkCapabilities capabilities) {
+                        if (isPhysicalNetwork(capabilities)) {
+                            handlePhysicalNetwork(network, capabilities);
+                        }
+                    }
+
+                    @Override
+                    public void onLost(Network network) {
+                        if (reconnectPolicy.lost(network.toString())) {
+                            worker.execute(
+                                    () ->
+                                            scheduleReconnect(
+                                                    "Recovering after physical network loss",
+                                                    true));
+                        }
+                    }
+                };
+        NetworkRequest request =
+                new NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                        .build();
+        connectivityManager.registerNetworkCallback(request, networkCallback, mainHandler);
+    }
+
+    private void handlePhysicalNetwork(Network network, NetworkCapabilities capabilities) {
+        if (!isPhysicalNetwork(capabilities)) {
+            return;
+        }
+        ReconnectPolicy.Change change =
+                reconnectPolicy.observe(network.toString(), physicalNetworkPriority(capabilities));
+        if (change == ReconnectPolicy.Change.RECONNECT) {
+            worker.execute(
+                    () -> scheduleReconnect("Reconnecting after physical network change", true));
+        }
+    }
+
+    private static boolean isPhysicalNetwork(NetworkCapabilities capabilities) {
+        return capabilities != null
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
+    }
+
+    private static int physicalNetworkPriority(NetworkCapabilities capabilities) {
+        int priority =
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                        ? 1_000
+                        : 0;
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+            return priority + 400;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            return priority + 300;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+            return priority + 200;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) {
+            return priority + 100;
+        }
+        return priority;
+    }
+
+    private void createNotificationChannel() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        NotificationChannel channel =
+                new NotificationChannel(
+                        NOTIFICATION_CHANNEL,
+                        getString(R.string.notification_channel),
+                        NotificationManager.IMPORTANCE_LOW);
+        channel.setDescription(getString(R.string.notification_channel_description));
+        manager.createNotificationChannel(channel);
+    }
+
+    private Notification notification(String text) {
+        Intent activity = new Intent(this, MainActivity.class);
+        PendingIntent contentIntent =
+                PendingIntent.getActivity(
+                        this,
+                        0,
+                        activity,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new Notification.Builder(this, NOTIFICATION_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_lock_lock)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(text)
+                .setContentIntent(contentIntent)
+                .setCategory(Notification.CATEGORY_SERVICE)
+                .setOngoing(connected || desiredConnected)
+                .setOnlyAlertOnce(true)
+                .build();
+    }
+
+    private void updateForegroundNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        String message =
+                connected && profile != null
+                        ? getString(R.string.notification_connected, profile.networkName)
+                        : connectionDetail;
+        manager.notify(NOTIFICATION_ID, notification(message));
+    }
+
+    private void publishSnapshot() {
+        PairRpc.Candidate candidate = activePairing == null ? null : activePairing.candidate;
+        snapshot =
+                new Snapshot(
+                        profile != null,
+                        connected,
+                        operationInProgress,
+                        profile == null ? null : profile.networkName,
+                        profile == null ? null : profile.peerId,
+                        connectionDetail,
+                        peerDetail,
+                        pairingDetail,
+                        activePairing == null ? null : activePairing.code,
+                        candidate == null ? null : candidate.peerId,
+                        candidate == null ? null : candidate.fingerprint,
+                        candidate == null ? null : candidate.requestedHostname,
+                        candidate == null ? null : candidate.requestedVpnIp);
+        Snapshot current = snapshot;
+        mainHandler.post(
+                () -> {
+                    for (Listener listener : listeners) {
+                        listener.onSnapshot(current);
+                    }
+                });
+    }
+
+    private static String pairingProgress(PairRpc.OperationStatus status) {
+        String phase = status.phase.replace('_', ' ');
+        return ("inviter".equals(status.role) ? "Inviting: " : "Joining: ") + phase;
+    }
+
+    private static RuntimeSummary runtimeSummary(JSONObject status) throws P2pVpnException {
+        JSONArray encodedLines = status.optJSONArray("lines");
+        if (encodedLines == null) {
+            throw new P2pVpnException("Native runtime status does not contain metrics");
+        }
+        List<String> lines = new ArrayList<>(encodedLines.length());
+        for (int index = 0; index < encodedLines.length(); index++) {
+            Object line = encodedLines.opt(index);
+            if (line instanceof String) {
+                lines.add((String) line);
+            }
+        }
+        return RuntimeSummary.fromLines(lines);
+    }
+
+    private static String normalizeHostname(String hostname) {
+        String normalized = hostname == null ? "" : hostname.trim().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private static String failureMessage(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.trim().isEmpty()
+                ? error.getClass().getSimpleName()
+                : message;
+    }
+
+    private static String capitalize(String value) {
+        if (value == null || value.isEmpty()) {
+            return "Running";
+        }
+        return Character.toUpperCase(value.charAt(0)) + value.substring(1).replace('_', ' ');
+    }
+
+    private static void cancel(ScheduledFuture<?> future) {
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    public interface Listener {
+        void onSnapshot(Snapshot snapshot);
+    }
+
+    public final class LocalBinder extends Binder {
+        void addListener(Listener listener) {
+            listeners.add(listener);
+            Snapshot current = snapshot;
+            mainHandler.post(() -> listener.onSnapshot(current));
+        }
+
+        void removeListener(Listener listener) {
+            listeners.remove(listener);
+        }
+
+        void createProfile(String networkName) {
+            worker.execute(() -> P2pVpnService.this.createProfile(networkName));
+        }
+
+        void openPairing() {
+            worker.execute(P2pVpnService.this::openPairing);
+        }
+
+        void joinPairing(String code) {
+            worker.execute(() -> P2pVpnService.this.joinPairing(code));
+        }
+
+        void approvePairing(String hostname) {
+            worker.execute(() -> P2pVpnService.this.approvePairing(hostname));
+        }
+
+        void rejectPairing() {
+            worker.execute(P2pVpnService.this::rejectPairing);
+        }
+    }
+
+    public static final class Snapshot {
+        final boolean hasProfile;
+        final boolean connected;
+        final boolean busy;
+        final String networkName;
+        final String peerId;
+        final String connectionDetail;
+        final String peerDetail;
+        final String pairingDetail;
+        final String pairingCode;
+        final String candidatePeer;
+        final String candidateFingerprint;
+        final String candidateHostname;
+        final String candidateVpnIp;
+
+        private Snapshot(
+                boolean hasProfile,
+                boolean connected,
+                boolean busy,
+                String networkName,
+                String peerId,
+                String connectionDetail,
+                String peerDetail,
+                String pairingDetail,
+                String pairingCode,
+                String candidatePeer,
+                String candidateFingerprint,
+                String candidateHostname,
+                String candidateVpnIp) {
+            this.hasProfile = hasProfile;
+            this.connected = connected;
+            this.busy = busy;
+            this.networkName = networkName;
+            this.peerId = peerId;
+            this.connectionDetail = connectionDetail;
+            this.peerDetail = peerDetail;
+            this.pairingDetail = pairingDetail;
+            this.pairingCode = pairingCode;
+            this.candidatePeer = candidatePeer;
+            this.candidateFingerprint = candidateFingerprint;
+            this.candidateHostname = candidateHostname;
+            this.candidateVpnIp = candidateVpnIp;
+        }
+
+        private static Snapshot initial() {
+            return new Snapshot(
+                    false,
+                    false,
+                    false,
+                    null,
+                    null,
+                    "Loading",
+                    "Overlay peers: unavailable",
+                    "No pairing operation",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+        }
+    }
+
+    private static final class ActivePairing {
+        final String operationId;
+        final String code;
+        PairRpc.Candidate candidate;
+
+        ActivePairing(String operationId, String code) {
+            this.operationId = operationId;
+            this.code = code;
+        }
+    }
+}

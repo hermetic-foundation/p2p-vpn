@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">p2p-vpn</string>
+    <string name="network_name_hint">Network name</string>
+    <string name="create_profile">Create profile</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="pair_title">Pair</string>
+    <string name="open_pairing">Create code</string>
+    <string name="copy_code">Copy code</string>
+    <string name="pairing_code_hint">Pairing code</string>
+    <string name="join_network">Join by code</string>
+    <string name="candidate_title">Pairing request</string>
+    <string name="hostname_hint">Assigned hostname (optional)</string>
+    <string name="approve">Approve</string>
+    <string name="reject">Reject</string>
+    <string name="status_title">Status</string>
+    <string name="profile_title">Network</string>
+    <string name="identity_unavailable">No profile</string>
+    <string name="identity_format">%1$s\n%2$s</string>
+    <string name="status_format">%1$s\n%2$s\n%3$s</string>
+    <string name="pairing_code_copied">Pairing code copied</string>
+    <string name="notification_channel">VPN connection</string>
+    <string name="notification_channel_description">p2p-vpn connection status</string>
+    <string name="notification_connecting">Connecting</string>
+    <string name="notification_connected">Connected to %1$s</string>
+</resources>

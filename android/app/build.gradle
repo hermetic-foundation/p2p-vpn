@@ -1,0 +1,56 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace = "org.hermeticfoundation.p2pvpn"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
+
+    defaultConfig {
+        applicationId = "org.hermeticfoundation.p2pvpn"
+        minSdk = 26
+        targetSdk = 37
+        versionCode = 1
+        versionName = "0.1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = false
+    }
+
+    signingConfigs {
+        // Public development key for reproducible debug APKs. Never use it for a release build.
+        debug {
+            storeFile = file("p2p-vpn-debug.keystore")
+            storePassword = "android"
+            keyAlias = "p2p-vpn-debug"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.debug
+        }
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+}
