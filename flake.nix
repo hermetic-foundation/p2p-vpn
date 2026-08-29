@@ -3669,6 +3669,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android-native = android.androidNative;
+          android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
           android-sdk = android.androidSdk;
         }

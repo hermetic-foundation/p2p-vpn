@@ -141,6 +141,37 @@ let
         + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
       );
 
+  androidRustTests =
+    if nativeSourcesPresent then
+      pkgs.rustPlatform.buildRustPackage {
+        pname = "${pname}-rust-tests";
+        inherit version;
+        src = nativeSource;
+        cargoLock.lockFile = rootLock;
+        cargoBuildFlags = [
+          "--package"
+          "p2p-vpn-android"
+          "--tests"
+        ];
+        cargoTestFlags = [
+          "--package"
+          "p2p-vpn-android"
+        ];
+        doCheck = true;
+        strictDeps = true;
+
+        installPhase = ''
+          runHook preInstall
+          touch "$out"
+          runHook postInstall
+        '';
+      }
+    else
+      unavailable "${pname}-rust-tests-source-missing" (
+        "The Rust Android source is incomplete under ${toString src}; "
+        + "Cargo.toml, Cargo.lock, src/, and crates/p2p-vpn-android/ are required."
+      );
+
   androidDebugApk =
     if androidProjectPresent then
       androidPkgs.stdenvNoCC.mkDerivation (finalAttrs: {
@@ -245,6 +276,8 @@ let
         nativeBuildInputs = [ jdk ];
       }
       ''
+        test -e ${androidRustTests}
+
         native=${androidNative}/lib/${abi}/libp2p_vpn_android.so
         if [[ ! -s "$native" ]]; then
           echo "missing Android JNI library: $native" >&2
@@ -356,6 +389,7 @@ in
     androidDevShell
     androidInstall
     androidNative
+    androidRustTests
     androidSdk
     androidUpdateDeps
     ;
