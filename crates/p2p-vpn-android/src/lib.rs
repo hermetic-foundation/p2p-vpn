@@ -1,6 +1,8 @@
 use std::{
     fs,
+    io::Read as _,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::Path,
 };
 
 use p2p_vpn::{
@@ -129,6 +131,23 @@ pub fn apply_pairing_artifacts(
     config_json: &str,
     artifacts_json: &str,
 ) -> Result<AndroidProfile, String> {
+    apply_pairing_artifacts_inner(config_json, artifacts_json, None)
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn apply_pairing_artifacts_with_managed_secrets(
+    config_json: &str,
+    artifacts_json: &str,
+    runtime_state_directory: &Path,
+) -> Result<AndroidProfile, String> {
+    apply_pairing_artifacts_inner(config_json, artifacts_json, Some(runtime_state_directory))
+}
+
+fn apply_pairing_artifacts_inner(
+    config_json: &str,
+    artifacts_json: &str,
+    runtime_state_directory: Option<&Path>,
+) -> Result<AndroidProfile, String> {
     let mut config: Config = serde_json::from_str(config_json)
         .map_err(|error| format!("invalid profile JSON: {error}"))?;
     let artifacts: PairRpcCompletionArtifacts = serde_json::from_str(artifacts_json)
@@ -189,8 +208,12 @@ pub fn apply_pairing_artifacts(
     config.network.member_records = member_records;
 
     if let Some(path) = plan.membership_key_file {
-        let membership_key = fs::read_to_string(path)
-            .map_err(|error| format!("failed to read paired membership key: {error}"))?;
+        let membership_key = if let Some(runtime_state_directory) = runtime_state_directory {
+            consume_managed_membership_key(&path, runtime_state_directory)?
+        } else {
+            fs::read_to_string(path)
+                .map_err(|error| format!("failed to read paired membership key: {error}"))?
+        };
         let membership_key = membership_key.trim();
         if membership_key.is_empty() {
             return Err("paired membership key is empty".to_owned());
@@ -201,6 +224,37 @@ pub fn apply_pairing_artifacts(
     let updated = serde_json::to_string(&config)
         .map_err(|error| format!("failed to encode paired profile: {error}"))?;
     inspect_profile(&updated)
+}
+
+fn consume_managed_membership_key(
+    path: &str,
+    runtime_state_directory: &Path,
+) -> Result<String, String> {
+    let runtime_state_directory = fs::canonicalize(runtime_state_directory)
+        .map_err(|error| format!("failed to resolve Android runtime state directory: {error}"))?;
+    let path = Path::new(path);
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect paired membership key: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("paired membership key is not a regular managed file".to_owned());
+    }
+    let canonical_path = fs::canonicalize(path)
+        .map_err(|error| format!("failed to resolve paired membership key: {error}"))?;
+    if canonical_path.parent() != Some(runtime_state_directory.as_path())
+        || canonical_path.file_name().and_then(|name| name.to_str()) != Some("membership.key")
+    {
+        return Err("paired membership key is outside Android runtime state storage".to_owned());
+    }
+
+    let mut key_file = fs::File::open(&canonical_path)
+        .map_err(|error| format!("failed to open paired membership key: {error}"))?;
+    fs::remove_file(&canonical_path)
+        .map_err(|error| format!("failed to remove transient paired membership key: {error}"))?;
+    let mut membership_key = String::new();
+    key_file
+        .read_to_string(&mut membership_key)
+        .map_err(|error| format!("failed to read paired membership key: {error}"))?;
+    Ok(membership_key)
 }
 
 impl AndroidCidr {
@@ -441,11 +495,17 @@ mod android {
         _class: JClass,
         config_json: JString,
         artifacts_json: JString,
+        runtime_state_directory: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
             let config_json = read_string(env, &config_json)?;
             let artifacts_json = read_string(env, &artifacts_json)?;
-            apply_pairing_artifacts(&config_json, &artifacts_json)
+            let runtime_state_directory = read_string(env, &runtime_state_directory)?;
+            apply_pairing_artifacts_with_managed_secrets(
+                &config_json,
+                &artifacts_json,
+                Path::new(&runtime_state_directory),
+            )
         })
     }
 
@@ -667,6 +727,8 @@ mod android {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use p2p_vpn::runtime::control_socket::{
         PairRpcCompletionArtifacts, PairRpcNixPlan, PairRpcPeer, PairRpcReceipt, PairRpcRole,
     };
@@ -779,5 +841,75 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn managed_membership_key_is_unlinked_before_profile_update() {
+        let profile = create_profile("private").expect("profile");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let state_directory = test_state_directory("consume-membership-key");
+        fs::create_dir_all(&state_directory).expect("state directory");
+        let membership_key_file = state_directory.join("membership.key");
+        fs::write(
+            &membership_key_file,
+            "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=\n",
+        )
+        .expect("membership key");
+        let artifacts = PairRpcCompletionArtifacts {
+            receipt: PairRpcReceipt {
+                network_name: "private".to_owned(),
+                local_peer: profile.peer_id.clone(),
+                remote_peer: remote.peer_id.clone(),
+                role: PairRpcRole::Joiner,
+                transcript_sha256: "ef".repeat(32),
+                completed_at_unix_seconds: 1_700_000_000,
+            },
+            nix: PairRpcNixPlan {
+                instance_name: "private".to_owned(),
+                network_name: "private".to_owned(),
+                local_peer: profile.peer_id.clone(),
+                assigned_vpn_ip: None,
+                additional_local_routes: Vec::new(),
+                peer: PairRpcPeer {
+                    id: remote.peer_id,
+                    name: None,
+                    vpn_ip: None,
+                    routes: Vec::new(),
+                },
+                member_records: Vec::new(),
+                membership_key_file: Some(
+                    membership_key_file
+                        .to_str()
+                        .expect("UTF-8 state path")
+                        .to_owned(),
+                ),
+            },
+        };
+
+        let updated = apply_pairing_artifacts_with_managed_secrets(
+            &profile.config_json,
+            &serde_json::to_string(&artifacts).expect("artifacts JSON"),
+            &state_directory,
+        )
+        .expect("updated profile");
+        let config: Config = serde_json::from_str(&updated.config_json).expect("updated config");
+
+        assert_eq!(
+            config.network.membership_key.as_deref(),
+            Some("CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=")
+        );
+        assert!(!membership_key_file.exists());
+        fs::remove_dir_all(state_directory).expect("remove state directory");
+    }
+
+    fn test_state_directory(label: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "p2p-vpn-android-{label}-{}-{unique}",
+            std::process::id()
+        ))
     }
 }

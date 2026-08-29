@@ -23,5 +23,6 @@ final class NativeBridge {
 
     static native String nativePairRpc(String requestJson);
 
-    static native String nativeApplyPairingArtifacts(String configJson, String artifactsJson);
+    static native String nativeApplyPairingArtifacts(
+            String configJson, String artifactsJson, String runtimeStateDirectory);
 }

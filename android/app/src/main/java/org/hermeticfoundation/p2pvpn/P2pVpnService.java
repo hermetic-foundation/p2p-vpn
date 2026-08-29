@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -56,6 +57,7 @@ public final class P2pVpnService extends VpnService {
     private File runtimeDirectory;
     private File pairingStateFile;
     private File membershipStateFile;
+    private boolean runtimeStorageReady;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private WifiManager.MulticastLock multicastLock;
@@ -171,6 +173,9 @@ public final class P2pVpnService extends VpnService {
         publishSnapshot();
         boolean recoveryRequired = false;
         try {
+            if (!runtimeStorageReady) {
+                throw new P2pVpnException("Private runtime storage is unavailable");
+            }
             loadProfile();
             acquireMulticastLock();
             Builder builder = new Builder();
@@ -565,7 +570,9 @@ public final class P2pVpnService extends VpnService {
                     AndroidProfile.fromNative(
                             NativeResponse.objectValue(
                                     NativeBridge.nativeApplyPairingArtifacts(
-                                            currentConfig, artifacts.toString())));
+                                            currentConfig,
+                                            artifacts.toString(),
+                                            runtimeDirectory.getAbsolutePath())));
 
             // Durably save the new identity bindings before compacting native enrollment state.
             profileStore.save(updated.configJson);
@@ -578,7 +585,6 @@ public final class P2pVpnService extends VpnService {
                 throw new P2pVpnException("Pairing RPC did not acknowledge enrollment");
             }
 
-            removeManagedMembershipKey(artifacts);
             activePairing = null;
             pairingDetail = "Paired with " + remotePeer;
             publishSnapshot();
@@ -600,28 +606,11 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
-    private void removeManagedMembershipKey(JSONObject artifacts) {
-        try {
-            String path = artifacts.getJSONObject("nix").optString("membership_key_file", "");
-            if (path.isEmpty()) {
-                return;
-            }
-            File managed = new File(path).getCanonicalFile();
-            File root = runtimeDirectory.getCanonicalFile();
-            String rootPath = root.getPath() + File.separator;
-            if (managed.getPath().startsWith(rootPath)) {
-                // Failure to remove this transient copy must not undo acknowledged enrollment.
-                managed.delete();
-            }
-        } catch (IOException | JSONException ignored) {
-            // The encrypted profile is already durable and native enrollment is acknowledged.
-        }
-    }
-
     private void prepareRuntimeDirectory() {
         runtimeDirectory = new File(getNoBackupFilesDir(), "runtime");
         if (!runtimeDirectory.isDirectory() && !runtimeDirectory.mkdirs()) {
             connectionDetail = "Failed to create private runtime storage";
+            return;
         }
         runtimeDirectory.setReadable(false, false);
         runtimeDirectory.setWritable(false, false);
@@ -631,6 +620,12 @@ public final class P2pVpnService extends VpnService {
         runtimeDirectory.setExecutable(true, true);
         pairingStateFile = new File(runtimeDirectory, "pairing-state.json");
         membershipStateFile = new File(runtimeDirectory, "membership-state.json");
+        try {
+            Files.deleteIfExists(new File(runtimeDirectory, "membership.key").toPath());
+            runtimeStorageReady = true;
+        } catch (IOException error) {
+            connectionDetail = "Failed to remove a stale pairing secret";
+        }
     }
 
     private void acquireMulticastLock() {
