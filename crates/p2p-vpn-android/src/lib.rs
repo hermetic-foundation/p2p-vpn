@@ -259,7 +259,7 @@ mod android {
         future::Future,
         io,
         io::{Read as _, Write as _},
-        os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
+        os::fd::{AsRawFd as _, FromRawFd as _},
         panic::{AssertUnwindSafe, catch_unwind},
         ptr,
         sync::{
@@ -388,12 +388,17 @@ mod android {
         membership_state_path: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
+            if tun_fd < 0 {
+                return Err("Android supplied an invalid TUN descriptor".to_owned());
+            }
+            // `VpnService` detached the descriptor, so JNI must adopt it before any fallible work.
+            let tun_file = unsafe { File::from_raw_fd(tun_fd) };
             let config_json = read_string(env, &config_json)?;
             let pairing_state_path = read_string(env, &pairing_state_path)?;
             let membership_state_path = read_string(env, &membership_state_path)?;
             start_runtime(
                 &config_json,
-                tun_fd,
+                tun_file,
                 pairing_state_path,
                 membership_state_path,
             )
@@ -446,16 +451,11 @@ mod android {
 
     fn start_runtime(
         config_json: &str,
-        tun_fd: RawFd,
+        writer_file: File,
         pairing_state_path: String,
         membership_state_path: String,
     ) -> Result<AndroidRuntimeStatus, String> {
         init_logging();
-        if tun_fd < 0 {
-            return Err("Android supplied an invalid TUN descriptor".to_owned());
-        }
-        // `VpnService` detaches the descriptor before JNI transfers ownership here.
-        let writer_file = unsafe { File::from_raw_fd(tun_fd) };
         let _ = stop_runtime();
         let config: Config = serde_json::from_str(config_json)
             .map_err(|error| format!("invalid profile JSON: {error}"))?;
