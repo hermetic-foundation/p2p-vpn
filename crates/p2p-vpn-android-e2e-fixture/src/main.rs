@@ -12,7 +12,7 @@ use std::{
 };
 
 use base64::Engine as _;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use p2p_vpn::{
     config::{BootstrapPeerConfig, Config, DiscoveryConfig, PRIVATE_KADEMLIA_PROTOCOL},
     identity::NodeIdentity,
@@ -60,6 +60,8 @@ enum Command {
         network: String,
         #[arg(long, default_value = "10.0.2.2")]
         emulator_host_alias: Ipv4Addr,
+        #[arg(long, value_enum, default_value = "automatic")]
+        path_mode: FixturePathMode,
     },
     /// Send overlay ICMP probes through a running fixture.
     Probe {
@@ -80,6 +82,7 @@ enum Command {
 struct FixtureMetadata {
     schema_version: u8,
     network: String,
+    path_mode: FixturePathMode,
     bootstrap: BootstrapMetadata,
     peer: PeerMetadata,
     packet_control_socket: String,
@@ -98,6 +101,15 @@ struct PeerMetadata {
     ipv4: Ipv4Addr,
     ipv6: Ipv6Addr,
     control_socket: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+enum FixturePathMode {
+    Automatic,
+    QuicStream,
+    TcpStream,
+    OwnedQuic,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -149,7 +161,8 @@ async fn main() {
             state_dir,
             network,
             emulator_host_alias,
-        } => run_fixture(&state_dir, &network, emulator_host_alias).await,
+            path_mode,
+        } => run_fixture(&state_dir, &network, emulator_host_alias, path_mode).await,
         Command::Probe {
             socket,
             source,
@@ -170,6 +183,7 @@ async fn run_fixture(
     state_dir: &Path,
     network: &str,
     emulator_host_alias: Ipv4Addr,
+    path_mode: FixturePathMode,
 ) -> Result<(), BoxError> {
     prepare_state_directory(state_dir)?;
 
@@ -180,6 +194,7 @@ async fn run_fixture(
     let bootstrap_port = available_tcp_port()?;
     let peer_tcp_port = available_tcp_port()?;
     let peer_quic_port = available_udp_port()?;
+    let packet_quic_port = available_udp_port_except(peer_quic_port)?;
     let membership_key = random_membership_key();
 
     let bootstrap = bootstrap_config(
@@ -195,8 +210,10 @@ async fn run_fixture(
         bootstrap_port,
         peer_tcp_port,
         peer_quic_port,
+        packet_quic_port,
         emulator_host_alias,
         &membership_key,
+        path_mode,
     )?;
     let tun = TunRuntimeConfig::from_config(&peer)
         .map_err(|error| format!("failed to derive fixture addresses: {error:?}"))?;
@@ -264,6 +281,7 @@ async fn run_fixture(
     let metadata = FixtureMetadata {
         schema_version: SCHEMA_VERSION,
         network: network.to_owned(),
+        path_mode,
         bootstrap: BootstrapMetadata {
             peer_id: bootstrap_identity.peer_id.clone(),
             android_address: format!(
@@ -382,19 +400,31 @@ fn peer_config(
     bootstrap_port: u16,
     tcp_port: u16,
     quic_port: u16,
+    packet_quic_port: u16,
     emulator_host_alias: Ipv4Addr,
     membership_key: &str,
+    path_mode: FixturePathMode,
 ) -> Result<Config, BoxError> {
     let mut config = minimal_config(network, identity)?;
     config.network.membership_key = Some(membership_key.to_owned());
-    config.network.listen_addresses = vec![
-        format!("/ip4/0.0.0.0/tcp/{tcp_port}"),
-        format!("/ip4/0.0.0.0/udp/{quic_port}/quic-v1"),
-    ];
-    config.network.external_addresses = vec![
-        format!("/ip4/{emulator_host_alias}/tcp/{tcp_port}"),
-        format!("/ip4/{emulator_host_alias}/udp/{quic_port}/quic-v1"),
-    ];
+    let tcp_listen = format!("/ip4/0.0.0.0/tcp/{tcp_port}");
+    let tcp_external = format!("/ip4/{emulator_host_alias}/tcp/{tcp_port}");
+    let quic_listen = format!("/ip4/0.0.0.0/udp/{quic_port}/quic-v1");
+    let quic_external = format!("/ip4/{emulator_host_alias}/udp/{quic_port}/quic-v1");
+    match path_mode {
+        FixturePathMode::Automatic | FixturePathMode::OwnedQuic => {
+            config.network.listen_addresses = vec![tcp_listen, quic_listen];
+            config.network.external_addresses = vec![tcp_external, quic_external];
+        }
+        FixturePathMode::QuicStream => {
+            config.network.listen_addresses = vec![quic_listen];
+            config.network.external_addresses = vec![quic_external];
+        }
+        FixturePathMode::TcpStream => {
+            config.network.listen_addresses = vec![tcp_listen];
+            config.network.external_addresses = vec![tcp_external];
+        }
+    }
     config.network.bootstrap_peers = vec![
         BootstrapPeerConfig {
             id: bootstrap.peer_id.clone(),
@@ -412,7 +442,15 @@ fn peer_config(
         },
     ];
     config.network.discovery = private_discovery(true);
-    disable_packet_plane(&mut config);
+    if path_mode == FixturePathMode::OwnedQuic {
+        config.network.packet_plane.listen.clear();
+        config.network.packet_plane.external_endpoints.clear();
+        config.network.packet_plane.quic_listen = vec![format!("0.0.0.0:{packet_quic_port}")];
+        config.network.packet_plane.quic_external_endpoints =
+            vec![format!("{emulator_host_alias}:{packet_quic_port}")];
+    } else {
+        disable_packet_plane(&mut config);
+    }
     validate_config(config, "overlay peer")
 }
 
@@ -469,6 +507,19 @@ fn available_udp_port() -> io::Result<u16> {
     Ok(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?
         .local_addr()?
         .port())
+}
+
+fn available_udp_port_except(excluded: u16) -> io::Result<u16> {
+    for _ in 0..32 {
+        let port = available_udp_port()?;
+        if port != excluded {
+            return Ok(port);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AddrNotAvailable,
+        "could not allocate distinct fixture UDP ports",
+    ))
 }
 
 fn prepare_state_directory(path: &Path) -> io::Result<()> {
@@ -1060,8 +1111,10 @@ mod tests {
             42_300,
             42_301,
             42_302,
+            42_303,
             Ipv4Addr::new(10, 0, 2, 2),
             &membership_key,
+            FixturePathMode::Automatic,
         )
         .expect("peer config");
 
@@ -1071,6 +1124,7 @@ mod tests {
         let metadata = FixtureMetadata {
             schema_version: SCHEMA_VERSION,
             network: "android-e2e".to_owned(),
+            path_mode: FixturePathMode::Automatic,
             bootstrap: BootstrapMetadata {
                 peer_id: bootstrap.peer_id.clone(),
                 android_address: format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id),
@@ -1095,5 +1149,52 @@ mod tests {
         assert!(!encoded.contains(&bootstrap.private_key));
         assert!(!encoded.contains(&peer.private_key));
         assert!(!encoded.contains(&membership_key));
+    }
+
+    #[test]
+    fn fixture_path_modes_constrain_data_plane_listeners() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let peer = NodeIdentity::generate_ed25519().expect("peer identity");
+        let membership_key = random_membership_key();
+        let host = Ipv4Addr::new(10, 0, 2, 2);
+        let config = |path_mode| {
+            peer_config(
+                "android-e2e",
+                &peer,
+                &bootstrap,
+                42_300,
+                42_301,
+                42_302,
+                42_303,
+                host,
+                &membership_key,
+                path_mode,
+            )
+            .expect("peer config")
+        };
+
+        let automatic = config(FixturePathMode::Automatic);
+        assert_eq!(automatic.network.listen_addresses.len(), 2);
+        assert!(automatic.network.packet_plane.quic_listen.is_empty());
+
+        let quic_stream = config(FixturePathMode::QuicStream);
+        assert_eq!(quic_stream.network.listen_addresses.len(), 1);
+        assert!(quic_stream.network.listen_addresses[0].contains("/quic-v1"));
+
+        let tcp_stream = config(FixturePathMode::TcpStream);
+        assert_eq!(tcp_stream.network.listen_addresses.len(), 1);
+        assert!(tcp_stream.network.listen_addresses[0].contains("/tcp/"));
+
+        let owned_quic = config(FixturePathMode::OwnedQuic);
+        assert_eq!(owned_quic.network.listen_addresses.len(), 2);
+        assert!(owned_quic.network.packet_plane.listen.is_empty());
+        assert_eq!(
+            owned_quic.network.packet_plane.quic_listen,
+            ["0.0.0.0:42303"]
+        );
+        assert_eq!(
+            owned_quic.network.packet_plane.quic_external_endpoints,
+            ["10.0.2.2:42303"]
+        );
     }
 }
