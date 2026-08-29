@@ -317,7 +317,7 @@ public final class P2pVpnService extends VpnService {
         try {
             JSONObject status = NativeResponse.objectValue(NativeBridge.nativeStatus());
             String phase = status.optString("phase", "running");
-            String detail = status.optString("detail", "");
+            String detail = status.isNull("detail") ? "" : status.optString("detail", "");
             if ("failed".equals(phase) || "stopped".equals(phase)) {
                 runtimeFailed = true;
                 failure = detail.isEmpty() ? "Native runtime stopped" : detail;
