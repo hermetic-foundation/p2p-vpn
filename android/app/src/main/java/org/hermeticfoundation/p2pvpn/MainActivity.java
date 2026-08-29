@@ -2,6 +2,7 @@ package org.hermeticfoundation.p2pvpn;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
@@ -27,6 +28,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private static final int NOTIFICATION_PERMISSION_REQUEST = 101;
 
     private LinearLayout profileSetup;
+    private LinearLayout profileRecovery;
     private LinearLayout generatedCodeGroup;
     private LinearLayout candidateGroup;
     private EditText networkName;
@@ -37,6 +39,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private TextView candidateDetails;
     private TextView status;
     private Button createProfile;
+    private Button resetProfile;
     private Button connect;
     private Button disconnect;
     private Button openPairing;
@@ -99,15 +102,22 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     @Override
     public void onSnapshot(P2pVpnService.Snapshot snapshot) {
         latestSnapshot = snapshot;
-        profileSetup.setVisibility(snapshot.hasProfile ? View.GONE : View.VISIBLE);
+        profileSetup.setVisibility(snapshot.profileStored ? View.GONE : View.VISIBLE);
+        profileRecovery.setVisibility(snapshot.profileUnreadable ? View.VISIBLE : View.GONE);
         if (snapshot.hasProfile) {
             identity.setText(
                     getString(R.string.identity_format, snapshot.networkName, snapshot.peerId));
+        } else if (snapshot.profileStored) {
+            identity.setText(R.string.identity_unavailable_stored);
         } else {
             identity.setText(R.string.identity_unavailable);
         }
 
-        createProfile.setEnabled(!snapshot.hasProfile && !snapshot.busy);
+        createProfile.setEnabled(!snapshot.profileStored && !snapshot.busy);
+        resetProfile.setEnabled(
+                snapshot.profileUnreadable
+                        && !snapshot.connectionRequested
+                        && !snapshot.busy);
         connect.setEnabled(
                 snapshot.hasProfile && !snapshot.connectionRequested && !snapshot.busy);
         disconnect.setEnabled(snapshot.connectionRequested);
@@ -164,6 +174,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
 
     private void bindViews() {
         profileSetup = findViewById(R.id.profile_setup);
+        profileRecovery = findViewById(R.id.profile_recovery);
         generatedCodeGroup = findViewById(R.id.generated_code_group);
         candidateGroup = findViewById(R.id.candidate_group);
         networkName = findViewById(R.id.network_name);
@@ -174,6 +185,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         candidateDetails = findViewById(R.id.candidate_details);
         status = findViewById(R.id.status);
         createProfile = findViewById(R.id.create_profile);
+        resetProfile = findViewById(R.id.reset_profile);
         connect = findViewById(R.id.connect);
         disconnect = findViewById(R.id.disconnect);
         openPairing = findViewById(R.id.open_pairing);
@@ -196,6 +208,20 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                     }
                     binder.createProfile(name);
                 });
+        resetProfile.setOnClickListener(
+                view ->
+                        new AlertDialog.Builder(this)
+                                .setTitle(R.string.reset_profile_title)
+                                .setMessage(R.string.reset_profile_warning)
+                                .setNegativeButton(android.R.string.cancel, null)
+                                .setPositiveButton(
+                                        R.string.reset_profile,
+                                        (dialog, which) -> {
+                                            if (binder != null) {
+                                                binder.resetUnreadableProfile();
+                                            }
+                                        })
+                                .show());
         connect.setOnClickListener(view -> requestVpnConnection());
         disconnect.setOnClickListener(view -> stopVpnService());
         openPairing.setOnClickListener(

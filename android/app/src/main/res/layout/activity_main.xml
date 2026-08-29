@@ -52,6 +52,29 @@
                 android:text="@string/create_profile" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/profile_recovery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/profile_unreadable" />
+
+            <Button
+                android:id="@+id/reset_profile"
+                style="@style/CommandButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/danger"
+                android:text="@string/reset_profile"
+                android:textColor="@color/on_primary" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/identity"
             style="@style/BodyText"

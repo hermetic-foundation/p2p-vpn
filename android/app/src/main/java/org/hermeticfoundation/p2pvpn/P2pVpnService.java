@@ -66,6 +66,8 @@ public final class P2pVpnService extends VpnService {
     private ScheduledFuture<?> pairingFuture;
 
     private AndroidProfile profile;
+    private boolean profilePresent;
+    private boolean profileUnreadable;
     private ActivePairing activePairing;
     private boolean desiredConnected;
     private boolean connected;
@@ -345,11 +347,15 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void loadProfileMetadata() {
+        profilePresent = profileStore.exists();
         try {
-            if (profileStore.exists()) {
+            if (profilePresent) {
                 loadProfile();
             }
-        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+        } catch (P2pVpnException | RuntimeException error) {
+            profileUnreadable = true;
+            connectionDetail = failureMessage(error);
+        } catch (LinkageError error) {
             connectionDetail = failureMessage(error);
         }
         try {
@@ -390,6 +396,8 @@ public final class P2pVpnService extends VpnService {
                                     NativeBridge.nativeCreateProfile(networkName.trim())));
             profileStore.save(created.configJson);
             profile = created;
+            profilePresent = true;
+            profileUnreadable = false;
             connectionDetail = "Profile ready";
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             connectionDetail = failureMessage(error);
@@ -397,6 +405,38 @@ public final class P2pVpnService extends VpnService {
             operationInProgress = false;
             publishSnapshot();
         }
+    }
+
+    private void resetUnreadableProfile() {
+        if (!profileUnreadable || desiredConnected || operationInProgress) {
+            connectionDetail = "The unreadable profile cannot be reset right now";
+            publishSnapshot();
+            return;
+        }
+        operationInProgress = true;
+        connectionDetail = "Removing unreadable profile";
+        publishSnapshot();
+        try {
+            deleteRuntimeState();
+            profileStore.reset();
+            profile = null;
+            profilePresent = false;
+            profileUnreadable = false;
+            activePairing = null;
+            pairingDetail = "No pairing operation";
+            connectionDetail = "Profile removed";
+        } catch (P2pVpnException | IOException | RuntimeException error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+        }
+    }
+
+    private void deleteRuntimeState() throws IOException {
+        Files.deleteIfExists(pairingStateFile.toPath());
+        Files.deleteIfExists(membershipStateFile.toPath());
+        Files.deleteIfExists(new File(runtimeDirectory, "membership.key").toPath());
     }
 
     private void openPairing() {
@@ -873,6 +913,8 @@ public final class P2pVpnService extends VpnService {
         snapshot =
                 new Snapshot(
                         profile != null,
+                        profilePresent,
+                        profileUnreadable,
                         connected,
                         desiredConnected,
                         operationInProgress,
@@ -959,6 +1001,10 @@ public final class P2pVpnService extends VpnService {
             worker.execute(() -> P2pVpnService.this.createProfile(networkName));
         }
 
+        void resetUnreadableProfile() {
+            worker.execute(P2pVpnService.this::resetUnreadableProfile);
+        }
+
         void openPairing() {
             worker.execute(P2pVpnService.this::openPairing);
         }
@@ -978,6 +1024,8 @@ public final class P2pVpnService extends VpnService {
 
     public static final class Snapshot {
         final boolean hasProfile;
+        final boolean profileStored;
+        final boolean profileUnreadable;
         final boolean connected;
         final boolean connectionRequested;
         final boolean busy;
@@ -994,6 +1042,8 @@ public final class P2pVpnService extends VpnService {
 
         private Snapshot(
                 boolean hasProfile,
+                boolean profileStored,
+                boolean profileUnreadable,
                 boolean connected,
                 boolean connectionRequested,
                 boolean busy,
@@ -1008,6 +1058,8 @@ public final class P2pVpnService extends VpnService {
                 String candidateHostname,
                 String candidateVpnIp) {
             this.hasProfile = hasProfile;
+            this.profileStored = profileStored;
+            this.profileUnreadable = profileUnreadable;
             this.connected = connected;
             this.connectionRequested = connectionRequested;
             this.busy = busy;
@@ -1025,6 +1077,8 @@ public final class P2pVpnService extends VpnService {
 
         private static Snapshot initial() {
             return new Snapshot(
+                    false,
+                    false,
                     false,
                     false,
                     false,

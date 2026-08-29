@@ -3,6 +3,10 @@
     <string name="app_name">p2p-vpn</string>
     <string name="network_name_hint">Network name</string>
     <string name="create_profile">Create profile</string>
+    <string name="profile_unreadable">The saved identity cannot be opened.</string>
+    <string name="reset_profile">Reset identity</string>
+    <string name="reset_profile_title">Reset p2p-vpn identity?</string>
+    <string name="reset_profile_warning">This permanently removes the saved identity, network membership, and pending pairing operation.</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="pair_title">Pair</string>
@@ -17,6 +21,7 @@
     <string name="status_title">Status</string>
     <string name="profile_title">Network</string>
     <string name="identity_unavailable">No profile</string>
+    <string name="identity_unavailable_stored">Saved profile unavailable</string>
     <string name="identity_format">%1$s\n%2$s</string>
     <string name="status_format">%1$s\n%2$s\n%3$s</string>
     <string name="pairing_code_copied">Pairing code copied</string>
