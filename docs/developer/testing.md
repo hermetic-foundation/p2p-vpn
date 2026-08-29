@@ -112,7 +112,7 @@ It does not replace the real hotspot/VPN evidence run.
 Run the reproducible Android gate on `x86_64-linux`:
 
 ```sh
-nix build .#checks.x86_64-linux.android -L
+nix build .#checks.x86_64-linux.android --no-link -L
 ```
 
 Coverage:
@@ -154,8 +154,13 @@ nix run .#android-e2e -- \
 Check the harness contract without KVM:
 
 ```sh
-nix build .#checks.x86_64-linux.android-e2e-structure -L
+nix build .#checks.x86_64-linux.android-e2e-structure --no-link -L
 ```
+
+The E2E harness requires 16 GiB of free runtime space by default.
+
+Set Nix daemon `min-free` and `max-free` thresholds before the first build.
+The daemon guard protects closure realization; the harness check runs afterward.
 
 See [Android Architecture](android.md) for the E2E procedure and recorded
 2026-08-29 Linux/emulator evidence.

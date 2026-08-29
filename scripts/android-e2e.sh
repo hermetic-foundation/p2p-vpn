@@ -6,11 +6,13 @@ umask 077
 
 readonly evidence_schema_version=1
 readonly maximum_log_bytes=$((1024 * 1024))
+readonly default_minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
 
 scenario=boot-smoke
 preflight_only=0
 allow_skip=0
 output_dir="${P2P_VPN_ANDROID_E2E_DIR:-}"
+minimum_free_bytes="${P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES:-$default_minimum_free_bytes}"
 started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 outcome=running
 outcome_detail="E2E harness exited before recording a result"
@@ -31,6 +33,10 @@ Options:
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
   -h, --help             Show this help.
+
+Environment:
+  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES
+                         Required runtime free space; defaults to 16 GiB.
 
 Exit codes:
   0   Scenario passed.
@@ -85,6 +91,13 @@ case "$scenario" in
     exit 2
     ;;
 esac
+
+if [[ ! "$minimum_free_bytes" =~ ^[0-9]{1,18}$ ]]; then
+  echo "P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES must be an integer from 0 to 999999999999999999" >&2
+  exit 2
+fi
+minimum_free_bytes=$((10#$minimum_free_bytes))
+readonly minimum_free_bytes
 
 if [[ -z "$output_dir" ]]; then
   output_dir="$(mktemp -d -t p2p-vpn-android-e2e-evidence.XXXXXXXX)"
@@ -322,6 +335,24 @@ if [[ "$(uname -m)" == x86_64 ]]; then
 else
   record_check host_architecture true false "API 35 emulator target requires x86_64"
   missing_requirements+=(host_architecture)
+fi
+
+available_bytes="$({
+  df --output=avail -B1 "${TMPDIR:-/tmp}" 2>/dev/null | tail -n 1 | tr -d '[:space:]'
+} || true)"
+if [[ "$available_bytes" =~ ^[0-9]{1,18}$ ]]; then
+  available_bytes=$((10#$available_bytes))
+  if (( available_bytes >= minimum_free_bytes )); then
+    record_check disk_space true true \
+      "$available_bytes bytes available; $minimum_free_bytes required"
+  else
+    record_check disk_space true false \
+      "$available_bytes bytes available; $minimum_free_bytes required"
+    missing_requirements+=(disk_space)
+  fi
+else
+  record_check disk_space true false "Available bytes could not be determined"
+  missing_requirements+=(disk_space)
 fi
 
 if [[ -n "$emulator_command" && -x "$emulator_command" ]]; then

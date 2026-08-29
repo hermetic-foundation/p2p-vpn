@@ -285,6 +285,53 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 `evidence.json` records preflight checks, the device contract, scenario steps,
 and cleanup results. `emulator.log` is redacted and capped at 1 MiB.
 
+### Storage Safety
+
+The app, SDK, cross toolchains, and emulator form a large Nix closure.
+
+Configure the Nix daemon on Android development hosts:
+
+```nix
+nix = {
+  gc = {
+    automatic = true;
+    dates = "daily";
+  };
+  settings = {
+    min-free = 128 * 1024 * 1024 * 1024;
+    max-free = 256 * 1024 * 1024 * 1024;
+  };
+};
+```
+
+| Layer | Guard |
+| --- | --- |
+| Nix realization | Daemon garbage collection starts below `min-free`. |
+| Harness runtime | Requires 16 GiB free before creating emulator state. |
+| Emulator | Uses a temporary AVD and removes it on every exit path. |
+| Evidence | Redacted emulator log is capped at 1 MiB. |
+
+Override the runtime threshold only for constrained test hosts:
+
+```sh
+P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=8589934592 \
+  nix run .#android-e2e -- --preflight
+```
+
+`0` disables only the harness check. It does not change Nix daemon behavior.
+
+Client `--option min-free` overrides may be ignored for untrusted users.
+Set the values in NixOS configuration so they apply while realizing the closure.
+
+Use `--no-link` for verification builds. It avoids a persistent `result` GC root.
+
+Inspect and reclaim unreachable paths:
+
+```sh
+df -h /nix/store
+nix store gc
+```
+
 ## Debug Automation
 
 The debug APK exposes one ordered-broadcast receiver for the E2E harness.
@@ -313,7 +360,7 @@ It can include an active pairing code; the harness keeps that in private state.
 Run the complete Android gate:
 
 ```sh
-nix build .#checks.x86_64-linux.android -L
+nix build .#checks.x86_64-linux.android --no-link -L
 ```
 
 The gate covers:

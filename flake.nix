@@ -462,6 +462,7 @@
                   .device.api_level == "35" and
                   .device.abi == "x86_64" and
                   .device.debug_automation and
+                  (.preflight[] | select(.name == "disk_space") | .available == true) and
                   .cleanup.emulator_stopped and
                   .cleanup.private_state_removed
                 ' "$test_root/evidence/evidence.json" >/dev/null
@@ -521,6 +522,29 @@
                   .cleanup.private_state_removed
                 ' "$test_root/skip-evidence/evidence.json" >/dev/null
                 test ! -s "$test_root/skip-evidence/emulator.log"
+
+                mkdir -p "$test_root/space-evidence"
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=900000000000000000 \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --preflight \
+                    --output "$test_root/space-evidence"
+                space_status=$?
+                set -e
+
+                test "$space_status" -eq 77
+                jq -e '
+                  .status == "skipped" and
+                  .detail == "Missing requirements: disk_space" and
+                  (.preflight[] | select(.name == "disk_space") | .available == false) and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/space-evidence/evidence.json" >/dev/null
+                test ! -s "$test_root/space-evidence/emulator.log"
 
                 touch "$out"
               ''
