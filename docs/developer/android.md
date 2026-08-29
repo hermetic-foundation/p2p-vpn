@@ -412,11 +412,23 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The 2026-08-29 run used an API 35 x86_64 emulator and a rootless Linux fixture.
+The 2026-08-29 runs used a clean API 35 x86_64 emulator.
+
+### Profile Lifecycle
+
+| Check | Result |
+| --- | --- |
+| Creation | JNI created an encrypted dual-stack profile |
+| Process death | The same identity and addresses were restored |
+| Update install | `adb install -r` preserved the profile |
+| Replacement install | A second replacement preserved the profile |
+| Cleanup | Emulator and private harness state were removed |
+
+### Linux Pairing
+
+The traffic run also used a rootless Linux fixture.
 
 Android was given one private discovery bootstrap and no overlay peer address.
-
-### Pairing
 
 | Check | Result |
 | --- | --- |
