@@ -3635,6 +3635,7 @@
                 cp ${package}/bin/p2p-vpn "$release_dir/bin/"
                 cp ${./README.md} "$release_dir/README.md"
                 cp ${./docs/user/README.md} "$release_dir/docs/user/README.md"
+                cp ${./docs/user/android.md} "$release_dir/docs/user/android.md"
                 cp ${./docs/user/quick-start.md} "$release_dir/docs/user/quick-start.md"
                 cp ${./docs/user/configuration.md} "$release_dir/docs/user/configuration.md"
                 cp ${./docs/user/membership.md} "$release_dir/docs/user/membership.md"
@@ -3643,6 +3644,7 @@
                 cp ${./docs/user/pairing.md} "$release_dir/docs/user/pairing.md"
                 cp ${./docs/user/public-libp2p.md} "$release_dir/docs/user/public-libp2p.md"
                 cp ${./docs/developer/README.md} "$release_dir/docs/developer/README.md"
+                cp ${./docs/developer/android.md} "$release_dir/docs/developer/android.md"
                 cp ${./docs/developer/architecture.md} "$release_dir/docs/developer/architecture.md"
                 cp ${./docs/developer/feature-matrix.md} "$release_dir/docs/developer/feature-matrix.md"
                 cp ${./docs/developer/membership.md} "$release_dir/docs/developer/membership.md"
@@ -3832,6 +3834,7 @@
                   "$root/flake.lock" \
                   "$root/Cargo.toml" \
                   "$root/docs/user/README.md" \
+                  "$root/docs/user/android.md" \
                   "$root/docs/user/quick-start.md" \
                   "$root/docs/user/configuration.md" \
                   "$root/docs/user/membership.md" \
@@ -3840,6 +3843,7 @@
                   "$root/docs/user/pairing.md" \
                   "$root/docs/user/public-libp2p.md" \
                   "$root/docs/developer/README.md" \
+                  "$root/docs/developer/android.md" \
                   "$root/docs/developer/architecture.md" \
                   "$root/docs/developer/feature-matrix.md" \
                   "$root/docs/developer/membership.md" \

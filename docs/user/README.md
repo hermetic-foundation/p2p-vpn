@@ -7,6 +7,7 @@ Use these docs when you want to run `p2p-vpn`.
 | Document | Use It For |
 | --- | --- |
 | [Quick Start](quick-start.md) | Start and code-pair a minimal NixOS overlay. |
+| [Android](android.md) | Build, install, pair, connect, and recover the Android app. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
 | [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |
@@ -19,10 +20,11 @@ Use these docs when you want to run `p2p-vpn`.
 
 | Requirement | Why |
 | --- | --- |
-| Linux | The daemon uses a TUN interface. |
-| `/dev/net/tun` | Required for packet forwarding. |
-| `CAP_NET_ADMIN` or root | Required to create and configure TUN. |
-| Nix flakes | Recommended build and run path for this repo. |
+| Linux/NixOS or Android | Run the Linux daemon or arm64 Android app. |
+| `/dev/net/tun` | Required on Linux for packet forwarding. |
+| `CAP_NET_ADMIN` or root | Required on Linux to configure TUN. |
+| Android VPN approval | Required on Android to establish the TUN. |
+| Nix flakes | Build, test, and package every supported target. |
 | Local identity | Generated automatically by the NixOS module. |
 | Peer authorization | Added through pairing or explicit peer settings. |
 
@@ -42,7 +44,15 @@ Pair once with an authorized member; signed membership then converges across the
 
 Enable `dns.enable` to resolve converged members by hostname.
 
-## JSON First Command
+## Android First Step
+
+```sh
+nix run .#android-install
+```
+
+Continue with [Android](android.md).
+
+## Linux JSON First Command
 
 ```sh
 nix run .# -- init-config --output p2p-vpn.json --force

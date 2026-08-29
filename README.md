@@ -1,6 +1,6 @@
 # p2p-vpn
 
-`p2p-vpn` is a Rust, libp2p-native mesh VPN for Linux and NixOS.
+`p2p-vpn` is a Rust, libp2p-native mesh VPN for Linux, NixOS, and Android.
 
 It uses libp2p for identity, encrypted transports, discovery, relay, AutoNAT,
 and DCUtR. It forwards overlay IP packets through authenticated packet
@@ -16,6 +16,7 @@ protocols and bounded queues.
 ## Quick Links
 
 - [Quick Start](docs/user/quick-start.md)
+- [Android](docs/user/android.md)
 - [NixOS Module](docs/user/nixos.md)
 - [Pairing](docs/user/pairing.md)
 - [Network Membership](docs/user/membership.md)
@@ -34,6 +35,7 @@ protocols and bounded queues.
 | --- | --- |
 | Minimal config | Operational in NixOS VM mesh tests without peer addresses. |
 | NixOS module | Operational with typed service instances and sane defaults. |
+| Android pair and connect | Debug APK implemented; physical Android/Linux proof pending. |
 | Code pairing | Operational with LAN-first discovery, approval, relay fallback, and native Nix artifacts. |
 | Network-wide membership | Operational with signed convergence, durable learned state, and derived routes. |
 | Authenticated overlay DNS | Operational with split DNS, transitive names, and lifecycle tests. |
@@ -48,6 +50,12 @@ protocols and bounded queues.
 
 ```sh
 nix build
+```
+
+Build the Android debug APK on `x86_64-linux`:
+
+```sh
+nix build .#android-debug-apk
 ```
 
 ## Run Help

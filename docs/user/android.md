@@ -1,0 +1,221 @@
+# Android
+
+The Android app creates one p2p-vpn identity, pairs by code, and connects one
+saved overlay through Android's VPN interface.
+
+The current artifact is a debug build for test environments.
+
+## Support Matrix
+
+| Item | Requirement |
+| --- | --- |
+| Build host | `x86_64-linux` with Nix flakes |
+| Android device | `arm64-v8a` |
+| Android version | Android 8.0 / API 26 or newer |
+| Installation | ADB with the device authorized |
+| Application ID | `org.hermeticfoundation.p2pvpn.debug` |
+
+## Build
+
+Build the APK from the repository root:
+
+```sh
+nix build .#android-debug-apk
+```
+
+The result is:
+
+```text
+result/p2p-vpn-debug.apk
+```
+
+The APK uses a public development signing key.
+
+Do not distribute it as a production release.
+
+## Install
+
+Enable developer options and USB debugging on the device.
+
+Confirm ADB access:
+
+```sh
+nix develop .#android -c adb devices -l
+```
+
+Install or update the app:
+
+```sh
+nix run .#android-install
+```
+
+Select one device when several are connected:
+
+```sh
+ANDROID_SERIAL=DEVICE_SERIAL nix run .#android-install
+```
+
+## Create a Profile
+
+1. Open `p2p-vpn`.
+2. Enter the exact overlay network name.
+3. Select **Create profile**.
+
+The network name must match the Linux or NixOS member.
+
+For a NixOS instance named `runners`, the default network name is `runners`.
+
+The app creates and displays a new libp2p peer ID.
+
+It restores the same encrypted profile on later launches.
+
+## Connect
+
+1. Select **Connect**.
+2. Approve the Android VPN prompt.
+3. Allow connection notifications when Android requests permission.
+
+The app installs only the overlay IPv4 and IPv6 routes.
+
+It does not replace the device's default internet route.
+
+## Join a Linux Member
+
+### 1. Open Pairing on Linux
+
+```sh
+sudo p2p-vpn pair open --instance runners
+```
+
+Keep the displayed operation ID and pairing code.
+
+### 2. Join on Android
+
+1. Connect the Android profile.
+2. Enter the code under **Pair**.
+3. Select **Join by code**.
+
+### 3. Verify on Linux
+
+Inspect the pending request:
+
+```sh
+sudo p2p-vpn pair status OPEN_OPERATION --instance runners
+```
+
+Compare the candidate peer ID with the ID shown by Android.
+
+### 4. Approve on Linux
+
+```sh
+sudo p2p-vpn pair approve \
+  OPEN_OPERATION APPROVAL_ID \
+  --instance runners
+```
+
+The Android app polls, applies the membership, and acknowledges it.
+
+Follow [Pairing](pairing.md) to render permanent native Nix artifacts on Linux.
+
+## Invite a Linux Member
+
+### 1. Create a Code on Android
+
+Connect the profile and select **Create code**.
+
+### 2. Join on Linux
+
+```sh
+sudo p2p-vpn pair join ANDROID_CODE \
+  --instance runners \
+  --no-wait
+```
+
+### 3. Verify on Android
+
+Compare the candidate with:
+
+```sh
+sudo p2p-vpn instance show runners
+```
+
+The Android request shows the peer ID, key fingerprint, requested hostname,
+and requested overlay IP.
+
+### 4. Approve on Android
+
+Optionally enter an assigned hostname, then select **Approve**.
+
+Select **Reject** for an unexpected request.
+
+## Verify Traffic
+
+List the converged members on Linux:
+
+```sh
+sudo p2p-vpn peers --instance runners
+```
+
+Ping the Android overlay address from Linux:
+
+```sh
+ping -c 5 ANDROID_OVERLAY_IPV4
+```
+
+Ping Linux from the Android shell:
+
+```sh
+nix develop .#android -c adb shell ping -c 5 LINUX_OVERLAY_IPV4
+```
+
+## Connection Status
+
+The status view reports:
+
+| Field | Meaning |
+| --- | --- |
+| Connection | Starting, connected, recovering, or failed |
+| Overlay peers | Members with a supported active path |
+| Direct paths | Healthy direct stream or datagram paths |
+| Relay paths | Healthy circuit-relay paths |
+| Public routers | Public Kademlia routing peers |
+| Pairing | Discovery, approval, application, or completion |
+
+## Network Changes
+
+The service watches non-VPN networks with internet capability.
+
+It prefers validated Ethernet, then Wi-Fi, cellular, and Bluetooth.
+
+When the selected network changes or disappears, the app restarts the native
+runtime and retries with bounded backoff.
+
+The Rust runtime then performs LAN-first discovery, public routing, hole
+punching, and relay fallback using the saved configuration.
+
+## Stored Data
+
+| Data | Storage |
+| --- | --- |
+| Identity and network profile | AES-GCM encrypted with Android Keystore |
+| Pending pairing operation | Separately encrypted atomic file |
+| Runtime pairing state | Private app storage |
+| Runtime membership state | Private app storage |
+| Received membership key | Consumed into the encrypted profile and unlinked |
+
+Android backup is disabled for the application.
+
+Clearing app data or uninstalling destroys the saved identity.
+
+If the Keystore entry becomes unusable, the app offers **Reset identity**.
+
+## Current Limits
+
+| Limit | Current Behavior |
+| --- | --- |
+| Simultaneous networks | One saved profile |
+| Android system DNS | Not integrated |
+| Always-on VPN | Explicitly unsupported |
+| Custom route grants | No Android UI |
+| Identity import/export | No Android UI |
+| Release distribution | Debug APK only |

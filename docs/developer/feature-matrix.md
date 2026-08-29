@@ -47,6 +47,8 @@ Status is conservative.
 | Signed membership records | Operational | Unit, DHT, code-pairing, restart, and revocation tests. |
 | Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, transitive VM, and physical four-host proofs. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
+| Android Nix build | Operational | Rust tests, cross build, Java tests, lint, APK, signature, and manifest gate. |
+| Android pair and connect | Partial | Implementation complete; physical Android/Linux E2E pending. |
 | Release archive | Operational | Release archive sanity check. |
 
 ## Current Recorded Evidence

@@ -86,6 +86,7 @@ Coverage:
 | Scenario | Checks |
 | --- | --- |
 | Rust package | `package`, `fmt`, `clippy` |
+| Android app | `android` on `x86_64-linux` |
 | Release archive | `releaseArchiveSanity` |
 | NixOS service | `nixos-module` |
 | Standalone consumer | `nixos-consumer-flake` |
@@ -105,6 +106,27 @@ Coverage:
 This gate is local.
 
 It does not replace the real hotspot/VPN evidence run.
+
+## Android
+
+Run the reproducible Android gate on `x86_64-linux`:
+
+```sh
+nix build .#checks.x86_64-linux.android -L
+```
+
+Coverage:
+
+| Layer | Assertion |
+| --- | --- |
+| Rust bridge | Four host-side profile and artifact tests pass. |
+| Native library | arm64 API 26 JNI output uses NDK 27. |
+| Java | Pairing, approval, status, and recovery tests pass. |
+| Lint | Android debug lint has no errors. |
+| APK | JNI library, signature, debug ID, and SDK levels match. |
+| Manifest | Unsupported always-on VPN mode is disabled. |
+
+See [Android Architecture](android.md) for the physical device E2E procedure.
 
 ## NixOS Module Check
 
