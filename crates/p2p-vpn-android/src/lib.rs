@@ -318,7 +318,7 @@ mod android {
         ptr,
         sync::{
             Arc, Mutex, Once,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU8, Ordering},
         },
         thread,
     };
@@ -344,11 +344,13 @@ mod android {
 
     static LOG_INIT: Once = Once::new();
     static RUNTIME: Mutex<Option<RuntimeInstance>> = Mutex::new(None);
+    const CONTROL_FAILURE_LIMIT: u8 = 3;
 
     struct RuntimeInstance {
         control: RuntimeControlHandle,
         shutdown: Option<oneshot::Sender<ShutdownReason>>,
         reader_stop: Arc<AtomicBool>,
+        control_failures: Arc<AtomicU8>,
         status: Arc<Mutex<AndroidRuntimeStatus>>,
         thread: Option<thread::JoinHandle<()>>,
     }
@@ -547,6 +549,7 @@ mod android {
             detail: None,
             lines: Vec::new(),
         }));
+        let control_failures = Arc::new(AtomicU8::new(0));
         let thread_status = Arc::clone(&status);
         let thread = thread::Builder::new()
             .name("p2p-vpn-runtime".to_owned())
@@ -591,6 +594,7 @@ mod android {
             control,
             shutdown: Some(shutdown),
             reader_stop,
+            control_failures,
             status: Arc::clone(&status),
             thread: Some(thread),
         };
@@ -632,7 +636,7 @@ mod android {
     }
 
     fn runtime_status() -> Result<AndroidRuntimeStatus, String> {
-        let (control, status) = {
+        let (control, control_failures, status) = {
             let runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
             let Some(instance) = runtime.as_ref() else {
                 return Ok(AndroidRuntimeStatus {
@@ -641,7 +645,11 @@ mod android {
                     lines: Vec::new(),
                 });
             };
-            (instance.control.clone(), Arc::clone(&instance.status))
+            (
+                instance.control.clone(),
+                Arc::clone(&instance.control_failures),
+                Arc::clone(&instance.status),
+            )
         };
 
         let mut snapshot = status
@@ -651,12 +659,38 @@ mod android {
         if matches!(
             snapshot.phase,
             AndroidRuntimePhase::Starting | AndroidRuntimePhase::Running
-        ) && let Ok(lines) = block_on_control(control.status())
-        {
-            snapshot.phase = AndroidRuntimePhase::Running;
-            snapshot.detail = None;
-            snapshot.lines = lines;
-            *status.lock().unwrap_or_else(|error| error.into_inner()) = snapshot.clone();
+        ) {
+            match block_on_control(control.status()) {
+                Ok(lines) => {
+                    control_failures.store(0, Ordering::Release);
+                    snapshot.phase = AndroidRuntimePhase::Running;
+                    snapshot.detail = None;
+                    snapshot.lines = lines;
+                }
+                Err(error) => {
+                    let previous = control_failures
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                            Some(value.saturating_add(1))
+                        })
+                        .unwrap_or_else(|value| value);
+                    let failures = previous.saturating_add(1);
+                    snapshot.detail = Some(format!(
+                        "runtime health check {failures} of {CONTROL_FAILURE_LIMIT} failed: {error}"
+                    ));
+                    if failures >= CONTROL_FAILURE_LIMIT {
+                        snapshot.phase = AndroidRuntimePhase::Failed;
+                    }
+                }
+            }
+
+            let mut current = status.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(
+                current.phase,
+                AndroidRuntimePhase::Stopped | AndroidRuntimePhase::Failed
+            ) {
+                return Ok(current.clone());
+            }
+            *current = snapshot.clone();
         }
         Ok(snapshot)
     }
