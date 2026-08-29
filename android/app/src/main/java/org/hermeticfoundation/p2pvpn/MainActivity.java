@@ -108,8 +108,9 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         }
 
         createProfile.setEnabled(!snapshot.hasProfile && !snapshot.busy);
-        connect.setEnabled(snapshot.hasProfile && !snapshot.connected && !snapshot.busy);
-        disconnect.setEnabled(snapshot.connected);
+        connect.setEnabled(
+                snapshot.hasProfile && !snapshot.connectionRequested && !snapshot.busy);
+        disconnect.setEnabled(snapshot.connectionRequested);
         openPairing.setEnabled(snapshot.connected && !snapshot.busy);
         joinPairing.setEnabled(snapshot.connected && !snapshot.busy);
 

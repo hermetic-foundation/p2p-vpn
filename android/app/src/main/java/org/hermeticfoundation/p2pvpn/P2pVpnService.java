@@ -140,6 +140,9 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void connectRequested() {
+        if (desiredConnected) {
+            return;
+        }
         desiredConnected = true;
         startConnection("Connecting");
     }
@@ -668,12 +671,6 @@ public final class P2pVpnService extends VpnService {
         networkCallback =
                 new ConnectivityManager.NetworkCallback() {
                     @Override
-                    public void onAvailable(Network network) {
-                        handlePhysicalNetwork(
-                                network, connectivityManager.getNetworkCapabilities(network));
-                    }
-
-                    @Override
                     public void onCapabilitiesChanged(
                             Network network, NetworkCapabilities capabilities) {
                         if (isPhysicalNetwork(capabilities)) {
@@ -783,6 +780,7 @@ public final class P2pVpnService extends VpnService {
                 new Snapshot(
                         profile != null,
                         connected,
+                        desiredConnected,
                         operationInProgress,
                         profile == null ? null : profile.networkName,
                         profile == null ? null : profile.peerId,
@@ -887,6 +885,7 @@ public final class P2pVpnService extends VpnService {
     public static final class Snapshot {
         final boolean hasProfile;
         final boolean connected;
+        final boolean connectionRequested;
         final boolean busy;
         final String networkName;
         final String peerId;
@@ -902,6 +901,7 @@ public final class P2pVpnService extends VpnService {
         private Snapshot(
                 boolean hasProfile,
                 boolean connected,
+                boolean connectionRequested,
                 boolean busy,
                 String networkName,
                 String peerId,
@@ -915,6 +915,7 @@ public final class P2pVpnService extends VpnService {
                 String candidateVpnIp) {
             this.hasProfile = hasProfile;
             this.connected = connected;
+            this.connectionRequested = connectionRequested;
             this.busy = busy;
             this.networkName = networkName;
             this.peerId = peerId;
@@ -930,6 +931,7 @@ public final class P2pVpnService extends VpnService {
 
         private static Snapshot initial() {
             return new Snapshot(
+                    false,
                     false,
                     false,
                     false,
