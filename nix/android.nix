@@ -65,12 +65,14 @@ let
   rootLock = src + "/Cargo.lock";
   rootRustSource = src + "/src";
   androidCrate = src + "/crates/p2p-vpn-android";
+  androidE2eFixtureCrate = src + "/crates/p2p-vpn-android-e2e-fixture";
   androidProjectPresent = builtins.pathExists androidProject;
   nativeSourcesPresent = builtins.all builtins.pathExists [
     rootManifest
     rootLock
     rootRustSource
     androidCrate
+    androidE2eFixtureCrate
   ];
 
   unavailable =
@@ -94,6 +96,7 @@ let
       rootLock
       rootRustSource
       androidCrate
+      androidE2eFixtureCrate
     ];
   };
 

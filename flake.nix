@@ -49,6 +49,7 @@
             ./Cargo.toml
             ./Cargo.lock
             ./crates/p2p-vpn-android
+            ./crates/p2p-vpn-android-e2e-fixture
             ./src
             ./tests/pair_cli.rs
             ./tests/tun_namespace.rs
@@ -65,6 +66,22 @@
         vmPackage = package.overrideAttrs (_: {
           doCheck = false;
         });
+        androidE2eFixture = pkgs.rustPlatform.buildRustPackage {
+          pname = "p2p-vpn-android-e2e-fixture";
+          version = "0.1.0";
+          src = rustSource;
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoBuildFlags = [
+            "--package"
+            "p2p-vpn-android-e2e-fixture"
+          ];
+          cargoTestFlags = [
+            "--package"
+            "p2p-vpn-android-e2e-fixture"
+          ];
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          RUST_MIN_STACK = "8388608";
+        };
         vmSelf = self // {
           packages = self.packages // {
             ${system} = self.packages.${system} // {
@@ -325,6 +342,7 @@
               runtimeInputs = [
                 android.androidEmulator
                 android.androidSdk
+                androidE2eFixture
                 package
                 pkgs.bash
                 pkgs.coreutils
@@ -337,6 +355,7 @@
                 export P2P_VPN_ANDROID_EMULATOR=${android.androidEmulator}/bin/run-test-emulator
                 export P2P_VPN_ADB=${android.androidSdk}/bin/adb
                 export P2P_VPN_ANDROID_APK=${android.androidDebugApk}/p2p-vpn-debug.apk
+                export P2P_VPN_ANDROID_E2E_FIXTURE=${androidE2eFixture}/bin/p2p-vpn-android-e2e-fixture
                 export P2P_VPN_BIN=${package}/bin/p2p-vpn
                 exec bash ${./scripts/android-e2e.sh} "$@"
               '';
@@ -3867,6 +3886,7 @@
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
           android-e2e = androidE2e;
+          android-e2e-fixture = androidE2eFixture;
           android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
         }
@@ -4128,6 +4148,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android = android.androidCheck;
+          android-e2e-fixture = androidE2eFixture;
           android-e2e-structure = androidE2eStructure;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
