@@ -40,7 +40,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, or pairing-traffic.
-  --path-mode MODE       Select automatic, quic-stream, tcp-stream, or owned-quic.
+  --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, or relay-only.
   --preflight            Check requirements without starting an emulator.
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
@@ -116,7 +116,7 @@ case "$scenario" in
 esac
 
 case "$path_mode" in
-  automatic|quic-stream|tcp-stream|owned-quic) ;;
+  automatic|quic-stream|tcp-stream|owned-quic|relay-only) ;;
   *)
     echo "unsupported Android E2E path mode: $path_mode" >&2
     exit 2
@@ -709,6 +709,7 @@ fixture_owned_quic_listen=""
 fixture_owned_quic_external_endpoint=""
 fixture_owned_quic_host_port=""
 fixture_owned_quic_guest_port=""
+fixture_relay_reservation=""
 
 if [[ "$scenario" == pairing-traffic ]]; then
   fixture_state_dir="$state_dir/fixture"
@@ -754,6 +755,12 @@ if [[ "$scenario" == pairing-traffic ]]; then
         ("127.0.0.1:" + (.owned_quic.host_forward_port | tostring))
     else
       (.owned_quic // null) == null
+    end) and
+    (if $path_mode == "relay-only" then
+      (.relay.android_reservation | type == "string" and
+        test("^/[^[:space:]]+/p2p-circuit$") and length <= 1024)
+    else
+      (.relay // null) == null
     end)
   ' "$fixture_metadata" >/dev/null 2>&1; then
     outcome=failed
@@ -773,6 +780,9 @@ if [[ "$scenario" == pairing-traffic ]]; then
     fixture_owned_quic_external_endpoint="$(jq -r '.owned_quic.android_external_endpoint' "$fixture_metadata")"
     fixture_owned_quic_host_port="$(jq -r '.owned_quic.host_forward_port' "$fixture_metadata")"
     fixture_owned_quic_guest_port="$(jq -r '.owned_quic.guest_listen_port' "$fixture_metadata")"
+  fi
+  if [[ "$path_mode" == relay-only ]]; then
+    fixture_relay_reservation="$(jq -r '.relay.android_reservation' "$fixture_metadata")"
   fi
   case "$fixture_control_socket:$fixture_packet_socket" in
     "$fixture_state_dir"/*:"$fixture_state_dir"/*) ;;
@@ -923,6 +933,9 @@ if [[ "$scenario" == pairing-traffic ]]; then
       --es packet_quic_listen "$fixture_owned_quic_listen"
       --es packet_quic_external_endpoint "$fixture_owned_quic_external_endpoint"
     )
+  fi
+  if [[ "$path_mode" == relay-only ]]; then
+    profile_arguments+=(--es relay_reservation "$fixture_relay_reservation")
   fi
   if ! android_automation create-profile "${profile_arguments[@]}" \
     > "$command_response" \
@@ -1196,6 +1209,53 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
   record_step android_to_linux_ipv6 passed "Android received 5 of 5 IPv6 replies"
 
+  relay_selected_paths=0
+  relay_stream_packets=0
+  relay_established_circuits=0
+  if [[ "$path_mode" == relay-only ]]; then
+    fixture_relay_state="$state_dir/fixture-relay-state.txt"
+    if ! "$p2p_vpn_command" daemon-state \
+      --socket "$fixture_control_socket" > "$fixture_relay_state"; then
+      outcome=failed
+      outcome_detail="Linux fixture relay state could not be queried"
+      record_step relay_path_isolation failed "$outcome_detail"
+      exit 1
+    fi
+    relay_selected_paths="$(
+      awk '
+        /^peer state:/ &&
+          /selected_path circuit_relay/ &&
+          /direct_paths 0/ &&
+          /relay_paths [1-9][0-9]*/ { count += 1 }
+        END { print count + 0 }
+      ' "$fixture_relay_state"
+    )"
+    relay_stream_packets="$(
+      awk '$1 == "outbound_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$fixture_relay_state"
+    )"
+    relay_established_circuits="$(
+      awk '$1 ~ /^relay_(inbound|outbound)_circuits_established$/ { total += $2 }
+        END { print total + 0 }' "$fixture_relay_state"
+    )"
+    if [[ ! "$relay_selected_paths" =~ ^[0-9]+$ || "$relay_selected_paths" -lt 1 ]]; then
+      outcome=failed
+      outcome_detail="Linux fixture did not select an isolated circuit-relay path"
+      record_step relay_path_isolation failed "$outcome_detail"
+      exit 1
+    fi
+    if [[ ! "$relay_stream_packets" =~ ^[0-9]+$ || "$relay_stream_packets" -lt 20 \
+      || ! "$relay_established_circuits" =~ ^[0-9]+$ \
+      || "$relay_established_circuits" -lt 1 ]]; then
+      outcome=failed
+      outcome_detail="Linux fixture relay counters did not cover measured traffic"
+      record_step relay_path_isolation failed "$outcome_detail"
+      exit 1
+    fi
+    record_step relay_path_isolation passed \
+      "Linux fixture selected circuit relay with no direct overlay path"
+  fi
+
   minimum_owned_quic_packets=0
   case "$path_mode" in
     automatic)
@@ -1210,6 +1270,9 @@ if [[ "$scenario" == pairing-traffic ]]; then
     owned-quic)
       minimum_owned_quic_packets=$((owned_quic_packets_before + 20))
       path_predicate="(.value.snapshot.paths.direct_quic_datagram >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.relay == 0) and (.value.snapshot.paths.packet_plane_quic_sessions >= 1) and (.value.snapshot.paths.outbound_quic_datagram_packets >= $minimum_owned_quic_packets)"
+      ;;
+    relay-only)
+      path_predicate='(.value.snapshot.paths.relay >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.direct_tcp_stream == 0) and (.value.snapshot.paths.packet_plane_quic_sessions == 0)'
       ;;
   esac
   final_status="$state_dir/status-final.json"
@@ -1260,7 +1323,10 @@ if [[ "$scenario" == pairing-traffic ]]; then
     --argjson android_ipv6_ready_attempts "$android_ipv6_ready_attempts" \
     --argjson owned_quic_packets_before "$owned_quic_packets_before" \
     --argjson owned_quic_packets_after "$owned_quic_packets_after" \
-    --argjson owned_quic_packet_delta "$owned_quic_packet_delta" '
+    --argjson owned_quic_packet_delta "$owned_quic_packet_delta" \
+    --argjson relay_selected_paths "$relay_selected_paths" \
+    --argjson relay_stream_packets "$relay_stream_packets" \
+    --argjson relay_established_circuits "$relay_established_circuits" '
     . + {
       pairing_traffic: ({
         code_only_enrollment: true,
@@ -1280,6 +1346,12 @@ if [[ "$scenario" == pairing-traffic ]]; then
           outbound_packets_before: $owned_quic_packets_before,
           outbound_packets_after: $owned_quic_packets_after,
           measured_packet_delta: $owned_quic_packet_delta
+        }
+      } elif $path_mode == "relay-only" then {
+        relay_only: {
+          selected_circuit_paths: $relay_selected_paths,
+          outbound_stream_packets: $relay_stream_packets,
+          established_circuits: $relay_established_circuits
         }
       } else {} end))
     }

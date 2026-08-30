@@ -285,7 +285,7 @@ nix run .#android-e2e -- \
 | Evidence | Logs are redacted, capped, and contain no pairing secret |
 | Cleanup | Emulator, fixture, and private runtime state are removed |
 
-Select one compatibility stream path:
+Select one isolated data path:
 
 ```sh
 nix run .#android-e2e -- \
@@ -299,6 +299,8 @@ nix run .#android-e2e -- \
 | `automatic` | Any supported path selected by the runtime |
 | `quic-stream` | QUIC stream healthy; TCP, datagram, and relay paths absent |
 | `tcp-stream` | TCP stream healthy; QUIC, datagram, and relay paths absent |
+| `owned-quic` | Owned QUIC packet session carries measured packets |
+| `relay-only` | Circuit relay carries packets; every direct path is absent |
 
 Run capability checks without starting Android:
 
@@ -468,7 +470,7 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The 2026-08-29 runs used a clean API 35 x86_64 emulator.
+The recorded runs through 2026-08-30 used a clean API 35 x86_64 emulator.
 
 ### Profile Lifecycle
 
@@ -502,7 +504,7 @@ Android was given one private discovery bootstrap and no overlay peer address.
 | Android to Linux | IPv4 ICMP | 5/5 replies |
 | Android to Linux | IPv6 ICMP | 5/5 replies |
 
-### Stream Path Isolation
+### Path Isolation
 
 Each isolated run repeated all four traffic checks.
 
@@ -510,6 +512,11 @@ Each isolated run repeated all four traffic checks.
 | --- | --- | --- | --- |
 | `quic-stream` | One direct QUIC stream | TCP, datagram, relay | 20/20 replies |
 | `tcp-stream` | One direct TCP stream | QUIC, datagram, relay | 20/20 replies |
+| `owned-quic` | Owned QUIC packet session | UDP fallback, relay | 20/20 replies; 23 packet delta |
+| `relay-only` | One circuit-relay path | Every direct path | 20/20 replies; 24 relay packets |
+
+The relay run also recorded three established circuits and no configured
+overlay peer address.
 
 ### Cleanup
 
@@ -521,11 +528,11 @@ Each isolated run repeated all four traffic checks.
 | Private state | Pairing code, keys, and runtime state removed |
 | Evidence | Both redacted logs remained below 1 MiB |
 
-This proves isolated emulator pairing, bidirectional dual-stack traffic, and
-the direct QUIC-stream and TCP-stream compatibility paths.
+This proves isolated emulator pairing, bidirectional dual-stack traffic,
+owned QUIC, both compatibility streams, and circuit-relay-only forwarding.
 
-It does not prove underlay changes, owned QUIC, relay-only operation,
-relay-to-direct promotion, public NAT traversal, or physical-device behavior.
+It does not prove underlay changes, relay-to-direct promotion, public NAT
+traversal, or physical-device behavior.
 
 ## Current Exclusions
 

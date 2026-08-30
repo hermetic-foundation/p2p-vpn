@@ -96,10 +96,15 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                         intent,
                         "packet_quic_external_endpoint",
                         P2pVpnService.DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
+        String relayReservation =
+                optionalProfileExtra(
+                        intent,
+                        "relay_reservation",
+                        P2pVpnService.DEBUG_RELAY_RESERVATION_MAX_LENGTH);
         boolean customBootstrap =
                 bootstrapPeerId != null || bootstrapAddress != null || kademliaProtocol != null;
         boolean packetQuic = packetQuicListen != null || packetQuicExternalEndpoint != null;
-        if (!customBootstrap && !packetQuic) {
+        if (!customBootstrap && !packetQuic && relayReservation == null) {
             enqueue(context, "create-profile", network);
             return;
         }
@@ -107,10 +112,10 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
             throw new IllegalArgumentException("incomplete_bootstrap");
         }
         try {
-            P2pVpnService.validateDebugPacketQuicPair(
-                    packetQuicListen, packetQuicExternalEndpoint);
+            P2pVpnService.validateDebugE2ePaths(
+                    packetQuicListen, packetQuicExternalEndpoint, relayReservation);
         } catch (P2pVpnException error) {
-            throw new IllegalArgumentException("incomplete_packet_quic", error);
+            throw new IllegalArgumentException("invalid_e2e_paths", error);
         }
         JSONObject settings = new JSONObject();
         settings.put("network", network);
@@ -120,6 +125,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         if (packetQuicListen != null) {
             settings.put("packet_quic_listen", packetQuicListen);
             settings.put("packet_quic_external_endpoint", packetQuicExternalEndpoint);
+        }
+        if (relayReservation != null) {
+            settings.put("relay_reservation", relayReservation);
         }
         enqueueService(context, "create-e2e-profile", settings.toString());
         accepted("create-profile");

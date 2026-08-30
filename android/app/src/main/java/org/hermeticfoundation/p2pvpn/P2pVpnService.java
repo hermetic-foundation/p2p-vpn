@@ -41,6 +41,7 @@ public final class P2pVpnService extends VpnService {
     static final String EXTRA_DEBUG_COMMAND = "command";
     static final String EXTRA_DEBUG_VALUE = "value";
     static final int DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH = 512;
+    static final int DEBUG_RELAY_RESERVATION_MAX_LENGTH = 1_024;
 
     private static final String NOTIFICATION_CHANNEL = "p2p-vpn-connection";
     private static final int NOTIFICATION_ID = 1;
@@ -400,7 +401,7 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void createProfile(String networkName) {
-        createProfile(networkName, null, null, null, null, null);
+        createProfile(networkName, null, null, null, null, null, null);
     }
 
     private void createE2eProfile(String encodedSettings) {
@@ -416,14 +417,21 @@ public final class P2pVpnService extends VpnService {
                             settings,
                             "packet_quic_external_endpoint",
                             DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
-            validateDebugPacketQuicPair(packetQuicListen, packetQuicExternalEndpoint);
+            String relayReservation =
+                    optionalDebugSetting(
+                            settings,
+                            "relay_reservation",
+                            DEBUG_RELAY_RESERVATION_MAX_LENGTH);
+            validateDebugE2ePaths(
+                    packetQuicListen, packetQuicExternalEndpoint, relayReservation);
             createProfile(
                     requiredDebugSetting(settings, "network", 128),
                     requiredDebugSetting(settings, "bootstrap_peer_id", 256),
                     requiredDebugSetting(settings, "bootstrap_address", 1_024),
                     requiredDebugSetting(settings, "kademlia_protocol", 128),
                     packetQuicListen,
-                    packetQuicExternalEndpoint);
+                    packetQuicExternalEndpoint,
+                    relayReservation);
         } catch (P2pVpnException | JSONException | RuntimeException error) {
             connectionDetail = failureMessage(error);
             publishSnapshot();
@@ -436,7 +444,8 @@ public final class P2pVpnService extends VpnService {
             String bootstrapAddress,
             String kademliaProtocol,
             String packetQuicListen,
-            String packetQuicExternalEndpoint) {
+            String packetQuicExternalEndpoint,
+            String relayReservation) {
         if (operationInProgress) {
             return;
         }
@@ -458,7 +467,8 @@ public final class P2pVpnService extends VpnService {
                                                     bootstrapAddress,
                                                     kademliaProtocol,
                                                     packetQuicListen,
-                                                    packetQuicExternalEndpoint)));
+                                                    packetQuicExternalEndpoint,
+                                                    relayReservation)));
             profileStore.save(created.configJson);
             profile = created;
             profilePresent = true;
@@ -1111,11 +1121,16 @@ public final class P2pVpnService extends VpnService {
         return result;
     }
 
-    static void validateDebugPacketQuicPair(String listen, String externalEndpoint)
+    static void validateDebugE2ePaths(
+            String listen, String externalEndpoint, String relayReservation)
             throws P2pVpnException {
         if ((listen == null) != (externalEndpoint == null)) {
             throw new P2pVpnException(
                     "Debug profile requires both owned QUIC packet endpoints");
+        }
+        if (listen != null && relayReservation != null) {
+            throw new P2pVpnException(
+                    "Debug profile cannot combine owned QUIC and relay-only paths");
         }
     }
 

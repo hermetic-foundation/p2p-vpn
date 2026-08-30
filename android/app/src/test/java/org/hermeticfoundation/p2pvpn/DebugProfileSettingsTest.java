@@ -9,8 +9,13 @@ import org.junit.Test;
 public final class DebugProfileSettingsTest {
     @Test
     public void acceptsAbsentOrCompleteOwnedQuicSettings() throws Exception {
-        P2pVpnService.validateDebugPacketQuicPair(null, null);
-        P2pVpnService.validateDebugPacketQuicPair("0.0.0.0:51821", "127.0.0.1:51821");
+        P2pVpnService.validateDebugE2ePaths(null, null, null);
+        P2pVpnService.validateDebugE2ePaths(
+                "0.0.0.0:51821", "127.0.0.1:51821", null);
+        P2pVpnService.validateDebugE2ePaths(
+                null,
+                null,
+                "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWRelay/p2p-circuit");
 
         assertEquals(
                 "0.0.0.0:51821",
@@ -25,6 +30,19 @@ public final class DebugProfileSettingsTest {
     }
 
     @Test
+    public void rejectsCombinedOwnedQuicAndRelaySettings() throws Exception {
+        try {
+            P2pVpnService.validateDebugE2ePaths(
+                    "0.0.0.0:51821",
+                    "127.0.0.1:51821",
+                    "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWRelay/p2p-circuit");
+            fail("expected conflicting E2E path settings to fail");
+        } catch (P2pVpnException error) {
+            assertFalse(error.getMessage().contains("10.0.2.2"));
+        }
+    }
+
+    @Test
     public void rejectsEmptyOversizedOrControlCharacterSettings() throws Exception {
         assertInvalid("", 512);
         assertInvalid("a".repeat(513), 512);
@@ -33,7 +51,7 @@ public final class DebugProfileSettingsTest {
 
     private static void assertIncomplete(String listen, String externalEndpoint) throws Exception {
         try {
-            P2pVpnService.validateDebugPacketQuicPair(listen, externalEndpoint);
+            P2pVpnService.validateDebugE2ePaths(listen, externalEndpoint, null);
             fail("expected incomplete owned QUIC settings to fail");
         } catch (P2pVpnException error) {
             assertFalse(error.getMessage().contains(String.valueOf(listen)));

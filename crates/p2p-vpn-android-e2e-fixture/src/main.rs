@@ -85,6 +85,8 @@ struct FixtureMetadata {
     path_mode: FixturePathMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     owned_quic: Option<OwnedQuicMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay: Option<RelayMetadata>,
     bootstrap: BootstrapMetadata,
     peer: PeerMetadata,
     packet_control_socket: String,
@@ -96,6 +98,11 @@ struct OwnedQuicMetadata {
     android_external_endpoint: String,
     host_forward_port: u16,
     guest_listen_port: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct RelayMetadata {
+    android_reservation: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -120,6 +127,7 @@ enum FixturePathMode {
     QuicStream,
     TcpStream,
     OwnedQuic,
+    RelayOnly,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -213,6 +221,7 @@ async fn run_fixture(
     } else {
         None
     };
+    let relay_enabled = path_mode == FixturePathMode::RelayOnly;
     let membership_key = random_membership_key();
 
     let bootstrap = bootstrap_config(
@@ -220,6 +229,7 @@ async fn run_fixture(
         &bootstrap_identity,
         bootstrap_port,
         emulator_host_alias,
+        relay_enabled,
     )?;
     let peer = peer_config(
         network,
@@ -301,6 +311,13 @@ async fn run_fixture(
         network: network.to_owned(),
         path_mode,
         owned_quic: android_packet_quic_port.map(owned_quic_metadata),
+        relay: relay_enabled.then(|| RelayMetadata {
+            android_reservation: relay_reservation(
+                emulator_host_alias,
+                bootstrap_port,
+                &bootstrap_identity.peer_id,
+            ),
+        }),
         bootstrap: BootstrapMetadata {
             peer_id: bootstrap_identity.peer_id.clone(),
             android_address: format!(
@@ -402,11 +419,13 @@ fn bootstrap_config(
     identity: &NodeIdentity,
     port: u16,
     emulator_host_alias: Ipv4Addr,
+    relay_server: bool,
 ) -> Result<Config, BoxError> {
     let mut config = minimal_config(network, identity)?;
     config.network.listen_addresses = vec![format!("/ip4/0.0.0.0/tcp/{port}")];
     config.network.external_addresses = vec![format!("/ip4/{emulator_host_alias}/tcp/{port}")];
     config.network.discovery = private_discovery(false);
+    config.network.relay.server = relay_server;
     disable_packet_plane(&mut config);
     validate_config(config, "bootstrap")
 }
@@ -443,6 +462,10 @@ fn peer_config(
             config.network.listen_addresses = vec![tcp_listen];
             config.network.external_addresses = vec![tcp_external];
         }
+        FixturePathMode::RelayOnly => {
+            config.network.listen_addresses.clear();
+            config.network.external_addresses.clear();
+        }
     }
     config.network.bootstrap_peers = vec![
         BootstrapPeerConfig {
@@ -461,6 +484,12 @@ fn peer_config(
         },
     ];
     config.network.discovery = private_discovery(true);
+    if path_mode == FixturePathMode::RelayOnly {
+        config.network.relay.reservations = vec![
+            relay_reservation(Ipv4Addr::LOCALHOST, bootstrap_port, &bootstrap.peer_id),
+            relay_reservation(emulator_host_alias, bootstrap_port, &bootstrap.peer_id),
+        ];
+    }
     if path_mode == FixturePathMode::OwnedQuic {
         config.network.packet_plane.listen.clear();
         config.network.packet_plane.external_endpoints.clear();
@@ -548,6 +577,10 @@ fn owned_quic_metadata(port: u16) -> OwnedQuicMetadata {
         host_forward_port: port,
         guest_listen_port: port,
     }
+}
+
+fn relay_reservation(address: Ipv4Addr, port: u16, peer_id: &str) -> String {
+    format!("/ip4/{address}/tcp/{port}/p2p/{peer_id}/p2p-circuit")
 }
 
 fn prepare_state_directory(path: &Path) -> io::Result<()> {
@@ -1130,6 +1163,7 @@ mod tests {
             &bootstrap,
             42_300,
             Ipv4Addr::new(10, 0, 2, 2),
+            false,
         )
         .expect("bootstrap config");
         let peer_config = peer_config(
@@ -1154,6 +1188,7 @@ mod tests {
             network: "android-e2e".to_owned(),
             path_mode: FixturePathMode::Automatic,
             owned_quic: None,
+            relay: None,
             bootstrap: BootstrapMetadata {
                 peer_id: bootstrap.peer_id.clone(),
                 android_address: format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id),
@@ -1224,6 +1259,44 @@ mod tests {
         assert_eq!(
             owned_quic.network.packet_plane.quic_external_endpoints,
             ["10.0.2.2:42303"]
+        );
+
+        let relay_only = config(FixturePathMode::RelayOnly);
+        assert!(relay_only.network.listen_addresses.is_empty());
+        assert!(relay_only.network.external_addresses.is_empty());
+        assert_eq!(relay_only.network.relay.reservations.len(), 2);
+        assert!(
+            relay_only
+                .network
+                .relay
+                .reservations
+                .iter()
+                .all(|address| address.ends_with("/p2p-circuit"))
+        );
+        assert!(relay_only.network.packet_plane.listen.is_empty());
+        assert!(relay_only.network.packet_plane.quic_listen.is_empty());
+    }
+
+    #[test]
+    fn relay_bootstrap_serves_reservations() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let config = bootstrap_config(
+            "android-e2e",
+            &bootstrap,
+            42_300,
+            Ipv4Addr::new(10, 0, 2, 2),
+            true,
+        )
+        .expect("relay bootstrap config");
+
+        assert!(config.network.relay.server);
+        assert!(config.network.packet_plane.listen.is_empty());
+        assert_eq!(
+            relay_reservation(Ipv4Addr::new(10, 0, 2, 2), 42_300, &bootstrap.peer_id),
+            format!(
+                "/ip4/10.0.2.2/tcp/42300/p2p/{}/p2p-circuit",
+                bootstrap.peer_id
+            )
         );
     }
 

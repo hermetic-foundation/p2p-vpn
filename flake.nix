@@ -683,6 +683,14 @@
                           guest_listen_port: 42304
                         }
                       } else {} end)' > "$state_dir/fixture.json"
+                    if [[ "$path_mode" == relay-only ]]; then
+                      jq '. + {
+                        relay: {
+                          android_reservation: "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWFakeBootstrapPeer/p2p-circuit"
+                        }
+                      }' "$state_dir/fixture.json" > "$state_dir/fixture.json.updated"
+                      mv "$state_dir/fixture.json.updated" "$state_dir/fixture.json"
+                    fi
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
                     printf 'ControlCapabilities { membership_tag: Some("secret-tag"), owned_quic_packet_plane_certificate_der: Some([1, 2]), member_public_key: "secret-key", signature: "secret-signature" }\n'
                     printf 'underlay 192.0.2.44 [fd00::44]:42300 /dns4/private.example/udp/42300\n'
@@ -710,6 +718,18 @@
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 case "$*" in
+                  'daemon-state '* )
+                    if [[ "''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}" == relay-only ]]; then
+                      printf '%s\n' \
+                        'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path circuit_relay selected_path_score 30 selected_path_mtu 1000 selected_path_origin relay_circuit healthy_paths 1 direct_paths 0 relay_paths 1' \
+                        'outbound_stream_fallback_packets 24' \
+                        'relay_inbound_circuits_established 2' \
+                        'relay_outbound_circuits_established 0'
+                    else
+                      printf '%s\n' \
+                        'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1280 selected_path_origin identify healthy_paths 1 direct_paths 1 relay_paths 0'
+                    fi
+                    ;;
                   'pair open '* )
                     jq -cn '{operation_id: "fake-operation", code: "ABCD-EFGH-JKLM-NPQR"}'
                     ;;
@@ -764,6 +784,7 @@
                       direct_quic_datagram=0
                       direct_quic_stream=0
                       direct_tcp_stream=0
+                      relay=0
                       packet_plane_quic_sessions=0
                       outbound_quic_datagram_packets=0
                       if [[ "$state" == connected || "$state" == paired ]]; then
@@ -783,6 +804,9 @@
                               outbound_quic_datagram_packets="$(< "$traffic_state")"
                             fi
                             ;;
+                          relay-only)
+                            relay=1
+                            ;;
                           *) direct_tcp_stream=1 ;;
                         esac
                       fi
@@ -793,6 +817,7 @@
                         --argjson direct_quic_datagram "$direct_quic_datagram" \
                         --argjson direct_quic_stream "$direct_quic_stream" \
                         --argjson direct_tcp_stream "$direct_tcp_stream" \
+                        --argjson relay "$relay" \
                         --argjson packet_plane_quic_sessions "$packet_plane_quic_sessions" \
                         --argjson outbound_quic_datagram_packets "$outbound_quic_datagram_packets" \
                         '{
@@ -815,7 +840,7 @@
                                 direct_quic_datagram: $direct_quic_datagram,
                                 direct_quic_stream: $direct_quic_stream,
                                 direct_tcp_stream: $direct_tcp_stream,
-                                relay: 0,
+                                relay: $relay,
                                 public_routing_peers: 0,
                                 packet_plane_quic_sessions: $packet_plane_quic_sessions,
                                 outbound_quic_datagram_packets: $outbound_quic_datagram_packets
@@ -1019,7 +1044,7 @@
                 ! grep -Eq '(192\.0\.2\.44|fd00::44|private\.example)' \
                   "$test_root/pairing-evidence/fixture.log"
 
-                for path_mode in quic-stream tcp-stream owned-quic; do
+                for path_mode in quic-stream tcp-stream owned-quic relay-only; do
                   path_state="$test_root/fake-pairing-$path_mode"
                   path_traffic_state="$test_root/fake-traffic-$path_mode"
                   path_evidence="$test_root/path-$path_mode-evidence"
@@ -1055,10 +1080,17 @@
                     elif $path_mode == "tcp-stream" then
                       .device.pairing_traffic.paths.direct_quic_stream == 0 and
                       .device.pairing_traffic.paths.direct_tcp_stream == 1
-                    else
+                    elif $path_mode == "owned-quic" then
                       .device.pairing_traffic.paths.direct_quic_datagram == 1 and
                       .device.pairing_traffic.paths.packet_plane_quic_sessions == 1 and
                       .device.pairing_traffic.owned_quic.measured_packet_delta >= 20
+                    else
+                      .device.pairing_traffic.paths.relay == 1 and
+                      .device.pairing_traffic.paths.direct_quic_stream == 0 and
+                      .device.pairing_traffic.paths.direct_tcp_stream == 0 and
+                      .device.pairing_traffic.relay_only.selected_circuit_paths >= 1 and
+                      .device.pairing_traffic.relay_only.outbound_stream_packets >= 20 and
+                      .device.pairing_traffic.relay_only.established_circuits >= 1
                     end) and
                     .cleanup.emulator_stopped and
                     .cleanup.fixture_stopped and

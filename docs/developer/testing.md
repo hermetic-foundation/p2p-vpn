@@ -163,11 +163,26 @@ The scenario uses a private discovery router and a rootless Linux endpoint.
 
 It requires 5/5 IPv4 and IPv6 replies in both traffic directions.
 
-Add `--path-mode quic-stream` or `--path-mode tcp-stream` to isolate a
-compatibility transport. The final status must exclude every other data path.
+Use `--path-mode` to isolate one data path:
 
-Both modes passed on API 35 on 2026-08-29. Each run completed four 5/5
-dual-stack traffic checks and removed all emulator, fixture, and private state.
+| Mode | Required Evidence |
+| --- | --- |
+| `quic-stream` | Direct QUIC stream; other data paths absent |
+| `tcp-stream` | Direct TCP stream; other data paths absent |
+| `owned-quic` | QUIC packet session and at least 20 measured packets |
+| `relay-only` | Circuit relay, at least 20 stream packets, no direct path |
+
+Run relay isolation:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario pairing-traffic \
+  --path-mode relay-only \
+  --output ./android-relay-evidence
+```
+
+All four modes passed on API 35 by 2026-08-30. Each run completed four
+5/5 dual-stack checks and removed emulator, fixture, and private state.
 
 Check the harness contract without KVM:
 
