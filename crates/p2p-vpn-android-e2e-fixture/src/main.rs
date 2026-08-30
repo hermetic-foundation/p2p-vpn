@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fs, io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdTcpListener, UdpSocket},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -29,8 +29,9 @@ use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
-    net::{UnixListener, UnixStream},
-    sync::{broadcast, watch},
+    net::{TcpListener, TcpStream, UnixListener, UnixStream},
+    sync::{Semaphore, broadcast, watch},
+    task::JoinSet,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -39,6 +40,7 @@ const MAX_PROBE_COUNT: u16 = 100;
 const MIN_PROBE_TIMEOUT_MILLIS: u64 = 100;
 const MAX_PROBE_TIMEOUT_MILLIS: u64 = 60_000;
 const DEFAULT_PROBE_TIMEOUT_MILLIS: u64 = 5_000;
+const MAX_DIRECT_PROXY_CONNECTIONS: usize = 16;
 const ICMP_PAYLOAD: &[u8] = b"p2p-vpn-android-e2e";
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -76,6 +78,11 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_PROBE_TIMEOUT_MILLIS)]
         timeout_millis: u64,
     },
+    /// Open the direct endpoint in a relay-to-direct fixture.
+    EnableDirect {
+        #[arg(long)]
+        socket: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -87,6 +94,8 @@ struct FixtureMetadata {
     owned_quic: Option<OwnedQuicMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     relay: Option<RelayMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    promotion: Option<PromotionMetadata>,
     bootstrap: BootstrapMetadata,
     peer: PeerMetadata,
     packet_control_socket: String,
@@ -103,6 +112,11 @@ struct OwnedQuicMetadata {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RelayMetadata {
     android_reservation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PromotionMetadata {
+    direct_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -128,6 +142,7 @@ enum FixturePathMode {
     TcpStream,
     OwnedQuic,
     RelayOnly,
+    RelayToDirect,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -140,6 +155,14 @@ enum PacketControlRequest {
         #[serde(default = "default_probe_timeout_millis")]
         timeout_millis: u64,
     },
+    EnableDirect,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum PacketControlResponse {
+    Probe(ProbeResponse),
+    DirectGate(DirectGateResponse),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -149,6 +172,14 @@ struct ProbeResponse {
     family: String,
     sent: u16,
     received: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct DirectGateResponse {
+    schema_version: u8,
+    ok: bool,
+    enabled: bool,
+    already_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -188,6 +219,7 @@ async fn main() {
             count,
             timeout_millis,
         } => run_probe_client(&socket, source, destination, count, timeout_millis).await,
+        Command::EnableDirect { socket } => run_enable_direct_client(&socket).await,
     };
 
     if let Err(error) = result {
@@ -213,6 +245,13 @@ async fn run_fixture(
     let peer_tcp_port = available_tcp_port()?;
     let peer_quic_port = available_udp_port()?;
     let packet_quic_port = available_udp_port_excluding(&[peer_quic_port])?;
+    let (direct_proxy_listener, direct_proxy_port) = if path_mode == FixturePathMode::RelayToDirect
+    {
+        let (listener, port) = bound_loopback_tcp_listener()?;
+        (Some(listener), Some(port))
+    } else {
+        (None, None)
+    };
     let android_packet_quic_port = if path_mode == FixturePathMode::OwnedQuic {
         Some(available_udp_port_excluding(&[
             peer_quic_port,
@@ -221,7 +260,10 @@ async fn run_fixture(
     } else {
         None
     };
-    let relay_enabled = path_mode == FixturePathMode::RelayOnly;
+    let relay_enabled = matches!(
+        path_mode,
+        FixturePathMode::RelayOnly | FixturePathMode::RelayToDirect
+    );
     let membership_key = random_membership_key();
 
     let bootstrap = bootstrap_config(
@@ -239,6 +281,7 @@ async fn run_fixture(
         peer_tcp_port,
         peer_quic_port,
         packet_quic_port,
+        direct_proxy_port,
         emulator_host_alias,
         &membership_key,
         path_mode,
@@ -269,6 +312,7 @@ async fn run_fixture(
     let bootstrap_packet_io = PacketIo::new(PendingPacketReader, DiscardPacketWriter);
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (direct_gate_tx, direct_gate_rx) = watch::channel(false);
     let (bootstrap_control, bootstrap_receiver) = runtime_control_channel();
     let bootstrap_platform = RuntimePlatform::new(bootstrap_packet_io, PreconfiguredTunRoutes)
         .with_control(bootstrap_receiver);
@@ -299,9 +343,17 @@ async fn run_fixture(
 
     wait_for_runtime(&peer_control, "overlay peer").await?;
 
+    let mut direct_proxy_task = tokio::spawn(serve_gated_tcp_proxy(
+        direct_proxy_listener,
+        SocketAddr::from((Ipv4Addr::LOCALHOST, peer_tcp_port)),
+        direct_gate_rx,
+        shutdown_rx.clone(),
+    ));
+
     let packet_server = tokio::spawn(serve_packet_control(
         packet_control_socket.clone(),
         agent,
+        (path_mode == FixturePathMode::RelayToDirect).then_some(direct_gate_tx),
         shutdown_rx,
     ));
     wait_for_path(&packet_control_socket, "packet control socket").await?;
@@ -317,6 +369,9 @@ async fn run_fixture(
                 bootstrap_port,
                 &bootstrap_identity.peer_id,
             ),
+        }),
+        promotion: (path_mode == FixturePathMode::RelayToDirect).then(|| PromotionMetadata {
+            direct_path: "tcp_stream".to_owned(),
         }),
         bootstrap: BootstrapMetadata {
             peer_id: bootstrap_identity.peer_id.clone(),
@@ -344,6 +399,7 @@ async fn run_fixture(
         }
         result = &mut bootstrap_task => Some(task_failure("bootstrap", result)),
         result = &mut peer_task => Some(task_failure("overlay peer", result)),
+        result = &mut direct_proxy_task => Some(auxiliary_task_failure("direct proxy", result)),
     };
 
     let _ = shutdown_tx.send(true);
@@ -354,6 +410,9 @@ async fn run_fixture(
         if !peer_task.is_finished() {
             let _ = (&mut peer_task).await;
         }
+        if !direct_proxy_task.is_finished() {
+            let _ = (&mut direct_proxy_task).await;
+        }
         let _ = packet_server.await;
     })
     .await;
@@ -362,6 +421,17 @@ async fn run_fixture(
         return Err(error);
     }
     Ok(())
+}
+
+fn auxiliary_task_failure(
+    label: &str,
+    result: Result<Result<(), BoxError>, tokio::task::JoinError>,
+) -> BoxError {
+    match result {
+        Ok(Ok(())) => format!("{label} stopped unexpectedly").into(),
+        Ok(Err(error)) => format!("{label} failed: {error}").into(),
+        Err(error) => format!("{label} task failed: {error}").into(),
+    }
 }
 
 fn task_failure(
@@ -439,6 +509,7 @@ fn peer_config(
     tcp_port: u16,
     quic_port: u16,
     packet_quic_port: u16,
+    direct_proxy_port: Option<u16>,
     emulator_host_alias: Ipv4Addr,
     membership_key: &str,
     path_mode: FixturePathMode,
@@ -466,6 +537,13 @@ fn peer_config(
             config.network.listen_addresses.clear();
             config.network.external_addresses.clear();
         }
+        FixturePathMode::RelayToDirect => {
+            let proxy_port =
+                direct_proxy_port.ok_or("relay-to-direct fixture lacks a proxy port")?;
+            config.network.listen_addresses = vec![format!("/ip4/127.0.0.1/tcp/{tcp_port}")];
+            config.network.external_addresses =
+                vec![format!("/ip4/{emulator_host_alias}/tcp/{proxy_port}")];
+        }
     }
     config.network.bootstrap_peers = vec![
         BootstrapPeerConfig {
@@ -484,7 +562,10 @@ fn peer_config(
         },
     ];
     config.network.discovery = private_discovery(true);
-    if path_mode == FixturePathMode::RelayOnly {
+    if matches!(
+        path_mode,
+        FixturePathMode::RelayOnly | FixturePathMode::RelayToDirect
+    ) {
         config.network.relay.reservations = vec![
             relay_reservation(Ipv4Addr::LOCALHOST, bootstrap_port, &bootstrap.peer_id),
             relay_reservation(emulator_host_alias, bootstrap_port, &bootstrap.peer_id),
@@ -546,9 +627,16 @@ fn random_membership_key() -> String {
 }
 
 fn available_tcp_port() -> io::Result<u16> {
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
+    Ok(StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
         .local_addr()?
         .port())
+}
+
+fn bound_loopback_tcp_listener() -> io::Result<(TcpListener, u16)> {
+    let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    Ok((TcpListener::from_std(listener)?, port))
 }
 
 fn available_udp_port() -> io::Result<u16> {
@@ -661,6 +749,7 @@ impl PacketWrite for DiscardPacketWriter {
 async fn serve_packet_control(
     socket: PathBuf,
     agent: PacketAgent,
+    direct_gate: Option<watch::Sender<bool>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), BoxError> {
     let listener = UnixListener::bind(socket)?;
@@ -674,8 +763,9 @@ async fn serve_packet_control(
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 let agent = agent.clone();
+                let direct_gate = direct_gate.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_packet_control(stream, agent).await {
+                    if let Err(error) = handle_packet_control(stream, agent, direct_gate).await {
                         eprintln!("packet control request failed: {error}");
                     }
                 });
@@ -684,7 +774,11 @@ async fn serve_packet_control(
     }
 }
 
-async fn handle_packet_control(mut stream: UnixStream, agent: PacketAgent) -> Result<(), BoxError> {
+async fn handle_packet_control(
+    mut stream: UnixStream,
+    agent: PacketAgent,
+    direct_gate: Option<watch::Sender<bool>>,
+) -> Result<(), BoxError> {
     let line = read_bounded_control_line(&mut stream).await?;
     let request: PacketControlRequest = serde_json::from_slice(&line)?;
     let response = match request {
@@ -695,20 +789,82 @@ async fn handle_packet_control(mut stream: UnixStream, agent: PacketAgent) -> Re
             timeout_millis,
         } => {
             validate_probe(&agent, source, destination, count, timeout_millis)?;
-            agent
-                .probe(
-                    source,
-                    destination,
-                    count,
-                    Duration::from_millis(timeout_millis),
-                )
-                .await
+            PacketControlResponse::Probe(
+                agent
+                    .probe(
+                        source,
+                        destination,
+                        count,
+                        Duration::from_millis(timeout_millis),
+                    )
+                    .await,
+            )
+        }
+        PacketControlRequest::EnableDirect => {
+            let direct_gate = direct_gate.ok_or("direct promotion gate is unavailable")?;
+            let already_enabled = direct_gate.send_replace(true);
+            PacketControlResponse::DirectGate(DirectGateResponse {
+                schema_version: SCHEMA_VERSION,
+                ok: true,
+                enabled: true,
+                already_enabled,
+            })
         }
     };
     let mut encoded = serde_json::to_vec(&response)?;
     encoded.push(b'\n');
     stream.write_all(&encoded).await?;
     Ok(())
+}
+
+async fn serve_gated_tcp_proxy(
+    listener: Option<TcpListener>,
+    target: SocketAddr,
+    mut direct_gate: watch::Receiver<bool>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), BoxError> {
+    let Some(listener) = listener else {
+        shutdown_signal(shutdown).await;
+        return Ok(());
+    };
+
+    while !*direct_gate.borrow() {
+        tokio::select! {
+            changed = direct_gate.changed() => {
+                changed.map_err(|_| "direct promotion gate closed unexpectedly")?;
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    let permits = Arc::new(Semaphore::new(MAX_DIRECT_PROXY_CONNECTIONS));
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            accepted = listener.accept() => {
+                let (mut inbound, _) = accepted?;
+                let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+                    continue;
+                };
+                connections.spawn(async move {
+                    let _permit = permit;
+                    let mut outbound = TcpStream::connect(target).await?;
+                    tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await?;
+                    Ok::<(), io::Error>(())
+                });
+            }
+            _ = connections.join_next(), if !connections.is_empty() => {}
+        }
+    }
 }
 
 async fn read_bounded_control_line(stream: &mut UnixStream) -> Result<Vec<u8>, BoxError> {
@@ -834,6 +990,24 @@ async fn run_probe_client(
             response.family, response.received, response.sent
         )
         .into());
+    }
+    Ok(())
+}
+
+async fn run_enable_direct_client(socket: &Path) -> Result<(), BoxError> {
+    let mut stream = UnixStream::connect(socket).await?;
+    let mut encoded = serde_json::to_vec(&PacketControlRequest::EnableDirect)?;
+    encoded.push(b'\n');
+    stream.write_all(&encoded).await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .map_err(|_| "direct promotion control response timed out")??;
+    let response: DirectGateResponse = serde_json::from_str(line.trim_end())?;
+    println!("{}", serde_json::to_string(&response)?);
+    if !response.ok || !response.enabled {
+        return Err("direct promotion gate was not enabled".into());
     }
     Ok(())
 }
@@ -1174,6 +1348,7 @@ mod tests {
             42_301,
             42_302,
             42_303,
+            None,
             Ipv4Addr::new(10, 0, 2, 2),
             &membership_key,
             FixturePathMode::Automatic,
@@ -1189,6 +1364,7 @@ mod tests {
             path_mode: FixturePathMode::Automatic,
             owned_quic: None,
             relay: None,
+            promotion: None,
             bootstrap: BootstrapMetadata {
                 peer_id: bootstrap.peer_id.clone(),
                 android_address: format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id),
@@ -1230,6 +1406,7 @@ mod tests {
                 42_301,
                 42_302,
                 42_303,
+                (path_mode == FixturePathMode::RelayToDirect).then_some(42_304),
                 host,
                 &membership_key,
                 path_mode,
@@ -1275,6 +1452,19 @@ mod tests {
         );
         assert!(relay_only.network.packet_plane.listen.is_empty());
         assert!(relay_only.network.packet_plane.quic_listen.is_empty());
+
+        let relay_to_direct = config(FixturePathMode::RelayToDirect);
+        assert_eq!(
+            relay_to_direct.network.listen_addresses,
+            ["/ip4/127.0.0.1/tcp/42301"]
+        );
+        assert_eq!(
+            relay_to_direct.network.external_addresses,
+            ["/ip4/10.0.2.2/tcp/42304"]
+        );
+        assert_eq!(relay_to_direct.network.relay.reservations.len(), 2);
+        assert!(relay_to_direct.network.packet_plane.listen.is_empty());
+        assert!(relay_to_direct.network.packet_plane.quic_listen.is_empty());
     }
 
     #[test]

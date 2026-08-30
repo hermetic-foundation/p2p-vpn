@@ -21,7 +21,9 @@ public final class RuntimeSummaryTest {
                                 "path_healthy_relay_paths 3",
                                 "public_routing_peers 4",
                                 "packet_plane_quic_sessions 5",
-                                "outbound_quic_datagram_packets 6"));
+                                "outbound_quic_datagram_packets 6",
+                                "outbound_direct_tcp_stream_fallback_packets 7",
+                                "path_promotions_to_direct 8"));
 
         assertEquals(2, summary.connectedPeers);
         assertEquals(7, summary.directPaths);
@@ -33,6 +35,8 @@ public final class RuntimeSummaryTest {
         assertEquals(4, summary.publicRoutingPeers);
         assertEquals(5, summary.packetPlaneQuicSessions);
         assertEquals(6, summary.outboundQuicDatagramPackets);
+        assertEquals(7, summary.outboundDirectTcpStreamPackets);
+        assertEquals(8, summary.pathPromotionsToDirect);
     }
 
     @Test
@@ -44,12 +48,16 @@ public final class RuntimeSummaryTest {
                                 "path_peers_with_supported_path nope",
                                 "path_healthy_relay_paths -1",
                                 "packet_plane_quic_sessions -1",
-                                "outbound_quic_datagram_packets nope"));
+                                "outbound_quic_datagram_packets nope",
+                                "outbound_direct_tcp_stream_fallback_packets -1",
+                                "path_promotions_to_direct nope"));
 
         assertEquals(0, summary.connectedPeers);
         assertEquals(0, summary.relayPaths);
         assertEquals(0, summary.packetPlaneQuicSessions);
         assertEquals(0, summary.outboundQuicDatagramPackets);
+        assertEquals(0, summary.outboundDirectTcpStreamPackets);
+        assertEquals(0, summary.pathPromotionsToDirect);
     }
 
     @Test
@@ -58,6 +66,8 @@ public final class RuntimeSummaryTest {
 
         assertEquals(0, summary.packetPlaneQuicSessions);
         assertEquals(0, summary.outboundQuicDatagramPackets);
+        assertEquals(0, summary.outboundDirectTcpStreamPackets);
+        assertEquals(0, summary.pathPromotionsToDirect);
     }
 
     @Test

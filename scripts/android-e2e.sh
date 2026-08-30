@@ -40,7 +40,8 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, or pairing-traffic.
-  --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, or relay-only.
+  --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
+                         or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
@@ -116,7 +117,7 @@ case "$scenario" in
 esac
 
 case "$path_mode" in
-  automatic|quic-stream|tcp-stream|owned-quic|relay-only) ;;
+  automatic|quic-stream|tcp-stream|owned-quic|relay-only|relay-to-direct) ;;
   *)
     echo "unsupported Android E2E path mode: $path_mode" >&2
     exit 2
@@ -192,6 +193,10 @@ record_step() {
     --arg detail "$detail" \
     '{name: $name, status: $status, detail: $detail}' \
     >> "$steps_file"
+}
+
+monotonic_millis() {
+  awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime
 }
 
 available_bytes_for_path() {
@@ -710,6 +715,7 @@ fixture_owned_quic_external_endpoint=""
 fixture_owned_quic_host_port=""
 fixture_owned_quic_guest_port=""
 fixture_relay_reservation=""
+fixture_promotion_path=""
 
 if [[ "$scenario" == pairing-traffic ]]; then
   fixture_state_dir="$state_dir/fixture"
@@ -756,11 +762,16 @@ if [[ "$scenario" == pairing-traffic ]]; then
     else
       (.owned_quic // null) == null
     end) and
-    (if $path_mode == "relay-only" then
+    (if ($path_mode == "relay-only" or $path_mode == "relay-to-direct") then
       (.relay.android_reservation | type == "string" and
         test("^/[^[:space:]]+/p2p-circuit$") and length <= 1024)
     else
       (.relay // null) == null
+    end) and
+    (if $path_mode == "relay-to-direct" then
+      .promotion.direct_path == "tcp_stream"
+    else
+      (.promotion // null) == null
     end)
   ' "$fixture_metadata" >/dev/null 2>&1; then
     outcome=failed
@@ -781,8 +792,11 @@ if [[ "$scenario" == pairing-traffic ]]; then
     fixture_owned_quic_host_port="$(jq -r '.owned_quic.host_forward_port' "$fixture_metadata")"
     fixture_owned_quic_guest_port="$(jq -r '.owned_quic.guest_listen_port' "$fixture_metadata")"
   fi
-  if [[ "$path_mode" == relay-only ]]; then
+  if [[ "$path_mode" == relay-only || "$path_mode" == relay-to-direct ]]; then
     fixture_relay_reservation="$(jq -r '.relay.android_reservation' "$fixture_metadata")"
+  fi
+  if [[ "$path_mode" == relay-to-direct ]]; then
+    fixture_promotion_path="$(jq -r '.promotion.direct_path' "$fixture_metadata")"
   fi
   case "$fixture_control_socket:$fixture_packet_socket" in
     "$fixture_state_dir"/*:"$fixture_state_dir"/*) ;;
@@ -934,7 +948,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
       --es packet_quic_external_endpoint "$fixture_owned_quic_external_endpoint"
     )
   fi
-  if [[ "$path_mode" == relay-only ]]; then
+  if [[ "$path_mode" == relay-only || "$path_mode" == relay-to-direct ]]; then
     profile_arguments+=(--es relay_reservation "$fixture_relay_reservation")
   fi
   if ! android_automation create-profile "${profile_arguments[@]}" \
@@ -1145,6 +1159,74 @@ if [[ "$scenario" == pairing-traffic ]]; then
   record_step traffic_readiness passed \
     "Bidirectional IPv4 and IPv6 forwarding converged before measurement"
 
+  promotion_runtime_generation_before=0
+  promotion_runtime_generation_after=0
+  promotion_relay_packets_before=0
+  promotion_relay_packets_after=0
+  promotion_relay_packet_delta=0
+  promotion_linux_direct_packets_before=0
+  promotion_linux_direct_packets_after=0
+  promotion_linux_direct_packet_delta=0
+  promotion_android_direct_packets_before=0
+  promotion_android_direct_packets_after=0
+  promotion_android_direct_packet_delta=0
+  promotion_convergence_millis=0
+  promotion_fixture_process_continuous=false
+  if [[ "$path_mode" == relay-to-direct ]]; then
+    promotion_android_relay_status="$state_dir/status-promotion-relay.json"
+    if ! wait_for_automation_status \
+      "$promotion_android_relay_status" \
+      '(.value.snapshot.paths.relay >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.direct_tcp_stream == 0) and (.value.snapshot.paths.promotions_to_direct == 0) and (.value.snapshot.runtime_generation >= 1)' \
+      60; then
+      outcome=failed
+      outcome_detail="Android did not establish the initial isolated relay path"
+      record_step promotion_relay_baseline failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_runtime_generation_before="$(
+      jq -r '.value.snapshot.runtime_generation' "$promotion_android_relay_status"
+    )"
+
+    promotion_linux_relay_before="$state_dir/fixture-promotion-relay-before.txt"
+    if ! "$p2p_vpn_command" daemon-state \
+      --socket "$fixture_control_socket" > "$promotion_linux_relay_before"; then
+      outcome=failed
+      outcome_detail="Linux fixture promotion baseline could not be queried"
+      record_step promotion_relay_baseline failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_selected_relay_paths="$(
+      awk -v peer="$android_peer_id" '
+        /^peer state:/ && index($0, peer) &&
+          /selected_path circuit_relay/ && /direct_paths 0/ &&
+          /relay_paths [1-9][0-9]*/ { count += 1 }
+        END { print count + 0 }
+      ' "$promotion_linux_relay_before"
+    )"
+    promotion_relay_packets_before="$(
+      awk '$1 == "outbound_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_relay_before"
+    )"
+    promotion_linux_direct_packets_before="$(
+      awk '$1 == "outbound_direct_tcp_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_relay_before"
+    )"
+    promotion_linux_events_before="$(
+      awk '$1 == "path_promotions_to_direct" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_relay_before"
+    )"
+    if [[ "$promotion_selected_relay_paths" -lt 1 \
+      || "$promotion_linux_direct_packets_before" -ne 0 \
+      || "$promotion_linux_events_before" -ne 0 ]]; then
+      outcome=failed
+      outcome_detail="Linux fixture did not begin on an isolated relay path"
+      record_step promotion_relay_baseline failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promotion_relay_baseline passed \
+      "Both runtimes selected relay before the direct endpoint was enabled"
+  fi
+
   linux_ipv4_probe="$state_dir/linux-ipv4-probe.json"
   linux_ipv6_probe="$state_dir/linux-ipv6-probe.json"
   if ! "$fixture_command" probe \
@@ -1208,6 +1290,244 @@ if [[ "$scenario" == pairing-traffic ]]; then
     exit 1
   fi
   record_step android_to_linux_ipv6 passed "Android received 5 of 5 IPv6 replies"
+
+  if [[ "$path_mode" == relay-to-direct ]]; then
+    promotion_linux_relay_after="$state_dir/fixture-promotion-relay-after.txt"
+    if ! "$p2p_vpn_command" daemon-state \
+      --socket "$fixture_control_socket" > "$promotion_linux_relay_after"; then
+      outcome=failed
+      outcome_detail="Linux fixture relay measurement could not be queried"
+      record_step promotion_relay_traffic failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_selected_relay_paths="$(
+      awk -v peer="$android_peer_id" '
+        /^peer state:/ && index($0, peer) &&
+          /selected_path circuit_relay/ && /direct_paths 0/ &&
+          /relay_paths [1-9][0-9]*/ { count += 1 }
+        END { print count + 0 }
+      ' "$promotion_linux_relay_after"
+    )"
+    promotion_relay_packets_after="$(
+      awk '$1 == "outbound_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_relay_after"
+    )"
+    promotion_relay_packet_delta=$((
+      promotion_relay_packets_after - promotion_relay_packets_before
+    ))
+    if [[ "$promotion_selected_relay_paths" -lt 1 \
+      || "$promotion_relay_packet_delta" -lt 20 ]]; then
+      outcome=failed
+      outcome_detail="Measured baseline traffic did not remain on circuit relay"
+      record_step promotion_relay_traffic failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promotion_relay_traffic passed \
+      "Bidirectional dual-stack baseline used circuit relay"
+
+    promotion_android_before="$state_dir/status-promotion-before.json"
+    if ! wait_for_automation_status \
+      "$promotion_android_before" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $promotion_runtime_generation_before) and (.value.snapshot.paths.relay >= 1) and (.value.snapshot.paths.direct_tcp_stream == 0) and (.value.snapshot.paths.promotions_to_direct == 0)" \
+      30; then
+      outcome=failed
+      outcome_detail="Android relay baseline changed before promotion"
+      record_step promotion_enable failed "$outcome_detail"
+      exit 1
+    fi
+
+    promotion_started_millis="$(monotonic_millis)"
+    promotion_enable_response="$state_dir/promotion-enable.json"
+    if ! "$fixture_command" enable-direct \
+      --socket "$fixture_packet_socket" > "$promotion_enable_response" \
+      || ! jq -e \
+        '.schema_version == 1 and .ok and .enabled and (.already_enabled | not)' \
+        "$promotion_enable_response" >/dev/null; then
+      outcome=failed
+      outcome_detail="Fixture direct endpoint could not be enabled"
+      record_step promotion_enable failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promotion_enable passed \
+      "Authenticated direct TCP candidate became reachable without runtime restart"
+
+    promotion_android_direct="$state_dir/status-promotion-direct.json"
+    if ! wait_for_automation_status \
+      "$promotion_android_direct" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $promotion_runtime_generation_before) and (.value.snapshot.paths.direct_tcp_stream >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.promotions_to_direct >= 1)" \
+      120; then
+      outcome=failed
+      outcome_detail="Android did not promote from relay to the direct TCP candidate"
+      record_step promotion_convergence failed "$outcome_detail"
+      exit 1
+    fi
+
+    promotion_linux_direct="$state_dir/fixture-promotion-direct.txt"
+    promotion_linux_selected_direct=0
+    promotion_linux_events_after=0
+    for _ in $(seq 1 120); do
+      if "$p2p_vpn_command" daemon-state \
+        --socket "$fixture_control_socket" > "$promotion_linux_direct"; then
+        promotion_linux_selected_direct="$(
+          awk -v peer="$android_peer_id" '
+            /^peer state:/ && index($0, peer) &&
+              /selected_path direct_tcp_stream/ &&
+              /direct_paths [1-9][0-9]*/ { count += 1 }
+            END { print count + 0 }
+          ' "$promotion_linux_direct"
+        )"
+        promotion_linux_events_after="$(
+          awk '$1 == "path_promotions_to_direct" { value = $2 }
+            END { print value + 0 }' "$promotion_linux_direct"
+        )"
+        if [[ "$promotion_linux_selected_direct" -ge 1 \
+          && "$promotion_linux_events_after" -ge 1 ]]; then
+          break
+        fi
+      fi
+      sleep 1
+    done
+    if [[ "$promotion_linux_selected_direct" -lt 1 \
+      || "$promotion_linux_events_after" -lt 1 ]]; then
+      outcome=failed
+      outcome_detail="Linux fixture did not observe relay-to-direct promotion"
+      record_step promotion_convergence failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_completed_millis="$(monotonic_millis)"
+    promotion_convergence_millis=$((
+      promotion_completed_millis - promotion_started_millis
+    ))
+    promotion_runtime_generation_after="$(
+      jq -r '.value.snapshot.runtime_generation' "$promotion_android_direct"
+    )"
+    promotion_android_direct_packets_before="$(
+      jq -r '.value.snapshot.paths.outbound_direct_tcp_stream_packets' \
+        "$promotion_android_direct"
+    )"
+    promotion_linux_direct_packets_before="$(
+      awk '$1 == "outbound_direct_tcp_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_direct"
+    )"
+    if ! kill -0 "$fixture_pid" 2>/dev/null \
+      || [[ "$promotion_runtime_generation_after" -ne "$promotion_runtime_generation_before" ]]; then
+      outcome=failed
+      outcome_detail="An endpoint restarted during relay-to-direct promotion"
+      record_step promotion_convergence failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_fixture_process_continuous=true
+    record_step promotion_convergence passed \
+      "Both runtimes selected direct TCP without restarting"
+
+    promoted_linux_ipv4_probe="$state_dir/promoted-linux-ipv4-probe.json"
+    promoted_linux_ipv6_probe="$state_dir/promoted-linux-ipv6-probe.json"
+    if ! "$fixture_command" probe \
+      --socket "$fixture_packet_socket" \
+      --source "$fixture_ipv4" \
+      --destination "$android_ipv4" \
+      --count 5 > "$promoted_linux_ipv4_probe" \
+      || ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+        "$promoted_linux_ipv4_probe" >/dev/null; then
+      outcome=failed
+      outcome_detail="Promoted Linux-to-Android IPv4 overlay probe failed"
+      record_step promoted_linux_to_android_ipv4 failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promoted_linux_to_android_ipv4 passed \
+      "Linux received 5 of 5 IPv4 replies over the promoted path"
+    if ! "$fixture_command" probe \
+      --socket "$fixture_packet_socket" \
+      --source "$fixture_ipv6" \
+      --destination "$android_ipv6" \
+      --count 5 > "$promoted_linux_ipv6_probe" \
+      || ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+        "$promoted_linux_ipv6_probe" >/dev/null; then
+      outcome=failed
+      outcome_detail="Promoted Linux-to-Android IPv6 overlay probe failed"
+      record_step promoted_linux_to_android_ipv6 failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promoted_linux_to_android_ipv6 passed \
+      "Linux received 5 of 5 IPv6 replies over the promoted path"
+
+    promoted_android_ipv4_ping="$state_dir/promoted-android-ipv4-ping.txt"
+    promoted_android_ipv6_ping="$state_dir/promoted-android-ipv6-ping.txt"
+    if ! "${adb[@]}" shell ping -c 5 -W 5 "$fixture_ipv4" \
+      > "$promoted_android_ipv4_ping" 2>&1 \
+      || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+        "$promoted_android_ipv4_ping"; then
+      outcome=failed
+      outcome_detail="Promoted Android-to-Linux IPv4 ping failed"
+      record_step promoted_android_to_linux_ipv4 failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promoted_android_to_linux_ipv4 passed \
+      "Android received 5 of 5 IPv4 replies over the promoted path"
+    if ! "${adb[@]}" shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+      > "$promoted_android_ipv6_ping" 2>&1 \
+      || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+        "$promoted_android_ipv6_ping"; then
+      outcome=failed
+      outcome_detail="Promoted Android-to-Linux IPv6 ping failed"
+      record_step promoted_android_to_linux_ipv6 failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promoted_android_to_linux_ipv6 passed \
+      "Android received 5 of 5 IPv6 replies over the promoted path"
+
+    promotion_android_after="$state_dir/status-promotion-after.json"
+    if ! wait_for_automation_status \
+      "$promotion_android_after" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $promotion_runtime_generation_before) and (.value.snapshot.paths.direct_tcp_stream >= 1) and (.value.snapshot.paths.promotions_to_direct >= 1) and (.value.snapshot.paths.outbound_direct_tcp_stream_packets >= ($promotion_android_direct_packets_before + 20))" \
+      60; then
+      outcome=failed
+      outcome_detail="Android direct TCP counters did not cover promoted traffic"
+      record_step promotion_direct_traffic failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_android_direct_packets_after="$(
+      jq -r '.value.snapshot.paths.outbound_direct_tcp_stream_packets' \
+        "$promotion_android_after"
+    )"
+    promotion_android_direct_packet_delta=$((
+      promotion_android_direct_packets_after - promotion_android_direct_packets_before
+    ))
+
+    promotion_linux_after="$state_dir/fixture-promotion-after.txt"
+    if ! "$p2p_vpn_command" daemon-state \
+      --socket "$fixture_control_socket" > "$promotion_linux_after"; then
+      outcome=failed
+      outcome_detail="Linux fixture direct traffic state could not be queried"
+      record_step promotion_direct_traffic failed "$outcome_detail"
+      exit 1
+    fi
+    promotion_linux_direct_packets_after="$(
+      awk '$1 == "outbound_direct_tcp_stream_fallback_packets" { value = $2 }
+        END { print value + 0 }' "$promotion_linux_after"
+    )"
+    promotion_linux_direct_packet_delta=$((
+      promotion_linux_direct_packets_after - promotion_linux_direct_packets_before
+    ))
+    promotion_linux_selected_direct="$(
+      awk -v peer="$android_peer_id" '
+        /^peer state:/ && index($0, peer) &&
+          /selected_path direct_tcp_stream/ &&
+          /direct_paths [1-9][0-9]*/ { count += 1 }
+        END { print count + 0 }
+      ' "$promotion_linux_after"
+    )"
+    if [[ "$promotion_linux_selected_direct" -lt 1 \
+      || "$promotion_linux_direct_packet_delta" -lt 20 \
+      || "$promotion_android_direct_packet_delta" -lt 20 ]]; then
+      outcome=failed
+      outcome_detail="Promoted traffic was not carried bidirectionally over direct TCP"
+      record_step promotion_direct_traffic failed "$outcome_detail"
+      exit 1
+    fi
+    record_step promotion_direct_traffic passed \
+      "Bidirectional dual-stack traffic used the promoted direct TCP path"
+  fi
 
   relay_selected_paths=0
   relay_stream_packets=0
@@ -1274,6 +1594,9 @@ if [[ "$scenario" == pairing-traffic ]]; then
     relay-only)
       path_predicate='(.value.snapshot.paths.relay >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.direct_tcp_stream == 0) and (.value.snapshot.paths.packet_plane_quic_sessions == 0)'
       ;;
+    relay-to-direct)
+      path_predicate="(.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.runtime_generation == $promotion_runtime_generation_before) and (.value.snapshot.paths.direct_tcp_stream >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.promotions_to_direct >= 1)"
+      ;;
   esac
   final_status="$state_dir/status-final.json"
   if ! wait_for_automation_status "$final_status" "$path_predicate" 60; then
@@ -1326,7 +1649,21 @@ if [[ "$scenario" == pairing-traffic ]]; then
     --argjson owned_quic_packet_delta "$owned_quic_packet_delta" \
     --argjson relay_selected_paths "$relay_selected_paths" \
     --argjson relay_stream_packets "$relay_stream_packets" \
-    --argjson relay_established_circuits "$relay_established_circuits" '
+    --argjson relay_established_circuits "$relay_established_circuits" \
+    --arg promotion_path "$fixture_promotion_path" \
+    --argjson promotion_runtime_generation_before "$promotion_runtime_generation_before" \
+    --argjson promotion_runtime_generation_after "$promotion_runtime_generation_after" \
+    --argjson promotion_relay_packets_before "$promotion_relay_packets_before" \
+    --argjson promotion_relay_packets_after "$promotion_relay_packets_after" \
+    --argjson promotion_relay_packet_delta "$promotion_relay_packet_delta" \
+    --argjson promotion_linux_direct_packets_before "$promotion_linux_direct_packets_before" \
+    --argjson promotion_linux_direct_packets_after "$promotion_linux_direct_packets_after" \
+    --argjson promotion_linux_direct_packet_delta "$promotion_linux_direct_packet_delta" \
+    --argjson promotion_android_direct_packets_before "$promotion_android_direct_packets_before" \
+    --argjson promotion_android_direct_packets_after "$promotion_android_direct_packets_after" \
+    --argjson promotion_android_direct_packet_delta "$promotion_android_direct_packet_delta" \
+    --argjson promotion_convergence_millis "$promotion_convergence_millis" \
+    --argjson promotion_fixture_process_continuous "$promotion_fixture_process_continuous" '
     . + {
       pairing_traffic: ({
         code_only_enrollment: true,
@@ -1352,6 +1689,33 @@ if [[ "$scenario" == pairing-traffic ]]; then
           selected_circuit_paths: $relay_selected_paths,
           outbound_stream_packets: $relay_stream_packets,
           established_circuits: $relay_established_circuits
+        }
+      } elif $path_mode == "relay-to-direct" then {
+        relay_to_direct: {
+          initial_path: "circuit_relay",
+          promoted_path: $promotion_path,
+          convergence_millis: $promotion_convergence_millis,
+          runtime_generation_before: $promotion_runtime_generation_before,
+          runtime_generation_after: $promotion_runtime_generation_after,
+          runtime_restarted: ($promotion_runtime_generation_before != $promotion_runtime_generation_after),
+          fixture_process_continuous: $promotion_fixture_process_continuous,
+          relay_packets_before: $promotion_relay_packets_before,
+          relay_packets_after: $promotion_relay_packets_after,
+          measured_relay_packet_delta: $promotion_relay_packet_delta,
+          linux_direct_packets_before: $promotion_linux_direct_packets_before,
+          linux_direct_packets_after: $promotion_linux_direct_packets_after,
+          linux_measured_direct_packet_delta: $promotion_linux_direct_packet_delta,
+          android_direct_packets_before: $promotion_android_direct_packets_before,
+          android_direct_packets_after: $promotion_android_direct_packets_after,
+          android_measured_direct_packet_delta: $promotion_android_direct_packet_delta,
+          promoted_linux_to_android: {
+            ipv4: {sent: 5, received: 5},
+            ipv6: {sent: 5, received: 5}
+          },
+          promoted_android_to_linux: {
+            ipv4: {sent: 5, received: 5},
+            ipv6: {sent: 5, received: 5}
+          }
         }
       } else {} end))
     }

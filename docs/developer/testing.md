@@ -171,6 +171,7 @@ Use `--path-mode` to isolate one data path:
 | `tcp-stream` | Direct TCP stream; other data paths absent |
 | `owned-quic` | QUIC packet session and at least 20 measured packets |
 | `relay-only` | Circuit relay, at least 20 stream packets, no direct path |
+| `relay-to-direct` | Relay baseline, autonomous direct TCP promotion, no restart |
 
 Run relay isolation:
 
@@ -181,8 +182,19 @@ nix run .#android-e2e -- \
   --output ./android-relay-evidence
 ```
 
-All four modes passed on API 35 by 2026-08-30. Each run completed four
-5/5 dual-stack checks and removed emulator, fixture, and private state.
+Run relay promotion:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario pairing-traffic \
+  --path-mode relay-to-direct \
+  --output ./android-promotion-evidence
+```
+
+All five isolated modes passed on API 35 by 2026-08-30.
+
+The promotion run carried 20 packets over relay and 20 over direct TCP.
+It converged in 10.300 seconds without restarting either runtime.
 
 Check the harness contract without KVM:
 

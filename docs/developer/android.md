@@ -301,6 +301,7 @@ nix run .#android-e2e -- \
 | `tcp-stream` | TCP stream healthy; QUIC, datagram, and relay paths absent |
 | `owned-quic` | Owned QUIC packet session carries measured packets |
 | `relay-only` | Circuit relay carries packets; every direct path is absent |
+| `relay-to-direct` | Relay carries baseline traffic, then promotes to direct TCP |
 
 Run capability checks without starting Android:
 
@@ -514,9 +515,25 @@ Each isolated run repeated all four traffic checks.
 | `tcp-stream` | One direct TCP stream | QUIC, datagram, relay | 20/20 replies |
 | `owned-quic` | Owned QUIC packet session | UDP fallback, relay | 20/20 replies; 23 packet delta |
 | `relay-only` | One circuit-relay path | Every direct path | 20/20 replies; 24 relay packets |
+| `relay-to-direct` | Circuit relay, then direct TCP | QUIC and datagram paths | 40/40 replies; no restart |
 
 The relay run also recorded three established circuits and no configured
 overlay peer address.
+
+### Relay Promotion
+
+The promotion run began with the direct endpoint bound but unavailable.
+
+Both runtimes selected circuit relay and carried 20 measured packets.
+
+| Check | Result |
+| --- | --- |
+| Direct availability | Fixture opened a bounded TCP proxy after relay traffic |
+| Convergence | Direct TCP selected in 10.300 seconds |
+| Android runtime | Generation stayed at `3`; no restart occurred |
+| Linux fixture | Original process remained active |
+| Promoted traffic | 20/20 replies; 20 direct packets per endpoint |
+| Relay backup | One healthy relay path remained available |
 
 ### Cleanup
 
@@ -529,10 +546,10 @@ overlay peer address.
 | Evidence | Both redacted logs remained below 1 MiB |
 
 This proves isolated emulator pairing, bidirectional dual-stack traffic,
-owned QUIC, both compatibility streams, and circuit-relay-only forwarding.
+owned QUIC, both compatibility streams, relay forwarding, and direct promotion.
 
-It does not prove underlay changes, relay-to-direct promotion, public NAT
-traversal, or physical-device behavior.
+It does not prove underlay changes, public NAT traversal, or physical-device
+behavior.
 
 ## Current Exclusions
 

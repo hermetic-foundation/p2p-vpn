@@ -86,6 +86,7 @@ public final class P2pVpnService extends VpnService {
     private final RuntimeSummaryAccumulator runtimeSummaryAccumulator =
             new RuntimeSummaryAccumulator();
     private int reconnectAttempts;
+    private long runtimeGeneration;
     private volatile Snapshot snapshot = Snapshot.initial();
 
     @Override
@@ -242,6 +243,9 @@ public final class P2pVpnService extends VpnService {
                             tunFd,
                             pairingStateFile.getAbsolutePath(),
                             membershipStateFile.getAbsolutePath()));
+            if (runtimeGeneration < Long.MAX_VALUE) {
+                runtimeGeneration++;
+            }
             connected = true;
             reconnectAttempts = 0;
             cancel(reconnectFuture);
@@ -1025,6 +1029,7 @@ public final class P2pVpnService extends VpnService {
                         profile == null ? null : profile.peerId,
                         profileAddresses(profile),
                         latestRuntimeSummary,
+                        runtimeGeneration,
                         connectionDetail,
                         peerDetail,
                         pairingDetail,
@@ -1205,6 +1210,7 @@ public final class P2pVpnService extends VpnService {
         final String peerId;
         final List<String> addresses;
         final RuntimeSummary runtimeSummary;
+        final long runtimeGeneration;
         final String connectionDetail;
         final String peerDetail;
         final String pairingDetail;
@@ -1225,6 +1231,7 @@ public final class P2pVpnService extends VpnService {
                 String peerId,
                 List<String> addresses,
                 RuntimeSummary runtimeSummary,
+                long runtimeGeneration,
                 String connectionDetail,
                 String peerDetail,
                 String pairingDetail,
@@ -1243,6 +1250,7 @@ public final class P2pVpnService extends VpnService {
             this.peerId = peerId;
             this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
             this.runtimeSummary = runtimeSummary;
+            this.runtimeGeneration = runtimeGeneration;
             this.connectionDetail = connectionDetail;
             this.peerDetail = peerDetail;
             this.pairingDetail = pairingDetail;
@@ -1265,6 +1273,7 @@ public final class P2pVpnService extends VpnService {
                     null,
                     Collections.emptyList(),
                     RuntimeSummary.empty(),
+                    0,
                     "Loading",
                     "Overlay peers: unavailable",
                     "No pairing operation",

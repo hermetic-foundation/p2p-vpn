@@ -13,6 +13,8 @@ final class RuntimeSummary {
     final long publicRoutingPeers;
     final long packetPlaneQuicSessions;
     final long outboundQuicDatagramPackets;
+    final long outboundDirectTcpStreamPackets;
+    final long pathPromotionsToDirect;
 
     private RuntimeSummary(
             long connectedPeers,
@@ -23,7 +25,9 @@ final class RuntimeSummary {
             long relayPaths,
             long publicRoutingPeers,
             long packetPlaneQuicSessions,
-            long outboundQuicDatagramPackets) {
+            long outboundQuicDatagramPackets,
+            long outboundDirectTcpStreamPackets,
+            long pathPromotionsToDirect) {
         this.connectedPeers = connectedPeers;
         this.directUdpDatagramPaths = directUdpDatagramPaths;
         this.directQuicDatagramPaths = directQuicDatagramPaths;
@@ -37,10 +41,12 @@ final class RuntimeSummary {
         this.publicRoutingPeers = publicRoutingPeers;
         this.packetPlaneQuicSessions = packetPlaneQuicSessions;
         this.outboundQuicDatagramPackets = outboundQuicDatagramPackets;
+        this.outboundDirectTcpStreamPackets = outboundDirectTcpStreamPackets;
+        this.pathPromotionsToDirect = pathPromotionsToDirect;
     }
 
     static RuntimeSummary empty() {
-        return new RuntimeSummary(0, 0, 0, 0, 0, 0, 0, 0, 0);
+        return new RuntimeSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     RuntimeSummary withOutboundQuicDatagramPackets(long packets) {
@@ -53,7 +59,9 @@ final class RuntimeSummary {
                 relayPaths,
                 publicRoutingPeers,
                 packetPlaneQuicSessions,
-                packets);
+                packets,
+                outboundDirectTcpStreamPackets,
+                pathPromotionsToDirect);
     }
 
     static RuntimeSummary fromLines(Iterable<String> lines) {
@@ -66,6 +74,8 @@ final class RuntimeSummary {
         long publicRoutingPeers = 0;
         long packetPlaneQuicSessions = 0;
         long outboundQuicDatagramPackets = 0;
+        long outboundDirectTcpStreamPackets = 0;
+        long pathPromotionsToDirect = 0;
         for (String line : lines) {
             int separator = line.indexOf(' ');
             if (separator <= 0 || separator == line.length() - 1) {
@@ -108,6 +118,12 @@ final class RuntimeSummary {
                 case "outbound_quic_datagram_packets":
                     outboundQuicDatagramPackets = value;
                     break;
+                case "outbound_direct_tcp_stream_fallback_packets":
+                    outboundDirectTcpStreamPackets = value;
+                    break;
+                case "path_promotions_to_direct":
+                    pathPromotionsToDirect = value;
+                    break;
                 default:
                     break;
             }
@@ -121,7 +137,9 @@ final class RuntimeSummary {
                 relayPaths,
                 publicRoutingPeers,
                 packetPlaneQuicSessions,
-                outboundQuicDatagramPackets);
+                outboundQuicDatagramPackets,
+                outboundDirectTcpStreamPackets,
+                pathPromotionsToDirect);
     }
 
     String describe() {

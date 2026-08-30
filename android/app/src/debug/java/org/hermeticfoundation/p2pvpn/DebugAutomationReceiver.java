@@ -179,6 +179,7 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         value.put("connection_detail", snapshot.connectionDetail);
         value.put("peer_detail", snapshot.peerDetail);
         value.put("pairing_detail", snapshot.pairingDetail);
+        value.put("runtime_generation", snapshot.runtimeGeneration);
 
         RuntimeSummary summary = snapshot.runtimeSummary;
         JSONObject paths = new JSONObject();
@@ -191,6 +192,8 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         paths.put("public_routing_peers", summary.publicRoutingPeers);
         paths.put("packet_plane_quic_sessions", summary.packetPlaneQuicSessions);
         paths.put("outbound_quic_datagram_packets", summary.outboundQuicDatagramPackets);
+        paths.put("outbound_direct_tcp_stream_packets", summary.outboundDirectTcpStreamPackets);
+        paths.put("promotions_to_direct", summary.pathPromotionsToDirect);
         value.put("paths", paths);
 
         JSONObject pairing = new JSONObject();

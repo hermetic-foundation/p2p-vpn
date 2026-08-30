@@ -634,6 +634,7 @@
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
+                promotion_state="''${P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE:-}"
                 record_fake_traffic() {
                   [[ -n "$traffic_state" ]] || return 0
                   current=0
@@ -683,12 +684,17 @@
                           guest_listen_port: 42304
                         }
                       } else {} end)' > "$state_dir/fixture.json"
-                    if [[ "$path_mode" == relay-only ]]; then
+                    if [[ "$path_mode" == relay-only || "$path_mode" == relay-to-direct ]]; then
                       jq '. + {
                         relay: {
                           android_reservation: "/ip4/10.0.2.2/tcp/42300/p2p/12D3KooWFakeBootstrapPeer/p2p-circuit"
                         }
                       }' "$state_dir/fixture.json" > "$state_dir/fixture.json.updated"
+                      mv "$state_dir/fixture.json.updated" "$state_dir/fixture.json"
+                    fi
+                    if [[ "$path_mode" == relay-to-direct ]]; then
+                      jq '. + {promotion: {direct_path: "tcp_stream"}}' \
+                        "$state_dir/fixture.json" > "$state_dir/fixture.json.updated"
                       mv "$state_dir/fixture.json.updated" "$state_dir/fixture.json"
                     fi
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
@@ -709,6 +715,13 @@
                     jq -cn --arg family "$family" --argjson count "$count" \
                       '{schema_version: 1, ok: true, family: $family, sent: $count, received: $count}'
                     ;;
+                  enable-direct)
+                    : "''${promotion_state:?}"
+                    current=0
+                    if [[ -s "$traffic_state" ]]; then current="$(< "$traffic_state")"; fi
+                    printf '%d\n' "$current" > "$promotion_state"
+                    jq -cn '{schema_version: 1, ok: true, enabled: true, already_enabled: false}'
+                    ;;
                   *) exit 2 ;;
                 esac
                 EOF
@@ -717,14 +730,38 @@
                 cat > "$test_root/bin/fake-p2p-vpn" <<'EOF'
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
+                path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
+                traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
+                promotion_state="''${P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE:-}"
                 case "$*" in
                   'daemon-state '* )
-                    if [[ "''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}" == relay-only ]]; then
+                    current=0
+                    if [[ -s "$traffic_state" ]]; then current="$(< "$traffic_state")"; fi
+                    if [[ "$path_mode" == relay-only ]]; then
                       printf '%s\n' \
                         'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path circuit_relay selected_path_score 30 selected_path_mtu 1000 selected_path_origin relay_circuit healthy_paths 1 direct_paths 0 relay_paths 1' \
                         'outbound_stream_fallback_packets 24' \
                         'relay_inbound_circuits_established 2' \
                         'relay_outbound_circuits_established 0'
+                    elif [[ "$path_mode" == relay-to-direct ]]; then
+                      if [[ -s "$promotion_state" ]]; then
+                        baseline="$(< "$promotion_state")"
+                        printf '%s\n' \
+                          'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1280 selected_path_origin identify healthy_paths 2 direct_paths 1 relay_paths 1' \
+                          "outbound_stream_fallback_packets $baseline" \
+                          "outbound_direct_tcp_stream_fallback_packets $((current - baseline))" \
+                          'path_promotions_to_direct 1' \
+                          'relay_inbound_circuits_established 2' \
+                          'relay_outbound_circuits_established 0'
+                      else
+                        printf '%s\n' \
+                          'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path circuit_relay selected_path_score 30 selected_path_mtu 1000 selected_path_origin relay_circuit healthy_paths 1 direct_paths 0 relay_paths 1' \
+                          "outbound_stream_fallback_packets $current" \
+                          'outbound_direct_tcp_stream_fallback_packets 0' \
+                          'path_promotions_to_direct 0' \
+                          'relay_inbound_circuits_established 2' \
+                          'relay_outbound_circuits_established 0'
+                      fi
                     else
                       printf '%s\n' \
                         'peer state: fake transport 12D3KooWFakeAndroidPeer validated true selected_path direct_tcp_stream selected_path_score 60 selected_path_mtu 1280 selected_path_origin identify healthy_paths 1 direct_paths 1 relay_paths 0'
@@ -758,6 +795,7 @@
                 pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
                 path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
                 traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
+                promotion_state="''${P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE:-}"
                 record_fake_traffic() {
                   [[ -n "$traffic_state" ]] || return 0
                   current=0
@@ -787,10 +825,15 @@
                       relay=0
                       packet_plane_quic_sessions=0
                       outbound_quic_datagram_packets=0
+                      outbound_direct_tcp_stream_packets=0
+                      promotions_to_direct=0
+                      runtime_generation=0
                       if [[ "$state" == connected || "$state" == paired ]]; then
                         connected=true
+                        runtime_generation=1
                       fi
                       if [[ "$state" == paired ]]; then
+                        runtime_generation=2
                         pairing_detail='Paired with 12D3KooWFakeLinuxPeer'
                         connected_peers=1
                         case "$path_mode" in
@@ -807,6 +850,19 @@
                           relay-only)
                             relay=1
                             ;;
+                          relay-to-direct)
+                            if [[ -s "$promotion_state" ]]; then
+                              baseline="$(< "$promotion_state")"
+                              current=0
+                              if [[ -s "$traffic_state" ]]; then current="$(< "$traffic_state")"; fi
+                              direct_tcp_stream=1
+                              relay=1
+                              outbound_direct_tcp_stream_packets=$((current - baseline))
+                              promotions_to_direct=1
+                            else
+                              relay=1
+                            fi
+                            ;;
                           *) direct_tcp_stream=1 ;;
                         esac
                       fi
@@ -820,6 +876,9 @@
                         --argjson relay "$relay" \
                         --argjson packet_plane_quic_sessions "$packet_plane_quic_sessions" \
                         --argjson outbound_quic_datagram_packets "$outbound_quic_datagram_packets" \
+                        --argjson outbound_direct_tcp_stream_packets "$outbound_direct_tcp_stream_packets" \
+                        --argjson promotions_to_direct "$promotions_to_direct" \
+                        --argjson runtime_generation "$runtime_generation" \
                         '{
                           schema_version: 1,
                           ok: true,
@@ -834,6 +893,7 @@
                               peer_id: "12D3KooWFakeAndroidPeer",
                               addresses: ["100.64.0.9/32", "fd42::9/128"],
                               pairing_detail: $pairing_detail,
+                              runtime_generation: $runtime_generation,
                               paths: {
                                 connected_peers: $connected_peers,
                                 direct_udp_datagram: 0,
@@ -843,7 +903,9 @@
                                 relay: $relay,
                                 public_routing_peers: 0,
                                 packet_plane_quic_sessions: $packet_plane_quic_sessions,
-                                outbound_quic_datagram_packets: $outbound_quic_datagram_packets
+                                outbound_quic_datagram_packets: $outbound_quic_datagram_packets,
+                                outbound_direct_tcp_stream_packets: $outbound_direct_tcp_stream_packets,
+                                promotions_to_direct: $promotions_to_direct
                               }
                             }
                           }
@@ -1044,9 +1106,10 @@
                 ! grep -Eq '(192\.0\.2\.44|fd00::44|private\.example)' \
                   "$test_root/pairing-evidence/fixture.log"
 
-                for path_mode in quic-stream tcp-stream owned-quic relay-only; do
+                for path_mode in quic-stream tcp-stream owned-quic relay-only relay-to-direct; do
                   path_state="$test_root/fake-pairing-$path_mode"
                   path_traffic_state="$test_root/fake-traffic-$path_mode"
+                  path_promotion_state="$test_root/fake-promotion-$path_mode"
                   path_evidence="$test_root/path-$path_mode-evidence"
                   printf '0\n' > "$path_traffic_state"
                   set +e
@@ -1055,6 +1118,7 @@
                     P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE="$path_state" \
                     P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE="$path_mode" \
                     P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE="$path_traffic_state" \
+                    P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE="$path_promotion_state" \
                     P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
                     P2P_VPN_ADB="$test_root/bin/fake-adb" \
                     P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
@@ -1084,13 +1148,27 @@
                       .device.pairing_traffic.paths.direct_quic_datagram == 1 and
                       .device.pairing_traffic.paths.packet_plane_quic_sessions == 1 and
                       .device.pairing_traffic.owned_quic.measured_packet_delta >= 20
-                    else
+                    elif $path_mode == "relay-only" then
                       .device.pairing_traffic.paths.relay == 1 and
                       .device.pairing_traffic.paths.direct_quic_stream == 0 and
                       .device.pairing_traffic.paths.direct_tcp_stream == 0 and
                       .device.pairing_traffic.relay_only.selected_circuit_paths >= 1 and
                       .device.pairing_traffic.relay_only.outbound_stream_packets >= 20 and
                       .device.pairing_traffic.relay_only.established_circuits >= 1
+                    else
+                      .device.pairing_traffic.paths.direct_tcp_stream == 1 and
+                      .device.pairing_traffic.paths.promotions_to_direct >= 1 and
+                      .device.pairing_traffic.relay_to_direct.initial_path == "circuit_relay" and
+                      .device.pairing_traffic.relay_to_direct.promoted_path == "tcp_stream" and
+                      (.device.pairing_traffic.relay_to_direct.runtime_restarted | not) and
+                      .device.pairing_traffic.relay_to_direct.fixture_process_continuous and
+                      .device.pairing_traffic.relay_to_direct.measured_relay_packet_delta >= 20 and
+                      .device.pairing_traffic.relay_to_direct.linux_measured_direct_packet_delta >= 20 and
+                      .device.pairing_traffic.relay_to_direct.android_measured_direct_packet_delta >= 20 and
+                      .device.pairing_traffic.relay_to_direct.promoted_linux_to_android.ipv4.received == 5 and
+                      .device.pairing_traffic.relay_to_direct.promoted_linux_to_android.ipv6.received == 5 and
+                      .device.pairing_traffic.relay_to_direct.promoted_android_to_linux.ipv4.received == 5 and
+                      .device.pairing_traffic.relay_to_direct.promoted_android_to_linux.ipv6.received == 5
                     end) and
                     .cleanup.emulator_stopped and
                     .cleanup.fixture_stopped and
