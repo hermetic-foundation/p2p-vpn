@@ -13,7 +13,9 @@ final class NativeBridge {
             String networkName,
             String bootstrapPeerId,
             String bootstrapAddress,
-            String kademliaProtocol);
+            String kademliaProtocol,
+            String packetQuicListen,
+            String packetQuicExternalEndpoint);
 
     static native String nativeInspectProfile(String configJson);
 

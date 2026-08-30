@@ -40,6 +40,7 @@ public final class P2pVpnService extends VpnService {
     static final String ACTION_DEBUG_COMMAND = "org.hermeticfoundation.p2pvpn.debug.COMMAND";
     static final String EXTRA_DEBUG_COMMAND = "command";
     static final String EXTRA_DEBUG_VALUE = "value";
+    static final int DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH = 512;
 
     private static final String NOTIFICATION_CHANNEL = "p2p-vpn-connection";
     private static final int NOTIFICATION_ID = 1;
@@ -81,6 +82,8 @@ public final class P2pVpnService extends VpnService {
     private String pairingDetail = "No pairing operation";
     private String reconnectDetail = "Recovering connection";
     private RuntimeSummary latestRuntimeSummary = RuntimeSummary.empty();
+    private final RuntimeSummaryAccumulator runtimeSummaryAccumulator =
+            new RuntimeSummaryAccumulator();
     private int reconnectAttempts;
     private volatile Snapshot snapshot = Snapshot.initial();
 
@@ -274,7 +277,7 @@ public final class P2pVpnService extends VpnService {
         }
         connected = false;
         peerDetail = "Overlay peers: unavailable";
-        latestRuntimeSummary = RuntimeSummary.empty();
+        latestRuntimeSummary = runtimeSummaryAccumulator.finishRuntime();
         releaseMulticastLock();
     }
 
@@ -343,7 +346,7 @@ public final class P2pVpnService extends VpnService {
             } else {
                 connectionDetail = capitalize(phase);
             }
-            latestRuntimeSummary = runtimeSummary(status);
+            latestRuntimeSummary = runtimeSummaryAccumulator.observe(runtimeSummary(status));
             peerDetail = latestRuntimeSummary.describe();
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             runtimeFailed = true;
@@ -397,17 +400,30 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void createProfile(String networkName) {
-        createProfile(networkName, null, null, null);
+        createProfile(networkName, null, null, null, null, null);
     }
 
     private void createE2eProfile(String encodedSettings) {
         try {
             JSONObject settings = new JSONObject(encodedSettings);
+            String packetQuicListen =
+                    optionalDebugSetting(
+                            settings,
+                            "packet_quic_listen",
+                            DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
+            String packetQuicExternalEndpoint =
+                    optionalDebugSetting(
+                            settings,
+                            "packet_quic_external_endpoint",
+                            DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
+            validateDebugPacketQuicPair(packetQuicListen, packetQuicExternalEndpoint);
             createProfile(
                     requiredDebugSetting(settings, "network", 128),
                     requiredDebugSetting(settings, "bootstrap_peer_id", 256),
                     requiredDebugSetting(settings, "bootstrap_address", 1_024),
-                    requiredDebugSetting(settings, "kademlia_protocol", 128));
+                    requiredDebugSetting(settings, "kademlia_protocol", 128),
+                    packetQuicListen,
+                    packetQuicExternalEndpoint);
         } catch (P2pVpnException | JSONException | RuntimeException error) {
             connectionDetail = failureMessage(error);
             publishSnapshot();
@@ -418,7 +434,9 @@ public final class P2pVpnService extends VpnService {
             String networkName,
             String bootstrapPeerId,
             String bootstrapAddress,
-            String kademliaProtocol) {
+            String kademliaProtocol,
+            String packetQuicListen,
+            String packetQuicExternalEndpoint) {
         if (operationInProgress) {
             return;
         }
@@ -438,7 +456,9 @@ public final class P2pVpnService extends VpnService {
                                                     networkName.trim(),
                                                     bootstrapPeerId,
                                                     bootstrapAddress,
-                                                    kademliaProtocol)));
+                                                    kademliaProtocol,
+                                                    packetQuicListen,
+                                                    packetQuicExternalEndpoint)));
             profileStore.save(created.configJson);
             profile = created;
             profilePresent = true;
@@ -1064,6 +1084,39 @@ public final class P2pVpnService extends VpnService {
             throw new P2pVpnException("Debug profile setting is invalid: " + key);
         }
         return result;
+    }
+
+    private static String optionalDebugSetting(JSONObject value, String key, int maximumLength)
+            throws JSONException, P2pVpnException {
+        if (!value.has(key) || value.isNull(key)) {
+            return null;
+        }
+        return boundedOptionalDebugSetting(value.getString(key), key, maximumLength);
+    }
+
+    static String boundedOptionalDebugSetting(String value, String key, int maximumLength)
+            throws P2pVpnException {
+        if (value == null || value.length() > maximumLength) {
+            throw new P2pVpnException("Debug profile setting is invalid: " + key);
+        }
+        String result = value.trim();
+        if (result.isEmpty()) {
+            throw new P2pVpnException("Debug profile setting is invalid: " + key);
+        }
+        for (int index = 0; index < result.length(); index++) {
+            if (Character.isISOControl(result.charAt(index))) {
+                throw new P2pVpnException("Debug profile setting is invalid: " + key);
+            }
+        }
+        return result;
+    }
+
+    static void validateDebugPacketQuicPair(String listen, String externalEndpoint)
+            throws P2pVpnException {
+        if ((listen == null) != (externalEndpoint == null)) {
+            throw new P2pVpnException(
+                    "Debug profile requires both owned QUIC packet endpoints");
+        }
     }
 
     private static String failureMessage(Throwable error) {

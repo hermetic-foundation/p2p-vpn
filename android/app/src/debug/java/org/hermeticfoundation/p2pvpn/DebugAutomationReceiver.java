@@ -86,20 +86,41 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         String bootstrapPeerId = optionalExtra(intent, "bootstrap_peer_id", 256);
         String bootstrapAddress = optionalExtra(intent, "bootstrap_address", 1024);
         String kademliaProtocol = optionalExtra(intent, "kademlia_protocol", 128);
+        String packetQuicListen =
+                optionalProfileExtra(
+                        intent,
+                        "packet_quic_listen",
+                        P2pVpnService.DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
+        String packetQuicExternalEndpoint =
+                optionalProfileExtra(
+                        intent,
+                        "packet_quic_external_endpoint",
+                        P2pVpnService.DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH);
         boolean customBootstrap =
                 bootstrapPeerId != null || bootstrapAddress != null || kademliaProtocol != null;
-        if (!customBootstrap) {
+        boolean packetQuic = packetQuicListen != null || packetQuicExternalEndpoint != null;
+        if (!customBootstrap && !packetQuic) {
             enqueue(context, "create-profile", network);
             return;
         }
         if (bootstrapPeerId == null || bootstrapAddress == null || kademliaProtocol == null) {
             throw new IllegalArgumentException("incomplete_bootstrap");
         }
+        try {
+            P2pVpnService.validateDebugPacketQuicPair(
+                    packetQuicListen, packetQuicExternalEndpoint);
+        } catch (P2pVpnException error) {
+            throw new IllegalArgumentException("incomplete_packet_quic", error);
+        }
         JSONObject settings = new JSONObject();
         settings.put("network", network);
         settings.put("bootstrap_peer_id", bootstrapPeerId);
         settings.put("bootstrap_address", bootstrapAddress);
         settings.put("kademlia_protocol", kademliaProtocol);
+        if (packetQuicListen != null) {
+            settings.put("packet_quic_listen", packetQuicListen);
+            settings.put("packet_quic_external_endpoint", packetQuicExternalEndpoint);
+        }
         enqueueService(context, "create-e2e-profile", settings.toString());
         accepted("create-profile");
     }
@@ -160,6 +181,8 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         paths.put("direct_tcp_stream", summary.directTcpStreamPaths);
         paths.put("relay", summary.relayPaths);
         paths.put("public_routing_peers", summary.publicRoutingPeers);
+        paths.put("packet_plane_quic_sessions", summary.packetPlaneQuicSessions);
+        paths.put("outbound_quic_datagram_packets", summary.outboundQuicDatagramPackets);
         value.put("paths", paths);
 
         JSONObject pairing = new JSONObject();
@@ -189,6 +212,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
             throw new IllegalArgumentException("invalid_" + name);
         }
         return value.trim();
+    }
+
+    private static String optionalProfileExtra(Intent intent, String name, int maximumLength) {
+        if (!intent.hasExtra(name)) {
+            return null;
+        }
+        try {
+            return P2pVpnService.boundedOptionalDebugSetting(
+                    intent.getStringExtra(name), name, maximumLength);
+        } catch (P2pVpnException error) {
+            throw new IllegalArgumentException("invalid_" + name, error);
+        }
     }
 
     private static Object nullable(String value) {

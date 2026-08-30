@@ -19,7 +19,9 @@ public final class RuntimeSummaryTest {
                                 "path_healthy_direct_quic_stream_paths 2",
                                 "path_healthy_direct_tcp_stream_paths 1",
                                 "path_healthy_relay_paths 3",
-                                "public_routing_peers 4"));
+                                "public_routing_peers 4",
+                                "packet_plane_quic_sessions 5",
+                                "outbound_quic_datagram_packets 6"));
 
         assertEquals(2, summary.connectedPeers);
         assertEquals(7, summary.directPaths);
@@ -29,6 +31,8 @@ public final class RuntimeSummaryTest {
         assertEquals(1, summary.directTcpStreamPaths);
         assertEquals(3, summary.relayPaths);
         assertEquals(4, summary.publicRoutingPeers);
+        assertEquals(5, summary.packetPlaneQuicSessions);
+        assertEquals(6, summary.outboundQuicDatagramPackets);
     }
 
     @Test
@@ -38,10 +42,22 @@ public final class RuntimeSummaryTest {
                         Arrays.asList(
                                 "missing-value",
                                 "path_peers_with_supported_path nope",
-                                "path_healthy_relay_paths -1"));
+                                "path_healthy_relay_paths -1",
+                                "packet_plane_quic_sessions -1",
+                                "outbound_quic_datagram_packets nope"));
 
         assertEquals(0, summary.connectedPeers);
         assertEquals(0, summary.relayPaths);
+        assertEquals(0, summary.packetPlaneQuicSessions);
+        assertEquals(0, summary.outboundQuicDatagramPackets);
+    }
+
+    @Test
+    public void emptySummaryDefaultsOwnedQuicMetricsToZero() {
+        RuntimeSummary summary = RuntimeSummary.empty();
+
+        assertEquals(0, summary.packetPlaneQuicSessions);
+        assertEquals(0, summary.outboundQuicDatagramPackets);
     }
 
     @Test

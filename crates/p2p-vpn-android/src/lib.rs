@@ -19,6 +19,7 @@ const BUILTIN_IPV4_PREFIX: u8 = 16;
 const BUILTIN_IPV6_NETWORK: Ipv6Addr =
     Ipv6Addr::new(0xfd00, 0x6879, 0x7072, 0x7370, 0x6163, 0x6500, 0, 0);
 const BUILTIN_IPV6_PREFIX: u8 = 96;
+const E2E_PACKET_QUIC_ENDPOINT_MAX_LENGTH: usize = 512;
 #[cfg(any(target_os = "android", test))]
 const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -83,7 +84,7 @@ pub fn create_profile(network_name: &str) -> Result<AndroidProfile, String> {
     let network_name = validate_network_name(network_name)?;
     let identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate identity: {error:?}"))?;
-    create_profile_with_identity(network_name, identity, None)
+    create_profile_with_identity(network_name, identity, None, None)
 }
 
 pub fn create_profile_with_bootstrap(
@@ -92,11 +93,30 @@ pub fn create_profile_with_bootstrap(
     bootstrap_address: &str,
     kademlia_protocol: &str,
 ) -> Result<AndroidProfile, String> {
+    create_profile_with_bootstrap_and_packet_quic(
+        network_name,
+        bootstrap_peer_id,
+        bootstrap_address,
+        kademlia_protocol,
+        None,
+        None,
+    )
+}
+
+fn create_profile_with_bootstrap_and_packet_quic(
+    network_name: &str,
+    bootstrap_peer_id: &str,
+    bootstrap_address: &str,
+    kademlia_protocol: &str,
+    packet_quic_listen: Option<&str>,
+    packet_quic_external_endpoint: Option<&str>,
+) -> Result<AndroidProfile, String> {
     let network_name = validate_network_name(network_name)?;
     let bootstrap_peer_id = validate_bootstrap_value("bootstrap peer ID", bootstrap_peer_id, 256)?;
     let bootstrap_address =
         validate_bootstrap_value("bootstrap address", bootstrap_address, 1_024)?;
     let kademlia_protocol = validate_bootstrap_value("Kademlia protocol", kademlia_protocol, 128)?;
+    let packet_quic = validate_e2e_packet_quic(packet_quic_listen, packet_quic_external_endpoint)?;
     let identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate identity: {error:?}"))?;
     let discovery = DiscoveryConfig {
@@ -117,6 +137,7 @@ pub fn create_profile_with_bootstrap(
             },
             discovery,
         )),
+        packet_quic,
     )
 }
 
@@ -124,6 +145,7 @@ fn create_profile_with_identity(
     network_name: &str,
     identity: NodeIdentity,
     bootstrap: Option<(BootstrapPeerConfig, DiscoveryConfig)>,
+    packet_quic: Option<(String, String)>,
 ) -> Result<AndroidProfile, String> {
     let mut config: Config = serde_json::from_value(serde_json::json!({
         "network": {
@@ -139,6 +161,15 @@ fn create_profile_with_identity(
     if let Some((bootstrap_peer, discovery)) = bootstrap {
         config.network.bootstrap_peers = vec![bootstrap_peer];
         config.network.discovery = discovery;
+    }
+    if let Some((listen, external_endpoint)) = packet_quic {
+        config.network.packet_plane.listen.clear();
+        config.network.packet_plane.external_endpoints.clear();
+        config.network.packet_plane.quic_listen = vec![listen];
+        config.network.packet_plane.quic_external_endpoints = vec![external_endpoint];
+        config
+            .validate_runtime()
+            .map_err(|_| "invalid owned QUIC packet-plane configuration".to_owned())?;
     }
     let config_json = serde_json::to_string(&config)
         .map_err(|error| format!("failed to encode profile: {error}"))?;
@@ -357,6 +388,29 @@ fn validate_bootstrap_value<'a>(
     Ok(value)
 }
 
+fn validate_e2e_packet_quic(
+    listen: Option<&str>,
+    external_endpoint: Option<&str>,
+) -> Result<Option<(String, String)>, String> {
+    match (listen, external_endpoint) {
+        (None, None) => Ok(None),
+        (Some(listen), Some(external_endpoint)) => {
+            let listen = validate_bootstrap_value(
+                "owned QUIC listen endpoint",
+                listen,
+                E2E_PACKET_QUIC_ENDPOINT_MAX_LENGTH,
+            )?;
+            let external_endpoint = validate_bootstrap_value(
+                "owned QUIC external endpoint",
+                external_endpoint,
+                E2E_PACKET_QUIC_ENDPOINT_MAX_LENGTH,
+            )?;
+            Ok(Some((listen.to_owned(), external_endpoint.to_owned())))
+        }
+        _ => Err("owned QUIC profile requires both listen and external endpoints".to_owned()),
+    }
+}
+
 fn push_unique(prefixes: &mut Vec<AndroidCidr>, prefix: AndroidCidr) {
     if !prefixes.contains(&prefix) {
         prefixes.push(prefix);
@@ -503,17 +557,24 @@ mod android {
         bootstrap_peer_id: JString,
         bootstrap_address: JString,
         kademlia_protocol: JString,
+        packet_quic_listen: JString,
+        packet_quic_external_endpoint: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
             let network_name = read_string(env, &network_name)?;
             let bootstrap_peer_id = read_string(env, &bootstrap_peer_id)?;
             let bootstrap_address = read_string(env, &bootstrap_address)?;
             let kademlia_protocol = read_string(env, &kademlia_protocol)?;
-            create_profile_with_bootstrap(
+            let packet_quic_listen = read_optional_string(env, &packet_quic_listen)?;
+            let packet_quic_external_endpoint =
+                read_optional_string(env, &packet_quic_external_endpoint)?;
+            create_profile_with_bootstrap_and_packet_quic(
                 &network_name,
                 &bootstrap_peer_id,
                 &bootstrap_address,
                 &kademlia_protocol,
+                packet_quic_listen.as_deref(),
+                packet_quic_external_endpoint.as_deref(),
             )
         })
     }
@@ -807,6 +868,16 @@ mod android {
             .map_err(|error| format!("failed to read Java string: {error}"))
     }
 
+    fn read_optional_string(
+        env: &mut JNIEnv<'_>,
+        value: &JString<'_>,
+    ) -> Result<Option<String>, String> {
+        if value.as_raw().is_null() {
+            return Ok(None);
+        }
+        read_string(env, value).map(Some)
+    }
+
     fn jni_response<T: Serialize>(
         env: &mut JNIEnv<'_>,
         operation: impl FnOnce(&mut JNIEnv<'_>) -> Result<T, String>,
@@ -914,6 +985,93 @@ mod tests {
         assert!(!config.network.discovery.mdns);
         assert_eq!(config.network.discovery.kademlia_protocol, "/p2p-vpn/kad/1");
         assert!(!config.uses_public_ipfs_bootstrap_defaults());
+        let encoded: serde_json::Value =
+            serde_json::from_str(&profile.config_json).expect("profile JSON");
+        assert!(encoded["network"].get("packet_plane").is_none());
+    }
+
+    #[test]
+    fn fixture_profile_configures_only_owned_quic_packet_endpoints() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let address = format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id);
+        let profile = create_profile_with_bootstrap_and_packet_quic(
+            "android-e2e",
+            &bootstrap.peer_id,
+            &address,
+            "/p2p-vpn/kad/1",
+            Some("0.0.0.0:51821"),
+            Some("127.0.0.1:51821"),
+        )
+        .expect("owned QUIC fixture profile");
+        let config: Config = serde_json::from_str(&profile.config_json).expect("profile config");
+
+        assert!(config.network.packet_plane.listen.is_empty());
+        assert!(config.network.packet_plane.external_endpoints.is_empty());
+        assert_eq!(
+            config.network.packet_plane.quic_listen,
+            vec!["0.0.0.0:51821"]
+        );
+        assert_eq!(
+            config.network.packet_plane.quic_external_endpoints,
+            vec!["127.0.0.1:51821"]
+        );
+        config.validate_runtime().expect("valid owned QUIC profile");
+    }
+
+    #[test]
+    fn fixture_profile_rejects_incomplete_or_invalid_owned_quic_settings() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let address = format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id);
+
+        assert!(
+            create_profile_with_bootstrap_and_packet_quic(
+                "android-e2e",
+                &bootstrap.peer_id,
+                &address,
+                "/p2p-vpn/kad/1",
+                Some("0.0.0.0:51821"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            create_profile_with_bootstrap_and_packet_quic(
+                "android-e2e",
+                &bootstrap.peer_id,
+                &address,
+                "/p2p-vpn/kad/1",
+                None,
+                Some("127.0.0.1:51821"),
+            )
+            .is_err()
+        );
+
+        let invalid_endpoint = "sensitive invalid endpoint";
+        let error = match create_profile_with_bootstrap_and_packet_quic(
+            "android-e2e",
+            &bootstrap.peer_id,
+            &address,
+            "/p2p-vpn/kad/1",
+            Some("0.0.0.0:51821"),
+            Some(invalid_endpoint),
+        ) {
+            Ok(_) => panic!("invalid external endpoint was accepted"),
+            Err(error) => error,
+        };
+        assert!(!error.contains(invalid_endpoint));
+
+        let oversized_endpoint = "a".repeat(E2E_PACKET_QUIC_ENDPOINT_MAX_LENGTH + 1);
+        assert!(
+            create_profile_with_bootstrap_and_packet_quic(
+                "android-e2e",
+                &bootstrap.peer_id,
+                &address,
+                "/p2p-vpn/kad/1",
+                Some(&oversized_endpoint),
+                Some("127.0.0.1:51821"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
