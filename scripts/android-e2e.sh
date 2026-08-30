@@ -7,6 +7,8 @@ umask 077
 readonly evidence_schema_version=1
 readonly maximum_log_bytes=$((1024 * 1024))
 readonly default_minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
+readonly default_maximum_runtime_growth_bytes=$((8 * 1024 * 1024 * 1024))
+readonly hard_maximum_runtime_growth_bytes=$((32 * 1024 * 1024 * 1024))
 
 scenario=boot-smoke
 path_mode=automatic
@@ -14,17 +16,23 @@ preflight_only=0
 allow_skip=0
 output_dir="${P2P_VPN_ANDROID_E2E_DIR:-}"
 minimum_free_bytes="${P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES:-$default_minimum_free_bytes}"
+maximum_runtime_growth_bytes="${P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES:-$default_maximum_runtime_growth_bytes}"
 started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 outcome=running
 outcome_detail="E2E harness exited before recording a result"
 evidence_finalized=0
 emulator_pid=""
 fixture_pid=""
+runtime_storage_watchdog_pid=""
 emulator_serial=""
 state_dir=""
+runtime_storage_failure_file=""
+runtime_tmp_baseline_available_bytes=""
+runtime_output_baseline_available_bytes=""
 cleanup_emulator_stopped=false
 cleanup_fixture_stopped=false
 cleanup_private_state_removed=false
+readonly harness_pid="$BASHPID"
 
 usage() {
   cat <<'EOF'
@@ -32,7 +40,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, or pairing-traffic.
-  --path-mode MODE       Select automatic, quic-stream, or tcp-stream for pairing traffic.
+  --path-mode MODE       Select automatic, quic-stream, tcp-stream, or owned-quic.
   --preflight            Check requirements without starting an emulator.
   --allow-skip           Exit 77 instead of 2 when requirements are unavailable.
   --output DIRECTORY     Write bounded evidence to DIRECTORY.
@@ -41,10 +49,13 @@ Options:
 Environment:
   P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES
                          Required runtime free space; defaults to 16 GiB.
+  P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES
+                         Runtime growth limit; defaults to 8 GiB and cannot exceed 32 GiB.
 
 Exit codes:
   0   Scenario passed.
   2   Usage error or a required host capability is unavailable.
+  75  Storage budget exhausted.
   77  Scenario skipped after an explicit preflight or --allow-skip.
   1   Scenario ran and failed.
 EOF
@@ -105,7 +116,7 @@ case "$scenario" in
 esac
 
 case "$path_mode" in
-  automatic|quic-stream|tcp-stream) ;;
+  automatic|quic-stream|tcp-stream|owned-quic) ;;
   *)
     echo "unsupported Android E2E path mode: $path_mode" >&2
     exit 2
@@ -122,6 +133,19 @@ if [[ ! "$minimum_free_bytes" =~ ^[0-9]{1,18}$ ]]; then
 fi
 minimum_free_bytes=$((10#$minimum_free_bytes))
 readonly minimum_free_bytes
+
+if [[ ! "$maximum_runtime_growth_bytes" =~ ^[0-9]{1,18}$ ]]; then
+  echo "P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES must be an unsigned integer" >&2
+  exit 2
+fi
+maximum_runtime_growth_bytes=$((10#$maximum_runtime_growth_bytes))
+if ((maximum_runtime_growth_bytes < 1 \
+  || maximum_runtime_growth_bytes > hard_maximum_runtime_growth_bytes)); then
+  printf 'P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES must be between 1 and %s\n' \
+    "$hard_maximum_runtime_growth_bytes" >&2
+  exit 2
+fi
+readonly maximum_runtime_growth_bytes
 
 if [[ -z "$output_dir" ]]; then
   output_dir="$(mktemp -d -t p2p-vpn-android-e2e-evidence.XXXXXXXX)"
@@ -168,6 +192,71 @@ record_step() {
     --arg detail "$detail" \
     '{name: $name, status: $status, detail: $detail}' \
     >> "$steps_file"
+}
+
+available_bytes_for_path() {
+  local path="$1"
+  "$df_command" --output=avail -B1 "$path" 2>/dev/null \
+    | tail -n 1 \
+    | tr -d '[:space:]'
+}
+
+check_runtime_storage_budget() {
+  local current_tmp_available_bytes
+  local current_output_available_bytes
+  local tmp_growth_bytes=0
+  local output_growth_bytes=0
+
+  current_tmp_available_bytes="$({ available_bytes_for_path "${TMPDIR:-/tmp}"; } || true)"
+  current_output_available_bytes="$({ available_bytes_for_path "$output_dir"; } || true)"
+  if [[ ! "$current_tmp_available_bytes" =~ ^[0-9]+$ \
+    || ! "$current_output_available_bytes" =~ ^[0-9]+$ ]]; then
+    echo "Android E2E stopped because runtime free space could not be monitored"
+    return 1
+  fi
+
+  if ((current_tmp_available_bytes < runtime_tmp_baseline_available_bytes)); then
+    tmp_growth_bytes=$((runtime_tmp_baseline_available_bytes - current_tmp_available_bytes))
+  fi
+  if ((current_output_available_bytes < runtime_output_baseline_available_bytes)); then
+    output_growth_bytes=$((runtime_output_baseline_available_bytes - current_output_available_bytes))
+  fi
+
+  if ((current_tmp_available_bytes < minimum_free_bytes \
+    || current_output_available_bytes < minimum_free_bytes)); then
+    echo "Android E2E stopped because runtime free space fell below the required reserve"
+    return 1
+  fi
+  if ((tmp_growth_bytes > maximum_runtime_growth_bytes \
+    || output_growth_bytes > maximum_runtime_growth_bytes)); then
+    echo "Android E2E stopped because runtime storage growth exceeded the per-run limit"
+    return 1
+  fi
+  return 0
+}
+
+start_runtime_storage_watchdog() {
+  (
+    trap 'exit 0' INT TERM
+    local failure
+    while sleep 1; do
+      if ! failure="$(check_runtime_storage_budget)"; then
+        printf '%s\n' "$failure" > "$runtime_storage_failure_file"
+        kill -TERM "$harness_pid" 2>/dev/null || true
+        exit 0
+      fi
+    done
+  ) &
+  runtime_storage_watchdog_pid=$!
+}
+
+stop_runtime_storage_watchdog() {
+  [[ -n "$runtime_storage_watchdog_pid" ]] || return 0
+  if kill -0 "$runtime_storage_watchdog_pid" 2>/dev/null; then
+    kill -TERM "$runtime_storage_watchdog_pid" 2>/dev/null || true
+  fi
+  wait "$runtime_storage_watchdog_pid" 2>/dev/null || true
+  runtime_storage_watchdog_pid=""
 }
 
 android_automation() {
@@ -312,6 +401,11 @@ sanitize_fixture_log() {
     -e 's#/home/[^/[:space:]]+#/home/REDACTED#g' \
     -e 's#/tmp/p2p-vpn-android-e2e-state\.[^/[:space:]]+#/tmp/p2p-vpn-android-e2e-state.REDACTED#g' \
     -e 's/[A-Z2-9]{4}(-[A-Z2-9]{4}){3}/PAIRING-CODE-REDACTED/g' \
+    -e '/(membership_key|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:)/d' \
+    -e 's#/dns(4|6)?/[^/[:space:]"}]+#/dns/UNDERLAY-REDACTED#g' \
+    -e 's#/ip6/[^/[:space:]"}]+#/ip6/IPV6-REDACTED#g' \
+    -e 's/\[?[[:xdigit:]]{1,4}(:[[:xdigit:]]{0,4}){2,7}\]?(:[0-9]+)?/IPV6-REDACTED/g' \
+    -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/IPV4-REDACTED/g' \
     "$fixture_log" > "$fixture_log.sanitized"
   mv -f "$fixture_log.sanitized" "$fixture_log"
 }
@@ -437,8 +531,16 @@ finalize_evidence() {
 
 exit_handler() {
   local status="$1"
+  local storage_failure=""
   trap - EXIT INT TERM
   set +e
+  if [[ "$status" -eq 0 && -n "$runtime_storage_watchdog_pid" ]] \
+    && ! storage_failure="$(check_runtime_storage_budget)"; then
+    status=75
+    outcome=failed
+    outcome_detail="$storage_failure"
+  fi
+  stop_runtime_storage_watchdog
   if [[ "$outcome" == running ]]; then
     outcome=failed
     outcome_detail="E2E harness terminated unexpectedly"
@@ -451,14 +553,26 @@ exit_handler() {
   exit "$status"
 }
 
+termination_handler() {
+  if [[ -n "$runtime_storage_failure_file" && -s "$runtime_storage_failure_file" ]]; then
+    outcome=failed
+    IFS= read -r outcome_detail < "$runtime_storage_failure_file"
+    exit 75
+  fi
+  outcome=failed
+  outcome_detail="E2E harness terminated"
+  exit 143
+}
+
 trap 'exit_handler $?' EXIT
 trap 'outcome=failed; outcome_detail="E2E harness interrupted"; exit 130' INT
-trap 'outcome=failed; outcome_detail="E2E harness terminated"; exit 143' TERM
+trap termination_handler TERM
 
 missing_requirements=()
 test_mode="${P2P_VPN_ANDROID_E2E_TEST_MODE:-0}"
 emulator_command="${P2P_VPN_ANDROID_EMULATOR:-}"
 adb_command="${P2P_VPN_ADB:-adb}"
+df_command="${P2P_VPN_ANDROID_E2E_DF:-df}"
 android_apk="${P2P_VPN_ANDROID_APK:-}"
 fixture_command="${P2P_VPN_ANDROID_E2E_FIXTURE:-}"
 p2p_vpn_command="${P2P_VPN_BIN:-}"
@@ -477,17 +591,19 @@ else
   missing_requirements+=(host_architecture)
 fi
 
-available_bytes="$({
-  df --output=avail -B1 "${TMPDIR:-/tmp}" 2>/dev/null | tail -n 1 | tr -d '[:space:]'
-} || true)"
-if [[ "$available_bytes" =~ ^[0-9]{1,18}$ ]]; then
-  available_bytes=$((10#$available_bytes))
-  if (( available_bytes >= minimum_free_bytes )); then
+tmp_available_bytes="$({ available_bytes_for_path "${TMPDIR:-/tmp}"; } || true)"
+output_available_bytes="$({ available_bytes_for_path "$output_dir"; } || true)"
+if [[ "$tmp_available_bytes" =~ ^[0-9]{1,18}$ \
+  && "$output_available_bytes" =~ ^[0-9]{1,18}$ ]]; then
+  tmp_available_bytes=$((10#$tmp_available_bytes))
+  output_available_bytes=$((10#$output_available_bytes))
+  if ((tmp_available_bytes >= minimum_free_bytes \
+    && output_available_bytes >= minimum_free_bytes)); then
     record_check disk_space true true \
-      "$available_bytes bytes available; $minimum_free_bytes required"
+      "tmp has $tmp_available_bytes bytes; evidence has $output_available_bytes; $minimum_free_bytes required"
   else
     record_check disk_space true false \
-      "$available_bytes bytes available; $minimum_free_bytes required"
+      "tmp has $tmp_available_bytes bytes; evidence has $output_available_bytes; $minimum_free_bytes required"
     missing_requirements+=(disk_space)
   fi
 else
@@ -576,6 +692,10 @@ fi
 
 state_dir="$(mktemp -d -t p2p-vpn-android-e2e-state.XXXXXXXX)"
 ready_file="$state_dir/emulator.ready"
+runtime_storage_failure_file="$state_dir/runtime-storage-failure"
+runtime_tmp_baseline_available_bytes="$tmp_available_bytes"
+runtime_output_baseline_available_bytes="$output_available_bytes"
+start_runtime_storage_watchdog
 
 fixture_metadata=""
 fixture_bootstrap_peer=""
@@ -585,6 +705,10 @@ fixture_ipv4=""
 fixture_ipv6=""
 fixture_control_socket=""
 fixture_packet_socket=""
+fixture_owned_quic_listen=""
+fixture_owned_quic_external_endpoint=""
+fixture_owned_quic_host_port=""
+fixture_owned_quic_guest_port=""
 
 if [[ "$scenario" == pairing-traffic ]]; then
   fixture_state_dir="$state_dir/fixture"
@@ -618,7 +742,19 @@ if [[ "$scenario" == pairing-traffic ]]; then
     (.peer.ipv4 | type == "string" and test("^[0-9.]+$") and length <= 15) and
     (.peer.ipv6 | type == "string" and test("^[0-9a-fA-F:]+$") and length <= 45) and
     (.peer.control_socket | type == "string" and length > 0 and length <= 4096) and
-    (.packet_control_socket | type == "string" and length > 0 and length <= 4096)
+    (.packet_control_socket | type == "string" and length > 0 and length <= 4096) and
+    (if $path_mode == "owned-quic" then
+      (.owned_quic.android_listen | type == "string") and
+      (.owned_quic.android_external_endpoint | type == "string") and
+      (.owned_quic.host_forward_port | type == "number" and . >= 1 and . <= 65535) and
+      (.owned_quic.guest_listen_port | type == "number" and . >= 1 and . <= 65535) and
+      .owned_quic.android_listen ==
+        ("0.0.0.0:" + (.owned_quic.guest_listen_port | tostring)) and
+      .owned_quic.android_external_endpoint ==
+        ("127.0.0.1:" + (.owned_quic.host_forward_port | tostring))
+    else
+      (.owned_quic // null) == null
+    end)
   ' "$fixture_metadata" >/dev/null 2>&1; then
     outcome=failed
     outcome_detail="Linux E2E fixture metadata is unavailable or invalid"
@@ -632,6 +768,12 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fixture_ipv6="$(jq -r '.peer.ipv6' "$fixture_metadata")"
   fixture_control_socket="$(jq -r '.peer.control_socket' "$fixture_metadata")"
   fixture_packet_socket="$(jq -r '.packet_control_socket' "$fixture_metadata")"
+  if [[ "$path_mode" == owned-quic ]]; then
+    fixture_owned_quic_listen="$(jq -r '.owned_quic.android_listen' "$fixture_metadata")"
+    fixture_owned_quic_external_endpoint="$(jq -r '.owned_quic.android_external_endpoint' "$fixture_metadata")"
+    fixture_owned_quic_host_port="$(jq -r '.owned_quic.host_forward_port' "$fixture_metadata")"
+    fixture_owned_quic_guest_port="$(jq -r '.owned_quic.guest_listen_port' "$fixture_metadata")"
+  fi
   case "$fixture_control_socket:$fixture_packet_socket" in
     "$fixture_state_dir"/*:"$fixture_state_dir"/*) ;;
     *)
@@ -684,6 +826,18 @@ if [[ "$("${adb[@]}" get-state)" != device ]]; then
   outcome_detail="ADB did not report the emulator as a device"
   record_step adb failed "$outcome_detail"
   exit 1
+fi
+
+if [[ "$path_mode" == owned-quic ]]; then
+  if ! "${adb[@]}" emu redir add \
+    "udp:$fixture_owned_quic_host_port:$fixture_owned_quic_guest_port" >/dev/null; then
+    outcome=failed
+    outcome_detail="Emulator could not install the owned-QUIC UDP redirection"
+    record_step owned_quic_redirection failed "$outcome_detail"
+    exit 1
+  fi
+  record_step owned_quic_redirection passed \
+    "Linux and Android owned-QUIC listeners are mutually reachable"
 fi
 
 api_level="$("${adb[@]}" shell getprop ro.build.version.sdk | tr -d '\r')"
@@ -758,11 +912,19 @@ fi
 if [[ "$scenario" == pairing-traffic ]]; then
   pairing_profile="$state_dir/pairing-profile.json"
   command_response="$state_dir/automation-command.json"
-  if ! android_automation create-profile \
-    --es network android-e2e \
-    --es bootstrap_peer_id "$fixture_bootstrap_peer" \
-    --es bootstrap_address "$fixture_bootstrap_address" \
-    --es kademlia_protocol "$fixture_kademlia_protocol" \
+  profile_arguments=(
+    --es network android-e2e
+    --es bootstrap_peer_id "$fixture_bootstrap_peer"
+    --es bootstrap_address "$fixture_bootstrap_address"
+    --es kademlia_protocol "$fixture_kademlia_protocol"
+  )
+  if [[ "$path_mode" == owned-quic ]]; then
+    profile_arguments+=(
+      --es packet_quic_listen "$fixture_owned_quic_listen"
+      --es packet_quic_external_endpoint "$fixture_owned_quic_external_endpoint"
+    )
+  fi
+  if ! android_automation create-profile "${profile_arguments[@]}" \
     > "$command_response" \
     || ! jq -e \
       '.schema_version == 1 and .ok and .value.accepted and .value.command == "create-profile"' \
@@ -911,6 +1073,31 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
   record_step overlay_addresses passed "Paired profile exposes IPv4 and IPv6 overlay addresses"
 
+  owned_quic_packets_before=0
+  if [[ "$path_mode" == owned-quic ]]; then
+    owned_quic_ready="$state_dir/status-owned-quic-ready.json"
+    if ! wait_for_automation_status \
+      "$owned_quic_ready" \
+      '(.value.snapshot.paths.direct_quic_datagram >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.relay == 0) and (.value.snapshot.paths.packet_plane_quic_sessions >= 1)' \
+      90; then
+      outcome=failed
+      outcome_detail="Android owned-QUIC packet plane did not become ready"
+      record_step owned_quic_ready failed "$outcome_detail"
+      exit 1
+    fi
+    owned_quic_packets_before="$(
+      jq -r '.value.snapshot.paths.outbound_quic_datagram_packets' "$owned_quic_ready"
+    )"
+    if [[ ! "$owned_quic_packets_before" =~ ^[0-9]{1,12}$ ]]; then
+      outcome=failed
+      outcome_detail="Android owned-QUIC packet counter is invalid"
+      record_step owned_quic_ready failed "$outcome_detail"
+      exit 1
+    fi
+    record_step owned_quic_ready passed \
+      "Android established the owned-QUIC packet session before measurement"
+  fi
+
   fixture_ipv4_ready_attempts=0
   fixture_ipv6_ready_attempts=0
   android_ipv4_ready_attempts=0
@@ -1009,6 +1196,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
   record_step android_to_linux_ipv6 passed "Android received 5 of 5 IPv6 replies"
 
+  minimum_owned_quic_packets=0
   case "$path_mode" in
     automatic)
       path_predicate='.value.snapshot.paths.connected_peers >= 1'
@@ -1019,9 +1207,34 @@ if [[ "$scenario" == pairing-traffic ]]; then
     tcp-stream)
       path_predicate='(.value.snapshot.paths.direct_tcp_stream >= 1) and (.value.snapshot.paths.direct_quic_stream == 0) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.direct_quic_datagram == 0) and (.value.snapshot.paths.relay == 0)'
       ;;
+    owned-quic)
+      minimum_owned_quic_packets=$((owned_quic_packets_before + 20))
+      path_predicate="(.value.snapshot.paths.direct_quic_datagram >= 1) and (.value.snapshot.paths.direct_udp_datagram == 0) and (.value.snapshot.paths.relay == 0) and (.value.snapshot.paths.packet_plane_quic_sessions >= 1) and (.value.snapshot.paths.outbound_quic_datagram_packets >= $minimum_owned_quic_packets)"
+      ;;
   esac
   final_status="$state_dir/status-final.json"
   if ! wait_for_automation_status "$final_status" "$path_predicate" 60; then
+    if jq -e \
+      '.schema_version == 1 and .ok and (.value.snapshot.paths | type == "object")' \
+      "$final_status" >/dev/null 2>&1; then
+      jq \
+        --arg path_mode "$path_mode" \
+        --argjson paths "$(jq '.value.snapshot.paths' "$final_status")" \
+        --argjson owned_quic_packets_before "$owned_quic_packets_before" \
+        --argjson minimum_owned_quic_packets "$minimum_owned_quic_packets" '
+        . + {
+          pairing_traffic: {
+            path_mode: $path_mode,
+            path_observation: $paths,
+            owned_quic: {
+              outbound_packets_before: $owned_quic_packets_before,
+              minimum_outbound_packets: $minimum_owned_quic_packets
+            }
+          }
+        }
+      ' "$device_file" > "$device_file.updated"
+      mv -f "$device_file.updated" "$device_file"
+    fi
     outcome=failed
     outcome_detail="Android did not retain the required $path_mode path isolation"
     record_step path_isolation failed "$outcome_detail"
@@ -1029,15 +1242,27 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
   record_step path_isolation passed "Final runtime status matched $path_mode requirements"
 
+  owned_quic_packets_after=0
+  owned_quic_packet_delta=0
+  if [[ "$path_mode" == owned-quic ]]; then
+    owned_quic_packets_after="$(
+      jq -r '.value.snapshot.paths.outbound_quic_datagram_packets' "$final_status"
+    )"
+    owned_quic_packet_delta=$((owned_quic_packets_after - owned_quic_packets_before))
+  fi
+
   jq \
     --arg path_mode "$path_mode" \
     --argjson paths "$(jq '.value.snapshot.paths' "$final_status")" \
     --argjson fixture_ipv4_ready_attempts "$fixture_ipv4_ready_attempts" \
     --argjson fixture_ipv6_ready_attempts "$fixture_ipv6_ready_attempts" \
     --argjson android_ipv4_ready_attempts "$android_ipv4_ready_attempts" \
-    --argjson android_ipv6_ready_attempts "$android_ipv6_ready_attempts" '
+    --argjson android_ipv6_ready_attempts "$android_ipv6_ready_attempts" \
+    --argjson owned_quic_packets_before "$owned_quic_packets_before" \
+    --argjson owned_quic_packets_after "$owned_quic_packets_after" \
+    --argjson owned_quic_packet_delta "$owned_quic_packet_delta" '
     . + {
-      pairing_traffic: {
+      pairing_traffic: ({
         code_only_enrollment: true,
         configured_overlay_peer_addresses: 0,
         path_mode: $path_mode,
@@ -1050,7 +1275,13 @@ if [[ "$scenario" == pairing-traffic ]]; then
         linux_to_android: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}},
         android_to_linux: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}},
         paths: $paths
-      }
+      } + (if $path_mode == "owned-quic" then {
+        owned_quic: {
+          outbound_packets_before: $owned_quic_packets_before,
+          outbound_packets_after: $owned_quic_packets_after,
+          measured_packet_delta: $owned_quic_packet_delta
+        }
+      } else {} end))
     }
   ' "$device_file" > "$device_file.updated"
   mv -f "$device_file.updated" "$device_file"

@@ -335,7 +335,7 @@
             exec bash ${./scripts/debug-bundle.sh} "$@"
           '';
         };
-        androidE2e =
+        androidE2eRuntime =
           if androidSupported then
             pkgs.writeShellApplication {
               name = "p2p-vpn-android-e2e";
@@ -362,6 +362,23 @@
             }
           else
             null;
+        androidE2eLauncher =
+          if androidSupported then
+            pkgs.writeShellApplication {
+              name = "p2p-vpn-android-e2e";
+              runtimeInputs = [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.gnugrep
+                pkgs.gnused
+              ];
+              text = ''
+                export P2P_VPN_ANDROID_E2E_FLAKE=${lib.escapeShellArg "path:${./.}"}
+                exec bash ${./scripts/android-e2e-nix.sh} "$@"
+              '';
+            }
+          else
+            null;
         androidE2eStructure =
           if androidSupported then
             pkgs.runCommand "p2p-vpn-android-e2e-structure"
@@ -377,33 +394,252 @@
               }
               ''
                 shellcheck ${./scripts/android-e2e.sh}
+                shellcheck ${./scripts/android-e2e-nix.sh}
 
                 test_root="$TMPDIR/android-e2e-test"
                 mkdir -p \
                   "$test_root/bin" \
+                  "$test_root/launcher-runtime/bin" \
+                  "$test_root/launcher-tmp" \
                   "$test_root/tmp" \
                   "$test_root/evidence" \
                   "$test_root/persistence-evidence" \
                   "$test_root/pairing-evidence" \
+                  "$test_root/runtime-budget-evidence" \
                   "$test_root/skip-evidence"
                 touch "$test_root/fake.apk"
+
+                cat > "$test_root/bin/fake-nix" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                mode="''${P2P_VPN_ANDROID_E2E_FAKE_NIX_MODE:-allowed}"
+                log="''${P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG:?}"
+                runtime="''${P2P_VPN_ANDROID_E2E_FAKE_RUNTIME:?}"
+                printf '%q ' "$@" >> "$log"
+                printf '\n' >> "$log"
+
+                if [[ "''${1:-}" == store && "''${2:-}" == info ]]; then
+                  [[ "$mode" != cache-fail ]]
+                  exit
+                fi
+
+                if [[ "''${1:-}" == config && "''${2:-}" == show \
+                  && "''${3:-}" == trusted-public-keys ]]; then
+                  printf '%s\n' \
+                    'cache.nixos.org-1:test nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs='
+                  exit 0
+                fi
+
+                if [[ "''${1:-}" == derivation && "''${2:-}" == show ]]; then
+                  case "''${3:-}" in
+                    *.zip.drv)
+                      printf '%s\n' '{"derivations":{"source":{"outputs":{"out":{"hash":"sha256-test"}}}}}'
+                      ;;
+                    *yasna-0.5.2.drv)
+                      printf '%s\n' '{"derivations":{"crate":{"env":{"buildCommand":"extract .cargo-checksum.json"},"outputs":{"out":{"path":"test"}}}}}'
+                      ;;
+                    *)
+                      printf '%s\n' '{"derivations":{"package":{"outputs":{"out":{"path":"test"}}}}}'
+                      ;;
+                  esac
+                  exit 0
+                fi
+
+                if [[ "''${1:-}" == build && " $* " == *' --dry-run '* ]]; then
+                  printf 'these 3 derivations will be built:\n' >&2
+                  printf '  /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p2p-vpn-android-e2e.drv\n' >&2
+                  printf '  /nix/store/cccccccccccccccccccccccccccccccc-yasna-0.5.2.drv\n' >&2
+                  if [[ "$mode" == dangerous ]]; then
+                    printf '  /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-gcc-15.3.0.drv\n' >&2
+                  else
+                    printf '  /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-emulator.zip.drv\n' >&2
+                  fi
+                  exit 0
+                fi
+
+                if [[ "''${1:-}" == build ]]; then
+                  if [[ "$mode" == fast-budget ]]; then
+                    : "''${P2P_VPN_ANDROID_E2E_FAKE_DF_TRIGGER:?}"
+                    touch "$P2P_VPN_ANDROID_E2E_FAKE_DF_TRIGGER"
+                    printf '%s\n' "$runtime"
+                    exit 0
+                  fi
+                  if [[ "$mode" == budget && " $* " == *' --print-out-paths '* ]]; then
+                    trap 'exit 143' TERM
+                    sleep 30
+                    exit 1
+                  fi
+                  printf '%s\n' "$runtime"
+                  exit 0
+                fi
+
+                exit 2
+                EOF
+                chmod +x "$test_root/bin/fake-nix"
+
+                cat > "$test_root/launcher-runtime/bin/p2p-vpn-android-e2e" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                printf '%s\n' "$*" > "''${P2P_VPN_ANDROID_E2E_FAKE_RUNTIME_LOG:?}"
+                EOF
+                chmod +x "$test_root/launcher-runtime/bin/p2p-vpn-android-e2e"
+
+                launcher_log="$test_root/launcher-nix.log"
+                launcher_runtime_log="$test_root/launcher-runtime.log"
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME_LOG="$launcher_runtime_log" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --scenario boot-smoke
+                grep -Fx -- '--scenario boot-smoke' "$launcher_runtime_log"
+                grep -F -- '--dry-run' "$launcher_log"
+                grep -F -- 'emulator.zip.drv\^\*' "$launcher_log"
+                grep -F -- '--print-out-paths' "$launcher_log"
+                grep -F -- '--option max-jobs 2' "$launcher_log"
+                grep -F -- '--option substituters https://cache.nixos.org\ https://nix-community.cachix.org' \
+                  "$launcher_log"
+                ! grep -F -- 'niri.cachix.org' "$launcher_log"
+                test -z "$(find "$test_root/launcher-tmp" -maxdepth 1 \
+                  -name 'p2p-vpn-android-e2e-plan.*' -print -quit)"
+
+                : > "$launcher_log"
+                set +e
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_MODE=dangerous \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --scenario boot-smoke
+                launcher_status=$?
+                set -e
+                test "$launcher_status" -eq 75
+                grep -F -- '--dry-run' "$launcher_log"
+                ! grep -F -- '--print-out-paths' "$launcher_log"
+
+                cat > "$test_root/bin/fake-df" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                state="''${P2P_VPN_ANDROID_E2E_FAKE_DF_STATE:?}"
+                trigger="''${P2P_VPN_ANDROID_E2E_FAKE_DF_TRIGGER:-}"
+                count=0
+                if [[ -f "$state" ]]; then
+                  read -r count < "$state"
+                fi
+                count=$((count + 1))
+                printf '%s\n' "$count" > "$state"
+                available=100000000000
+                if [[ -n "$trigger" && -f "$trigger" ]]; then
+                  available=$((available - 2097152))
+                elif ((count > 2)); then
+                  available=$((available - 2097152))
+                fi
+                printf 'Avail\n%s\n' "$available"
+                EOF
+                chmod +x "$test_root/bin/fake-df"
+
+                : > "$launcher_log"
+                set +e
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_DF="$test_root/bin/fake-df" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_MAX_STORE_GROWTH_BYTES=1048576 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_MODE=budget \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  P2P_VPN_ANDROID_E2E_FAKE_DF_STATE="$test_root/fake-df-state" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --scenario boot-smoke
+                launcher_status=$?
+                set -e
+                test "$launcher_status" -eq 75
+                grep -F -- 'emulator.zip.drv\^\*' "$launcher_log"
+                ! grep -F -- '--print-out-paths' "$launcher_log"
+                test -z "$(find "$test_root/launcher-tmp" -maxdepth 1 \
+                  -name 'p2p-vpn-android-e2e-plan.*' -print -quit)"
+
+                : > "$launcher_log"
+                rm -f "$test_root/fast-budget-trigger" "$test_root/fast-df-state"
+                set +e
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_DF="$test_root/bin/fake-df" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_MAX_STORE_GROWTH_BYTES=1048576 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_MODE=fast-budget \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  P2P_VPN_ANDROID_E2E_FAKE_DF_STATE="$test_root/fast-df-state" \
+                  P2P_VPN_ANDROID_E2E_FAKE_DF_TRIGGER="$test_root/fast-budget-trigger" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --scenario boot-smoke
+                launcher_status=$?
+                set -e
+                test "$launcher_status" -eq 75
+                grep -F -- 'emulator.zip.drv\^\*' "$launcher_log"
+                ! grep -F -- '--print-out-paths' "$launcher_log"
+                test -z "$(find "$test_root/launcher-tmp" -maxdepth 1 \
+                  -name 'p2p-vpn-android-e2e-plan.*' -print -quit)"
+
+                : > "$launcher_log"
+                set +e
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_MODE=cache-fail \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --scenario boot-smoke
+                launcher_status=$?
+                set -e
+                test "$launcher_status" -eq 69
+                ! grep -F -- 'build ' "$launcher_log"
 
                 cat > "$test_root/bin/fake-emulator" <<'EOF'
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 ready_file="''${P2P_VPN_ANDROID_EMULATOR_READY_FILE:?}"
+                trap 'exit 0' INT TERM
                 printf 'Sending adb public key test-user@test-host\n'
                 printf 'Crash data: /tmp/android-test-user/crash.db\n'
+                if [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_STORAGE_TRIGGER:-}" ]]; then
+                  touch "$P2P_VPN_ANDROID_E2E_FAKE_STORAGE_TRIGGER"
+                  while :; do sleep 1; done
+                fi
                 printf 'emulator-test\n' > "$ready_file.tmp"
                 mv "$ready_file.tmp" "$ready_file"
-                trap 'exit 0' INT TERM
                 while :; do sleep 1; done
                 EOF
                 chmod +x "$test_root/bin/fake-emulator"
 
+                cat > "$test_root/bin/fake-runtime-df" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                trigger="''${P2P_VPN_ANDROID_E2E_FAKE_STORAGE_TRIGGER:?}"
+                available=100000000000
+                if [[ -f "$trigger" ]]; then
+                  available=$((available - 2097152))
+                fi
+                printf 'Avail\n%s\n' "$available"
+                EOF
+                chmod +x "$test_root/bin/fake-runtime-df"
+
                 cat > "$test_root/bin/fake-fixture" <<'EOF'
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
+                traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
+                record_fake_traffic() {
+                  [[ -n "$traffic_state" ]] || return 0
+                  current=0
+                  if [[ -s "$traffic_state" ]]; then current="$(< "$traffic_state")"; fi
+                  printf '%d\n' "$((current + $1))" > "$traffic_state"
+                }
                 case "''${1:-}" in
                   run)
                     shift
@@ -439,8 +675,17 @@
                           control_socket: $control
                         },
                         packet_control_socket: $packet
-                      }' > "$state_dir/fixture.json"
+                    } + (if $path_mode == "owned-quic" then {
+                        owned_quic: {
+                          android_listen: "0.0.0.0:42304",
+                          android_external_endpoint: "127.0.0.1:42304",
+                          host_forward_port: 42304,
+                          guest_listen_port: 42304
+                        }
+                      } else {} end)' > "$state_dir/fixture.json"
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
+                    printf 'ControlCapabilities { membership_tag: Some("secret-tag"), owned_quic_packet_plane_certificate_der: Some([1, 2]), member_public_key: "secret-key", signature: "secret-signature" }\n'
+                    printf 'underlay 192.0.2.44 [fd00::44]:42300 /dns4/private.example/udp/42300\n'
                     trap 'exit 0' INT TERM
                     while :; do sleep 1; done
                     ;;
@@ -452,6 +697,7 @@
                       if [[ "$1" == --count ]]; then count="$2"; fi
                       shift
                     done
+                    record_fake_traffic "$count"
                     jq -cn --arg family "$family" --argjson count "$count" \
                       '{schema_version: 1, ok: true, family: $family, sent: $count, received: $count}'
                     ;;
@@ -491,8 +737,16 @@
                 if [[ "''${1:-}" == -s ]]; then shift 2; fi
                 pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
                 path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
+                traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
+                record_fake_traffic() {
+                  [[ -n "$traffic_state" ]] || return 0
+                  current=0
+                  if [[ -s "$traffic_state" ]]; then current="$(< "$traffic_state")"; fi
+                  printf '%d\n' "$((current + $1))" > "$traffic_state"
+                }
                 case "$*" in
                   get-state) printf 'device\n' ;;
+                  emu\ redir\ add\ udp:*) ;;
                   'shell getprop ro.build.version.sdk') printf '35\n' ;;
                   'shell getprop ro.product.cpu.abi') printf 'x86_64\n' ;;
                   'shell pm path org.hermeticfoundation.p2pvpn.debug')
@@ -507,8 +761,11 @@
                       connected=false
                       pairing_detail='No pairing operation'
                       connected_peers=0
+                      direct_quic_datagram=0
                       direct_quic_stream=0
                       direct_tcp_stream=0
+                      packet_plane_quic_sessions=0
+                      outbound_quic_datagram_packets=0
                       if [[ "$state" == connected || "$state" == paired ]]; then
                         connected=true
                       fi
@@ -517,6 +774,15 @@
                         connected_peers=1
                         case "$path_mode" in
                           quic-stream) direct_quic_stream=1 ;;
+                          owned-quic)
+                            direct_quic_datagram=1
+                            direct_quic_stream=1
+                            direct_tcp_stream=1
+                            packet_plane_quic_sessions=1
+                            if [[ -s "$traffic_state" ]]; then
+                              outbound_quic_datagram_packets="$(< "$traffic_state")"
+                            fi
+                            ;;
                           *) direct_tcp_stream=1 ;;
                         esac
                       fi
@@ -524,8 +790,11 @@
                         --argjson connected "$connected" \
                         --arg pairing_detail "$pairing_detail" \
                         --argjson connected_peers "$connected_peers" \
+                        --argjson direct_quic_datagram "$direct_quic_datagram" \
                         --argjson direct_quic_stream "$direct_quic_stream" \
                         --argjson direct_tcp_stream "$direct_tcp_stream" \
+                        --argjson packet_plane_quic_sessions "$packet_plane_quic_sessions" \
+                        --argjson outbound_quic_datagram_packets "$outbound_quic_datagram_packets" \
                         '{
                           schema_version: 1,
                           ok: true,
@@ -543,11 +812,13 @@
                               paths: {
                                 connected_peers: $connected_peers,
                                 direct_udp_datagram: 0,
-                                direct_quic_datagram: 0,
+                                direct_quic_datagram: $direct_quic_datagram,
                                 direct_quic_stream: $direct_quic_stream,
                                 direct_tcp_stream: $direct_tcp_stream,
                                 relay: 0,
-                                public_routing_peers: 0
+                                public_routing_peers: 0,
+                                packet_plane_quic_sessions: $packet_plane_quic_sessions,
+                                outbound_quic_datagram_packets: $outbound_quic_datagram_packets
                               }
                             }
                           }
@@ -586,15 +857,19 @@
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
                     ;;
                   shell\ ping\ -c\ 5\ -W\ 5\ *)
+                    record_fake_traffic 5
                     printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
                     ;;
                   shell\ ping6\ -c\ 5\ -W\ 5\ *)
+                    record_fake_traffic 5
                     printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
                     ;;
                   shell\ ping\ -c\ 1\ -W\ 2\ *)
+                    record_fake_traffic 1
                     printf '1 packet transmitted, 1 packet received, 0%% packet loss\n'
                     ;;
                   shell\ ping6\ -c\ 1\ -W\ 2\ *)
+                    record_fake_traffic 1
                     printf '1 packet transmitted, 1 packet received, 0%% packet loss\n'
                     ;;
                   'shell am force-stop org.hermeticfoundation.p2pvpn.debug') ;;
@@ -639,6 +914,31 @@
                 ! grep -Fq 'Sending adb public key' "$test_root/evidence/emulator.log"
                 ! grep -Fq 'test-user' "$test_root/evidence/emulator.log"
                 grep -Fq '/tmp/android-REDACTED/crash.db' "$test_root/evidence/emulator.log"
+
+                rm -f "$test_root/runtime-storage-trigger"
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES=1048576 \
+                  P2P_VPN_ANDROID_E2E_DF="$test_root/bin/fake-runtime-df" \
+                  P2P_VPN_ANDROID_E2E_FAKE_STORAGE_TRIGGER="$test_root/runtime-storage-trigger" \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario boot-smoke \
+                    --output "$test_root/runtime-budget-evidence"
+                runtime_budget_status=$?
+                set -e
+
+                test "$runtime_budget_status" -eq 75
+                jq -e '
+                  .status == "failed" and
+                  .detail == "Android E2E stopped because runtime storage growth exceeded the per-run limit" and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed
+                ' "$test_root/runtime-budget-evidence/evidence.json" >/dev/null
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 set +e
                 TMPDIR="$test_root/tmp" \
@@ -714,15 +1014,22 @@
                 ! grep -Fq 'ABCD-EFGH-JKLM-NPQR' "$test_root/pairing-evidence/fixture.log"
                 ! grep -Fq "$test_root/tmp/p2p-vpn-android-e2e-state." \
                   "$test_root/pairing-evidence/fixture.log"
+                ! grep -Eq '(secret-tag|secret-key|secret-signature|certificate_der: Some)' \
+                  "$test_root/pairing-evidence/fixture.log"
+                ! grep -Eq '(192\.0\.2\.44|fd00::44|private\.example)' \
+                  "$test_root/pairing-evidence/fixture.log"
 
-                for path_mode in quic-stream tcp-stream; do
+                for path_mode in quic-stream tcp-stream owned-quic; do
                   path_state="$test_root/fake-pairing-$path_mode"
+                  path_traffic_state="$test_root/fake-traffic-$path_mode"
                   path_evidence="$test_root/path-$path_mode-evidence"
+                  printf '0\n' > "$path_traffic_state"
                   set +e
                   TMPDIR="$test_root/tmp" \
                     P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
                     P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE="$path_state" \
                     P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE="$path_mode" \
+                    P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE="$path_traffic_state" \
                     P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
                     P2P_VPN_ADB="$test_root/bin/fake-adb" \
                     P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
@@ -745,9 +1052,13 @@
                     (if $path_mode == "quic-stream" then
                       .device.pairing_traffic.paths.direct_quic_stream == 1 and
                       .device.pairing_traffic.paths.direct_tcp_stream == 0
-                    else
+                    elif $path_mode == "tcp-stream" then
                       .device.pairing_traffic.paths.direct_quic_stream == 0 and
                       .device.pairing_traffic.paths.direct_tcp_stream == 1
+                    else
+                      .device.pairing_traffic.paths.direct_quic_datagram == 1 and
+                      .device.pairing_traffic.paths.packet_plane_quic_sessions == 1 and
+                      .device.pairing_traffic.owned_quic.measured_packet_delta >= 20
                     end) and
                     .cleanup.emulator_stopped and
                     .cleanup.fixture_stopped and
@@ -4163,7 +4474,8 @@
           android-native-x86_64 = android.androidNativeX86_64;
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
-          android-e2e = androidE2e;
+          android-e2e = androidE2eLauncher;
+          android-e2e-runtime = androidE2eRuntime;
           android-e2e-fixture = androidE2eFixture;
           android-emulator = android.androidEmulator;
           android-sdk = android.androidSdk;
@@ -4218,9 +4530,9 @@
         // lib.optionalAttrs androidSupported {
           android-e2e = {
             type = "app";
-            program = "${androidE2e}/bin/p2p-vpn-android-e2e";
+            program = "${androidE2eLauncher}/bin/p2p-vpn-android-e2e";
             meta = {
-              description = "Run the managed Android/Linux E2E harness";
+              description = "Safely realize and run the managed Android/Linux E2E harness";
             };
           };
           android-emulator = {

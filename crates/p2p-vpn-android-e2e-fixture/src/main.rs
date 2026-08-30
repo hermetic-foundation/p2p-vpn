@@ -83,9 +83,19 @@ struct FixtureMetadata {
     schema_version: u8,
     network: String,
     path_mode: FixturePathMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owned_quic: Option<OwnedQuicMetadata>,
     bootstrap: BootstrapMetadata,
     peer: PeerMetadata,
     packet_control_socket: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct OwnedQuicMetadata {
+    android_listen: String,
+    android_external_endpoint: String,
+    host_forward_port: u16,
+    guest_listen_port: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -194,7 +204,15 @@ async fn run_fixture(
     let bootstrap_port = available_tcp_port()?;
     let peer_tcp_port = available_tcp_port()?;
     let peer_quic_port = available_udp_port()?;
-    let packet_quic_port = available_udp_port_except(peer_quic_port)?;
+    let packet_quic_port = available_udp_port_excluding(&[peer_quic_port])?;
+    let android_packet_quic_port = if path_mode == FixturePathMode::OwnedQuic {
+        Some(available_udp_port_excluding(&[
+            peer_quic_port,
+            packet_quic_port,
+        ])?)
+    } else {
+        None
+    };
     let membership_key = random_membership_key();
 
     let bootstrap = bootstrap_config(
@@ -282,6 +300,7 @@ async fn run_fixture(
         schema_version: SCHEMA_VERSION,
         network: network.to_owned(),
         path_mode,
+        owned_quic: android_packet_quic_port.map(owned_quic_metadata),
         bootstrap: BootstrapMetadata {
             peer_id: bootstrap_identity.peer_id.clone(),
             android_address: format!(
@@ -509,10 +528,10 @@ fn available_udp_port() -> io::Result<u16> {
         .port())
 }
 
-fn available_udp_port_except(excluded: u16) -> io::Result<u16> {
+fn available_udp_port_excluding(excluded: &[u16]) -> io::Result<u16> {
     for _ in 0..32 {
         let port = available_udp_port()?;
-        if port != excluded {
+        if !excluded.contains(&port) {
             return Ok(port);
         }
     }
@@ -520,6 +539,15 @@ fn available_udp_port_except(excluded: u16) -> io::Result<u16> {
         io::ErrorKind::AddrNotAvailable,
         "could not allocate distinct fixture UDP ports",
     ))
+}
+
+fn owned_quic_metadata(port: u16) -> OwnedQuicMetadata {
+    OwnedQuicMetadata {
+        android_listen: format!("0.0.0.0:{port}"),
+        android_external_endpoint: format!("127.0.0.1:{port}"),
+        host_forward_port: port,
+        guest_listen_port: port,
+    }
 }
 
 fn prepare_state_directory(path: &Path) -> io::Result<()> {
@@ -1125,6 +1153,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             network: "android-e2e".to_owned(),
             path_mode: FixturePathMode::Automatic,
+            owned_quic: None,
             bootstrap: BootstrapMetadata {
                 peer_id: bootstrap.peer_id.clone(),
                 android_address: format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id),
@@ -1196,5 +1225,15 @@ mod tests {
             owned_quic.network.packet_plane.quic_external_endpoints,
             ["10.0.2.2:42303"]
         );
+    }
+
+    #[test]
+    fn owned_quic_metadata_maps_host_and_guest_endpoints() {
+        let metadata = owned_quic_metadata(42_304);
+
+        assert_eq!(metadata.android_listen, "0.0.0.0:42304");
+        assert_eq!(metadata.android_external_endpoint, "127.0.0.1:42304");
+        assert_eq!(metadata.host_forward_port, 42_304);
+        assert_eq!(metadata.guest_listen_port, 42_304);
     }
 }

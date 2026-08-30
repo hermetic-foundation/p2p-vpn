@@ -175,10 +175,16 @@ Check the harness contract without KVM:
 nix build .#checks.x86_64-linux.android-e2e-structure --no-link -L
 ```
 
-The E2E harness requires 16 GiB of free runtime space by default.
+The E2E harness reserves 16 GiB. It permits 24 GiB of Nix-store growth and
+8 GiB of emulator-runtime growth by default.
 
 Set Nix daemon `min-free` and `max-free` thresholds before the first build.
 The daemon guard protects closure realization; the harness check runs afterward.
+
+The launcher uses the official cache and an already-trusted `nix-community` cache.
+
+It rejects third-party source builds, disables fallback, prefetches fixed inputs
+sequentially, and cancels realization when its storage budget is exceeded.
 
 See [Android Architecture](android.md) for the E2E procedure and recorded
 2026-08-29 Linux/emulator evidence.

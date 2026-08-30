@@ -339,8 +339,17 @@ nix = {
 
 | Layer | Guard |
 | --- | --- |
+| Safe launcher | Checks temporary and Nix-store free space before realization. |
+| Trusted caches | Uses the official cache plus `nix-community` when its signing key is trusted. |
+| Source fallback | Rejects non-fixed third-party builds and realizes with `fallback = false`. |
+| Local plan | Caps all builds at 512, non-fixed builds at 256, and permits reviewed classes. |
+| Dependency preflight | Fetches missing fixed-output sources sequentially before the runtime closure. |
+| Build jobs | Uses at most two local build jobs by default. |
+| Growth budget | Cancels realization after 24 GiB of net Nix-store growth. |
+| GC roots | Uses `--no-link`; the realized runtime remains garbage-collectable. |
 | Nix realization | Daemon garbage collection starts below `min-free`. |
 | Harness runtime | Requires 16 GiB free before creating emulator state. |
+| Runtime growth | Stops the emulator run after 8 GiB of temporary or evidence growth. |
 | Emulator | Uses a temporary AVD and removes it on every exit path. |
 | Evidence | Redacted emulator log is capped at 1 MiB. |
 
@@ -353,10 +362,42 @@ P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=8589934592 \
 
 `0` disables only the harness check. It does not change Nix daemon behavior.
 
+Raise the realization budget only after reviewing the dry-run plan:
+
+```sh
+P2P_VPN_ANDROID_E2E_MAX_STORE_GROWTH_BYTES=34359738368 \
+  nix run .#android-e2e -- --scenario pairing-traffic
+```
+
+The hard maximum is 64 GiB. Budget exhaustion cancels Nix and exits `75`.
+
+Lower the emulator runtime budget on constrained hosts:
+
+```sh
+P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES=4294967296 \
+  nix run .#android-e2e -- --scenario pairing-traffic
+```
+
+The runtime default is 8 GiB and its hard maximum is 32 GiB.
+
+The watchdog checks both temporary state and the evidence filesystem. It
+stops the run with exit `75`, then removes the emulator and private state.
+
 Client `--option min-free` overrides may be ignored for untrusted users.
 Set the values in NixOS configuration so they apply while realizing the closure.
 
 Use `--no-link` for verification builds. It avoids a persistent `result` GC root.
+
+`nix run .#android-e2e` realizes only a lightweight launcher first.
+
+The launcher avoids unrelated configured caches. It stops if the official
+cache is unavailable, the plan is unbounded, or realization exceeds its budget.
+
+Crate and Maven inputs are fetched before large Android archives. A failed
+source fetch therefore stops before the runtime closure is realized.
+
+`android-e2e-runtime` is an internal package. Use the launcher instead of
+building that package directly.
 
 Inspect and reclaim unreachable paths:
 
