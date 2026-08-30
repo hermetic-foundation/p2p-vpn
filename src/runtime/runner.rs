@@ -24,7 +24,10 @@ use rand_core::{OsRng, RngCore as _};
 use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use sha2_010::{Digest as _, Sha256};
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    task::{AbortHandle, JoinSet},
+};
 
 use crate::{
     OVERLAY_FRAGMENTATION_POLICY_LINE, PathKind, PeerId, SessionId,
@@ -87,10 +90,10 @@ use crate::{
         packet_plane::{
             PacketPlaneEphemeralSecret, PacketPlaneHandshake, PacketPlaneHandshakeError,
             PacketPlaneHandshakeKind, PacketPlaneHandshakeParams, PacketPlaneIoError,
-            PacketPlaneQuicError, PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot,
-            PacketPlaneReceivedFrame, PacketPlaneRuntime, PacketPlaneSessionError,
-            PacketPlaneSessionRole, PacketPlaneSessionSnapshot, PacketPlaneSnapshot,
-            VerifiedPacketPlaneHandshake,
+            PacketPlaneQuicConnection, PacketPlaneQuicConnector, PacketPlaneQuicError,
+            PacketPlaneQuicRuntime, PacketPlaneQuicSnapshot, PacketPlaneReceivedFrame,
+            PacketPlaneRuntime, PacketPlaneSessionError, PacketPlaneSessionRole,
+            PacketPlaneSessionSnapshot, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
         },
         pairing_code::{PairingCodeRejectionReason, PairingCodeRequest, PairingCodeResponse},
         pairing_sessions::{
@@ -152,10 +155,9 @@ const PATH_PROBE_TOKEN_LEN: usize = 8;
 const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
-const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(25);
 const PAIRING_RESPONSE_EXPIRES_IN_SECONDS: u64 = 600;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const PACKET_PLANE_QUIC_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_RELAY_RESERVATION_PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 const AUTO_RELAY_CANDIDATE_FAILURE_EVICTION_THRESHOLD: u8 = 2;
 const MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES: usize = 64 * 1024;
@@ -218,9 +220,14 @@ fn local_packet_data_plane() -> LocalPacketDataPlane {
     LOCAL_PACKET_DATA_PLANE
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct PacketPlaneNegotiator {
     pending: HashMap<PeerId, PendingPacketPlaneHello>,
+    pending_responders: HashMap<PeerId, PendingPacketPlaneResponder>,
+    quic_connection_tasks: JoinSet<PacketPlaneQuicConnectionTaskResult>,
+    quic_connection_task_handles:
+        HashMap<(PeerId, PacketPlaneQuicNegotiationRole), PacketPlaneQuicConnectionTask>,
+    next_quic_connection_task_generation: u64,
 }
 
 #[derive(Debug)]
@@ -229,8 +236,34 @@ struct PendingPacketPlaneHello {
     hello: VerifiedPacketPlaneHandshake,
     backend: PacketDatagramBackend,
     created_at: Instant,
-    quic_connect_attempted: bool,
-    quic_connect_defer_events: u8,
+    accept: Option<VerifiedPacketPlaneHandshake>,
+}
+
+#[derive(Debug)]
+struct PendingPacketPlaneResponder {
+    secret: PacketPlaneEphemeralSecret,
+    accept: VerifiedPacketPlaneHandshake,
+    hello: VerifiedPacketPlaneHandshake,
+    backend: PacketDatagramBackend,
+    created_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum PacketPlaneQuicNegotiationRole {
+    Initiator,
+    Responder,
+}
+
+struct PacketPlaneQuicConnectionTask {
+    generation: u64,
+    abort_handle: AbortHandle,
+}
+
+struct PacketPlaneQuicConnectionTaskResult {
+    peer: PeerId,
+    role: PacketPlaneQuicNegotiationRole,
+    generation: u64,
+    result: Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError>,
 }
 
 impl PacketPlaneNegotiator {
@@ -248,8 +281,27 @@ impl PacketPlaneNegotiator {
                 hello,
                 backend,
                 created_at: Instant::now(),
-                quic_connect_attempted: false,
-                quic_connect_defer_events: u8::from(backend == PacketDatagramBackend::OwnedQuic),
+                accept: None,
+            },
+        );
+    }
+
+    fn insert_responder(
+        &mut self,
+        peer: PeerId,
+        secret: PacketPlaneEphemeralSecret,
+        accept: VerifiedPacketPlaneHandshake,
+        hello: VerifiedPacketPlaneHandshake,
+        backend: PacketDatagramBackend,
+    ) {
+        self.pending_responders.insert(
+            peer,
+            PendingPacketPlaneResponder {
+                secret,
+                accept,
+                hello,
+                backend,
+                created_at: Instant::now(),
             },
         );
     }
@@ -264,27 +316,75 @@ impl PacketPlaneNegotiator {
 
     fn remove_peer(&mut self, peer: PeerId) {
         self.pending.remove(&peer);
+        self.pending_responders.remove(&peer);
+        self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Initiator);
+        self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Responder);
     }
 
-    fn pending_quic_connect_peers(&mut self) -> Vec<PeerId> {
-        let mut peers = Vec::new();
-        for (peer, pending) in &mut self.pending {
-            if pending.backend != PacketDatagramBackend::OwnedQuic || pending.quic_connect_attempted
-            {
-                continue;
+    fn start_quic_connection(
+        &mut self,
+        connector: PacketPlaneQuicConnector,
+        peer: PeerId,
+        remote_capabilities: ControlCapabilities,
+        role: PacketPlaneQuicNegotiationRole,
+        preferred_direction: PacketPlaneQuicConnectionDirection,
+    ) {
+        self.next_quic_connection_task_generation = self
+            .next_quic_connection_task_generation
+            .wrapping_add(1)
+            .max(1);
+        let generation = self.next_quic_connection_task_generation;
+        let abort_handle = self.quic_connection_tasks.spawn(async move {
+            let result = establish_packet_plane_quic_connection(
+                &connector,
+                peer,
+                &remote_capabilities,
+                preferred_direction,
+                PACKET_PLANE_QUIC_CONNECT_TIMEOUT,
+            )
+            .await;
+            PacketPlaneQuicConnectionTaskResult {
+                peer,
+                role,
+                generation,
+                result,
             }
-            if pending.quic_connect_defer_events > 0 {
-                pending.quic_connect_defer_events -= 1;
-                continue;
-            }
-            peers.push(*peer);
+        });
+        if let Some(previous) = self.quic_connection_task_handles.insert(
+            (peer, role),
+            PacketPlaneQuicConnectionTask {
+                generation,
+                abort_handle,
+            },
+        ) {
+            previous.abort_handle.abort();
         }
-        peers
     }
 
-    fn mark_quic_connect_attempted(&mut self, peer: PeerId) {
-        if let Some(pending) = self.pending.get_mut(&peer) {
-            pending.quic_connect_attempted = true;
+    fn has_quic_connection_tasks(&self) -> bool {
+        !self.quic_connection_tasks.is_empty()
+    }
+
+    fn finish_quic_connection_task(
+        &mut self,
+        peer: PeerId,
+        role: PacketPlaneQuicNegotiationRole,
+        generation: u64,
+    ) -> bool {
+        if self
+            .quic_connection_task_handles
+            .get(&(peer, role))
+            .is_none_or(|task| task.generation != generation)
+        {
+            return false;
+        }
+        self.quic_connection_task_handles.remove(&(peer, role));
+        true
+    }
+
+    fn abort_quic_connection_task(&mut self, peer: PeerId, role: PacketPlaneQuicNegotiationRole) {
+        if let Some(task) = self.quic_connection_task_handles.remove(&(peer, role)) {
+            task.abort_handle.abort();
         }
     }
 
@@ -293,7 +393,7 @@ impl PacketPlaneNegotiator {
         now: Instant,
         max_age: Duration,
     ) -> Vec<(PeerId, PacketDatagramBackend)> {
-        let expired = self
+        let mut expired = self
             .pending
             .iter()
             .filter_map(|(peer, pending)| {
@@ -303,7 +403,21 @@ impl PacketPlaneNegotiator {
             .collect::<Vec<_>>();
         for (peer, _) in &expired {
             self.pending.remove(peer);
+            self.abort_quic_connection_task(*peer, PacketPlaneQuicNegotiationRole::Initiator);
         }
+        let expired_responders = self
+            .pending_responders
+            .iter()
+            .filter_map(|(peer, pending)| {
+                (now.saturating_duration_since(pending.created_at) >= max_age)
+                    .then_some((*peer, pending.backend))
+            })
+            .collect::<Vec<_>>();
+        for (peer, _) in &expired_responders {
+            self.pending_responders.remove(peer);
+            self.abort_quic_connection_task(*peer, PacketPlaneQuicNegotiationRole::Responder);
+        }
+        expired.extend(expired_responders);
         expired
     }
 }
@@ -1478,13 +1592,6 @@ where
                     &mut kademlia_membership_records_key,
                     &mut kademlia_membership_record_lookup_keys,
                 );
-                drive_pending_packet_plane_quic_connects(
-                    packet_plane_quic.as_mut(),
-                    &mut packet_plane_negotiator,
-                    &peer_capabilities,
-                    &metrics,
-                )
-                .await;
                 drain_runtime_outbound_queue(RuntimeOutboundDrain {
                     node: &mut node,
                     forwarder: &forwarder,
@@ -1545,6 +1652,21 @@ where
                     Err(error) => {
                         handle_packet_plane_quic_receive_error(&mut paths, &metrics, &error);
                     }
+                }
+            }
+            task = packet_plane_negotiator.quic_connection_tasks.join_next(),
+                if packet_plane_negotiator.has_quic_connection_tasks() => {
+                if let Some(task) = task {
+                    handle_packet_plane_quic_connection_task(
+                        &mut PacketPlaneQuicSessionContext {
+                            packet_plane_quic: packet_plane_quic.as_mut(),
+                            negotiator: &mut packet_plane_negotiator,
+                            paths: &mut paths,
+                            metrics: &metrics,
+                            path_probe_tracker: &mut path_probe_tracker,
+                        },
+                        task,
+                    );
                 }
             }
             _ = timers.redial.tick() => {
@@ -1635,13 +1757,6 @@ where
                     &metrics,
                     Instant::now(),
                 );
-                drive_pending_packet_plane_quic_connects(
-                    packet_plane_quic.as_mut(),
-                    &mut packet_plane_negotiator,
-                    &peer_capabilities,
-                    &metrics,
-                )
-                .await;
                 expire_outbound_queue(&mut queues, &metrics);
                 let expired_replay_sessions = forwarder.expire_replay_sessions();
                 if expired_replay_sessions > 0 {
@@ -11241,7 +11356,7 @@ async fn handle_control_request(
     match request {
         ControlRequest::Capabilities(capabilities) => {
             context.metrics.record_control_request_received();
-            eprintln!("control capabilities from {peer}: {capabilities:?}");
+            log_control_capabilities_summary("control_capabilities_received", peer, &capabilities);
             let was_authorized = context.forwarder.is_configured_transport_peer(peer);
             let (response, membership_changed) =
                 capability_response_for_peer_with_membership_records_result(
@@ -11369,6 +11484,7 @@ async fn handle_control_request(
                     metrics: context.metrics,
                     packet_plane: context.packet_plane,
                     packet_plane_quic: context.packet_plane_quic.as_deref_mut(),
+                    negotiator: context.packet_plane_negotiator,
                     identity: context.identity,
                     local_capabilities: context.local_capabilities,
                     path_probe_tracker: context.path_probe_tracker,
@@ -13596,7 +13712,11 @@ fn handle_control_response_event(
                     discovery,
                 );
                 metrics.record_control_capability_accept();
-                eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+                log_control_capabilities_summary(
+                    "control_capabilities_accepted",
+                    peer,
+                    &capabilities,
+                );
                 maybe_send_packet_plane_hello(
                     swarm,
                     forwarder,
@@ -13696,7 +13816,11 @@ fn handle_control_response(
             } else {
                 record_peer_capabilities(forwarder, peer_capabilities, peer, capabilities.clone());
                 metrics.record_control_capability_accept();
-                eprintln!("control capabilities accepted by {peer}: {capabilities:?}");
+                log_control_capabilities_summary(
+                    "control_capabilities_accepted",
+                    peer,
+                    &capabilities,
+                );
             }
         }
         ControlResponse::CapabilitiesRejected(reason) => {
@@ -14382,6 +14506,62 @@ fn record_peer_capabilities(
     }
 }
 
+fn log_control_capabilities_summary(
+    event: &str,
+    peer: Libp2pPeerId,
+    capabilities: &ControlCapabilities,
+) {
+    let wire_version = capabilities.wire_version.to_string();
+    let effective_mtu = capabilities.effective_mtu.to_string();
+    let advertised_routes = capabilities.advertised_routes.len().to_string();
+    let direct_candidates = capabilities.direct_address_candidates.len().to_string();
+    let udp_candidates = capabilities.packet_endpoint_candidates.len().to_string();
+    let quic_candidates = capabilities
+        .owned_quic_packet_endpoint_candidates
+        .len()
+        .to_string();
+    let member_records = capabilities.member_records.len().to_string();
+    log_runtime_event(
+        LogLevel::Info,
+        event,
+        &[
+            ("peer", &peer.to_string()),
+            ("wire_version", &wire_version),
+            ("effective_mtu", &effective_mtu),
+            ("preferred_path", &capabilities.preferred_path),
+            (
+                "membership_scope",
+                if capabilities.membership_tag.is_some() {
+                    "present"
+                } else {
+                    "absent"
+                },
+            ),
+            ("advertised_routes", &advertised_routes),
+            ("direct_candidates", &direct_candidates),
+            ("udp_candidates", &udp_candidates),
+            ("quic_candidates", &quic_candidates),
+            ("member_records", &member_records),
+            (
+                "owned_udp",
+                if capabilities.supports_owned_udp_packet_plane {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            (
+                "owned_quic",
+                if capabilities.supports_owned_quic_packet_plane {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ],
+    );
+}
+
 #[derive(Debug)]
 enum PacketPlaneNegotiationError {
     UnauthorizedPeer,
@@ -14467,6 +14647,21 @@ fn maybe_send_packet_plane_hello(
                     .behaviour_mut()
                     .control
                     .send_request(&peer, ControlRequest::PacketPlaneHello(encoded));
+                if backend == PacketDatagramBackend::OwnedQuic {
+                    if let Some(packet_plane_quic) = packet_plane_quic {
+                        negotiator.start_quic_connection(
+                            packet_plane_quic.connector(),
+                            remote_overlay,
+                            remote_capabilities.clone(),
+                            PacketPlaneQuicNegotiationRole::Initiator,
+                            PacketPlaneQuicConnectionDirection::Connect,
+                        );
+                    } else {
+                        negotiator.remove_peer(remote_overlay);
+                        metrics.record_control_failure();
+                        return;
+                    }
+                }
                 metrics.record_control_request_sent();
                 log_runtime_event(
                     LogLevel::Info,
@@ -14505,13 +14700,7 @@ fn packet_plane_negotiation_backend(
     if local_capabilities.supports_owned_quic_packet_plane
         && remote_capabilities.supports_owned_quic_packet_plane
         && packet_plane_quic.is_some_and(|packet_plane| {
-            packet_plane_session_needs_negotiation(
-                paths,
-                peer,
-                PathKind::DirectQuicDatagram,
-                packet_plane.session_endpoint_for(peer),
-                remote_quic_endpoint,
-            )
+            packet_plane_quic_session_needs_negotiation(packet_plane, peer, remote_quic_endpoint)
         })
         && local_quic_endpoint.is_some()
         && remote_quic_endpoint.is_some()
@@ -14539,6 +14728,17 @@ fn packet_plane_negotiation_backend(
         return Some(PacketDatagramBackend::OwnedUdp);
     }
     None
+}
+
+fn packet_plane_quic_session_needs_negotiation(
+    packet_plane: &PacketPlaneQuicRuntime,
+    peer: PeerId,
+    advertised_endpoint: Option<SocketAddr>,
+) -> bool {
+    advertised_endpoint.is_some()
+        && (!packet_plane.has_session(peer)
+            || !packet_plane.has_usable_connection(peer)
+            || packet_plane.session_endpoint_for(peer) != advertised_endpoint)
 }
 
 fn packet_plane_accept_backend(
@@ -14584,54 +14784,110 @@ fn has_healthy_path_kind(paths: &PathSet, peer: PeerId, path: PathKind) -> bool 
 }
 
 async fn connect_packet_plane_quic_peer(
-    packet_plane_quic: &mut PacketPlaneQuicRuntime,
-    peer: PeerId,
+    connector: &PacketPlaneQuicConnector,
     remote_capabilities: &ControlCapabilities,
-) -> Result<(), PacketPlaneNegotiationError> {
+    timeout_duration: Duration,
+) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
     let endpoint = first_packet_plane_quic_endpoint(remote_capabilities)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
-    if packet_plane_quic.session_endpoint_for(peer) == Some(endpoint) {
-        return Ok(());
-    }
     let certificate = remote_capabilities
         .owned_quic_packet_plane_certificate_der
         .clone()
         .filter(|certificate| !certificate.is_empty())
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
     tokio::time::timeout(
-        PACKET_PLANE_QUIC_CONNECT_TIMEOUT,
-        packet_plane_quic.connect_peer(peer, endpoint, CertificateDer::from(certificate)),
+        timeout_duration,
+        connector.connect(endpoint, CertificateDer::from(certificate)),
     )
     .await
     .map_err(|_| PacketPlaneNegotiationError::Quic("connect_timeout".to_owned()))?
     .map_err(|error| PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error)))
 }
 
-async fn drive_pending_packet_plane_quic_connects(
-    packet_plane_quic: Option<&mut PacketPlaneQuicRuntime>,
-    negotiator: &mut PacketPlaneNegotiator,
-    peer_capabilities: &PeerCapabilities,
-    metrics: &RuntimeMetrics,
-) {
-    let Some(packet_plane_quic) = packet_plane_quic else {
-        return;
-    };
-    for peer in negotiator.pending_quic_connect_peers() {
-        let Some(remote_capabilities) = peer_capabilities.get(peer) else {
-            negotiator.remove_peer(peer);
-            metrics.record_control_failure();
-            continue;
-        };
-        negotiator.mark_quic_connect_attempted(peer);
-        if let Err(error) =
-            connect_packet_plane_quic_peer(packet_plane_quic, peer, remote_capabilities).await
-        {
-            negotiator.remove_peer(peer);
-            metrics.record_control_failure();
-            eprintln!(
-                "packet-plane QUIC connect to {peer} failed: {}",
-                error.describe()
+async fn accept_packet_plane_quic_peer(
+    connector: &PacketPlaneQuicConnector,
+    timeout_duration: Duration,
+) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
+    tokio::time::timeout(timeout_duration, connector.accept())
+        .await
+        .map_err(|_| PacketPlaneNegotiationError::Quic("accept_timeout".to_owned()))?
+        .map_err(|error| PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error)))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PacketPlaneQuicConnectionDirection {
+    Connect,
+    Accept,
+}
+
+impl PacketPlaneQuicConnectionDirection {
+    const fn reverse(self) -> Self {
+        match self {
+            Self::Connect => Self::Accept,
+            Self::Accept => Self::Connect,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Accept => "accept",
+        }
+    }
+}
+
+async fn attempt_packet_plane_quic_connection(
+    connector: &PacketPlaneQuicConnector,
+    remote_capabilities: &ControlCapabilities,
+    direction: PacketPlaneQuicConnectionDirection,
+    timeout_duration: Duration,
+) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
+    match direction {
+        PacketPlaneQuicConnectionDirection::Connect => {
+            connect_packet_plane_quic_peer(connector, remote_capabilities, timeout_duration).await
+        }
+        PacketPlaneQuicConnectionDirection::Accept => {
+            accept_packet_plane_quic_peer(connector, timeout_duration).await
+        }
+    }
+}
+
+async fn establish_packet_plane_quic_connection(
+    connector: &PacketPlaneQuicConnector,
+    peer: PeerId,
+    remote_capabilities: &ControlCapabilities,
+    preferred_direction: PacketPlaneQuicConnectionDirection,
+    timeout_duration: Duration,
+) -> Result<PacketPlaneQuicConnection, PacketPlaneNegotiationError> {
+    match attempt_packet_plane_quic_connection(
+        connector,
+        remote_capabilities,
+        preferred_direction,
+        timeout_duration,
+    )
+    .await
+    {
+        Ok(connection) => Ok(connection),
+        Err(error) => {
+            let reverse_direction = preferred_direction.reverse();
+            let reason = error.describe();
+            log_runtime_event(
+                LogLevel::Info,
+                "packet_plane_quic_direction_fallback",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("from", preferred_direction.name()),
+                    ("to", reverse_direction.name()),
+                    ("reason", &reason),
+                ],
             );
+            attempt_packet_plane_quic_connection(
+                connector,
+                remote_capabilities,
+                reverse_direction,
+                timeout_duration,
+            )
+            .await
         }
     }
 }
@@ -14643,6 +14899,7 @@ struct PacketPlaneAcceptContext<'a> {
     metrics: &'a RuntimeMetrics,
     packet_plane: &'a mut PacketPlaneRuntime,
     packet_plane_quic: Option<&'a mut PacketPlaneQuicRuntime>,
+    negotiator: &'a mut PacketPlaneNegotiator,
     identity: &'a NodeIdentity,
     local_capabilities: &'a ControlCapabilities,
     path_probe_tracker: &'a mut PathProbeTracker,
@@ -14683,21 +14940,6 @@ async fn accept_packet_plane_hello(
         .ok_or(PacketPlaneNegotiationError::MissingRemoteCapabilities)?;
     let backend = packet_plane_accept_backend(context.local_capabilities, remote_capabilities)
         .ok_or(PacketPlaneNegotiationError::MissingRemoteEndpoint)?;
-    if backend == PacketDatagramBackend::OwnedQuic {
-        let packet_plane_quic = context
-            .packet_plane_quic
-            .as_deref_mut()
-            .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?;
-        tokio::time::timeout(
-            PACKET_PLANE_QUIC_ACCEPT_TIMEOUT,
-            packet_plane_quic.accept_peer(remote_overlay),
-        )
-        .await
-        .map_err(|_| PacketPlaneNegotiationError::Quic("accept_timeout".to_owned()))?
-        .map_err(|error| {
-            PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
-        })?;
-    }
     if !remote_capabilities.supports_datagram_packet_path() {
         return Err(PacketPlaneNegotiationError::MissingRemoteEndpoint);
     }
@@ -14719,30 +14961,37 @@ async fn accept_packet_plane_hello(
         context.local_capabilities,
         backend,
     )?;
-    let session = match backend {
-        PacketDatagramBackend::OwnedUdp => context
-            .packet_plane
-            .establish_session(
-                PacketPlaneSessionRole::Responder,
-                &secret,
-                &verified_accept,
-                &hello,
-            )
-            .map_err(PacketPlaneNegotiationError::Session)?,
-        PacketDatagramBackend::OwnedQuic => context
+    if backend == PacketDatagramBackend::OwnedQuic {
+        let connector = context
             .packet_plane_quic
             .as_deref_mut()
             .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?
-            .establish_session(
-                PacketPlaneSessionRole::Responder,
-                &secret,
-                &verified_accept,
-                &hello,
-            )
-            .map_err(|error| {
-                PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
-            })?,
-    };
+            .connector();
+        context.negotiator.insert_responder(
+            remote_overlay,
+            secret,
+            verified_accept,
+            hello,
+            backend,
+        );
+        context.negotiator.start_quic_connection(
+            connector,
+            remote_overlay,
+            remote_capabilities.clone(),
+            PacketPlaneQuicNegotiationRole::Responder,
+            PacketPlaneQuicConnectionDirection::Accept,
+        );
+        return accept.encode().map_err(PacketPlaneNegotiationError::Encode);
+    }
+    let session = context
+        .packet_plane
+        .establish_session(
+            PacketPlaneSessionRole::Responder,
+            &secret,
+            &verified_accept,
+            &hello,
+        )
+        .map_err(PacketPlaneNegotiationError::Session)?;
     record_packet_plane_path_established(
         context.paths,
         context.metrics,
@@ -14760,7 +15009,6 @@ async fn accept_packet_plane_hello(
             ("peer", &remote_overlay.to_string()),
             ("role", "responder"),
             ("backend", packet_datagram_backend_name(backend)),
-            ("endpoint", &hello.endpoint.to_string()),
         ],
     );
     accept.encode().map_err(PacketPlaneNegotiationError::Encode)
@@ -14790,9 +15038,11 @@ fn complete_packet_plane_hello(
     if !has_direct_packet_plane_negotiation_path(context.paths, remote_overlay) {
         return Err(PacketPlaneNegotiationError::NoDirectNegotiationPath);
     }
-    let pending = context
+    let pending_backend = context
         .negotiator
-        .remove(remote_overlay)
+        .pending
+        .get(&remote_overlay)
+        .map(|pending| pending.backend)
         .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
     let remote_capabilities = context
         .peer_capabilities
@@ -14806,35 +15056,43 @@ fn complete_packet_plane_hello(
         || !endpoint_is_advertised_for_backend(
             remote_capabilities,
             accept.endpoint,
-            pending.backend,
+            pending_backend,
         )
     {
         return Err(PacketPlaneNegotiationError::EndpointNotAdvertised);
     }
-    let session = match pending.backend {
-        PacketDatagramBackend::OwnedUdp => context
-            .packet_plane
-            .establish_session(
-                PacketPlaneSessionRole::Initiator,
-                &pending.secret,
-                &pending.hello,
-                &accept,
-            )
-            .map_err(PacketPlaneNegotiationError::Session)?,
-        PacketDatagramBackend::OwnedQuic => context
-            .packet_plane_quic
-            .as_deref_mut()
-            .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?
-            .establish_session(
-                PacketPlaneSessionRole::Initiator,
-                &pending.secret,
-                &pending.hello,
-                &accept,
-            )
-            .map_err(|error| {
-                PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
-            })?,
-    };
+    if pending_backend == PacketDatagramBackend::OwnedQuic {
+        context
+            .negotiator
+            .pending
+            .get_mut(&remote_overlay)
+            .ok_or(PacketPlaneNegotiationError::NoPendingHello)?
+            .accept = Some(accept);
+        try_complete_packet_plane_quic_initiator(
+            &mut PacketPlaneQuicSessionContext {
+                packet_plane_quic: context.packet_plane_quic.as_deref_mut(),
+                negotiator: context.negotiator,
+                paths: context.paths,
+                metrics: context.metrics,
+                path_probe_tracker: context.path_probe_tracker,
+            },
+            remote_overlay,
+        )?;
+        return Ok(());
+    }
+    let pending = context
+        .negotiator
+        .remove(remote_overlay)
+        .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
+    let session = context
+        .packet_plane
+        .establish_session(
+            PacketPlaneSessionRole::Initiator,
+            &pending.secret,
+            &pending.hello,
+            &accept,
+        )
+        .map_err(PacketPlaneNegotiationError::Session)?;
     record_packet_plane_path_established(
         context.paths,
         context.metrics,
@@ -14853,10 +15111,200 @@ fn complete_packet_plane_hello(
             ("peer", &remote_overlay.to_string()),
             ("role", "initiator"),
             ("backend", packet_datagram_backend_name(pending.backend)),
-            ("endpoint", &accept.endpoint.to_string()),
         ],
     );
     Ok(())
+}
+
+struct PacketPlaneQuicSessionContext<'a> {
+    packet_plane_quic: Option<&'a mut PacketPlaneQuicRuntime>,
+    negotiator: &'a mut PacketPlaneNegotiator,
+    paths: &'a mut PathSet,
+    metrics: &'a RuntimeMetrics,
+    path_probe_tracker: &'a mut PathProbeTracker,
+}
+
+fn try_complete_packet_plane_quic_initiator(
+    context: &mut PacketPlaneQuicSessionContext<'_>,
+    peer: PeerId,
+) -> Result<bool, PacketPlaneNegotiationError> {
+    let packet_plane_quic = context
+        .packet_plane_quic
+        .as_deref_mut()
+        .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?;
+    if !packet_plane_quic.has_connection(peer)
+        || context
+            .negotiator
+            .pending
+            .get(&peer)
+            .is_none_or(|pending| pending.accept.is_none())
+    {
+        return Ok(false);
+    }
+    let pending = context
+        .negotiator
+        .remove(peer)
+        .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
+    let accept = pending
+        .accept
+        .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
+    let session = packet_plane_quic
+        .establish_session(
+            PacketPlaneSessionRole::Initiator,
+            &pending.secret,
+            &pending.hello,
+            &accept,
+        )
+        .map_err(|error| {
+            PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
+        })?;
+    record_packet_plane_path_established(
+        context.paths,
+        context.metrics,
+        peer,
+        pending.backend,
+        session.mtu,
+    );
+    context
+        .path_probe_tracker
+        .clear_path(peer, packet_datagram_backend_path_kind(pending.backend));
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_session_established",
+        &[
+            ("peer", &peer.to_string()),
+            ("role", "initiator"),
+            ("backend", packet_datagram_backend_name(pending.backend)),
+        ],
+    );
+    Ok(true)
+}
+
+fn complete_packet_plane_quic_responder(
+    context: &mut PacketPlaneQuicSessionContext<'_>,
+    peer: PeerId,
+) -> Result<(), PacketPlaneNegotiationError> {
+    let pending = context
+        .negotiator
+        .pending_responders
+        .remove(&peer)
+        .ok_or(PacketPlaneNegotiationError::NoPendingHello)?;
+    let session = context
+        .packet_plane_quic
+        .as_deref_mut()
+        .ok_or(PacketPlaneNegotiationError::MissingLocalEndpoint)?
+        .establish_session(
+            PacketPlaneSessionRole::Responder,
+            &pending.secret,
+            &pending.accept,
+            &pending.hello,
+        )
+        .map_err(|error| {
+            PacketPlaneNegotiationError::Quic(packet_plane_quic_error_detail(&error))
+        })?;
+    record_packet_plane_path_established(
+        context.paths,
+        context.metrics,
+        peer,
+        pending.backend,
+        session.mtu,
+    );
+    context
+        .path_probe_tracker
+        .clear_path(peer, packet_datagram_backend_path_kind(pending.backend));
+    log_runtime_event(
+        LogLevel::Info,
+        "packet_plane_session_established",
+        &[
+            ("peer", &peer.to_string()),
+            ("role", "responder"),
+            ("backend", packet_datagram_backend_name(pending.backend)),
+        ],
+    );
+    Ok(())
+}
+
+fn handle_packet_plane_quic_connection_task(
+    context: &mut PacketPlaneQuicSessionContext<'_>,
+    task: Result<PacketPlaneQuicConnectionTaskResult, tokio::task::JoinError>,
+) {
+    let task = match task {
+        Ok(task) => task,
+        Err(error) => {
+            if error.is_cancelled() {
+                return;
+            }
+            context.metrics.record_control_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "packet_plane_quic_connection_task_failed",
+                &[("reason", "task_failed")],
+            );
+            return;
+        }
+    };
+    if !context
+        .negotiator
+        .finish_quic_connection_task(task.peer, task.role, task.generation)
+    {
+        return;
+    }
+    let connection = match task.result {
+        Ok(connection) => connection,
+        Err(error) => {
+            context.negotiator.remove_peer(task.peer);
+            context.metrics.record_control_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "packet_plane_quic_connection_failed",
+                &[
+                    ("peer", &task.peer.to_string()),
+                    ("role", packet_plane_quic_negotiation_role_name(task.role)),
+                    ("reason", &error.describe()),
+                ],
+            );
+            return;
+        }
+    };
+    let Some(packet_plane_quic) = context.packet_plane_quic.as_deref_mut() else {
+        context.negotiator.remove_peer(task.peer);
+        context.metrics.record_control_failure();
+        return;
+    };
+    packet_plane_quic.install_connection(task.peer, connection);
+    let completion = match task.role {
+        PacketPlaneQuicNegotiationRole::Initiator => {
+            try_complete_packet_plane_quic_initiator(context, task.peer).map(|_| ())
+        }
+        PacketPlaneQuicNegotiationRole::Responder => {
+            complete_packet_plane_quic_responder(context, task.peer)
+        }
+    };
+    if let Err(error) = completion {
+        if let Some(packet_plane_quic) = context.packet_plane_quic.as_deref_mut() {
+            packet_plane_quic.forget_peer(task.peer);
+        }
+        context.negotiator.remove_peer(task.peer);
+        context.metrics.record_control_failure();
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_quic_session_failed",
+            &[
+                ("peer", &task.peer.to_string()),
+                ("role", packet_plane_quic_negotiation_role_name(task.role)),
+                ("reason", &error.describe()),
+            ],
+        );
+    }
+}
+
+const fn packet_plane_quic_negotiation_role_name(
+    role: PacketPlaneQuicNegotiationRole,
+) -> &'static str {
+    match role {
+        PacketPlaneQuicNegotiationRole::Initiator => "initiator",
+        PacketPlaneQuicNegotiationRole::Responder => "responder",
+    }
 }
 
 struct PacketPlaneExpiryContext<'a> {
@@ -18066,7 +18514,7 @@ fn packet_plane_quic_error_name(error: &PacketPlaneQuicError) -> &'static str {
 }
 
 fn packet_plane_quic_error_detail(error: &PacketPlaneQuicError) -> String {
-    format!("{}: {error:?}", packet_plane_quic_error_name(error))
+    packet_plane_quic_error_name(error).to_owned()
 }
 
 fn packet_plane_datagram_error_name(
@@ -31273,6 +31721,7 @@ mod tests {
         let mut initiator_paths = PathSet::new();
         let metrics = RuntimeMetrics::default();
         let mut negotiator = PacketPlaneNegotiator::default();
+        let mut responder_negotiator = PacketPlaneNegotiator::default();
         let mut responder_path_probe_tracker = PathProbeTracker::default();
         let mut initiator_path_probe_tracker = PathProbeTracker::default();
         let (secret, hello, verified_hello) = signed_packet_plane_handshake(
@@ -31298,6 +31747,7 @@ mod tests {
                 metrics: &metrics,
                 packet_plane: &mut responder_packet_plane,
                 packet_plane_quic: None,
+                negotiator: &mut responder_negotiator,
                 identity: &responder_identity,
                 local_capabilities: &responder_capabilities,
                 path_probe_tracker: &mut responder_path_probe_tracker,
@@ -31321,6 +31771,7 @@ mod tests {
                 metrics: &metrics,
                 packet_plane: &mut responder_packet_plane,
                 packet_plane_quic: None,
+                negotiator: &mut responder_negotiator,
                 identity: &responder_identity,
                 local_capabilities: &responder_capabilities,
                 path_probe_tracker: &mut responder_path_probe_tracker,
@@ -31566,6 +32017,7 @@ mod tests {
         initiator_paths.record_established(responder_overlay, PathKind::DirectTcpStream);
         let metrics = RuntimeMetrics::default();
         let mut negotiator = PacketPlaneNegotiator::default();
+        let mut responder_negotiator = PacketPlaneNegotiator::default();
         let mut responder_path_probe_tracker = PathProbeTracker::default();
         let mut initiator_path_probe_tracker = PathProbeTracker::default();
         let (secret, hello, verified_hello) = signed_packet_plane_handshake(
@@ -31582,31 +32034,30 @@ mod tests {
             PacketDatagramBackend::OwnedQuic,
         );
         let encoded_hello = hello.encode().expect("encoded quic hello");
-        let responder_certificate = responder_quic.server_certificate();
-
-        let (connect, response) = tokio::join!(
-            initiator_quic.connect_peer(
-                responder_overlay,
-                responder_endpoint,
-                responder_certificate,
-            ),
-            packet_plane_accept_response_for_peer(
-                PacketPlaneAcceptContext {
-                    forwarder: &responder_forwarder,
-                    peer_capabilities: &responder_peer_capabilities,
-                    paths: &mut responder_paths,
-                    metrics: &metrics,
-                    packet_plane: &mut responder_packet_plane,
-                    packet_plane_quic: Some(&mut responder_quic),
-                    identity: &responder_identity,
-                    local_capabilities: &responder_capabilities,
-                    path_probe_tracker: &mut responder_path_probe_tracker,
-                },
-                initiator_peer,
-                &encoded_hello,
-            )
+        negotiator.start_quic_connection(
+            initiator_quic.connector(),
+            responder_overlay,
+            responder_capabilities.clone(),
+            PacketPlaneQuicNegotiationRole::Initiator,
+            PacketPlaneQuicConnectionDirection::Connect,
         );
-        connect.expect("initiator quic connection");
+        let response = packet_plane_accept_response_for_peer(
+            PacketPlaneAcceptContext {
+                forwarder: &responder_forwarder,
+                peer_capabilities: &responder_peer_capabilities,
+                paths: &mut responder_paths,
+                metrics: &metrics,
+                packet_plane: &mut responder_packet_plane,
+                packet_plane_quic: Some(&mut responder_quic),
+                negotiator: &mut responder_negotiator,
+                identity: &responder_identity,
+                local_capabilities: &responder_capabilities,
+                path_probe_tracker: &mut responder_path_probe_tracker,
+            },
+            initiator_peer,
+            &encoded_hello,
+        )
+        .await;
         let ControlResponse::PacketPlaneAccepted(encoded_accept) = response else {
             panic!("expected packet-plane quic accept, got {response:?}");
         };
@@ -31626,9 +32077,52 @@ mod tests {
             &encoded_accept,
         )
         .expect("complete quic hello");
+        let initiator_task = negotiator
+            .quic_connection_tasks
+            .join_next()
+            .await
+            .expect("initiator connection task");
+        handle_packet_plane_quic_connection_task(
+            &mut PacketPlaneQuicSessionContext {
+                packet_plane_quic: Some(&mut initiator_quic),
+                negotiator: &mut negotiator,
+                paths: &mut initiator_paths,
+                metrics: &metrics,
+                path_probe_tracker: &mut initiator_path_probe_tracker,
+            },
+            initiator_task,
+        );
+        let responder_task = responder_negotiator
+            .quic_connection_tasks
+            .join_next()
+            .await
+            .expect("responder connection task");
+        handle_packet_plane_quic_connection_task(
+            &mut PacketPlaneQuicSessionContext {
+                packet_plane_quic: Some(&mut responder_quic),
+                negotiator: &mut responder_negotiator,
+                paths: &mut responder_paths,
+                metrics: &metrics,
+                path_probe_tracker: &mut responder_path_probe_tracker,
+            },
+            responder_task,
+        );
 
         assert!(initiator_quic.has_session(responder_overlay));
         assert!(responder_quic.has_session(initiator_overlay));
+        initiator_paths.mark_unhealthy(responder_overlay, PathKind::DirectQuicDatagram);
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &initiator_paths,
+                &initiator_capabilities,
+                &responder_capabilities,
+                &initiator_packet_plane,
+                Some(&initiator_quic),
+                responder_overlay,
+            ),
+            None,
+            "an open matching QUIC session should recover through path probes"
+        );
         assert_eq!(
             initiator_paths
                 .best_for(responder_overlay)
@@ -31654,6 +32148,207 @@ mod tests {
         .expect("quic receive should not time out")
         .expect("quic receive");
         assert_eq!(received.frame, frame);
+        assert!(initiator_quic.close_connection(responder_overlay));
+        assert_eq!(
+            packet_plane_negotiation_backend(
+                &initiator_paths,
+                &initiator_capabilities,
+                &responder_capabilities,
+                &initiator_packet_plane,
+                Some(&initiator_quic),
+                responder_overlay,
+            ),
+            Some(PacketDatagramBackend::OwnedQuic),
+            "a closed QUIC connection must trigger renegotiation"
+        );
+    }
+
+    #[tokio::test]
+    async fn packet_plane_quic_reverses_direction_when_preferred_endpoint_is_unreachable() {
+        let initiator_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("initiator identity");
+        let responder_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("responder identity");
+        let initiator_overlay = initiator_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("initiator peer");
+        let responder_overlay = responder_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("responder peer");
+        let mut initiator_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("initiator quic"))
+                .expect("initiator quic");
+        let mut responder_quic =
+            PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("responder quic"))
+                .expect("responder quic");
+        let initiator_endpoint = initiator_quic.local_addr();
+        let black_hole = std::net::UdpSocket::bind("127.0.0.1:0").expect("black-hole socket");
+        let unreachable_responder_endpoint = black_hole.local_addr().expect("black-hole endpoint");
+        let initiator_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_owned_quic_packet_endpoint_candidates(vec![initiator_endpoint.to_string()])
+            .with_owned_quic_packet_plane_certificate(
+                initiator_quic.server_certificate().as_ref().to_vec(),
+            );
+        let responder_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_owned_quic_packet_endpoint_candidates(vec![
+                unreachable_responder_endpoint.to_string(),
+            ])
+            .with_owned_quic_packet_plane_certificate(
+                responder_quic.server_certificate().as_ref().to_vec(),
+            );
+        let direction_timeout = TokioDuration::from_millis(250);
+        let initiator_connector = initiator_quic.connector();
+        let responder_connector = responder_quic.connector();
+
+        let (initiator_result, responder_result) = tokio::join!(
+            establish_packet_plane_quic_connection(
+                &initiator_connector,
+                responder_overlay,
+                &responder_capabilities,
+                PacketPlaneQuicConnectionDirection::Connect,
+                direction_timeout,
+            ),
+            establish_packet_plane_quic_connection(
+                &responder_connector,
+                initiator_overlay,
+                &initiator_capabilities,
+                PacketPlaneQuicConnectionDirection::Accept,
+                direction_timeout,
+            )
+        );
+        initiator_quic.install_connection(
+            responder_overlay,
+            initiator_result.expect("initiator reverse accept"),
+        );
+        responder_quic.install_connection(
+            initiator_overlay,
+            responder_result.expect("responder reverse connect"),
+        );
+
+        let (initiator_secret, _hello, verified_hello) = signed_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Hello,
+            &initiator_identity,
+            &initiator_capabilities,
+            PacketDatagramBackend::OwnedQuic,
+        )
+        .expect("signed hello");
+        let (responder_secret, _accept, verified_accept) = signed_packet_plane_handshake(
+            PacketPlaneHandshakeKind::Accept,
+            &responder_identity,
+            &responder_capabilities,
+            PacketDatagramBackend::OwnedQuic,
+        )
+        .expect("signed accept");
+        initiator_quic
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &verified_hello,
+                &verified_accept,
+            )
+            .expect("initiator session");
+        responder_quic
+            .establish_session(
+                PacketPlaneSessionRole::Responder,
+                &responder_secret,
+                &verified_accept,
+                &verified_hello,
+            )
+            .expect("responder session");
+
+        let frame = Frame::packet(23, 29, vec![0x45; 20]).expect("frame");
+        responder_quic
+            .send_frame_to_peer(initiator_overlay, &frame)
+            .expect("send reverse-dial frame");
+        let received = timeout(
+            TokioDuration::from_secs(1),
+            initiator_quic.recv_frame_from_peer(responder_overlay),
+        )
+        .await
+        .expect("reverse-dial receive should not time out")
+        .expect("reverse-dial receive");
+        assert_eq!(received.frame, frame);
+    }
+
+    #[tokio::test]
+    async fn packet_plane_quic_connection_tasks_are_bounded_per_peer() {
+        let remote_identity =
+            crate::identity::NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_overlay = remote_identity
+            .peer_id
+            .parse::<PeerId>()
+            .expect("remote peer");
+        let local_quic = PacketPlaneQuicRuntime::bind("127.0.0.1:0".parse().expect("local quic"))
+            .expect("local quic");
+        let black_hole = std::net::UdpSocket::bind("127.0.0.1:0").expect("black-hole socket");
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1200)
+            .with_owned_quic_packet_endpoint_candidates(vec![
+                black_hole
+                    .local_addr()
+                    .expect("black-hole endpoint")
+                    .to_string(),
+            ])
+            .with_owned_quic_packet_plane_certificate(
+                local_quic.server_certificate().as_ref().to_vec(),
+            );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let task_key = (remote_overlay, PacketPlaneQuicNegotiationRole::Initiator);
+
+        negotiator.start_quic_connection(
+            local_quic.connector(),
+            remote_overlay,
+            remote_capabilities.clone(),
+            PacketPlaneQuicNegotiationRole::Initiator,
+            PacketPlaneQuicConnectionDirection::Connect,
+        );
+        let first_task = negotiator
+            .quic_connection_task_handles
+            .get(&task_key)
+            .expect("first task");
+        let first_generation = first_task.generation;
+        let first_abort_handle = first_task.abort_handle.clone();
+
+        negotiator.start_quic_connection(
+            local_quic.connector(),
+            remote_overlay,
+            remote_capabilities,
+            PacketPlaneQuicNegotiationRole::Initiator,
+            PacketPlaneQuicConnectionDirection::Connect,
+        );
+        assert_eq!(negotiator.quic_connection_task_handles.len(), 1);
+        assert_ne!(
+            negotiator
+                .quic_connection_task_handles
+                .get(&task_key)
+                .expect("replacement task")
+                .generation,
+            first_generation
+        );
+        timeout(TokioDuration::from_secs(1), async {
+            while !first_abort_handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replaced task should be aborted");
+
+        let replacement_abort_handle = negotiator
+            .quic_connection_task_handles
+            .get(&task_key)
+            .expect("replacement task")
+            .abort_handle
+            .clone();
+        negotiator.remove_peer(remote_overlay);
+        assert!(negotiator.quic_connection_task_handles.is_empty());
+        timeout(TokioDuration::from_secs(1), async {
+            while !replacement_abort_handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("removed peer task should be aborted");
     }
 
     #[test]

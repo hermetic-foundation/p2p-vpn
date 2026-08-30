@@ -679,6 +679,15 @@ pub struct PacketPlaneQuicRuntime {
     max_replay_windows_per_session: usize,
 }
 
+#[derive(Clone)]
+pub struct PacketPlaneQuicConnector {
+    endpoint: Endpoint,
+}
+
+pub struct PacketPlaneQuicConnection {
+    connection: Connection,
+}
+
 impl Default for PacketPlaneRuntime {
     fn default() -> Self {
         Self {
@@ -1471,6 +1480,29 @@ impl PacketPlaneQuicRuntime {
     }
 
     #[must_use]
+    pub fn has_connection(&self, peer: PeerId) -> bool {
+        self.connections.contains_key(&peer)
+    }
+
+    #[must_use]
+    pub fn has_usable_connection(&self, peer: PeerId) -> bool {
+        self.connections
+            .get(&peer)
+            .is_some_and(|connection| connection.close_reason().is_none())
+    }
+
+    #[must_use]
+    pub fn connector(&self) -> PacketPlaneQuicConnector {
+        PacketPlaneQuicConnector {
+            endpoint: self.endpoint.clone(),
+        }
+    }
+
+    pub fn install_connection(&mut self, peer: PeerId, connection: PacketPlaneQuicConnection) {
+        self.connections.insert(peer, connection.connection);
+    }
+
+    #[must_use]
     pub fn session_endpoint_for(&self, peer: PeerId) -> Option<SocketAddr> {
         self.sessions.get(&peer).map(|session| session.endpoint)
     }
@@ -1540,24 +1572,17 @@ impl PacketPlaneQuicRuntime {
         endpoint: SocketAddr,
         trusted_certificate: CertificateDer<'static>,
     ) -> Result<(), PacketPlaneQuicError> {
-        self.endpoint
-            .set_default_client_config(quic_client_config(trusted_certificate)?);
         let connection = self
-            .endpoint
-            .connect(endpoint, "p2p-vpn-packet-plane")?
+            .connector()
+            .connect(endpoint, trusted_certificate)
             .await?;
-        self.connections.insert(peer, connection);
+        self.install_connection(peer, connection);
         Ok(())
     }
 
     pub async fn accept_peer(&mut self, peer: PeerId) -> Result<(), PacketPlaneQuicError> {
-        let incoming = self
-            .endpoint
-            .accept()
-            .await
-            .ok_or(PacketPlaneQuicError::EndpointClosed)?;
-        let connection = incoming.await?;
-        self.connections.insert(peer, connection);
+        let connection = self.connector().accept().await?;
+        self.install_connection(peer, connection);
         Ok(())
     }
 
@@ -1696,6 +1721,35 @@ impl PacketPlaneQuicRuntime {
             peer: Some(peer),
             remote_addr,
             local_addr: self.local_addr,
+        })
+    }
+}
+
+impl PacketPlaneQuicConnector {
+    pub async fn connect(
+        &self,
+        endpoint: SocketAddr,
+        trusted_certificate: CertificateDer<'static>,
+    ) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
+        let connection = self
+            .endpoint
+            .connect_with(
+                quic_client_config(trusted_certificate)?,
+                endpoint,
+                "p2p-vpn-packet-plane",
+            )?
+            .await?;
+        Ok(PacketPlaneQuicConnection { connection })
+    }
+
+    pub async fn accept(&self) -> Result<PacketPlaneQuicConnection, PacketPlaneQuicError> {
+        let incoming = self
+            .endpoint
+            .accept()
+            .await
+            .ok_or(PacketPlaneQuicError::EndpointClosed)?;
+        Ok(PacketPlaneQuicConnection {
+            connection: incoming.await?,
         })
     }
 }
