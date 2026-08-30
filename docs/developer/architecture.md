@@ -231,7 +231,7 @@ Configured overlay prefixes are filtered from:
 
 | Candidate Source | Filtered Values |
 | --- | --- |
-| libp2p listener candidates | Concrete and wildcard-expanded VPN addresses. |
+| Authenticated libp2p hints | Concrete listeners and configured external addresses; VPN addresses are removed. |
 | UDP packet-plane candidates | Observed or configured VPN endpoints. |
 | QUIC packet-plane candidates | Observed or configured VPN endpoints. |
 

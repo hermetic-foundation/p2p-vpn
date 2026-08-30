@@ -14175,12 +14175,24 @@ fn local_direct_address_candidates(swarm: &Swarm<Behaviour>, forwarder: &Forward
         .local_advertised_route_prefixes()
         .collect::<Vec<_>>();
     let interface_ips = local_interface_ips(&forwarder.config().interface.name);
+    direct_address_candidates_from_sources(
+        swarm.listeners().chain(swarm.external_addresses()),
+        &interface_ips,
+        &overlay_prefixes,
+    )
+}
+
+fn direct_address_candidates_from_sources<'a>(
+    sources: impl IntoIterator<Item = &'a Multiaddr>,
+    interface_ips: &[IpAddr],
+    overlay_prefixes: &[IpCidr],
+) -> Vec<String> {
     let mut addresses = Vec::new();
-    for listener in swarm.listeners() {
+    for listener in sources {
         for address in concrete_direct_listener_addresses_excluding_overlay(
             listener,
-            &interface_ips,
-            &overlay_prefixes,
+            interface_ips,
+            overlay_prefixes,
         ) {
             if addresses.len() >= MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES {
                 return addresses;
@@ -32485,6 +32497,21 @@ mod tests {
             &overlay_prefixes,
         )
         .is_empty());
+    }
+
+    #[test]
+    fn configured_external_addresses_are_authenticated_direct_candidates() {
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().expect("loopback");
+        let external: Multiaddr = "/ip4/10.0.2.2/tcp/4002".parse().expect("external");
+        let overlay: Multiaddr = "/ip4/10.45.0.1/tcp/4003".parse().expect("overlay");
+        let overlay_prefixes =
+            vec![IpCidr::new(IpAddr::V4(Ipv4Addr::new(10, 45, 0, 0)), 24).expect("overlay prefix")];
+        let sources = [loopback, external.clone(), external.clone(), overlay];
+
+        assert_eq!(
+            direct_address_candidates_from_sources(sources.iter(), &[], &overlay_prefixes),
+            vec![external.to_string()]
+        );
     }
 
     #[test]

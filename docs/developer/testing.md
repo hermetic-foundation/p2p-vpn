@@ -681,6 +681,7 @@ Coverage:
 | --- | --- |
 | Listener expansion | Configured VPN prefixes are not direct dial candidates. |
 | Concrete listeners | Concrete VPN listeners are rejected as direct candidates. |
+| External addresses | Configured underlay addresses become bounded authenticated candidates. |
 | Observed UDP endpoints | VPN endpoints are rejected as packet-plane candidates. |
 | Configured packet endpoints | VPN endpoints are rejected before advertisement. |
 
