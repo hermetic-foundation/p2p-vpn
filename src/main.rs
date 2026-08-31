@@ -40,7 +40,7 @@ use p2p_vpn::{
         validate_membership_records_at,
     },
     metrics::{RuntimeMetrics, prometheus_lines_from_metric_lines},
-    network_peer::NetworkPeerList,
+    network_peer::{NetworkPeer, NetworkPeerList},
     pairing::{
         DEFAULT_PAIRING_EXPIRES_IN_SECONDS, PairingConfigOptions, PairingError, PairingOffer,
         PairingOfferOptions, PairingRequestOptions, PairingResponse,
@@ -83,6 +83,7 @@ use p2p_vpn::membership::issue_membership_record_for_subject_at;
 use serde::{Deserialize, Serialize};
 
 const RELAY_CHECK_CAPPED_INPUT_LIMIT: usize = 256;
+const ALL_INSTANCE_NETWORK_PEER_LIST_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -270,7 +271,7 @@ enum Command {
         /// Running daemon control socket.
         #[arg(long, conflicts_with = "instance")]
         socket: Option<PathBuf>,
-        /// Running NixOS module instance under /run/p2p-vpn/INSTANCE/control.sock.
+        /// Running NixOS module instance under /run/p2p-vpn-INSTANCE/control.sock.
         #[arg(long, conflicts_with = "socket")]
         instance: Option<String>,
         /// Per-operation timeout.
@@ -2099,6 +2100,12 @@ fn instance_runtime_config(runtime_root: &Path, instance: &str) -> PathBuf {
         .join("config.json")
 }
 
+fn instance_runtime_control_socket(runtime_root: &Path, instance: &str) -> PathBuf {
+    runtime_root
+        .join(format!("p2p-vpn-{instance}"))
+        .join("control.sock")
+}
+
 fn load_instance_info(runtime_root: &Path, instance: &str) -> Result<InstanceInfo, String> {
     let path = instance_runtime_config(runtime_root, instance);
     let config = Config::load(&path).map_err(|error| {
@@ -2120,6 +2127,13 @@ fn load_instance_info(runtime_root: &Path, instance: &str) -> Result<InstanceInf
 }
 
 fn list_instances(runtime_root: &Path) -> Result<Vec<InstanceInfo>, String> {
+    list_instance_names(runtime_root)?
+        .into_iter()
+        .map(|instance| load_instance_info(runtime_root, &instance))
+        .collect()
+}
+
+fn list_instance_names(runtime_root: &Path) -> Result<Vec<String>, String> {
     let entries = fs::read_dir(runtime_root).map_err(|error| {
         format!(
             "failed to inspect runtime root {}: {error}",
@@ -2136,10 +2150,7 @@ fn list_instances(runtime_root: &Path) -> Result<Vec<InstanceInfo>, String> {
         })
         .collect::<Vec<_>>();
     names.sort();
-    names
-        .into_iter()
-        .map(|instance| load_instance_info(runtime_root, &instance))
-        .collect()
+    Ok(names)
 }
 
 fn write_instance_list(instances: &[InstanceInfo], format: InstanceFormat) -> Result<(), String> {
@@ -3038,9 +3049,7 @@ fn pair_daemon_target(target: &PairDaemonTarget) -> Result<(PathBuf, Duration), 
 }
 
 fn daemon_target(target: &DaemonTarget) -> Result<(PathBuf, Duration), String> {
-    if target.timeout_seconds == 0 || target.timeout_seconds > 300 {
-        return Err("--timeout-seconds must be between 1 and 300".to_owned());
-    }
+    let timeout = daemon_timeout(target.timeout_seconds)?;
     let socket = if let Some(instance) = target.instance.as_deref() {
         validate_nixos_instance_name(instance).map_err(|_| {
             "--instance must start with an ASCII letter or digit and contain only letters, digits, dots, underscores, or hyphens"
@@ -3053,7 +3062,14 @@ fn daemon_target(target: &DaemonTarget) -> Result<(PathBuf, Duration), String> {
             .clone()
             .unwrap_or_else(|| PathBuf::from("/run/p2p-vpn/control.sock"))
     };
-    Ok((socket, Duration::from_secs(target.timeout_seconds)))
+    Ok((socket, timeout))
+}
+
+fn daemon_timeout(timeout_seconds: u64) -> Result<Duration, String> {
+    if timeout_seconds == 0 || timeout_seconds > 300 {
+        return Err("--timeout-seconds must be between 1 and 300".to_owned());
+    }
+    Ok(Duration::from_secs(timeout_seconds))
 }
 
 fn pair_rpc_result(response: PairRpcResponseEnvelope) -> Result<PairRpcResult, String> {
@@ -5855,6 +5871,13 @@ async fn peers_dispatch(
         .await;
     }
 
+    if config.is_none() && !live {
+        let peers =
+            query_all_instance_network_peers(Path::new("/run"), daemon_timeout(timeout_seconds)?)
+                .await?;
+        return write_all_instance_network_peer_list(&peers, format);
+    }
+
     let config = config.unwrap_or_else(|| PathBuf::from("p2p-vpn.json"));
     if format == DaemonViewFormat::Json {
         if live {
@@ -8272,6 +8295,80 @@ async fn peers_command(target: &DaemonTarget, format: DaemonViewFormat) -> Resul
     write_network_peer_list(&peers, format)
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct AllInstanceNetworkPeerList {
+    schema_version: u8,
+    instance_count: usize,
+    peers: Vec<InstanceNetworkPeer>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct InstanceNetworkPeer {
+    instance: String,
+    network: String,
+    #[serde(flatten)]
+    peer: NetworkPeer,
+}
+
+async fn query_all_instance_network_peers(
+    runtime_root: &Path,
+    timeout: Duration,
+) -> Result<AllInstanceNetworkPeerList, String> {
+    let instances = list_instance_names(runtime_root)?;
+    let instance_count = instances.len();
+    let queries = instances.into_iter().map(|instance| {
+        let socket = instance_runtime_control_socket(runtime_root, &instance);
+        async move {
+            let peers = query_network_peers(&socket, timeout).await.map_err(|error| {
+                format!(
+                    "failed to list network peers for instance `{instance}` through {}: {error:?}",
+                    socket.display()
+                )
+            })?;
+            Ok::<_, String>((instance, peers))
+        }
+    });
+    let instance_lists = futures::future::join_all(queries)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let peers = instance_lists
+        .into_iter()
+        .flat_map(|(instance, peers)| {
+            let network = peers.network;
+            peers
+                .peers
+                .into_iter()
+                .map(move |peer| InstanceNetworkPeer {
+                    instance: instance.clone(),
+                    network: network.clone(),
+                    peer,
+                })
+        })
+        .collect();
+
+    Ok(AllInstanceNetworkPeerList {
+        schema_version: ALL_INSTANCE_NETWORK_PEER_LIST_SCHEMA_VERSION,
+        instance_count,
+        peers,
+    })
+}
+
+fn write_all_instance_network_peer_list(
+    peers: &AllInstanceNetworkPeerList,
+    format: DaemonViewFormat,
+) -> Result<(), String> {
+    match format {
+        DaemonViewFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(peers)
+                .map_err(|error| format!("failed to encode all-instance peer list: {error}"))?
+        ),
+        DaemonViewFormat::Text => print!("{}", all_instance_network_peer_list_text(peers)),
+    }
+    Ok(())
+}
+
 fn write_network_peer_list(
     peers: &NetworkPeerList,
     format: DaemonViewFormat,
@@ -8333,6 +8430,68 @@ fn network_peer_list_text(peers: &NetworkPeerList) -> String {
     for (hostnames, ipv4, peer) in rows {
         lines.push(format!(
             "{hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {:<5}  {}",
+            if peer.local { "yes" } else { "no" },
+            peer.peer_id
+        ));
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+fn all_instance_network_peer_list_text(peers: &AllInstanceNetworkPeerList) -> String {
+    let rows = peers
+        .peers
+        .iter()
+        .map(|entry| {
+            let hostnames = if entry.peer.hostnames.is_empty() {
+                "-".to_owned()
+            } else {
+                entry.peer.hostnames.join(",")
+            };
+            let ipv4 = if entry.peer.ipv4.is_empty() {
+                "-".to_owned()
+            } else {
+                entry
+                    .peer
+                    .ipv4
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            (&entry.instance, hostnames, ipv4, &entry.peer)
+        })
+        .collect::<Vec<_>>();
+    let instance_width = rows
+        .iter()
+        .map(|(instance, _, _, _)| instance.len())
+        .max()
+        .unwrap_or(0)
+        .max("INSTANCE".len());
+    let hostname_width = rows
+        .iter()
+        .map(|(_, hostname, _, _)| hostname.len())
+        .max()
+        .unwrap_or(0)
+        .max("HOSTNAMES".len());
+    let ipv4_width = rows
+        .iter()
+        .map(|(_, _, ipv4, _)| ipv4.len())
+        .max()
+        .unwrap_or(0)
+        .max("IPV4".len());
+    let mut lines = vec![
+        format!("instances: {}", peers.instance_count),
+        format!("peers: {}", peers.peers.len()),
+        String::new(),
+        format!(
+            "{:<instance_width$}  {:<hostname_width$}  {:<ipv4_width$}  LOCAL  PEER_ID",
+            "INSTANCE", "HOSTNAMES", "IPV4"
+        ),
+    ];
+    for (instance, hostnames, ipv4, peer) in rows {
+        lines.push(format!(
+            "{instance:<instance_width$}  {hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {:<5}  {}",
             if peer.local { "yes" } else { "no" },
             peer.peer_id
         ));
@@ -10984,6 +11143,30 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_targetless_all_instance_peer_inventory() {
+        let cli = Cli::try_parse_from(["p2p-vpn", "peers"]).expect("cli");
+
+        let Command::Peers {
+            config,
+            live,
+            socket,
+            instance,
+            timeout_seconds,
+            format,
+        } = cli.command
+        else {
+            panic!("expected peers command");
+        };
+
+        assert_eq!(config, None);
+        assert!(!live);
+        assert_eq!(socket, None);
+        assert_eq!(instance, None);
+        assert_eq!(timeout_seconds, 10);
+        assert_eq!(format, DaemonViewFormat::Text);
+    }
+
+    #[test]
     fn cli_parses_live_network_peer_inventory_target() {
         let cli = Cli::try_parse_from([
             "p2p-vpn",
@@ -11075,6 +11258,99 @@ mod tests {
         assert_eq!(output["peers"][0]["hostnames"][0], "worker-1");
         assert_eq!(output["peers"][0]["ipv4"][0], "100.64.0.1");
         assert_eq!(output["peers"][0]["ipv6"][0], "fd00::1");
+    }
+
+    #[tokio::test]
+    async fn all_instance_peer_inventory_queries_every_prepared_daemon() {
+        use p2p_vpn::runtime::control_socket::{ControlSocket, RuntimeControlRequest};
+
+        let runtime_root = std::env::temp_dir().join(format!(
+            "p2p-vpn-all-peers-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&runtime_root).expect("runtime root");
+        let prepare_instance = |instance: &str| {
+            let directory = runtime_root.join(format!("p2p-vpn-{instance}"));
+            fs::create_dir(&directory).expect("instance directory");
+            fs::write(directory.join("config.json"), b"{}").expect("runtime config marker");
+            directory.join("control.sock")
+        };
+        let beta_path = prepare_instance("beta");
+        let alpha_path = prepare_instance("alpha");
+        let (alpha_socket, mut alpha_requests) =
+            ControlSocket::bind(&alpha_path).expect("alpha control socket");
+        let (beta_socket, mut beta_requests) =
+            ControlSocket::bind(&beta_path).expect("beta control socket");
+        let alpha_responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::NetworkPeers { respond_to }) =
+                alpha_requests.recv().await
+            else {
+                panic!("expected alpha network peer request");
+            };
+            respond_to
+                .send(Ok(NetworkPeerList {
+                    schema_version: 1,
+                    network: "personal".to_owned(),
+                    peers: vec![NetworkPeer {
+                        peer_id: "12D3KooWAlpha".to_owned(),
+                        hostnames: vec!["alpha-host".to_owned()],
+                        ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
+                        ipv6: Vec::new(),
+                        local: true,
+                    }],
+                }))
+                .expect("alpha response accepted");
+        });
+        let beta_responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::NetworkPeers { respond_to }) =
+                beta_requests.recv().await
+            else {
+                panic!("expected beta network peer request");
+            };
+            respond_to
+                .send(Ok(NetworkPeerList {
+                    schema_version: 1,
+                    network: "runners".to_owned(),
+                    peers: vec![NetworkPeer {
+                        peer_id: "12D3KooWBeta".to_owned(),
+                        hostnames: vec!["beta-host".to_owned()],
+                        ipv4: vec!["100.64.0.2".parse().expect("IPv4")],
+                        ipv6: Vec::new(),
+                        local: false,
+                    }],
+                }))
+                .expect("beta response accepted");
+        });
+
+        let peers = query_all_instance_network_peers(&runtime_root, Duration::from_secs(1))
+            .await
+            .expect("all-instance inventory");
+
+        assert_eq!(peers.schema_version, 1);
+        assert_eq!(peers.instance_count, 2);
+        assert_eq!(peers.peers.len(), 2);
+        assert_eq!(peers.peers[0].instance, "alpha");
+        assert_eq!(peers.peers[0].network, "personal");
+        assert_eq!(peers.peers[1].instance, "beta");
+        assert_eq!(peers.peers[1].network, "runners");
+        let text = all_instance_network_peer_list_text(&peers);
+        assert!(text.starts_with("instances: 2\npeers: 2\n\n"));
+        assert!(text.contains("INSTANCE  HOSTNAMES"));
+        assert!(text.contains("alpha     alpha-host"));
+        let json = serde_json::to_value(&peers).expect("peer list JSON");
+        assert_eq!(json["peers"][0]["instance"], "alpha");
+        assert_eq!(json["peers"][0]["network"], "personal");
+        assert_eq!(json["peers"][0]["ipv4"][0], "100.64.0.1");
+
+        alpha_responder.await.expect("alpha responder");
+        beta_responder.await.expect("beta responder");
+        drop(alpha_socket);
+        drop(beta_socket);
+        fs::remove_dir_all(runtime_root).expect("cleanup runtime root");
     }
 
     #[test]

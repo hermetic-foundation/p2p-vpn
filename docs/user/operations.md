@@ -53,20 +53,48 @@ credentials. These commands emit public identity metadata only.
 
 ### Network Peers
 
-List the effective members of a NixOS network:
+List effective members across every prepared NixOS instance:
+
+```sh
+sudo p2p-vpn peers
+```
+
+The command queries every daemon concurrently. It fails instead of returning a
+partial inventory when one instance is unavailable.
+
+| Column | Value |
+| --- | --- |
+| `INSTANCE` | NixOS module instance containing the peer |
+| `HOSTNAMES` | Authenticated short names; `-` when unnamed |
+| `IPV4` | Identity-derived and explicit IPv4 host addresses |
+| `LOCAL` | Whether the row is local to that instance |
+| `PEER_ID` | libp2p public identity |
+
+Inspect one instance:
 
 ```sh
 sudo p2p-vpn peers --instance monarchic-runners
 ```
 
-The table includes local, explicitly configured, and transitive signed members.
+Both views include local, explicitly configured, and transitive signed members.
 
-| Column | Value |
+Use JSON for an all-instance inventory:
+
+```sh
+sudo p2p-vpn peers --format json
+```
+
+| JSON field | Type |
 | --- | --- |
-| `HOSTNAMES` | Authenticated short names; `-` when unnamed |
-| `IPV4` | Identity-derived and explicit IPv4 host addresses |
-| `LOCAL` | Whether the row is this daemon |
-| `PEER_ID` | libp2p public identity |
+| `schema_version` | Aggregate schema integer; currently `1` |
+| `instance_count` | Number of queried instances |
+| `peers[].instance` | NixOS module instance name |
+| `peers[].network` | Overlay network name |
+| `peers[].peer_id` | libp2p peer ID |
+| `peers[].hostnames` | Sorted hostname array |
+| `peers[].ipv4` | Sorted IPv4 array |
+| `peers[].ipv6` | Sorted IPv6 array |
+| `peers[].local` | Boolean |
 
 Use a control socket outside the NixOS module:
 
@@ -74,7 +102,7 @@ Use a control socket outside the NixOS module:
 sudo p2p-vpn peers --socket /run/p2p-vpn/control.sock
 ```
 
-Use JSON for IPv4, IPv6, and stable field names:
+Use the existing single-network JSON schema with an explicit target:
 
 ```sh
 sudo p2p-vpn peers \
@@ -84,7 +112,7 @@ sudo p2p-vpn peers \
 
 | JSON field | Type |
 | --- | --- |
-| `schema_version` | Integer; currently `1` |
+| `schema_version` | Single-network schema integer; currently `1` |
 | `network` | Network name |
 | `peers[].peer_id` | libp2p peer ID |
 | `peers[].hostnames` | Sorted hostname array |
