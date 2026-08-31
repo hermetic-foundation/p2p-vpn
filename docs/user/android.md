@@ -194,14 +194,15 @@ Run its non-mutating preflight first:
 nix run .#android-device-audit -- --preflight
 ```
 
-For an existing paired profile:
+For an existing paired profile, choose a scenario:
 
 ```sh
 nix run .#android-device-audit -- \
+  --scenario core \
   --network runners \
   --peer-ipv4 LINUX_OVERLAY_IPV4 \
   --peer-ipv6 LINUX_OVERLAY_IPV6 \
-  --output ./android-device-evidence
+  --output ./android-core-evidence
 ```
 
 Add `--serial DEVICE_SERIAL` when multiple ADB devices are attached.
@@ -211,17 +212,50 @@ Use `--pair` only when the app has no saved profile:
 ```sh
 nix run .#android-device-audit -- \
   --pair \
+  --scenario core \
   --network runners \
   --peer-ipv4 LINUX_OVERLAY_IPV4 \
   --peer-ipv6 LINUX_OVERLAY_IPV6 \
-  --output ./android-device-evidence
+  --output ./android-core-evidence
 ```
 
 The pairing code is read from the terminal without echoing or storing it.
 
-The runner prompts for these transitions:
+### Audit Scenarios
 
-1. LAN to cellular or a separate hotspot.
+| Scenario | Device transitions | Lifecycle checks |
+| --- | --- | --- |
+| `full` | LAN to separate hotspot, enable its upstream VPN, return to LAN | All |
+| `core` | LAN to cellular or separate hotspot, return to LAN | All |
+| `upstream-vpn` | Wi-Fi to VPN-routed hotspot, return to Wi-Fi | None |
+
+`full` remains the default for compatibility.
+
+It requires a separately managed hotspot whose upstream VPN can change while
+the Android test device stays connected.
+
+Use two devices when one phone supplies its own cellular connection:
+
+1. Run `core` on the cellular phone.
+2. Run `upstream-vpn` on a phone that can join the VPN-routed hotspot.
+
+The two evidence files cover the same physical topologies without requiring a
+phone to join its own hotspot.
+
+Run the second scenario with a separate output directory:
+
+```sh
+nix run .#android-device-audit -- \
+  --scenario upstream-vpn \
+  --network runners \
+  --peer-ipv4 LINUX_OVERLAY_IPV4 \
+  --peer-ipv6 LINUX_OVERLAY_IPV6 \
+  --output ./android-upstream-vpn-evidence
+```
+
+The `full` scenario prompts for these transitions:
+
+1. LAN to a separately managed hotspot.
 2. Hotspot with its upstream routed through a VPN.
 3. Return to the original LAN.
 4. Screen-off and forced Doze.
@@ -231,7 +265,7 @@ Do not start another Android VPN app for step 2.
 Android permits only one active VPN service. Apply the VPN to the hotspot's
 upstream connection instead.
 
-The default proof includes:
+The `full` and `core` proofs include:
 
 | Check | Default |
 | --- | ---: |
@@ -241,16 +275,24 @@ The default proof includes:
 | Traffic sampling | Every 60 seconds |
 | Packet-loss ceiling | 1 percent |
 
-The runner also recreates the app process and performs `adb install -r`.
+Those scenarios also recreate the app process and perform `adb install -r`.
 
-It requires identity and traffic persistence after both operations.
+The `upstream-vpn` scenario records only its baseline and two transitions.
+
+Every scenario requires identity and bidirectional traffic to persist through
+each included transition.
 
 `--allow-short` permits development smoke runs.
 
 Their evidence is explicitly marked `proof_eligible: false`.
 
-Proof-eligible runs require interactive confirmation of all three network
-transitions. Automated test confirmations require `--allow-short`.
+| Proof | Interactive transitions | Endurance minimum |
+| --- | ---: | ---: |
+| `full` | 3 | 30 minutes plus 5-minute Doze |
+| `core` | 2 | 30 minutes plus 5-minute Doze |
+| `upstream-vpn` | 2 | None |
+
+Automated test confirmations require `--allow-short`.
 
 The result is `OUTPUT/evidence.json`, capped at 2 MiB.
 

@@ -16,7 +16,6 @@ readonly minimum_proof_doze_seconds=300
 readonly default_transition_timeout_seconds=180
 readonly default_adb_timeout_seconds=60
 readonly cleanup_adb_timeout_seconds=5
-readonly required_transition_confirmations=3
 readonly default_minimum_free_bytes=$((4 * 1024 * 1024 * 1024))
 readonly maximum_evidence_bytes=$((2 * 1024 * 1024))
 
@@ -26,6 +25,7 @@ peer_ipv4=""
 peer_ipv6=""
 output_dir=""
 apk="${P2P_VPN_ANDROID_APK:-}"
+scenario="full"
 duration_seconds="$default_duration_seconds"
 sample_seconds="$default_sample_seconds"
 doze_seconds="$default_doze_seconds"
@@ -72,12 +72,15 @@ final_status_json=null
 evidence_path=""
 finalizing=0
 transition_confirmation_count=0
+required_transition_confirmations=3
+requires_endurance=true
+coverage_json='{"cellular_or_hotspot":true,"upstream_vpn":true,"lan_return":true,"doze":true,"sustained":true,"process_recreation":true,"in_place_update":true}'
 
 usage() {
   cat <<'EOF'
 Usage: p2p-vpn-android-device-audit [OPTIONS]
 
-Required for a full audit:
+Required for a non-preflight audit:
   --network NAME           Expected Android overlay network.
   --peer-ipv4 ADDRESS      Reachable Linux overlay IPv4 address.
   --peer-ipv6 ADDRESS      Reachable Linux overlay IPv6 address.
@@ -86,10 +89,11 @@ Required for a full audit:
 Options:
   --serial SERIAL          Authorized ADB device serial.
   --apk PATH               Debug APK used for the replacement update.
+  --scenario NAME          Audit scenario: full, core, or upstream-vpn; default: full.
   --pair                   Create a profile and join using a code read from the TTY.
-  --duration-seconds N     Sustained-run duration; default and proof minimum: 1800.
-  --sample-seconds N       Sustained traffic interval; default: 60.
-  --doze-seconds N         Forced-Doze hold; default and proof minimum: 300.
+  --duration-seconds N     Full/core sustained run; default and proof minimum: 1800.
+  --sample-seconds N       Full/core traffic interval; default: 60.
+  --doze-seconds N         Full/core Doze hold; default and proof minimum: 300.
   --transition-timeout N   Recovery deadline per transition; default: 180.
   --max-loss-percent N     Sustained packet-loss ceiling; default: 1.
   --allow-short            Permit a smoke run that is marked proof-ineligible.
@@ -131,6 +135,11 @@ while [[ $# -gt 0 ]]; do
     --apk)
       [[ $# -ge 2 ]] || { echo "--apk requires a value" >&2; exit 2; }
       apk="$2"
+      shift 2
+      ;;
+    --scenario)
+      [[ $# -ge 2 ]] || { echo "--scenario requires a value" >&2; exit 2; }
+      scenario="$2"
       shift 2
       ;;
     --pair)
@@ -181,6 +190,28 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$scenario" in
+  full)
+    required_transition_confirmations=3
+    requires_endurance=true
+    coverage_json='{"cellular_or_hotspot":true,"upstream_vpn":true,"lan_return":true,"doze":true,"sustained":true,"process_recreation":true,"in_place_update":true}'
+    ;;
+  core)
+    required_transition_confirmations=2
+    requires_endurance=true
+    coverage_json='{"cellular_or_hotspot":true,"upstream_vpn":false,"lan_return":true,"doze":true,"sustained":true,"process_recreation":true,"in_place_update":true}'
+    ;;
+  upstream-vpn)
+    required_transition_confirmations=2
+    requires_endurance=false
+    coverage_json='{"cellular_or_hotspot":false,"upstream_vpn":true,"lan_return":true,"doze":false,"sustained":false,"process_recreation":false,"in_place_update":false}'
+    ;;
+  *)
+    echo "--scenario must be full, core, or upstream-vpn" >&2
+    exit 2
+    ;;
+esac
 
 unsigned_integer() {
   [[ "$1" =~ ^[0-9]{1,18}$ ]]
@@ -269,7 +300,8 @@ if ((maximum_loss_percent > 100)); then
   echo "--max-loss-percent must be between 0 and 100" >&2
   exit 2
 fi
-if ((allow_short == 0)) \
+if [[ "$requires_endurance" == true ]] \
+  && ((allow_short == 0)) \
   && ((duration_seconds < minimum_proof_duration_seconds \
     || doze_seconds < minimum_proof_doze_seconds)); then
   echo "shortened duration or Doze checks require --allow-short" >&2
@@ -955,7 +987,7 @@ finish_audit() {
   if [[ "$outcome" == running ]]; then
     if ((exit_status == 0)); then
       outcome=passed
-      outcome_detail="Physical arm64 audit passed"
+      outcome_detail="Physical arm64 $scenario audit passed"
     else
       outcome=failed
     fi
@@ -963,14 +995,17 @@ finish_audit() {
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$outcome" == passed ]] && ((allow_short == 0 \
     && auto_confirm == 0 \
-    && transition_confirmation_count >= required_transition_confirmations \
-    && duration_seconds >= minimum_proof_duration_seconds \
-    && doze_seconds >= minimum_proof_doze_seconds)); then
-    proof_eligible=true
+    && transition_confirmation_count >= required_transition_confirmations)); then
+    if [[ "$requires_endurance" != true ]] \
+      || ((duration_seconds >= minimum_proof_duration_seconds \
+        && doze_seconds >= minimum_proof_doze_seconds)); then
+      proof_eligible=true
+    fi
   fi
 
   if ! jq -n \
     --argjson schema_version "$schema_version" \
+    --arg scenario "$scenario" \
     --arg outcome "$outcome" \
     --arg detail "$outcome_detail" \
     --arg started_at "$started_at" \
@@ -986,6 +1021,7 @@ finish_audit() {
     --argjson automatic_confirmation "$automatic_confirmation" \
     --argjson transition_confirmations "$transition_confirmation_count" \
     --argjson required_confirmations "$required_transition_confirmations" \
+    --argjson coverage "$coverage_json" \
     --argjson sustained "$sustained_summary_json" \
     --argjson final_status "$final_status_json" \
     --argjson final_diagnostics "$diagnostics_end_json" \
@@ -1001,6 +1037,8 @@ finish_audit() {
       started_at: $started_at,
       finished_at: $finished_at,
       contract: {
+        scenario: $scenario,
+        coverage: $coverage,
         arm64_required: true,
         minimum_api: 26,
         duration_seconds: $duration,
@@ -1108,32 +1146,67 @@ record_step lan_baseline passed \
     '{status: $status, traffic: $traffic}')"
 
 checkpoint_status_file="$state_dir/checkpoint-status.json"
-run_transition_checkpoint \
-  hotspot_or_cellular \
-  "Move the Android device from LAN to cellular or a separate hotspot. Do not add port forwarding." \
-  1 \
-  "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_transition_checkpoint \
-  hotspot_upstream_vpn \
-  "Route that hotspot's upstream connection through a VPN. Do not start a second Android VPN app." \
-  0 \
-  "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_transition_checkpoint \
-  lan_return \
-  "Disable the upstream VPN and return the Android device to the original LAN." \
-  1 \
-  "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_doze_checkpoint "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_sustained_checkpoint "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_process_recreation_checkpoint "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
-run_update_checkpoint "$current_status" > "$checkpoint_status_file"
-current_status="$(< "$checkpoint_status_file")"
+case "$scenario" in
+  full)
+    run_transition_checkpoint \
+      hotspot_or_cellular \
+      "Move the Android device from LAN to a separately managed hotspot. Do not add port forwarding." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    run_transition_checkpoint \
+      hotspot_upstream_vpn \
+      "Route that hotspot's upstream connection through a VPN. Do not start a second Android VPN app." \
+      0 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    run_transition_checkpoint \
+      lan_return \
+      "Disable the upstream VPN and return the Android device to the original LAN." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    ;;
+  core)
+    run_transition_checkpoint \
+      hotspot_or_cellular \
+      "Move the Android device from LAN to cellular or a separate hotspot. Do not add port forwarding." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    run_transition_checkpoint \
+      lan_return \
+      "Return the Android device to the original LAN." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    ;;
+  upstream-vpn)
+    run_transition_checkpoint \
+      hotspot_upstream_vpn \
+      "Move the Android device from LAN/Wi-Fi to a separate hotspot whose upstream is routed through a VPN. Do not start a second Android VPN app." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    run_transition_checkpoint \
+      lan_return \
+      "Return the Android device to the original LAN/Wi-Fi." \
+      1 \
+      "$current_status" > "$checkpoint_status_file"
+    current_status="$(< "$checkpoint_status_file")"
+    ;;
+esac
+
+if [[ "$requires_endurance" == true ]]; then
+  run_doze_checkpoint "$current_status" > "$checkpoint_status_file"
+  current_status="$(< "$checkpoint_status_file")"
+  run_sustained_checkpoint "$current_status" > "$checkpoint_status_file"
+  current_status="$(< "$checkpoint_status_file")"
+  run_process_recreation_checkpoint "$current_status" > "$checkpoint_status_file"
+  current_status="$(< "$checkpoint_status_file")"
+  run_update_checkpoint "$current_status" > "$checkpoint_status_file"
+  current_status="$(< "$checkpoint_status_file")"
+fi
 
 final_identity="$(jq -r '.value.snapshot.peer_id' <<< "$current_status")"
 if [[ "$final_identity" != "$baseline_identity" ]]; then
@@ -1141,5 +1214,5 @@ if [[ "$final_identity" != "$baseline_identity" ]]; then
 fi
 final_status_json="$(sanitize_status <<< "$current_status")"
 outcome=passed
-outcome_detail="Physical arm64 audit passed"
+outcome_detail="Physical arm64 $scenario audit passed"
 exit 0

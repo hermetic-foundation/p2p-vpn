@@ -1752,6 +1752,10 @@
                   "$test_root/preflight-state" \
                   "$test_root/full-state" \
                   "$test_root/full-evidence" \
+                  "$test_root/core-state" \
+                  "$test_root/core-evidence" \
+                  "$test_root/upstream-vpn-state" \
+                  "$test_root/upstream-vpn-evidence" \
                   "$test_root/failure-state" \
                   "$test_root/failure-evidence"
                 printf 'apk\n' > "$test_root/fake.apk"
@@ -1821,6 +1825,19 @@
                 test "$unsafe_address_status" -eq 2
                 ! grep -Fq ' install ' "$test_root/preflight-state/adb.log"
 
+                set +e
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --scenario unsupported \
+                    --apk "$test_root/fake.apk" \
+                    --preflight
+                unsupported_scenario_status=$?
+                set -e
+                test "$unsupported_scenario_status" -eq 2
+                ! grep -Fq ' install ' "$test_root/preflight-state/adb.log"
+
                 env \
                   "''${common_environment[@]}" \
                   P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/full-state" \
@@ -1842,6 +1859,8 @@
                   .schema_version == 1 and
                   .kind == "p2p-vpn-android-physical-audit" and
                   .outcome == "passed" and
+                  .contract.scenario == "full" and
+                  (.contract.coverage | to_entries | all(.value)) and
                   (.contract.proof_eligible | not) and
                   .contract.operator.automatic_confirmation and
                   .contract.operator.interactive_transition_confirmations == 0 and
@@ -1892,6 +1911,87 @@
                   "$test_root/full-state/adb.log"
                 test "$(grep -c ' install -r ' "$test_root/full-state/adb.log")" -eq 2
 
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/core-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --scenario core \
+                    --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/core-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --duration-seconds 1 \
+                    --sample-seconds 1 \
+                    --doze-seconds 1 \
+                    --transition-timeout 10 \
+                    --allow-short
+
+                jq -e '
+                  .outcome == "passed" and
+                  .contract.scenario == "core" and
+                  .contract.coverage == {
+                    cellular_or_hotspot: true,
+                    upstream_vpn: false,
+                    lan_return: true,
+                    doze: true,
+                    sustained: true,
+                    process_recreation: true,
+                    in_place_update: true
+                  } and
+                  .contract.operator.required_transition_confirmations == 2 and
+                  [.steps[].name] == [
+                    "lan_baseline",
+                    "hotspot_or_cellular",
+                    "lan_return",
+                    "screen_off_doze",
+                    "sustained_connection",
+                    "process_service_recreation",
+                    "in_place_apk_update"
+                  ] and
+                  ([.steps[].state] | all(. == "passed")) and
+                  .sustained.sent >= 20
+                ' "$test_root/core-evidence/evidence.json" >/dev/null
+                test "$(grep -c ' install -r ' "$test_root/core-state/adb.log")" -eq 2
+
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/upstream-vpn-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --scenario upstream-vpn \
+                    --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/upstream-vpn-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --transition-timeout 10 \
+                    --allow-short
+
+                jq -e '
+                  .outcome == "passed" and
+                  .contract.scenario == "upstream-vpn" and
+                  .contract.coverage == {
+                    cellular_or_hotspot: false,
+                    upstream_vpn: true,
+                    lan_return: true,
+                    doze: false,
+                    sustained: false,
+                    process_recreation: false,
+                    in_place_update: false
+                  } and
+                  .contract.operator.required_transition_confirmations == 2 and
+                  [.steps[].name] == [
+                    "lan_baseline",
+                    "hotspot_upstream_vpn",
+                    "lan_return"
+                  ] and
+                  ([.steps[].state] | all(. == "passed")) and
+                  .sustained == null
+                ' "$test_root/upstream-vpn-evidence/evidence.json" >/dev/null
+                test "$(grep -c ' install -r ' "$test_root/upstream-vpn-state/adb.log")" -eq 1
+                ! grep -Fq 'shell dumpsys deviceidle force-idle' \
+                  "$test_root/upstream-vpn-state/adb.log"
+
                 set +e
                 env \
                   "''${common_environment[@]}" \
@@ -1914,6 +2014,7 @@
                 jq -e '
                   .outcome == "failed" and
                   .detail == "Android could not enter forced Doze" and
+                  .contract.scenario == "full" and
                   (.contract.proof_eligible | not) and
                   .cleanup.doze_released and
                   .cleanup.screen_awake and

@@ -423,14 +423,15 @@ Run the non-mutating device preflight:
 nix run .#android-device-audit -- --preflight
 ```
 
-Run the full proof against an existing Linux overlay member:
+Run a core proof against an existing Linux overlay member:
 
 ```sh
 nix run .#android-device-audit -- \
+  --scenario core \
   --network NETWORK \
   --peer-ipv4 LINUX_OVERLAY_IPV4 \
   --peer-ipv6 LINUX_OVERLAY_IPV6 \
-  --output ./android-device-evidence
+  --output ./android-core-evidence
 ```
 
 The safe launcher realizes `android-device-audit-runtime`.
@@ -451,7 +452,43 @@ It does not carry overlay or bootstrap traffic.
 | Host overlay ping | Uses the host routing table |
 | Android overlay ping | Uses the active `VpnService` interface |
 
-### Audit Sequence
+### Audit Scenarios
+
+| Scenario | Topology coverage | Endurance and lifecycle |
+| --- | --- | --- |
+| `full` | LAN, separate hotspot, upstream VPN, LAN return | Included |
+| `core` | LAN, cellular or separate hotspot, LAN return | Included |
+| `upstream-vpn` | LAN/Wi-Fi, VPN-routed hotspot, LAN/Wi-Fi return | Excluded |
+
+`full` is the compatible default.
+
+It requires an externally managed hotspot. The hotspot's upstream VPN must be
+changeable while the Android device stays connected.
+
+When the Android device supplies the cellular path, use two audit runs:
+
+1. Run `core` on the cellular device.
+2. Run `upstream-vpn` on another device that can join the VPN-routed hotspot.
+
+Each evidence file identifies its scenario and exact coverage.
+
+Together, proof-eligible `core` and `upstream-vpn` evidence cover the complete
+physical topology and lifecycle contract.
+
+### Scenario Sequences
+
+| Phase | `full` | `core` | `upstream-vpn` |
+| --- | :---: | :---: | :---: |
+| LAN baseline | Yes | Yes | Yes |
+| Separate hotspot or cellular | Yes | Yes | No |
+| Hotspot upstream VPN | Yes | No | Yes |
+| LAN return | Yes | Yes | Yes |
+| Screen-off/Doze | Yes | Yes | No |
+| Sustained run | Yes | Yes | No |
+| Process recreation | Yes | Yes | No |
+| APK replacement | Yes | Yes | No |
+
+### Audit Assertions
 
 | Phase | Required Evidence |
 | --- | --- |
@@ -476,6 +513,7 @@ It records only aggregate state:
 
 | Scope | Recorded |
 | --- | --- |
+| Contract | Scenario, coverage flags, thresholds, operator confirmations |
 | Device | arm64 contract and Android API |
 | Recovery | Convergence time, underlay counters, runtime generation |
 | Traffic | Sent and received packets per direction and family |
@@ -486,11 +524,17 @@ It records only aggregate state:
 
 Serials, models, peer IDs, addresses, codes, and identity material are excluded.
 
-Runs shorter than 30 minutes or five minutes of Doze require `--allow-short`.
+`full` and `core` runs shorter than 30 minutes or five minutes of Doze require
+`--allow-short`.
 
-Those runs cannot set `contract.proof_eligible`.
+`upstream-vpn` has no endurance phase. Its proof eligibility requires two
+interactive topology confirmations and omitting `--allow-short`.
 
-All three network transitions also require interactive operator confirmation.
+Any run using `--allow-short` cannot set `contract.proof_eligible`.
+
+`full` requires three interactive transitions.
+
+`core` and `upstream-vpn` each require two.
 
 The fake-device auto-confirm mode is accepted only with `--allow-short` and can
 never produce proof-eligible evidence.
