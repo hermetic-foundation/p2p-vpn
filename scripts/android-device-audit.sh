@@ -647,11 +647,15 @@ connect_with_permission() {
   if jq -e '.ok' <<< "$response" >/dev/null; then
     return 0
   fi
-  if ! jq -e '.error == "vpn_permission_required"' <<< "$response" >/dev/null; then
+  if ! jq -e '
+    .error == "local_network_permission_required" or
+    .error == "vpn_permission_required"
+  ' <<< "$response" >/dev/null; then
     return 1
   fi
   start_app
-  prompt_operator "In p2p-vpn, tap Connect and approve the Android VPN permission dialog."
+  prompt_operator \
+    "In p2p-vpn, tap Connect and approve the local-network and VPN permission dialogs shown."
   response="$(android_automation connect)" || return 1
   jq -e '.ok' <<< "$response" >/dev/null
 }

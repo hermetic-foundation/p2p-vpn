@@ -75,8 +75,12 @@ It restores the same encrypted profile on later launches.
 ## Connect
 
 1. Select **Connect**.
-2. Approve the Android VPN prompt.
-3. Allow connection notifications when Android requests permission.
+2. Allow local-network access when Android requests permission.
+3. Approve the Android VPN prompt.
+4. Allow connection notifications when Android requests permission.
+
+Local-network access is required for LAN discovery and direct peer paths on
+Android API 37 and newer. Denying it leaves the profile disconnected.
 
 The app installs only the overlay IPv4 and IPv6 routes.
 

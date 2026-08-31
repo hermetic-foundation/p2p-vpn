@@ -559,6 +559,13 @@ let
           fi
 
           ${androidSdk}/bin/apkanalyzer manifest print "$apk" > apk-manifest.xml
+          if ! grep -F 'android.permission.ACCESS_LOCAL_NETWORK' \
+            apk-manifest.xml >/dev/null
+          then
+            echo "APK must request Android local-network access" >&2
+            exit 1
+          fi
+
           if ! grep -A1 -F 'android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"' \
             apk-manifest.xml | grep -F 'android:value="false"' >/dev/null
           then

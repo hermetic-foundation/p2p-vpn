@@ -52,6 +52,20 @@ Android supplies packet I/O and marks TUN routes as preconfigured.
 
 Linux behavior and protocol encodings remain unchanged.
 
+## Android Permissions
+
+| Permission | Purpose | Runtime gate |
+| --- | --- | --- |
+| `INTERNET` | Public discovery, relay, and direct transports | Install time |
+| `ACCESS_LOCAL_NETWORK` | LAN discovery and raw direct TCP/UDP | API and target 37+ |
+| `POST_NOTIFICATIONS` | Foreground-service connection status | API 33+ |
+| Android VPN consent | Create and own the TUN interface | Every revoked grant |
+
+The UI requests local-network access before VPN consent.
+
+The service also rejects startup and stops after revocation. This prevents a
+nominally connected profile from silently losing all LAN transports.
+
 ## JNI Contract
 
 | Method | Result |
@@ -622,13 +636,13 @@ The gate covers:
 | Java unit tests | RPC JSON, approval, status, underlay selection, diagnostics |
 | Android lint | Debug variant static analysis |
 | APK | Dual ABI, JNI entry, debug ID, signing, min/target SDK |
-| Manifest | Always-on disabled; debug automation protected by `DUMP` |
+| Manifest | LAN permission; always-on disabled; automation protected by `DUMP` |
 
 ## Device E2E
 
 1. Build and install with `nix run .#android-install`.
 2. Create the same network name as a Linux instance.
-3. Connect and approve the VPN permission.
+3. Connect and approve local-network access and VPN permission.
 4. Pair from only the code and approve the candidate.
 5. Read both overlay addresses with `p2p-vpn peers`.
 6. Ping Android from Linux and Linux from `adb shell`.

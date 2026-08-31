@@ -31,6 +31,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private static final int VPN_PERMISSION_REQUEST = 100;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 101;
     private static final int DIAGNOSTIC_EXPORT_REQUEST = 102;
+    private static final int LOCAL_NETWORK_PERMISSION_REQUEST = 103;
     private static final String STATE_DIAGNOSTIC_REPORT = "pending_diagnostic_report";
 
     private LinearLayout profileSetup;
@@ -204,6 +205,20 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         }
     }
 
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != LOCAL_NETWORK_PERMISSION_REQUEST) {
+            return;
+        }
+        if (LocalNetworkPermission.isGranted(this)) {
+            requestVpnConnection();
+        } else {
+            showLocalStatus("Local network permission was not granted");
+        }
+    }
+
     private void bindViews() {
         profileSetup = findViewById(R.id.profile_setup);
         profileRecovery = findViewById(R.id.profile_recovery);
@@ -311,6 +326,12 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private void requestVpnConnection() {
         if (latestSnapshot == null || !latestSnapshot.hasProfile) {
             showLocalStatus("Create a profile before connecting");
+            return;
+        }
+        if (!LocalNetworkPermission.isGranted(this)) {
+            requestPermissions(
+                    new String[] {LocalNetworkPermission.NAME},
+                    LOCAL_NETWORK_PERMISSION_REQUEST);
             return;
         }
         Intent permission = VpnService.prepare(this);

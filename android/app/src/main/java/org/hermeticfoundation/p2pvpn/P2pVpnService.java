@@ -217,6 +217,10 @@ public final class P2pVpnService extends VpnService {
         if (!desiredConnected || operationInProgress) {
             return;
         }
+        if (!LocalNetworkPermission.isGranted(this)) {
+            stopForMissingLocalNetworkPermission();
+            return;
+        }
         operationInProgress = true;
         connectionDetail = initialDetail;
         peerDetail = "Overlay peers: discovering";
@@ -445,6 +449,10 @@ public final class P2pVpnService extends VpnService {
         if (!connected) {
             return;
         }
+        if (!LocalNetworkPermission.isGranted(this)) {
+            stopForMissingLocalNetworkPermission();
+            return;
+        }
         boolean runtimeFailed = false;
         String failure = null;
         try {
@@ -481,6 +489,23 @@ public final class P2pVpnService extends VpnService {
         if (connected) {
             scheduleStatusPoll();
         }
+    }
+
+    private void stopForMissingLocalNetworkPermission() {
+        desiredConnected = false;
+        recordDiagnosticEvent("local_network_permission_missing");
+        if (connected) {
+            stopNativeRuntime();
+        }
+        connectionDetail = "Local network permission is required";
+        peerDetail = "Overlay peers: unavailable";
+        updateForegroundNotification();
+        publishSnapshot();
+        mainHandler.post(
+                () -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    stopSelf();
+                });
     }
 
     private void loadProfileMetadata() {

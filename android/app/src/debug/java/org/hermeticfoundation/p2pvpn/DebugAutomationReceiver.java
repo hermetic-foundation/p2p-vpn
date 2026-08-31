@@ -88,6 +88,10 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
     }
 
     private void connect(Context context) throws JSONException {
+        if (!LocalNetworkPermission.isGranted(context)) {
+            respond(false, null, "local_network_permission_required");
+            return;
+        }
         if (VpnService.prepare(context) != null) {
             respond(false, null, "vpn_permission_required");
             return;
