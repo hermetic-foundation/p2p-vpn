@@ -126,6 +126,17 @@ Coverage:
 | APK | Both JNI ABIs, signature, debug ID, and SDK levels match. |
 | Manifest | Unsupported always-on VPN mode is disabled. |
 
+Run the physical-device audit preflight without changing the device:
+
+```sh
+nix run .#android-device-audit -- --preflight
+```
+
+Run `.#checks.x86_64-linux.android-device-audit-structure` to verify the
+arm64 contract, checkpoint evidence, privacy boundary, and failure cleanup.
+
+The structure check uses fake ADB and cannot replace the physical arm64 run.
+
 Run the managed API 35 emulator:
 
 ```sh

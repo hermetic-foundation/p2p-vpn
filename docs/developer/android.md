@@ -30,6 +30,7 @@ MainActivity
 | `android/app/src/main/java/.../PairRpc.java` | Existing pairing RPC shapes |
 | `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
 | `crates/p2p-vpn-android/src/lib.rs` | JNI and runtime adapter |
+| `scripts/android-device-audit.sh` | Physical arm64 transition and endurance audit |
 | `src/runtime/tun.rs` | Platform-neutral packet I/O and route hooks |
 | `src/runtime/control.rs` | In-process runtime control channel |
 | `nix/android.nix` | Cross build, SDK, APK, apps, and checks |
@@ -238,6 +239,7 @@ Android outputs exist on `x86_64-linux`.
 | `.#android-rust-tests` | Host-side bridge tests |
 | `.#android-debug-apk` | Signed dual-ABI debug APK |
 | `.#android-e2e` | Managed Android/Linux E2E harness |
+| `.#android-device-audit` | Guarded physical arm64 audit launcher |
 | `.#android-emulator` | API 35 x86_64 emulator package |
 | `.#android-sdk` | Pinned SDK and platform tools |
 | `devShells.android` | Gradle, JDK, SDK, NDK, and ADB |
@@ -245,6 +247,7 @@ Android outputs exist on `x86_64-linux`.
 | `apps.android-emulator` | Boot the managed test emulator |
 | `apps.android-update-deps` | Refresh pinned Gradle dependencies |
 | `checks.android` | Full Android build and verification gate |
+| `checks.android-device-audit-structure` | Fake-device contract and cleanup gate |
 
 ## Toolchain
 
@@ -387,6 +390,89 @@ the validated diagnostic report, and cleanup results.
 
 Runtime logs are redacted before evidence validation.
 
+## Physical Arm64 Audit
+
+Run the non-mutating device preflight:
+
+```sh
+nix run .#android-device-audit -- --preflight
+```
+
+Run the full proof against an existing Linux overlay member:
+
+```sh
+nix run .#android-device-audit -- \
+  --network NETWORK \
+  --peer-ipv4 LINUX_OVERLAY_IPV4 \
+  --peer-ipv6 LINUX_OVERLAY_IPV6 \
+  --output ./android-device-evidence
+```
+
+The safe launcher realizes `android-device-audit-runtime`.
+
+That closure includes the APK and platform tools, but not the emulator image.
+
+### Management Boundary
+
+ADB controls the app and reads aggregate status.
+
+It does not carry overlay or bootstrap traffic.
+
+| Mechanism | Audit Policy |
+| --- | --- |
+| USB or wireless ADB | Management only |
+| `adb forward` | Never used |
+| `adb reverse` | Never used |
+| Host overlay ping | Uses the host routing table |
+| Android overlay ping | Uses the active `VpnService` interface |
+
+### Audit Sequence
+
+| Phase | Required Evidence |
+| --- | --- |
+| LAN baseline | IPv4 and IPv6 pass 5/5 in both directions |
+| Hotspot or cellular | Selection changes; traffic recovers without runtime restart |
+| Hotspot upstream VPN | Traffic recovers without ADB tunneling or runtime restart |
+| LAN return | Selection changes; traffic recovers without runtime restart |
+| Screen-off/Doze | Five-minute hold, stable runtime generation, 20/20 traffic |
+| Sustained run | Thirty minutes, sampled dual-stack traffic, bounded loss |
+| Process recreation | New PID, same identity, restored traffic |
+| APK replacement | `adb install -r`, same identity, restored traffic |
+
+The upstream VPN belongs on the hotspot or router.
+
+A second Android VPN app would replace p2p-vpn and invalidate the test.
+
+### Evidence Contract
+
+`evidence.json` is capped at 2 MiB.
+
+It records only aggregate state:
+
+| Scope | Recorded |
+| --- | --- |
+| Device | arm64 contract and Android API |
+| Recovery | Convergence time, underlay counters, runtime generation |
+| Traffic | Sent and received packets per direction and family |
+| Paths | Aggregate direct, relay, routing, and promotion counters |
+| Resources | CPU delta, final PSS, private dirty memory, threads |
+| Battery | Level and charge-counter deltas; plugged state qualifies the result |
+| Lifecycle | Process recreation, APK replacement, identity-preserved booleans |
+
+Serials, models, peer IDs, addresses, codes, and identity material are excluded.
+
+Runs shorter than 30 minutes or five minutes of Doze require `--allow-short`.
+
+Those runs cannot set `contract.proof_eligible`.
+
+### Failure Cleanup
+
+Every exit path releases forced Doze and wakes the screen.
+
+Temporary host state is removed without clearing the Android profile.
+
+The structure check injects a Doze failure and verifies this cleanup.
+
 ### Storage Safety
 
 The app, SDK, cross toolchains, and emulator form a large Nix closure.
@@ -409,6 +495,7 @@ nix = {
 | Layer | Guard |
 | --- | --- |
 | Safe launcher | Checks temporary and Nix-store free space before realization. |
+| Physical closure | Omits the emulator image and system AVD. |
 | Trusted caches | Uses the official cache plus `nix-community` when its signing key is trusted. |
 | Source fallback | Rejects non-fixed third-party builds and realizes with `fallback = false`. |
 | Local plan | Caps all builds at 512, non-fixed builds at 256, and permits reviewed classes. |

@@ -197,6 +197,7 @@
 
             ${lib.optionalString androidSupported ''
               checks+=(".#checks.$system.android")
+              checks+=(".#checks.$system.android-device-audit-structure")
             ''}
 
             if [[ "$is_linux" -eq 1 ]]; then
@@ -379,6 +380,46 @@
             }
           else
             null;
+        androidDeviceAuditRuntime =
+          if androidSupported then
+            pkgs.writeShellApplication {
+              name = "p2p-vpn-android-device-audit";
+              runtimeInputs = [
+                android.androidSdk
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.gawk
+                pkgs.gnugrep
+                pkgs.gnused
+                pkgs.iputils
+                pkgs.jq
+              ];
+              text = ''
+                export P2P_VPN_ADB=${android.androidSdk}/bin/adb
+                export P2P_VPN_ANDROID_APK=${android.androidDebugApk}/p2p-vpn-debug.apk
+                exec bash ${./scripts/android-device-audit.sh} "$@"
+              '';
+            }
+          else
+            null;
+        androidDeviceAuditLauncher =
+          if androidSupported then
+            pkgs.writeShellApplication {
+              name = "p2p-vpn-android-device-audit";
+              runtimeInputs = [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.gnugrep
+                pkgs.gnused
+              ];
+              text = ''
+                export P2P_VPN_ANDROID_E2E_FLAKE=${lib.escapeShellArg "path:${./.}"}
+                export P2P_VPN_ANDROID_E2E_RUNTIME_TARGET=android-device-audit-runtime
+                exec bash ${./scripts/android-e2e-nix.sh} "$@"
+              '';
+            }
+          else
+            null;
         androidE2eStructure =
           if androidSupported then
             pkgs.runCommand "p2p-vpn-android-e2e-structure"
@@ -484,6 +525,12 @@
                 printf '%s\n' "$*" > "''${P2P_VPN_ANDROID_E2E_FAKE_RUNTIME_LOG:?}"
                 EOF
                 chmod +x "$test_root/launcher-runtime/bin/p2p-vpn-android-e2e"
+                cat > "$test_root/launcher-runtime/bin/p2p-vpn-android-device-audit" <<'EOF'
+                #!${pkgs.bash}/bin/bash
+                set -euo pipefail
+                printf '%s\n' "$*" > "''${P2P_VPN_ANDROID_E2E_FAKE_RUNTIME_LOG:?}"
+                EOF
+                chmod +x "$test_root/launcher-runtime/bin/p2p-vpn-android-device-audit"
 
                 launcher_log="$test_root/launcher-nix.log"
                 launcher_runtime_log="$test_root/launcher-runtime.log"
@@ -503,6 +550,21 @@
                 grep -F -- '--option substituters https://cache.nixos.org\ https://nix-community.cachix.org' \
                   "$launcher_log"
                 ! grep -F -- 'niri.cachix.org' "$launcher_log"
+                test -z "$(find "$test_root/launcher-tmp" -maxdepth 1 \
+                  -name 'p2p-vpn-android-e2e-plan.*' -print -quit)"
+
+                : > "$launcher_log"
+                P2P_VPN_ANDROID_E2E_NIX="$test_root/bin/fake-nix" \
+                  P2P_VPN_ANDROID_E2E_FLAKE=path:/fake \
+                  P2P_VPN_ANDROID_E2E_RUNTIME_TARGET=android-device-audit-runtime \
+                  P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES=0 \
+                  P2P_VPN_ANDROID_E2E_FAKE_NIX_LOG="$launcher_log" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME="$test_root/launcher-runtime" \
+                  P2P_VPN_ANDROID_E2E_FAKE_RUNTIME_LOG="$launcher_runtime_log" \
+                  TMPDIR="$test_root/launcher-tmp" \
+                  bash ${./scripts/android-e2e-nix.sh} --preflight
+                grep -Fx -- '--preflight' "$launcher_runtime_log"
+                grep -F -- 'path:/fake#android-device-audit-runtime' "$launcher_log"
                 test -z "$(find "$test_root/launcher-tmp" -maxdepth 1 \
                   -name 'p2p-vpn-android-e2e-plan.*' -print -quit)"
 
@@ -1650,6 +1712,188 @@
                 ' "$test_root/space-evidence/evidence.json" >/dev/null
                 test ! -s "$test_root/space-evidence/emulator.log"
 
+                touch "$out"
+              ''
+          else
+            null;
+        androidDeviceAuditStructure =
+          if androidSupported then
+            pkgs.runCommand "p2p-vpn-android-device-audit-structure"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.gawk
+                  pkgs.gnugrep
+                  pkgs.gnused
+                  pkgs.jq
+                  pkgs.shellcheck
+                ];
+              }
+              ''
+                shellcheck ${./scripts/android-device-audit.sh}
+                shellcheck ${./tests/android-device-audit/fake-adb.sh}
+                shellcheck ${./tests/android-device-audit/fake-ping.sh}
+
+                test_root="$TMPDIR/android-device-audit-test"
+                mkdir -p \
+                  "$test_root/bin" \
+                  "$test_root/tmp" \
+                  "$test_root/preflight-state" \
+                  "$test_root/full-state" \
+                  "$test_root/full-evidence" \
+                  "$test_root/failure-state" \
+                  "$test_root/failure-evidence"
+                printf 'apk\n' > "$test_root/fake.apk"
+                cp ${./tests/android-device-audit/fake-adb.sh} "$test_root/bin/fake-adb"
+                cp ${./tests/android-device-audit/fake-ping.sh} "$test_root/bin/fake-ping"
+                chmod +x "$test_root/bin/fake-adb" "$test_root/bin/fake-ping"
+                patchShebangs "$test_root/bin"
+
+                common_environment=(
+                  P2P_VPN_ADB="$test_root/bin/fake-adb"
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_PING="$test_root/bin/fake-ping"
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_AUTO_CONFIRM=1
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_MIN_FREE_BYTES=0
+                  TMPDIR="$test_root/tmp"
+                )
+
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --apk "$test_root/fake.apk" \
+                    --preflight
+                ! grep -Fq ' install ' "$test_root/preflight-state/adb.log"
+
+                set +e
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_MODE=wrong-abi \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --apk "$test_root/fake.apk" \
+                    --preflight
+                wrong_abi_status=$?
+                set -e
+                test "$wrong_abi_status" -eq 2
+
+                set +e
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --network physical-test \
+                    --peer-ipv4 '100.64.0.1;id' \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/rejected-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --duration-seconds 1 \
+                    --doze-seconds 1 \
+                    --allow-short
+                unsafe_address_status=$?
+                set -e
+                test "$unsafe_address_status" -eq 2
+                ! grep -Fq ' install ' "$test_root/preflight-state/adb.log"
+
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/full-state" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_MODE=fresh-pair \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --pair \
+                    --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/full-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --duration-seconds 1 \
+                    --sample-seconds 1 \
+                    --doze-seconds 1 \
+                    --transition-timeout 10 \
+                    --allow-short
+
+                jq -e '
+                  .schema_version == 1 and
+                  .kind == "p2p-vpn-android-physical-audit" and
+                  .outcome == "passed" and
+                  (.contract.proof_eligible | not) and
+                  .device.abi == "arm64-v8a" and
+                  .device.android_api == 35 and
+                  .device.serial == "excluded" and
+                  .device.model == "excluded" and
+                  .pairing.performed_during_run and
+                  .management_path.adb_only and
+                  (.management_path.adb_forward | not) and
+                  (.management_path.adb_reverse | not) and
+                  [.steps[].name] == [
+                    "pairing",
+                    "lan_baseline",
+                    "hotspot_or_cellular",
+                    "hotspot_upstream_vpn",
+                    "lan_return",
+                    "screen_off_doze",
+                    "sustained_connection",
+                    "process_service_recreation",
+                    "in_place_apk_update"
+                  ] and
+                  ([.steps[].state] | all(. == "passed")) and
+                  (.steps[] | select(.name == "screen_off_doze") |
+                    .data.deep_idle_observed) and
+                  .sustained.sent >= 20 and
+                  .sustained.received == .sustained.sent and
+                  .sustained.packet_loss_basis_points == 0 and
+                  .sustained.battery.unplugged_measurement and
+                  .final_diagnostics.privacy.identity_material == "excluded" and
+                  .privacy.peer_ids == "excluded" and
+                  .privacy.overlay_addresses == "excluded" and
+                  .privacy.pairing_codes == "excluded" and
+                  .cleanup.doze_released and
+                  .cleanup.screen_awake and
+                  .cleanup.private_state_removed and
+                  .cleanup.profile_preserved
+                ' "$test_root/full-evidence/evidence.json" >/dev/null
+                test "$(wc -c < "$test_root/full-evidence/evidence.json")" -le 2097152
+                ! grep -Eq \
+                  '12D3KooWFakeAndroidPeer|100\.64\.0\.9|fd42::9|TEST-PAIRING-CODE' \
+                  "$test_root/full-evidence/evidence.json"
+                ! grep -Eq '(^|[[:space:]])(forward|reverse)([[:space:]]|$)' \
+                  "$test_root/full-state/adb.log"
+                test "$(grep -c ' install -r ' "$test_root/full-state/adb.log")" -eq 2
+
+                set +e
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/failure-state" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_MODE=doze-fail \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/failure-evidence" \
+                    --apk "$test_root/fake.apk" \
+                    --duration-seconds 1 \
+                    --sample-seconds 1 \
+                    --doze-seconds 1 \
+                    --transition-timeout 10 \
+                    --allow-short
+                failure_status=$?
+                set -e
+                test "$failure_status" -eq 1
+                jq -e '
+                  .outcome == "failed" and
+                  .detail == "Android could not enter forced Doze" and
+                  (.contract.proof_eligible | not) and
+                  .cleanup.doze_released and
+                  .cleanup.screen_awake and
+                  .cleanup.private_state_removed and
+                  .cleanup.profile_preserved
+                ' "$test_root/failure-evidence/evidence.json" >/dev/null
+                grep -Fq 'shell dumpsys deviceidle unforce' "$test_root/failure-state/adb.log"
+                grep -Fq 'shell input keyevent 224' "$test_root/failure-state/adb.log"
+
+                test -z "$(find "$test_root/tmp" -maxdepth 1 \
+                  -name 'p2p-vpn-android-device-audit.*' -print -quit)"
                 touch "$out"
               ''
           else
@@ -4997,9 +5241,13 @@
                 cp ${./nix/android-gradle-deps.json} "$release_dir/nix/android-gradle-deps.json"
                 cp ${./nix/nixos-module.nix} "$release_dir/nix/nixos-module.nix"
                 cp ${./scripts/debug-bundle.sh} "$release_dir/scripts/debug-bundle.sh"
+                cp ${./scripts/android-device-audit.sh} "$release_dir/scripts/android-device-audit.sh"
                 cp ${./scripts/android-e2e.sh} "$release_dir/scripts/android-e2e.sh"
+                cp ${./scripts/android-e2e-nix.sh} "$release_dir/scripts/android-e2e-nix.sh"
                 cp ${./scripts/membership-record-repro.sh} "$release_dir/scripts/membership-record-repro.sh"
+                chmod +x "$release_dir/scripts/android-device-audit.sh"
                 chmod +x "$release_dir/scripts/android-e2e.sh"
+                chmod +x "$release_dir/scripts/android-e2e-nix.sh"
                 chmod +x "$release_dir/scripts/debug-bundle.sh"
                 chmod +x "$release_dir/scripts/membership-record-repro.sh"
                 tar --sort=name --mtime="UTC 1970-01-01" \
@@ -5013,6 +5261,8 @@
           android-native-x86_64 = android.androidNativeX86_64;
           android-rust-tests = android.androidRustTests;
           android-debug-apk = android.androidDebugApk;
+          android-device-audit = androidDeviceAuditLauncher;
+          android-device-audit-runtime = androidDeviceAuditRuntime;
           android-e2e = androidE2eLauncher;
           android-e2e-runtime = androidE2eRuntime;
           android-e2e-fixture = androidE2eFixture;
@@ -5067,6 +5317,13 @@
           };
         }
         // lib.optionalAttrs androidSupported {
+          android-device-audit = {
+            type = "app";
+            program = "${androidDeviceAuditLauncher}/bin/p2p-vpn-android-device-audit";
+            meta = {
+              description = "Safely realize and run the physical arm64 Android audit";
+            };
+          };
           android-e2e = {
             type = "app";
             program = "${androidE2eLauncher}/bin/p2p-vpn-android-e2e";
@@ -5216,7 +5473,9 @@
                   "$root/nix/android-gradle-deps.json" \
                   "$root/nix/nixos-module.nix" \
                   "$root/scripts/debug-bundle.sh" \
+                  "$root/scripts/android-device-audit.sh" \
                   "$root/scripts/android-e2e.sh" \
+                  "$root/scripts/android-e2e-nix.sh" \
                   "$root/scripts/membership-record-repro.sh"
                 do
                   grep -Fx "$path" entries >/dev/null || {
@@ -5227,8 +5486,12 @@
 
                 tar -xzf "$archive" "$root/scripts/debug-bundle.sh"
                 test -x "$root/scripts/debug-bundle.sh"
+                tar -xzf "$archive" "$root/scripts/android-device-audit.sh"
+                test -x "$root/scripts/android-device-audit.sh"
                 tar -xzf "$archive" "$root/scripts/android-e2e.sh"
                 test -x "$root/scripts/android-e2e.sh"
+                tar -xzf "$archive" "$root/scripts/android-e2e-nix.sh"
+                test -x "$root/scripts/android-e2e-nix.sh"
                 tar -xzf "$archive" "$root/scripts/membership-record-repro.sh"
                 test -x "$root/scripts/membership-record-repro.sh"
 
@@ -5277,6 +5540,7 @@
         }
         // lib.optionalAttrs androidSupported {
           android = android.androidCheck;
+          android-device-audit-structure = androidDeviceAuditStructure;
           android-e2e-fixture = androidE2eFixture;
           android-e2e-structure = androidE2eStructure;
         }

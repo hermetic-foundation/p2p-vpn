@@ -14,11 +14,27 @@ readonly default_max_jobs=2
 nix_command="${P2P_VPN_ANDROID_E2E_NIX:-nix}"
 df_command="${P2P_VPN_ANDROID_E2E_DF:-df}"
 flake_ref="${P2P_VPN_ANDROID_E2E_FLAKE:-}"
+runtime_target_name="${P2P_VPN_ANDROID_E2E_RUNTIME_TARGET:-android-e2e-runtime}"
 min_free_bytes="${P2P_VPN_ANDROID_E2E_MIN_FREE_BYTES:-$default_min_free_bytes}"
 max_store_growth_bytes="${P2P_VPN_ANDROID_E2E_MAX_STORE_GROWTH_BYTES:-$default_max_store_growth_bytes}"
 max_local_derivations="${P2P_VPN_ANDROID_E2E_MAX_LOCAL_DERIVATIONS:-$default_max_local_derivations}"
 max_planned_derivations="${P2P_VPN_ANDROID_E2E_MAX_PLANNED_DERIVATIONS:-$default_max_planned_derivations}"
 max_jobs="${P2P_VPN_ANDROID_E2E_MAX_JOBS:-$default_max_jobs}"
+
+case "$runtime_target_name" in
+  android-e2e-runtime)
+    runtime_binary_name=p2p-vpn-android-e2e
+    runner_label="Android E2E"
+    ;;
+  android-device-audit-runtime)
+    runtime_binary_name=p2p-vpn-android-device-audit
+    runner_label="Android device audit"
+    ;;
+  *)
+    echo "P2P_VPN_ANDROID_E2E_RUNTIME_TARGET is not an approved Android runtime" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "$flake_ref" ]]; then
   script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -79,23 +95,23 @@ if ((max_jobs < 1 || max_jobs > 4)); then
 fi
 
 if ! command -v "$nix_command" >/dev/null 2>&1; then
-  echo "Nix is required to run the Android E2E harness" >&2
+  echo "Nix is required to run the $runner_label harness" >&2
   exit 2
 fi
 if ! command -v "$df_command" >/dev/null 2>&1; then
-  echo "df is required to enforce the Android E2E storage budget" >&2
+  echo "df is required to enforce the $runner_label storage budget" >&2
   exit 2
 fi
 
 tmp_available_bytes="$("$df_command" --output=avail -B1 "${TMPDIR:-/tmp}" | tail -n 1 | tr -d '[:space:]')"
 store_available_bytes="$("$df_command" --output=avail -B1 /nix/store | tail -n 1 | tr -d '[:space:]')"
 if [[ ! "$tmp_available_bytes" =~ ^[0-9]+$ || ! "$store_available_bytes" =~ ^[0-9]+$ ]]; then
-  echo "could not determine available space for Android E2E state and Nix store" >&2
+  echo "could not determine available space for $runner_label state and Nix store" >&2
   exit 2
 fi
 if ((tmp_available_bytes < min_free_bytes || store_available_bytes < min_free_bytes)); then
-  printf 'Android E2E requires at least %s free bytes; tmp has %s and the Nix store has %s\n' \
-    "$min_free_bytes" "$tmp_available_bytes" "$store_available_bytes" >&2
+  printf '%s requires at least %s free bytes; tmp has %s and the Nix store has %s\n' \
+    "$runner_label" "$min_free_bytes" "$tmp_available_bytes" "$store_available_bytes" >&2
   exit 2
 fi
 
@@ -120,7 +136,7 @@ trap 'exit 143' TERM
 if ! "$nix_command" store info \
   --store "$official_cache" \
   --option connect-timeout 30 >/dev/null 2>&1; then
-  echo "Android E2E stopped because cache.nixos.org is unavailable" >&2
+  echo "$runner_label stopped because cache.nixos.org is unavailable" >&2
   exit 69
 fi
 
@@ -134,7 +150,7 @@ if grep -Fq "$community_cache_key" <<<"$trusted_public_keys"; then
     --option connect-timeout 10 >/dev/null 2>&1; then
     substituters+=" $community_cache"
   else
-    echo "Android E2E: trusted nix-community cache is unavailable; using the official cache" >&2
+    echo "$runner_label: trusted nix-community cache is unavailable; using the official cache" >&2
   fi
 fi
 
@@ -195,8 +211,8 @@ run_guarded_nix_build() {
 
     current_seconds="$(date +%s)"
     if ((last_progress_seconds == 0 || current_seconds - last_progress_seconds >= 30)); then
-      printf 'Android E2E: %s has used %s bytes of the %s-byte limit\n' \
-        "$label" "$last_store_growth_bytes" "$max_store_growth_bytes" >&2
+      printf '%s: %s has used %s bytes of the %s-byte limit\n' \
+        "$runner_label" "$label" "$last_store_growth_bytes" "$max_store_growth_bytes" >&2
       last_progress_seconds="$current_seconds"
     fi
     sleep 1
@@ -222,7 +238,7 @@ run_guarded_nix_build() {
   return "$build_status"
 }
 
-runtime_target="${flake_ref}#android-e2e-runtime"
+runtime_target="${flake_ref}#$runtime_target_name"
 plan_log="$plan_dir/plan.log"
 if ! "$nix_command" build "$runtime_target" \
   --no-link \
@@ -231,7 +247,7 @@ if ! "$nix_command" build "$runtime_target" \
   "${nix_options[@]}" \
   >/dev/null 2>"$plan_log"; then
   tail -n 80 "$plan_log" >&2
-  echo "Android E2E stopped because the Nix build plan failed" >&2
+  echo "$runner_label stopped because the Nix build plan failed" >&2
   exit 1
 fi
 
@@ -240,8 +256,8 @@ mapfile -t planned_derivations < <(
 )
 
 if ((${#planned_derivations[@]} > max_planned_derivations)); then
-  printf 'Android E2E stopped: Nix planned %d builds; limit is %d\n' \
-    "${#planned_derivations[@]}" "$max_planned_derivations" >&2
+  printf '%s stopped: Nix planned %d builds; limit is %d\n' \
+    "$runner_label" "${#planned_derivations[@]}" "$max_planned_derivations" >&2
   exit 75
 fi
 
@@ -306,13 +322,13 @@ for derivation in "${planned_derivations[@]}"; do
 done
 
 if ((non_fixed_derivations > max_local_derivations)); then
-  printf 'Android E2E stopped: Nix planned %d non-fixed builds; limit is %d\n' \
-    "$non_fixed_derivations" "$max_local_derivations" >&2
+  printf '%s stopped: Nix planned %d non-fixed builds; limit is %d\n' \
+    "$runner_label" "$non_fixed_derivations" "$max_local_derivations" >&2
   exit 75
 fi
 
 if ((${#unexpected_derivations[@]} > 0)); then
-  echo "Android E2E stopped before an unexpected third-party source build:" >&2
+  echo "$runner_label stopped before an unexpected third-party source build:" >&2
   printf '  %s\n' "${unexpected_derivations[@]}" >&2
   echo "Restore binary-cache access and retry; do not bypass this guard casually." >&2
   exit 75
@@ -323,8 +339,8 @@ fixed_output_derivations=(
   "${late_fixed_output_derivations[@]}"
 )
 if ((${#fixed_output_derivations[@]} > 0)); then
-  printf 'Android E2E: prefetching %d fixed-output inputs sequentially\n' \
-    "${#fixed_output_derivations[@]}" >&2
+  printf '%s: prefetching %d fixed-output inputs sequentially\n' \
+    "$runner_label" "${#fixed_output_derivations[@]}" >&2
 fi
 
 prefetch_stdout="$plan_dir/prefetch.out"
@@ -345,18 +361,18 @@ for derivation in "${fixed_output_derivations[@]}"; do
 
   tail -n 80 "$prefetch_log" >&2 || true
   if ((prefetch_status == 75)); then
-    echo "Android E2E stopped: $budget_failure" >&2
+    echo "$runner_label stopped: $budget_failure" >&2
     exit 75
   fi
-  printf 'Android E2E stopped before runtime realization: fixed-output input failed: %s\n' \
-    "${derivation##*/}" >&2
+  printf '%s stopped before runtime realization: fixed-output input failed: %s\n' \
+    "$runner_label" "${derivation##*/}" >&2
   exit 1
 done
 
 runtime_path_file="$plan_dir/runtime-path"
 realize_log="$plan_dir/realize.log"
-printf 'Android E2E: realizing at most %s bytes with %s build jobs\n' \
-  "$max_store_growth_bytes" "$max_jobs" >&2
+printf '%s: realizing at most %s bytes with %s build jobs\n' \
+  "$runner_label" "$max_store_growth_bytes" "$max_jobs" >&2
 
 if run_guarded_nix_build \
   "runtime realization" \
@@ -374,22 +390,22 @@ fi
 
 if ((build_status == 75)); then
   tail -n 80 "$realize_log" >&2 || true
-  echo "Android E2E stopped: $budget_failure" >&2
+  echo "$runner_label stopped: $budget_failure" >&2
   exit 75
 fi
 
 if ((build_status != 0)); then
   tail -n 80 "$realize_log" >&2 || true
-  echo "Android E2E runtime realization failed without source fallback" >&2
+  echo "$runner_label runtime realization failed without source fallback" >&2
   exit 1
 fi
 
 mapfile -t runtime_paths <"$runtime_path_file"
-if ((${#runtime_paths[@]} != 1)) || [[ ! -x "${runtime_paths[0]}/bin/p2p-vpn-android-e2e" ]]; then
-  echo "Android E2E runtime realization returned an invalid output" >&2
+if ((${#runtime_paths[@]} != 1)) || [[ ! -x "${runtime_paths[0]}/bin/$runtime_binary_name" ]]; then
+  echo "$runner_label runtime realization returned an invalid output" >&2
   exit 1
 fi
 
 cleanup
 trap - EXIT
-exec "${runtime_paths[0]}/bin/p2p-vpn-android-e2e" "$@"
+exec "${runtime_paths[0]}/bin/$runtime_binary_name" "$@"

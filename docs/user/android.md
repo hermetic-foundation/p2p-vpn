@@ -168,6 +168,80 @@ Ping Linux from the Android shell:
 nix develop .#android -c adb shell ping -c 5 LINUX_OVERLAY_IPV4
 ```
 
+## Physical Device Audit
+
+The audit requires an authorized arm64 device and a reachable Linux member.
+
+Run its non-mutating preflight first:
+
+```sh
+nix run .#android-device-audit -- --preflight
+```
+
+For an existing paired profile:
+
+```sh
+nix run .#android-device-audit -- \
+  --network runners \
+  --peer-ipv4 LINUX_OVERLAY_IPV4 \
+  --peer-ipv6 LINUX_OVERLAY_IPV6 \
+  --output ./android-device-evidence
+```
+
+Add `--serial DEVICE_SERIAL` when multiple ADB devices are attached.
+
+Use `--pair` only when the app has no saved profile:
+
+```sh
+nix run .#android-device-audit -- \
+  --pair \
+  --network runners \
+  --peer-ipv4 LINUX_OVERLAY_IPV4 \
+  --peer-ipv6 LINUX_OVERLAY_IPV6 \
+  --output ./android-device-evidence
+```
+
+The pairing code is read from the terminal without echoing or storing it.
+
+The runner prompts for these transitions:
+
+1. LAN to cellular or a separate hotspot.
+2. Hotspot with its upstream routed through a VPN.
+3. Return to the original LAN.
+4. Screen-off and forced Doze.
+
+Do not start another Android VPN app for step 2.
+
+Android permits only one active VPN service. Apply the VPN to the hotspot's
+upstream connection instead.
+
+The default proof includes:
+
+| Check | Default |
+| --- | ---: |
+| Recovery deadline | 180 seconds per transition |
+| Forced Doze | 300 seconds |
+| Sustained connection | 1,800 seconds |
+| Traffic sampling | Every 60 seconds |
+| Packet-loss ceiling | 1 percent |
+
+The runner also recreates the app process and performs `adb install -r`.
+
+It requires identity and traffic persistence after both operations.
+
+`--allow-short` permits development smoke runs.
+
+Their evidence is explicitly marked `proof_eligible: false`.
+
+The result is `OUTPUT/evidence.json`, capped at 2 MiB.
+
+It excludes device serials, models, peer IDs, overlay addresses, pairing codes,
+identity material, and underlay addresses.
+
+The runner never creates ADB forwarding or reverse-forwarding rules.
+
+It preserves the installed profile, releases forced Doze, and wakes the screen.
+
 ## Connection Status
 
 The status view reports:
