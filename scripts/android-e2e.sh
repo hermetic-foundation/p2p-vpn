@@ -1356,6 +1356,13 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
     exit 1
   fi
   android_peer_id="$(jq -r '.value.snapshot.peer_id' "$pairing_profile")"
+  android_hostname="$(jq -r '.value.snapshot.hostname' "$pairing_profile")"
+  if [[ ! "$android_hostname" =~ ^android-[0-9a-f]{16}$ ]]; then
+    outcome=failed
+    outcome_detail="Android profile did not generate a stable p2p-vpn hostname"
+    record_step profile_creation failed "$outcome_detail"
+    exit 1
+  fi
   record_step profile_creation passed \
     "Encrypted profile configured with discovery bootstrap only"
 
@@ -1432,6 +1439,12 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
     record_step code_pairing failed "$outcome_detail"
     exit 1
   fi
+  if [[ "$(jq -r '.candidate.requested_hostname // empty' "$inviter_status")" != "$android_hostname" ]]; then
+    outcome=failed
+    outcome_detail="Android pairing request did not authenticate its generated hostname"
+    record_step code_pairing failed "$outcome_detail"
+    exit 1
+  fi
   approval_id="$(jq -r '.candidate.approval_id' "$inviter_status")"
   pair_approved="$state_dir/pair-approved.json"
   if ! "$p2p_vpn_command" pair approve \
@@ -1457,7 +1470,8 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
     exit 1
   fi
   record_step code_pairing passed \
-    "Android enrolled from a code without a configured overlay peer address"
+    "Android enrolled from a code without a configured overlay peer address" \
+    '{"hostname_assigned":true}'
 
   android_ipv4="$(
     jq -r '[.value.snapshot.addresses[] | select(contains("."))][0] | split("/")[0]' \

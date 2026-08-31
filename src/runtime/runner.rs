@@ -12921,11 +12921,7 @@ fn handle_pairing_code_response(
             else {
                 return Ok(());
             };
-            let configured_hostname = if context.forwarder.config().network.dns.enabled {
-                context.forwarder.config().network.dns.hostname.as_deref()
-            } else {
-                None
-            };
+            let configured_hostname = context.forwarder.config().network.dns.hostname.as_deref();
             let mut request = build_named_pairing_request_at(
                 &offer,
                 PairingRequestOptions {
@@ -14128,11 +14124,7 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
         .map(canonical_dns_label)
         .transpose()
         .map_err(crate::pairing::PairingError::InvalidHostname)?;
-    let inviter_hostname = if config.network.dns.enabled {
-        config.network.dns.hostname.clone()
-    } else {
-        None
-    };
+    let inviter_hostname = config.network.dns.hostname.clone();
     let assigned_vpn_ip = assigned_vpn_ip.or_else(|| request.payload.requested_vpn_ip.clone());
     let route_grants =
         pairing_route_grants_for_assignment(request, assigned_vpn_ip.as_deref(), granted_routes)?;
@@ -20697,11 +20689,11 @@ mod tests {
     }
 
     #[test]
-    fn pairing_response_for_request_issues_authenticated_hostname_records() {
+    fn pairing_response_issues_hostname_records_without_a_local_dns_listener() {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
         let mut config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
-        config.network.dns.enabled = true;
+        config.network.dns.enabled = false;
         config.network.dns.hostname = Some("inviter-host".to_owned());
         let offer =
             export_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000).expect("offer");

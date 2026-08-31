@@ -165,7 +165,7 @@ Enable the loopback authoritative resolver:
 | Field | Default | Rule |
 | --- | --- | --- |
 | `enabled` | `false` | Keeps existing configurations unchanged |
-| `hostname` | unset | Required when enabled |
+| `hostname` | unset | Required when enabled; otherwise an optional pairing identity claim |
 | `listen` | `127.0.0.1:0` | Numeric loopback socket only |
 | `ttl_seconds` | `30` | Range `1` through `300` |
 

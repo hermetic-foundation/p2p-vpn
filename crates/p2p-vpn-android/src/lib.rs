@@ -6,7 +6,9 @@ use std::{
 };
 
 use p2p_vpn::{
+    PeerId,
     config::{BootstrapPeerConfig, Config, DiscoveryConfig, PeerConfig, RouteConfig},
+    dns::canonical_dns_label,
     identity::NodeIdentity,
     membership::SignedMembershipRecord,
     route::IpCidr,
@@ -42,6 +44,7 @@ fn block_on_control<T>(
 pub struct AndroidProfile {
     pub config_json: String,
     pub network_name: String,
+    pub hostname: String,
     pub peer_id: String,
     pub interface_name: String,
     pub mtu: u16,
@@ -198,7 +201,7 @@ fn create_profile_with_identity(
 }
 
 pub fn inspect_profile(config_json: &str) -> Result<AndroidProfile, String> {
-    let config: Config = serde_json::from_str(config_json)
+    let mut config: Config = serde_json::from_str(config_json)
         .map_err(|error| format!("invalid profile JSON: {error}"))?;
     config
         .validate_runtime()
@@ -206,6 +209,12 @@ pub fn inspect_profile(config_json: &str) -> Result<AndroidProfile, String> {
     let identity = config
         .identity()
         .map_err(|error| format!("invalid profile identity: {error:?}"))?;
+    let hostname = match config.network.dns.hostname.as_deref() {
+        Some(hostname) => canonical_dns_label(hostname)
+            .map_err(|_| "Android profile contains an invalid hostname".to_owned())?,
+        None => default_android_hostname(&identity.peer_id)?,
+    };
+    config.network.dns.hostname = Some(hostname.clone());
     let tun = TunRuntimeConfig::from_config(&config)
         .map_err(|error| format!("invalid profile routes: {error:?}"))?;
 
@@ -232,12 +241,21 @@ pub fn inspect_profile(config_json: &str) -> Result<AndroidProfile, String> {
         config_json: serde_json::to_string(&config)
             .map_err(|error| format!("failed to normalize profile: {error}"))?,
         network_name: config.network.name,
+        hostname,
         peer_id: identity.peer_id,
         interface_name: tun.name,
         mtu: tun.mtu,
         addresses,
         routes,
     })
+}
+
+fn default_android_hostname(peer_id: &str) -> Result<String, String> {
+    let overlay_peer = peer_id
+        .parse::<PeerId>()
+        .map_err(|_| "Android profile contains an invalid peer ID".to_owned())?;
+    let digest = overlay_peer.to_string();
+    Ok(format!("android-{}", &digest[..16]))
 }
 
 pub fn apply_pairing_artifacts(
@@ -996,6 +1014,15 @@ mod tests {
 
         assert_eq!(encoded["network"]["name"], "personal");
         assert!(encoded["network"]["private_key"].is_string());
+        assert_eq!(encoded["network"]["dns"]["enabled"], false);
+        assert_eq!(encoded["network"]["dns"]["hostname"], profile.hostname);
+        assert!(profile.hostname.starts_with("android-"));
+        assert_eq!(profile.hostname.len(), 24);
+        assert!(
+            profile.hostname[8..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
         assert_eq!(profile.addresses.len(), 2);
         assert!(profile.routes.contains(&AndroidCidr {
             address: BUILTIN_IPV4_NETWORK.to_string(),
@@ -1005,6 +1032,26 @@ mod tests {
             address: BUILTIN_IPV6_NETWORK.to_string(),
             prefix_length: BUILTIN_IPV6_PREFIX,
         }));
+    }
+
+    #[test]
+    fn profile_inspection_migrates_a_missing_android_hostname_stably() {
+        let profile = create_profile("personal").expect("profile");
+        let mut config: Config =
+            serde_json::from_str(&profile.config_json).expect("profile config");
+        config.network.dns.hostname = None;
+        let legacy = serde_json::to_string(&config).expect("legacy profile");
+
+        let migrated = inspect_profile(&legacy).expect("migrated profile");
+
+        assert_eq!(migrated.peer_id, profile.peer_id);
+        assert_eq!(migrated.hostname, profile.hostname);
+        assert_eq!(
+            inspect_profile(&migrated.config_json)
+                .expect("reinspected profile")
+                .hostname,
+            profile.hostname
+        );
     }
 
     #[test]

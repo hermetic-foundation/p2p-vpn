@@ -848,7 +848,8 @@
                       phase: "awaiting_approval",
                       candidate: {
                         approval_id: "fake-approval",
-                        peer_id: "12D3KooWFakeAndroidPeer"
+                        peer_id: "12D3KooWFakeAndroidPeer",
+                        requested_hostname: "android-0123456789abcdef"
                       }
                     }'
                     ;;
@@ -1017,6 +1018,7 @@
                               busy: false,
                               connected: $connected,
                               network_name: "android-e2e",
+                              hostname: "android-0123456789abcdef",
                               peer_id: "12D3KooWFakeAndroidPeer",
                               addresses: ["100.64.0.9/32", "fd42::9/128"],
                               pairing_detail: $pairing_detail,
@@ -1049,7 +1051,7 @@
                         }')"
                     elif [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
                       && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
-                      response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":true,"profile_stored":true,"busy":false,"network_name":"android-e2e","peer_id":"12D3KooWFakeAndroidPeer","addresses":["100.64.0.9/32","fd42::9/128"],"paths":{"connected_peers":0}}}}'
+                      response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":true,"profile_stored":true,"busy":false,"network_name":"android-e2e","hostname":"android-0123456789abcdef","peer_id":"12D3KooWFakeAndroidPeer","addresses":["100.64.0.9/32","fd42::9/128"],"paths":{"connected_peers":0}}}}'
                     else
                       response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
                     fi

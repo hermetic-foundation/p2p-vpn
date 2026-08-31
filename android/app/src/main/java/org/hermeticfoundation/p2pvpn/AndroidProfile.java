@@ -13,6 +13,7 @@ import org.json.JSONObject;
 final class AndroidProfile {
     final String configJson;
     final String networkName;
+    final String hostname;
     final String peerId;
     final String interfaceName;
     final int mtu;
@@ -22,6 +23,7 @@ final class AndroidProfile {
     private AndroidProfile(
             String configJson,
             String networkName,
+            String hostname,
             String peerId,
             String interfaceName,
             int mtu,
@@ -29,6 +31,7 @@ final class AndroidProfile {
             List<Cidr> routes) {
         this.configJson = configJson;
         this.networkName = networkName;
+        this.hostname = hostname;
         this.peerId = peerId;
         this.interfaceName = interfaceName;
         this.mtu = mtu;
@@ -40,6 +43,7 @@ final class AndroidProfile {
         try {
             String configJson = requiredString(value, "config_json");
             String networkName = requiredString(value, "network_name");
+            String hostname = requiredString(value, "hostname");
             String peerId = requiredString(value, "peer_id");
             String interfaceName = requiredString(value, "interface_name");
             int mtu = value.getInt("mtu");
@@ -53,7 +57,14 @@ final class AndroidProfile {
                         "Native profile does not contain overlay addresses and routes");
             }
             return new AndroidProfile(
-                    configJson, networkName, peerId, interfaceName, mtu, addresses, routes);
+                    configJson,
+                    networkName,
+                    hostname,
+                    peerId,
+                    interfaceName,
+                    mtu,
+                    addresses,
+                    routes);
         } catch (JSONException error) {
             throw new P2pVpnException("Native profile is malformed", error);
         }

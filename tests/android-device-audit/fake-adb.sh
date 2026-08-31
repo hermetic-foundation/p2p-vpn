@@ -136,6 +136,7 @@ EOF
                 connection_requested: $has_profile,
                 busy: false,
                 network_name: (if $has_profile then "physical-test" else null end),
+                hostname: (if $has_profile then "android-0123456789abcdef" else null end),
                 peer_id: (if $has_profile then "12D3KooWFakeAndroidPeer" else null end),
                 addresses: (if $has_profile then ["100.64.0.9/32", "fd42::9/128"] else [] end),
                 runtime_generation: 2,

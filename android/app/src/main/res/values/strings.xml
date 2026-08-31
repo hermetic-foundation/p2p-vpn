@@ -26,7 +26,7 @@
     <string name="profile_title">Network</string>
     <string name="identity_unavailable">No profile</string>
     <string name="identity_unavailable_stored">Saved profile unavailable</string>
-    <string name="identity_format">%1$s\n%2$s</string>
+    <string name="identity_format">%1$s\n%2$s\n%3$s</string>
     <string name="status_format">%1$s\n%2$s\n%3$s</string>
     <string name="pairing_code_copied">Pairing code copied</string>
     <string name="notification_channel">VPN connection</string>

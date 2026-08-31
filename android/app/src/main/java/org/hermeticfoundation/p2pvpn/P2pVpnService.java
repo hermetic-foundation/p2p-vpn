@@ -1148,6 +1148,7 @@ public final class P2pVpnService extends VpnService {
                         desiredConnected,
                         operationInProgress,
                         profile == null ? null : profile.networkName,
+                        profile == null ? null : profile.hostname,
                         profile == null ? null : profile.peerId,
                         profileAddresses(profile),
                         latestRuntimeSummary,
@@ -1417,6 +1418,7 @@ public final class P2pVpnService extends VpnService {
         final boolean connectionRequested;
         final boolean busy;
         final String networkName;
+        final String hostname;
         final String peerId;
         final List<String> addresses;
         final RuntimeSummary runtimeSummary;
@@ -1443,6 +1445,7 @@ public final class P2pVpnService extends VpnService {
                 boolean connectionRequested,
                 boolean busy,
                 String networkName,
+                String hostname,
                 String peerId,
                 List<String> addresses,
                 RuntimeSummary runtimeSummary,
@@ -1467,6 +1470,7 @@ public final class P2pVpnService extends VpnService {
             this.connectionRequested = connectionRequested;
             this.busy = busy;
             this.networkName = networkName;
+            this.hostname = hostname;
             this.peerId = peerId;
             this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
             this.runtimeSummary = runtimeSummary;
@@ -1494,6 +1498,7 @@ public final class P2pVpnService extends VpnService {
                     false,
                     false,
                     true,
+                    null,
                     null,
                     null,
                     Collections.emptyList(),

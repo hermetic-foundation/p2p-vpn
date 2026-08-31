@@ -82,7 +82,10 @@ The final response carries signed membership records for:
 | Record | Hostname Source |
 | --- | --- |
 | Joiner grant | Assigned or requested hostname |
-| Inviter self/grant path | Inviter's enabled local DNS hostname |
+| Inviter self/grant path | Inviter's configured local hostname |
+
+`dns.enabled` controls the local resolver only. A configured hostname remains
+an authenticated identity claim when that listener is disabled.
 
 Pending `Submit` requests are persisted with their exact signed transcript.
 

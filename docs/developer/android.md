@@ -92,7 +92,7 @@ Shutdown signals the reader and closes both owners through Rust RAII.
 
 ```text
 no profile
-  -> create minimal Rust config
+  -> create minimal Rust config and stable identity-derived hostname
   -> encrypt profile atomically
   -> restore and inspect on startup
   -> connect through VpnService
@@ -101,6 +101,9 @@ no profile
 The profile contains the private libp2p identity and learned membership.
 
 It never enters the Android resources or APK.
+
+The profile stores `network.dns.hostname` while leaving the Android DNS
+listener disabled. Pairing authenticates that label independently of serving DNS.
 
 ## Persistence
 
@@ -122,6 +125,9 @@ Files are under `noBackupFilesDir`, and application backup is disabled.
 Android uses `/p2p-vpn/pairing-code/1` through the existing runtime RPC.
 
 No Android-specific pairing protocol exists.
+
+Both pairing roles include the stable Android hostname in signed membership
+records. DNS-listener enablement does not control identity claims.
 
 ```text
 persist operation intent

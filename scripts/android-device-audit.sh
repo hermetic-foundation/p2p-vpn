@@ -452,7 +452,8 @@ wait_for_profile_status() {
       && jq -e --arg network "$network" '
         .value.snapshot.has_profile and
         (.value.snapshot.profile_unreadable | not) and
-        .value.snapshot.network_name == $network
+        .value.snapshot.network_name == $network and
+        (.value.snapshot.hostname | type == "string" and test("^android-[0-9a-f]{16}$"))
       ' <<< "$status" >/dev/null; then
       printf '%s\n' "$status"
       return 0
@@ -471,6 +472,7 @@ sanitize_status() {
       profile_stored,
       profile_readable: (.has_profile and (.profile_unreadable | not)),
       network_matches: (.network_name == $network),
+      hostname_assigned: (.hostname | type == "string" and test("^android-[0-9a-f]{16}$")),
       address_families: ([.addresses[]? | if contains(":") then "ipv6" else "ipv4" end] | unique),
       runtime_generation,
       underlay,
@@ -692,7 +694,8 @@ pair_new_profile() {
         <<< "$status" >/dev/null; then
       pairing_proven=true
       record_step pairing passed \
-        "Code pairing completed without a configured overlay peer address"
+        "Code pairing completed without a configured overlay peer address" \
+        '{"hostname_assigned":true}'
       return 0
     fi
     sleep 2

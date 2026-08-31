@@ -127,7 +127,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         profileRecovery.setVisibility(snapshot.profileUnreadable ? View.VISIBLE : View.GONE);
         if (snapshot.hasProfile) {
             identity.setText(
-                    getString(R.string.identity_format, snapshot.networkName, snapshot.peerId));
+                    getString(
+                            R.string.identity_format,
+                            snapshot.networkName,
+                            snapshot.hostname,
+                            snapshot.peerId));
         } else if (snapshot.profileStored) {
             identity.setText(R.string.identity_unavailable_stored);
         } else {

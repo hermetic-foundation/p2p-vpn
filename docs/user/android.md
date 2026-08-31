@@ -65,7 +65,10 @@ The network name must match the Linux or NixOS member.
 
 For a NixOS instance named `runners`, the default network name is `runners`.
 
-The app creates and displays a new libp2p peer ID.
+The app creates and displays a new libp2p peer ID and p2p-vpn hostname.
+
+The default hostname is `android-` plus 16 identity-derived hexadecimal
+characters. It remains stable while the profile identity is preserved.
 
 It restores the same encrypted profile on later launches.
 
@@ -105,6 +108,9 @@ sudo p2p-vpn pair status OPEN_OPERATION --instance runners
 
 Compare the candidate peer ID with the ID shown by Android.
 
+The request also shows the Android hostname. It is covered by the signed
+pairing request and accepted by default.
+
 ### 4. Approve on Linux
 
 ```sh
@@ -114,6 +120,12 @@ sudo p2p-vpn pair approve \
 ```
 
 The Android app polls, applies the membership, and acknowledges it.
+
+Linux DNS members can then resolve:
+
+```text
+ANDROID_HOSTNAME.runners.p2p-vpn.internal
+```
 
 Follow [Pairing](pairing.md) to render permanent native Nix artifacts on Linux.
 
@@ -251,6 +263,7 @@ The status view reports:
 
 | Field | Meaning |
 | --- | --- |
+| Identity | Network, stable hostname, and peer ID |
 | Connection | Starting, connected, recovering, or failed |
 | Overlay peers | Members with a supported active path |
 | Direct paths | Healthy direct stream or datagram paths |
@@ -332,7 +345,7 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 | Limit | Current Behavior |
 | --- | --- |
 | Simultaneous networks | One saved profile |
-| Android system DNS | Not integrated |
+| Android system DNS | Not integrated; Linux members still resolve Android hostnames |
 | Always-on VPN | Explicitly unsupported |
 | Custom route grants | No Android UI |
 | Identity import/export | No Android UI |

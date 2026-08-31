@@ -189,6 +189,7 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         value.put("connection_requested", snapshot.connectionRequested);
         value.put("busy", snapshot.busy);
         value.put("network_name", nullable(snapshot.networkName));
+        value.put("hostname", nullable(snapshot.hostname));
         value.put("peer_id", nullable(snapshot.peerId));
         value.put("addresses", new JSONArray(snapshot.addresses));
         value.put("connection_detail", snapshot.connectionDetail);
