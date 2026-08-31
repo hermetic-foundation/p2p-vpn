@@ -42,6 +42,10 @@ let
   };
   arm64RustTarget = androidCrossPkgs.stdenv.hostPlatform.rust.rustcTarget;
   x86_64RustTarget = "x86_64-linux-android";
+  androidPageSizeRustFlags = lib.concatStringsSep " " [
+    "-C link-arg=-Wl,-z,max-page-size=16384"
+    "-C link-arg=-Wl,-z,common-page-size=16384"
+  ];
 
   jdk = androidPkgs.jdk17;
   gradle = androidPkgs.gradle_9.override { java = jdk; };
@@ -122,6 +126,7 @@ let
         ];
         doCheck = false;
         strictDeps = true;
+        RUSTFLAGS = androidPageSizeRustFlags;
 
         installPhase = ''
           runHook preInstall
@@ -485,10 +490,35 @@ let
   androidCheck =
     pkgs.runCommand "${pname}-check"
       {
-        nativeBuildInputs = [ jdk ];
+        nativeBuildInputs = [
+          jdk
+          pkgs.binutils
+        ];
       }
       ''
         test -e ${androidRustTests}
+
+        check_load_alignment() {
+          local native="$1"
+          local abi="$2"
+          local alignment
+          local load_segments=0
+
+          while read -r alignment; do
+            load_segments=$((load_segments + 1))
+            if [[ ! "$alignment" =~ ^0x[0-9A-Fa-f]+$ ]] \
+              || ((alignment < 0x4000))
+            then
+              echo "$abi JNI library has unsupported LOAD alignment: $alignment" >&2
+              exit 1
+            fi
+          done < <(readelf -lW "$native" | awk '$1 == "LOAD" { print $NF }')
+
+          if ((load_segments == 0)); then
+            echo "$abi JNI library has no ELF LOAD segments" >&2
+            exit 1
+          fi
+        }
 
         arm64_native=${androidNative}/lib/${arm64Abi}/libp2p_vpn_android.so
         if [[ ! -s "$arm64_native" ]]; then
@@ -504,6 +534,7 @@ let
             exit 1
             ;;
         esac
+        check_load_alignment "$arm64_native" ${lib.escapeShellArg arm64Abi}
 
         x86_64_native=${androidNative}/lib/${x86_64Abi}/libp2p_vpn_android.so
         if [[ ! -s "$x86_64_native" ]]; then
@@ -519,6 +550,7 @@ let
             exit 1
             ;;
         esac
+        check_load_alignment "$x86_64_native" ${lib.escapeShellArg x86_64Abi}
 
         ${lib.optionalString androidProjectPresent ''
             apk=${androidDebugApk}/p2p-vpn-debug.apk
@@ -543,6 +575,12 @@ let
 
             if ! ${androidHome}/build-tools/${buildToolsVersion}/apksigner verify "$apk"; then
               echo "APK signature verification failed: $apk" >&2
+              exit 1
+            fi
+            if ! ${androidHome}/build-tools/${buildToolsVersion}/zipalign \
+              -c -P 16 4 "$apk"
+            then
+              echo "APK native libraries are not 16 KiB zip-aligned: $apk" >&2
               exit 1
             fi
 

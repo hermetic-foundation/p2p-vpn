@@ -284,6 +284,11 @@ Android outputs exist on `x86_64-linux`.
 | Android Gradle Plugin | 9.3.2 |
 | Java | 17 |
 
+Both JNI libraries and their APK entries support 16 KiB Android page sizes.
+
+The NDK 27 arm64 build uses explicit page-size linker flags. The Android check
+validates every ELF `LOAD` segment and the packaged APK alignment.
+
 Gradle dependencies are pinned in `nix/android-gradle-deps.json`.
 
 Refresh them only after an intentional Gradle dependency change:
@@ -635,7 +640,7 @@ The gate covers:
 | Rust cross build | arm64 and x86_64 API 26 JNI libraries |
 | Java unit tests | RPC JSON, approval, status, underlay selection, diagnostics |
 | Android lint | Debug variant static analysis |
-| APK | Dual ABI, JNI entry, debug ID, signing, min/target SDK |
+| APK | Dual ABI, 16 KiB alignment, debug ID, signing, min/target SDK |
 | Manifest | LAN permission; always-on disabled; automation protected by `DUMP` |
 
 ## Device E2E
