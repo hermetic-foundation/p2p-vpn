@@ -57,6 +57,7 @@ public final class P2pVpnService extends VpnService {
     private static final long PAIRING_TIMEOUT_SECONDS = 600;
     private static final long PAIRING_POLL_MILLIS = 1_000;
     private static final long STATUS_POLL_MILLIS = 2_000;
+    private static final long BLOCKED_MODE_POLL_MILLIS = 30_000;
     private static final long NETWORK_RECONNECT_DELAY_MILLIS = 1_500;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000;
     private static final long UNDERLAY_RECOVERY_DELAY_MILLIS = 500;
@@ -244,10 +245,8 @@ public final class P2pVpnService extends VpnService {
         }
         refreshVpnMode(false);
         if (!vpnMode.permitsOverlayConnection()) {
-            connectionDetail = getString(R.string.lockdown_unsupported);
-            recordDiagnosticEvent("lockdown_connection_blocked");
-            updateForegroundNotification();
-            publishSnapshot();
+            reportLockdownBlocked();
+            scheduleBlockedModePoll();
             return;
         }
         if (!profilePresent) {
@@ -497,9 +496,32 @@ public final class P2pVpnService extends VpnService {
                 worker.schedule(this::pollNativeStatus, STATUS_POLL_MILLIS, TimeUnit.MILLISECONDS);
     }
 
+    private void scheduleBlockedModePoll() {
+        cancel(statusFuture);
+        statusFuture =
+                worker.schedule(
+                        this::pollNativeStatus,
+                        BLOCKED_MODE_POLL_MILLIS,
+                        TimeUnit.MILLISECONDS);
+    }
+
     private void pollNativeStatus() {
         statusFuture = null;
+        refreshVpnMode(false);
+        if (!vpnMode.permitsOverlayConnection()) {
+            if (connected) {
+                stopNativeRuntime();
+            }
+            reportLockdownBlocked();
+            if (desiredConnected) {
+                scheduleBlockedModePoll();
+            }
+            return;
+        }
         if (!connected) {
+            if (desiredConnected) {
+                startConnection("Restoring after blocked connections were disabled");
+            }
             return;
         }
         if (!LocalNetworkPermission.isGranted(this)) {
@@ -542,6 +564,16 @@ public final class P2pVpnService extends VpnService {
         if (connected) {
             scheduleStatusPoll();
         }
+    }
+
+    private void reportLockdownBlocked() {
+        String detail = getString(R.string.lockdown_unsupported);
+        if (!detail.equals(connectionDetail)) {
+            recordDiagnosticEvent("lockdown_connection_blocked");
+        }
+        connectionDetail = detail;
+        updateForegroundNotification();
+        publishSnapshot();
     }
 
     private void stopForMissingLocalNetworkPermission() {
@@ -1304,6 +1336,8 @@ public final class P2pVpnService extends VpnService {
                         current.hasProfile && !current.profileUnreadable,
                         current.connectionRequested,
                         current.connected,
+                        current.alwaysOn,
+                        current.lockdown,
                         current.busy,
                         current.runtimeGeneration,
                         underlay.kind,
@@ -1363,7 +1397,9 @@ public final class P2pVpnService extends VpnService {
                 || ACTION_DEBUG_COMMAND.equals(action)) {
             return false;
         }
-        return action == null || (Build.VERSION.SDK_INT >= 29 && isAlwaysOn());
+        return action == null
+                || SERVICE_INTERFACE.equals(action)
+                || (Build.VERSION.SDK_INT >= 29 && isAlwaysOn());
     }
 
     private void refreshVpnMode(boolean systemStart) {

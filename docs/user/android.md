@@ -12,6 +12,7 @@ The current artifact is a debug build for test environments.
 | Build host | `x86_64-linux` with Nix flakes |
 | Android ABI | `arm64-v8a` or `x86_64` |
 | Android version | Android 8.0 / API 26 or newer |
+| Always-on status reporting | Android 10 / API 29 or newer |
 | Installation | ADB with the device authorized |
 | Application ID | `org.hermeticfoundation.p2pvpn.debug` |
 
@@ -92,6 +93,46 @@ Android API 37 and newer. Denying it leaves the profile disconnected.
 The app installs only the overlay IPv4 and IPv6 routes.
 
 It does not replace the device's default internet route.
+
+## Always-On VPN
+
+Connect once before enabling always-on mode. This grants VPN consent and
+confirms the saved profile is readable.
+
+### Enable
+
+1. Open Android **Settings**.
+2. Open **Network & internet** then **VPN**.
+3. Open the settings for `p2p-vpn`.
+4. Enable **Always-on VPN**.
+5. Leave **Block connections without VPN** disabled.
+
+Android starts the foreground service after reboot, process death, and app
+updates. The app restores the encrypted profile without another prompt.
+
+### Split-Tunnel Behavior
+
+| Traffic | Route |
+| --- | --- |
+| p2p-vpn overlay prefixes | Android TUN interface |
+| Normal internet traffic | Existing Wi-Fi, Ethernet, or cellular route |
+| p2p-vpn transport sockets | Physical networks, outside the TUN |
+
+The app status shows **Always-on VPN** while Android owns the lifecycle.
+
+The in-app **Disconnect** control is disabled in this mode. Disable always-on
+mode in Android Settings before disconnecting manually.
+
+### Blocked Connections
+
+Do not enable **Block connections without VPN**.
+
+p2p-vpn is an overlay split tunnel, not a default-route privacy VPN. Android
+lockdown would block normal internet traffic for other apps because p2p-vpn
+does not provide a default route.
+
+On Android 10 and newer, the app detects lockdown and remains stopped with an
+actionable status instead of entering a reconnect loop.
 
 ## Join a Linux Member
 
@@ -330,6 +371,9 @@ The service watches non-VPN networks with internet capability.
 
 It prefers validated Ethernet, then Wi-Fi, cellular, and Bluetooth.
 
+The app's own UID is excluded from the TUN. Internal QUIC, TCP, relay, DNS,
+and discovery sockets therefore remain underlay traffic.
+
 The TUN interface and native runtime stay active when the selected network
 changes or disappears.
 
@@ -358,7 +402,7 @@ The report is capped at 64 KiB.
 
 | Section | Included Data |
 | --- | --- |
-| Lifecycle | Service uptime, profile readability, connection state, runtime generation |
+| Lifecycle | Service uptime, profile readability, connection, always-on, lockdown, runtime generation |
 | Underlay | Coarse transport kind, validation, selection, loss, and recovery counts |
 | Paths | Aggregate direct, relay, routing-peer, and packet-session counts |
 | Queue and drops | Aggregate queue gauges, drops, expiry, fallback, and demotion counts |
@@ -399,7 +443,8 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 | --- | --- |
 | Simultaneous networks | One saved profile |
 | Android system DNS | Not integrated; Linux members still resolve Android hostnames |
-| Always-on VPN | Explicitly unsupported |
+| Always-on VPN | Supported as a split tunnel; Android 10+ reports mode state |
+| Lockdown / blocked connections | Unsupported; normal internet must remain outside the overlay |
 | Custom route grants | No Android UI |
 | Identity import/export | No Android UI |
 | Release distribution | Debug APK only |

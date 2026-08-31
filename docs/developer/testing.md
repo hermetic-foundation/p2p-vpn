@@ -121,10 +121,10 @@ Coverage:
 | --- | --- |
 | Rust bridge | Profile, artifact, validation, secret, and context tests pass. |
 | Native library | arm64 and x86_64 API 26 JNI outputs pass ABI checks. |
-| Java | Pairing, approval, status, and recovery tests pass. |
+| Java | Pairing, approval, VPN mode, status, and recovery tests pass. |
 | Lint | Android debug lint has no errors. |
 | APK | Both JNI ABIs, signature, debug ID, and SDK levels match. |
-| Manifest | Unsupported always-on VPN mode is disabled. |
+| Manifest | Always-on support and debug automation permissions match policy. |
 
 Run the physical-device audit preflight without changing the device:
 
@@ -161,6 +161,17 @@ nix run .#android-e2e -- \
   --scenario profile-persistence \
   --output ./android-profile-evidence
 ```
+
+Run always-on lifecycle coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario always-on \
+  --output ./android-always-on-evidence
+```
+
+The gate covers Android ownership, update restart, disconnect protection,
+lockdown refusal, automatic recovery, and settings cleanup.
 
 Run code pairing and bidirectional packet coverage:
 
@@ -225,7 +236,7 @@ It rejects third-party source builds, disables fallback, prefetches fixed inputs
 sequentially, and cancels realization when its storage budget is exceeded.
 
 See [Android Architecture](android.md) for the E2E procedure and recorded
-2026-08-29 Linux/emulator evidence.
+2026-08-31 Linux/emulator evidence.
 
 ## NixOS Module Check
 

@@ -39,6 +39,8 @@ public final class DiagnosticReportTest {
                         true,
                         true,
                         true,
+                        true,
+                        false,
                         false,
                         2,
                         "wifi-secret-handle",
@@ -60,6 +62,8 @@ public final class DiagnosticReportTest {
 
         assertTrue(report.contains("\"kind\":\"p2p-vpn-android-diagnostics\""));
         assertTrue(report.contains("\"connected_peers\":2"));
+        assertTrue(report.contains("\"always_on\":true"));
+        assertTrue(report.contains("\"lockdown\":false"));
         assertTrue(report.contains("\"peers_without_supported_path\":1"));
         assertTrue(report.contains("\"queue_packets\":5"));
         assertTrue(report.contains("\"process_cpu_millis\":100"));

@@ -191,6 +191,8 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         value.put("profile_unreadable", snapshot.profileUnreadable);
         value.put("connected", snapshot.connected);
         value.put("connection_requested", snapshot.connectionRequested);
+        value.put("always_on", snapshot.alwaysOn);
+        value.put("lockdown", snapshot.lockdown);
         value.put("busy", snapshot.busy);
         value.put("network_name", nullable(snapshot.networkName));
         value.put("hostname", nullable(snapshot.hostname));

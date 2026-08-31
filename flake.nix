@@ -358,6 +358,7 @@
                 pkgs.gnugrep
                 pkgs.gnused
                 pkgs.jq
+                pkgs.libxml2
                 pkgs.procps
               ];
               text = ''
@@ -870,6 +871,7 @@
                   sleep 300
                 fi
                 pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
+                always_on_state="''${P2P_VPN_ANDROID_E2E_FAKE_ALWAYS_ON_STATE:-}"
                 path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
                 traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
                 promotion_state="''${P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE:-}"
@@ -1051,7 +1053,64 @@
                         }')"
                     elif [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
                       && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
-                      response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":true,"profile_stored":true,"busy":false,"network_name":"android-e2e","hostname":"android-0123456789abcdef","peer_id":"12D3KooWFakeAndroidPeer","addresses":["100.64.0.9/32","fd42::9/128"],"paths":{"connected_peers":0}}}}'
+                      connected=false
+                      connection_requested=false
+                      always_on=false
+                      lockdown=false
+                      connection_detail='Disconnected'
+                      runtime_generation=0
+                      if [[ -n "$always_on_state" && -s "$always_on_state" ]]; then
+                        connection_requested=true
+                        case "$(< "$always_on_state")" in
+                          manual)
+                            connected=true
+                            connection_detail='Connected'
+                            runtime_generation=1
+                            ;;
+                          always-on|updated)
+                            connected=true
+                            always_on=true
+                            connection_detail='Always-on VPN is managed by Android'
+                            runtime_generation=1
+                            ;;
+                          lockdown)
+                            always_on=true
+                            lockdown=true
+                            connection_detail='Turn off Block connections without VPN. p2p-vpn uses split-tunnel routes.'
+                            runtime_generation=1
+                            ;;
+                          restored)
+                            connected=true
+                            always_on=true
+                            connection_detail='Connected'
+                            runtime_generation=2
+                            ;;
+                          *) exit 2 ;;
+                        esac
+                      fi
+                      response="$(jq -cn \
+                        --argjson connected "$connected" \
+                        --argjson connection_requested "$connection_requested" \
+                        --argjson always_on "$always_on" \
+                        --argjson lockdown "$lockdown" \
+                        --arg connection_detail "$connection_detail" \
+                        --argjson runtime_generation "$runtime_generation" \
+                        '{schema_version: 1, ok: true, value: {service_ready: true, snapshot: {
+                          has_profile: true,
+                          profile_stored: true,
+                          busy: false,
+                          connected: $connected,
+                          connection_requested: $connection_requested,
+                          always_on: $always_on,
+                          lockdown: $lockdown,
+                          connection_detail: $connection_detail,
+                          network_name: "android-e2e",
+                          hostname: "android-0123456789abcdef",
+                          peer_id: "12D3KooWFakeAndroidPeer",
+                          addresses: ["100.64.0.9/32", "fd42::9/128"],
+                          runtime_generation: $runtime_generation,
+                          paths: {connected_peers: 0}
+                        }}}')"
                     else
                       response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
                     fi
@@ -1059,7 +1118,10 @@
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command diagnostics')
                     profile_stored=false
+                    connection_requested=false
                     connected=false
+                    always_on=false
+                    lockdown=false
                     runtime_generation=0
                     connected_peers=0
                     direct_quic_datagram=0
@@ -1072,6 +1134,7 @@
                       profile_stored=true
                       state="$(< "$pairing_state")"
                       if [[ "$state" == connected || "$state" == paired ]]; then
+                        connection_requested=true
                         connected=true
                         runtime_generation=1
                       fi
@@ -1102,6 +1165,34 @@
                     elif [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
                       && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
                       profile_stored=true
+                      if [[ -n "$always_on_state" && -s "$always_on_state" ]]; then
+                        case "$(< "$always_on_state")" in
+                          manual)
+                            connection_requested=true
+                            connected=true
+                            runtime_generation=1
+                            ;;
+                          always-on|updated)
+                            connection_requested=true
+                            connected=true
+                            always_on=true
+                            runtime_generation=1
+                            ;;
+                          lockdown)
+                            connection_requested=true
+                            always_on=true
+                            lockdown=true
+                            runtime_generation=1
+                            ;;
+                          restored)
+                            connection_requested=true
+                            connected=true
+                            always_on=true
+                            runtime_generation=2
+                            ;;
+                          *) exit 2 ;;
+                        esac
+                      fi
                     fi
 
                     underlay_kind=wifi
@@ -1148,7 +1239,10 @@
 
                     report="$(jq -cn \
                       --argjson profile_stored "$profile_stored" \
+                      --argjson connection_requested "$connection_requested" \
                       --argjson connected "$connected" \
+                      --argjson always_on "$always_on" \
+                      --argjson lockdown "$lockdown" \
                       --argjson runtime_generation "$runtime_generation" \
                       --argjson connected_peers "$connected_peers" \
                       --argjson direct_quic_datagram "$direct_quic_datagram" \
@@ -1173,8 +1267,10 @@
                           service_uptime_millis: 12000,
                           profile_stored: $profile_stored,
                           profile_readable: $profile_stored,
-                          connection_requested: $connected,
+                          connection_requested: $connection_requested,
                           connected: $connected,
+                          always_on: $always_on,
+                          lockdown: $lockdown,
                           busy: false,
                           runtime_generation: $runtime_generation
                         },
@@ -1260,10 +1356,37 @@
                     ;;
                   'shell appops set org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow') ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command connect')
-                    : "''${pairing_state:?}"
-                    printf 'connected\n' > "$pairing_state"
+                    if [[ -n "$pairing_state" ]]; then
+                      printf 'connected\n' > "$pairing_state"
+                    else
+                      : "''${always_on_state:?}"
+                      printf 'manual\n' > "$always_on_state"
+                    fi
                     response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"connect"}}'
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command disconnect')
+                    response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"disconnect"}}'
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell settings put secure always_on_vpn_app org.hermeticfoundation.p2pvpn.debug')
+                    : "''${always_on_state:?}"
+                    printf 'always-on\n' > "$always_on_state"
+                    ;;
+                  'shell settings put secure always_on_vpn_lockdown 1')
+                    : "''${always_on_state:?}"
+                    printf 'lockdown\n' > "$always_on_state"
+                    ;;
+                  'shell settings put secure always_on_vpn_lockdown 0')
+                    if [[ -n "$always_on_state" && -s "$always_on_state" \
+                      && "$(< "$always_on_state")" == lockdown ]]; then
+                      printf 'restored\n' > "$always_on_state"
+                    fi
+                    ;;
+                  'shell settings delete secure always_on_vpn_app')
+                    if [[ -n "$always_on_state" ]]; then
+                      printf 'manual\n' > "$always_on_state"
+                    fi
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command join-pairing --es code '*)
                     : "''${pairing_state:?}"
@@ -1271,7 +1394,14 @@
                     response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"join-pairing"}}'
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
                     ;;
-                  'shell pidof org.hermeticfoundation.p2pvpn.debug') printf '4242\n' ;;
+                  'shell pidof org.hermeticfoundation.p2pvpn.debug')
+                    if [[ -n "$always_on_state" && -s "$always_on_state" \
+                      && "$(< "$always_on_state")" == updated ]]; then
+                      printf '5252\n'
+                    else
+                      printf '4242\n'
+                    fi
+                    ;;
                   logcat*)
                     printf '1.0 I p2p-vpn: p2p_vpn::runtime::runner event=test peer=12D3KooWFakeAndroidPeer overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef address=/ip6/fd42::9/tcp/42300 key=/members/c2VjcmV0+/membership-records/1\n'
                     ;;
@@ -1314,7 +1444,13 @@
                   'shell am start -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity')
                     printf 'Starting: Intent\n'
                     ;;
-                  install\ -r\ *) printf 'Success\n' ;;
+                  install\ -r\ *)
+                    if [[ -n "$always_on_state" && -s "$always_on_state" \
+                      && "$(< "$always_on_state")" == always-on ]]; then
+                      printf 'updated\n' > "$always_on_state"
+                    fi
+                    printf 'Success\n'
+                    ;;
                   *) printf 'unexpected fake ADB call: %s\n' "$*" >&2; exit 2 ;;
                 esac
                 EOF
@@ -1461,6 +1597,41 @@
                   .cleanup.logs_redacted
                 ' "$test_root/persistence-evidence/evidence.json" >/dev/null
                 assert_diagnostic_evidence "$test_root/persistence-evidence/evidence.json" false
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
+
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE="$test_root/fake-always-on-profile" \
+                  P2P_VPN_ANDROID_E2E_FAKE_ALWAYS_ON_STATE="$test_root/fake-always-on-mode" \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario always-on \
+                    --output "$test_root/always-on-evidence"
+                always_on_status=$?
+                set -e
+
+                if [[ "$always_on_status" -ne 0 ]]; then
+                  jq . "$test_root/always-on-evidence/evidence.json" >&2
+                  exit "$always_on_status"
+                fi
+                jq -e '
+                  .scenario == "always-on" and
+                  .status == "passed" and
+                  .device.always_on.manual_connect and
+                  .device.always_on.disconnect_guard and
+                  .device.always_on.update_restart and
+                  .device.always_on.lockdown_guard and
+                  .device.always_on.lockdown_recovery and
+                  .device.always_on.profile_identity_preserved and
+                  .cleanup.always_on_cleared and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
+                ' "$test_root/always-on-evidence/evidence.json" >/dev/null
+                assert_diagnostic_evidence "$test_root/always-on-evidence/evidence.json" true
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 set +e

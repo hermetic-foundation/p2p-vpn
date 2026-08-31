@@ -134,6 +134,8 @@ EOF
                 profile_unreadable: false,
                 connected: $has_profile,
                 connection_requested: $has_profile,
+                always_on: false,
+                lockdown: false,
                 busy: false,
                 network_name: (if $has_profile then "physical-test" else null end),
                 hostname: (if $has_profile then "android-0123456789abcdef" else null end),
@@ -170,7 +172,7 @@ EOF
         ')"
         ;;
       diagnostics)
-        response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"report":{"schema_version":1,"kind":"p2p-vpn-android-diagnostics","lifecycle":{"connected":true,"runtime_generation":2},"underlay":{"kind":"wifi","runtime_recovery_requests":4,"runtime_recovery_failures":0},"paths":{"connected_peers":1,"direct_quic_stream":1,"relay":0},"queue":{"queued_packets":0},"drops":{"outbound_packets":0,"inbound_packets":0},"resources":{"process_cpu_millis":2500,"total_pss_kib":52000,"private_dirty_kib":27000,"active_threads":12},"pairing":{"operation_active":false,"candidate_pending":false},"events":{"discarded":0,"items":[{"sequence":1,"since_service_start_millis":1,"name":"pairing_completed"}]},"privacy":{"identity_material":"excluded","peers":"excluded","pairing_secrets":"excluded","underlay_addresses":"excluded"}}}}'
+        response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"report":{"schema_version":1,"kind":"p2p-vpn-android-diagnostics","lifecycle":{"connected":true,"always_on":false,"lockdown":false,"runtime_generation":2},"underlay":{"kind":"wifi","runtime_recovery_requests":4,"runtime_recovery_failures":0},"paths":{"connected_peers":1,"direct_quic_stream":1,"relay":0},"queue":{"queued_packets":0},"drops":{"outbound_packets":0,"inbound_packets":0},"resources":{"process_cpu_millis":2500,"total_pss_kib":52000,"private_dirty_kib":27000,"active_threads":12},"pairing":{"operation_active":false,"candidate_pending":false},"events":{"discarded":0,"items":[{"sequence":1,"since_service_start_millis":1,"name":"pairing_completed"}]},"privacy":{"identity_material":"excluded","peers":"excluded","pairing_secrets":"excluded","underlay_addresses":"excluded"}}}}'
         ;;
       create-profile)
         touch "$state_dir/profile-created"

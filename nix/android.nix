@@ -638,9 +638,9 @@ let
           fi
 
           if ! grep -A1 -F 'android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"' \
-            apk-manifest.xml | grep -F 'android:value="false"' >/dev/null
+            apk-manifest.xml | grep -F 'android:value="true"' >/dev/null
           then
-            echo "APK must explicitly opt out of unsupported always-on VPN mode" >&2
+            echo "APK must explicitly support always-on VPN mode" >&2
             exit 1
           fi
 

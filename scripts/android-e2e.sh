@@ -38,7 +38,9 @@ cleanup_fixture_stopped=false
 cleanup_private_state_removed=false
 cleanup_logs_redacted=false
 cleanup_diagnostic_report_redacted=true
+cleanup_always_on_cleared=true
 diagnostic_report_required=false
+always_on_configured=false
 readonly harness_pid="$BASHPID"
 
 adb_run() {
@@ -50,8 +52,8 @@ usage() {
 Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
-  --scenario NAME        Select boot-smoke, profile-persistence, pairing-traffic,
-                         or underlay-recovery.
+  --scenario NAME        Select boot-smoke, profile-persistence, always-on,
+                         pairing-traffic, or underlay-recovery.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -124,7 +126,7 @@ done
 
 pairing_scenario=0
 case "$scenario" in
-  boot-smoke|profile-persistence) ;;
+  boot-smoke|profile-persistence|always-on) ;;
   pairing-traffic|underlay-recovery) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
@@ -637,8 +639,9 @@ diagnostic_report_is_valid() {
         (startswith("12D3KooW") | not))) and
     (.lifecycle |
       exact_keys([
-        "busy", "connected", "connection_requested", "profile_readable",
-        "profile_stored", "runtime_generation", "service_uptime_millis"
+        "always_on", "busy", "connected", "connection_requested", "lockdown",
+        "profile_readable", "profile_stored", "runtime_generation",
+        "service_uptime_millis"
       ]) and
       (.service_uptime_millis | natural) and
       (.runtime_generation | natural) and
@@ -646,6 +649,8 @@ diagnostic_report_is_valid() {
       (.profile_readable | boolean) and
       (.connection_requested | boolean) and
       (.connected | boolean) and
+      (.always_on | boolean) and
+      (.lockdown | boolean) and
       (.busy | boolean)) and
     (.underlay |
       exact_keys([
@@ -763,6 +768,149 @@ collect_android_diagnostics() {
   rm -f "$final_status" "$coarse_status"
 }
 
+dump_android_settings_ui() {
+  local ui_file="$state_dir/android-settings-ui.xml"
+  adb_run shell uiautomator dump /sdcard/p2p-vpn-window.xml >/dev/null 2>&1 \
+    || return 1
+  adb_run exec-out cat /sdcard/p2p-vpn-window.xml > "$ui_file" || return 1
+  xmllint --nonet --noout "$ui_file" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$ui_file"
+}
+
+wait_for_android_ui_xpath() {
+  local xpath="$1"
+  local attempts="${2:-10}"
+  local ui_file
+  for _ in $(seq 1 "$attempts"); do
+    if ui_file="$(dump_android_settings_ui)" \
+      && [[ "$(xmllint --nonet --xpath "boolean(($xpath)[1])" "$ui_file" 2>/dev/null)" == true ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+tap_android_ui_xpath() {
+  local xpath="$1"
+  local ui_file bounds
+  ui_file="$(dump_android_settings_ui)" || return 1
+  bounds="$(
+    xmllint --nonet --xpath "string(($xpath)[1]/@bounds)" "$ui_file" 2>/dev/null
+  )"
+  if [[ ! "$bounds" =~ ^\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]$ ]]; then
+    return 1
+  fi
+  local x=$(((BASH_REMATCH[1] + BASH_REMATCH[3]) / 2))
+  local y=$(((BASH_REMATCH[2] + BASH_REMATCH[4]) / 2))
+  adb_run shell input tap "$x" "$y" >/dev/null
+}
+
+vpn_preference_xpath() {
+  local label="$1"
+  printf "//node[@clickable='true' and .//node[@text='%s']]\n" "$label"
+}
+
+vpn_preference_checked() {
+  local label="$1"
+  local ui_file row_xpath
+  row_xpath="$(vpn_preference_xpath "$label")"
+  ui_file="$(dump_android_settings_ui)" || return 1
+  xmllint --nonet --xpath \
+    "string(($row_xpath)[1]//node[@class='android.widget.Switch'][1]/@checked)" \
+    "$ui_file" 2>/dev/null
+}
+
+wait_for_vpn_preference_state() {
+  local label="$1"
+  local expected="$2"
+  local attempts="${3:-10}"
+  for _ in $(seq 1 "$attempts"); do
+    if [[ "$(vpn_preference_checked "$label" 2>/dev/null || true)" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+open_android_vpn_app_settings() {
+  local settings_button="//node[@resource-id='com.android.settings:id/settings_button' and @content-desc='Settings']"
+  adb_run shell am force-stop com.android.settings >/dev/null || return 1
+  adb_run shell am start -a android.settings.VPN_SETTINGS >/dev/null || return 1
+  wait_for_android_ui_xpath "$settings_button" || return 1
+  tap_android_ui_xpath "$settings_button" || return 1
+  wait_for_android_ui_xpath "//node[@text='Always-on VPN']"
+}
+
+set_android_vpn_mode() {
+  local desired_always_on="$1"
+  local desired_lockdown="$2"
+  if [[ "$test_mode" == 1 ]]; then
+    if [[ "$desired_always_on" == true ]]; then
+      adb_run shell settings put secure always_on_vpn_app \
+        org.hermeticfoundation.p2pvpn.debug >/dev/null || return 1
+      adb_run shell settings put secure always_on_vpn_lockdown \
+        "$([[ "$desired_lockdown" == true ]] && printf 1 || printf 0)" >/dev/null \
+        || return 1
+      always_on_configured=true
+    else
+      adb_run shell settings put secure always_on_vpn_lockdown 0 >/dev/null || return 1
+      adb_run shell settings delete secure always_on_vpn_app >/dev/null || return 1
+      always_on_configured=false
+    fi
+    return 0
+  fi
+
+  open_android_vpn_app_settings || return 1
+  local always_on_row lockdown_row
+  always_on_row="$(vpn_preference_xpath "Always-on VPN")"
+  lockdown_row="$(vpn_preference_xpath "Block connections without VPN")"
+
+  if [[ "$desired_always_on" == true \
+    && "$(vpn_preference_checked "Always-on VPN" 2>/dev/null || true)" != true ]]; then
+    tap_android_ui_xpath "$always_on_row" || return 1
+    always_on_configured=true
+    wait_for_vpn_preference_state "Always-on VPN" true || return 1
+  fi
+
+  if [[ "$desired_lockdown" == true \
+    && "$(vpn_preference_checked "Block connections without VPN" 2>/dev/null || true)" != true ]]; then
+    tap_android_ui_xpath "$lockdown_row" || return 1
+    local confirm_button="//node[@resource-id='android:id/button1' and @text='TURN ON']"
+    wait_for_android_ui_xpath "$confirm_button" || return 1
+    tap_android_ui_xpath "$confirm_button" || return 1
+    wait_for_vpn_preference_state "Block connections without VPN" true || return 1
+  elif [[ "$desired_lockdown" == false \
+    && "$(vpn_preference_checked "Block connections without VPN" 2>/dev/null || true)" == true ]]; then
+    tap_android_ui_xpath "$lockdown_row" || return 1
+    wait_for_vpn_preference_state "Block connections without VPN" false || return 1
+  fi
+
+  if [[ "$desired_always_on" == false \
+    && "$(vpn_preference_checked "Always-on VPN" 2>/dev/null || true)" == true ]]; then
+    tap_android_ui_xpath "$always_on_row" || return 1
+    wait_for_vpn_preference_state "Always-on VPN" false || return 1
+    always_on_configured=false
+  fi
+}
+
+clear_always_on_mode() {
+  if [[ "$always_on_configured" != true ]]; then
+    cleanup_always_on_cleared=true
+    return 0
+  fi
+  cleanup_always_on_cleared=false
+  [[ -n "$emulator_serial" && ${#adb[@]} -gt 0 ]] || return 0
+  local adb_timeout_seconds="$cleanup_adb_timeout_seconds"
+  if [[ "$(adb_run get-state 2>/dev/null || true)" != device ]]; then
+    return 0
+  fi
+  if set_android_vpn_mode false false >/dev/null 2>&1; then
+    cleanup_always_on_cleared=true
+  fi
+}
+
 stop_emulator() {
   if [[ -z "$emulator_pid" ]]; then
     cleanup_emulator_stopped=true
@@ -860,6 +1008,7 @@ finalize_evidence() {
     --argjson private_state_removed "$cleanup_private_state_removed" \
     --argjson logs_redacted "$cleanup_logs_redacted" \
     --argjson diagnostic_report_redacted "$cleanup_diagnostic_report_redacted" \
+    --argjson always_on_cleared "$cleanup_always_on_cleared" \
     '{
       schema_version: $schema_version,
       kind: "p2p-vpn-android-e2e",
@@ -876,7 +1025,8 @@ finalize_evidence() {
         fixture_stopped: $fixture_stopped,
         private_state_removed: $private_state_removed,
         logs_redacted: $logs_redacted,
-        diagnostic_report_redacted: $diagnostic_report_redacted
+        diagnostic_report_redacted: $diagnostic_report_redacted,
+        always_on_cleared: $always_on_cleared
       },
       artifacts: {
         android_log: "android.log",
@@ -904,6 +1054,7 @@ exit_handler() {
     outcome_detail="E2E harness terminated unexpectedly"
   fi
   collect_android_diagnostics
+  clear_always_on_mode
   stop_emulator
   stop_fixture
   remove_private_state
@@ -921,6 +1072,11 @@ exit_handler() {
     status=1
     outcome=failed
     outcome_detail="Android diagnostic report validation failed"
+  fi
+  if [[ "$cleanup_always_on_cleared" != true ]]; then
+    status=1
+    outcome=failed
+    outcome_detail="Android always-on settings cleanup failed"
   fi
   finalize_evidence
   printf 'Android E2E evidence: %s\n' "$evidence_file" >&2
@@ -2427,6 +2583,169 @@ assert_profile_unchanged() {
     .[0].value.snapshot.addresses == .[1].value.snapshot.addresses
   ' "$baseline_profile" "$current" >/dev/null
 }
+
+if [[ "$scenario" == always-on ]]; then
+  if ! adb_run shell appops set \
+    org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not grant VPN consent for always-on validation"
+    record_step vpn_consent failed "$outcome_detail"
+    exit 1
+  fi
+  record_step vpn_consent passed "VPN consent granted through emulator automation"
+
+  if ! android_automation connect > "$command_response" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .value.accepted and .value.command == "connect"' \
+      "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept the initial VPN connection"
+    record_step manual_connect failed "$outcome_detail"
+    exit 1
+  fi
+  manual_status="$state_dir/status-manual.json"
+  if ! wait_for_automation_status \
+    "$manual_status" \
+    '.value.snapshot.connected and (.value.snapshot.always_on | not) and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not)' \
+    90; then
+    outcome=failed
+    outcome_detail="Android VPN runtime did not establish the initial manual connection"
+    record_step manual_connect failed "$outcome_detail"
+    exit 1
+  fi
+  record_step manual_connect passed "Manual split-tunnel VPN connection established"
+
+  if ! set_android_vpn_mode true false; then
+    outcome=failed
+    outcome_detail="Android did not enable always-on VPN mode"
+    record_step always_on_enable failed "$outcome_detail"
+    exit 1
+  fi
+  always_on_status="$state_dir/status-always-on.json"
+  if ! wait_for_automation_status \
+    "$always_on_status" \
+    '.value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not)' \
+    30; then
+    outcome=failed
+    outcome_detail="The service did not observe Android always-on ownership"
+    record_step always_on_enable failed "$outcome_detail"
+    exit 1
+  fi
+  record_step always_on_enable passed "Android assumed always-on ownership of the VPN"
+
+  always_on_generation="$(jq -r '.value.snapshot.runtime_generation' "$always_on_status")"
+  if ! android_automation disconnect > "$command_response" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .value.accepted and .value.command == "disconnect"' \
+      "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept the disconnect probe"
+    record_step disconnect_guard failed "$outcome_detail"
+    exit 1
+  fi
+  guarded_status="$state_dir/status-after-disconnect.json"
+  if ! wait_for_automation_status \
+    "$guarded_status" \
+    ".value.snapshot.connected and .value.snapshot.connection_requested and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.runtime_generation == $always_on_generation)" \
+    15; then
+    outcome=failed
+    outcome_detail="In-app disconnect interrupted Android's always-on VPN"
+    record_step disconnect_guard failed "$outcome_detail"
+    exit 1
+  fi
+  record_step disconnect_guard passed "In-app disconnect was ignored while Android owned the VPN"
+
+  process_before_update="$(adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
+  if [[ ! "$process_before_update" =~ ^[0-9]+$ ]]; then
+    outcome=failed
+    outcome_detail="The pre-update Android process ID was unavailable"
+    record_step always_on_update_restart failed "$outcome_detail"
+    exit 1
+  fi
+  if ! adb_run install -r "$android_apk" >/dev/null; then
+    outcome=failed
+    outcome_detail="ADB replacement install failed during always-on validation"
+    record_step always_on_update_restart failed "$outcome_detail"
+    exit 1
+  fi
+  updated_status="$state_dir/status-after-always-on-update.json"
+  if ! wait_for_automation_status \
+    "$updated_status" \
+    '.value.snapshot.has_profile and .value.snapshot.profile_stored and .value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not)' \
+    90 \
+    || ! assert_profile_unchanged "$updated_status"; then
+    outcome=failed
+    outcome_detail="Always-on VPN did not restore the same profile after an app update"
+    record_step always_on_update_restart failed "$outcome_detail"
+    exit 1
+  fi
+  process_after_update="$(adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
+  if [[ ! "$process_after_update" =~ ^[0-9]+$ \
+    || "$process_after_update" == "$process_before_update" ]]; then
+    outcome=failed
+    outcome_detail="The app update did not prove a fresh always-on service process"
+    record_step always_on_update_restart failed "$outcome_detail"
+    exit 1
+  fi
+  record_step always_on_update_restart passed \
+    "Android restarted the VPN with the same encrypted profile after an app update"
+
+  if ! set_android_vpn_mode true true; then
+    outcome=failed
+    outcome_detail="Android did not enable the lockdown validation state"
+    record_step lockdown_guard failed "$outcome_detail"
+    exit 1
+  fi
+  lockdown_status="$state_dir/status-lockdown.json"
+  if ! wait_for_automation_status \
+    "$lockdown_status" \
+    '.value.snapshot.always_on and .value.snapshot.lockdown and (.value.snapshot.connected | not) and .value.snapshot.connection_requested and (.value.snapshot.connection_detail | contains("Block connections without VPN"))' \
+    30; then
+    outcome=failed
+    outcome_detail="The service did not stop and report unsupported Android lockdown"
+    record_step lockdown_guard failed "$outcome_detail"
+    exit 1
+  fi
+  record_step lockdown_guard passed "Unsupported Android lockdown stopped the split tunnel"
+
+  if ! set_android_vpn_mode true false; then
+    outcome=failed
+    outcome_detail="Android did not disable the lockdown validation state"
+    record_step lockdown_recovery failed "$outcome_detail"
+    exit 1
+  fi
+  restored_status="$state_dir/status-after-lockdown.json"
+  if ! wait_for_automation_status \
+    "$restored_status" \
+    '.value.snapshot.connected and .value.snapshot.connection_requested and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not)' \
+    45 \
+    || ! assert_profile_unchanged "$restored_status"; then
+    outcome=failed
+    outcome_detail="Always-on VPN did not recover automatically after lockdown was disabled"
+    record_step lockdown_recovery failed "$outcome_detail"
+    exit 1
+  fi
+  record_step lockdown_recovery passed \
+    "The split tunnel recovered automatically after lockdown was disabled"
+
+  jq '
+    . + {
+      always_on: {
+        manual_connect: true,
+        disconnect_guard: true,
+        update_restart: true,
+        lockdown_guard: true,
+        lockdown_recovery: true,
+        profile_identity_preserved: true
+      }
+    }
+  ' "$device_file" > "$device_file.updated"
+  mv -f "$device_file.updated" "$device_file"
+
+  outcome=passed
+  outcome_detail="Always-on ownership, restart, lockdown guard, and recovery passed"
+  exit 0
+fi
 
 adb_run shell am force-stop org.hermeticfoundation.p2pvpn.debug
 start_main_activity

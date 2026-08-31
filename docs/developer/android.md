@@ -24,6 +24,7 @@ MainActivity
 | --- | --- |
 | `android/app/src/main/java/.../MainActivity.java` | Native pair-and-connect UI |
 | `android/app/src/main/java/.../P2pVpnService.java` | VPN and recovery lifecycle |
+| `android/app/src/main/java/.../VpnMode.java` | Always-on and lockdown mode policy |
 | `android/app/src/main/java/.../UnderlayTracker.java` | Deterministic physical-network selection |
 | `android/app/src/main/java/.../DiagnosticReport.java` | Bounded aggregate-only support report |
 | `android/app/src/main/java/.../ProfileStore.java` | Keystore-backed persistence |
@@ -64,8 +65,8 @@ Linux behavior and protocol encodings remain unchanged.
 
 The UI requests local-network access before VPN consent.
 
-The service also rejects startup and stops after revocation. This prevents a
-nominally connected profile from silently losing all LAN transports.
+The service rejects startup after revocation. A manual service stops; an
+always-on service remains foreground and reports the missing permission.
 
 ## JNI Contract
 
@@ -119,6 +120,67 @@ It never enters the Android resources or APK.
 
 The profile stores `network.dns.hostname` while leaving the Android DNS
 listener disabled. Pairing authenticates that label independently of serving DNS.
+
+## Always-On Lifecycle
+
+The manifest explicitly advertises always-on support.
+
+Android starts `P2pVpnService` without the app's connect action. The service
+enters the foreground immediately, then queues profile restoration.
+
+```text
+system start
+  -> foreground notification
+  -> encrypted profile restore
+  -> VPN and native runtime start
+  -> bounded recovery after process death or network change
+```
+
+| State | Service action |
+| --- | --- |
+| Profile ready | Establish TUN and start the Rust runtime |
+| Profile absent | Stay foreground and wait for profile creation |
+| Profile unreadable | Stay foreground and expose reset recovery |
+| Local-network permission absent | Stay foreground and expose permission state |
+| Always-on disconnect request | Ignore it; Android owns lifecycle |
+| Android VPN permission revoked | Stop the runtime and service |
+
+Android API 29 exposes `isAlwaysOn()` and `isLockdownEnabled()`.
+
+System starts recognize both actionless intents and `VpnService.SERVICE_INTERFACE`.
+The latter is used when Android restarts the VPN after an app update.
+
+Mode reporting on Android 10 and newer is authoritative. Older system starts
+retain always-on ownership from the start intent.
+
+### Transport Isolation
+
+`Builder.addDisallowedApplication(getPackageName())` excludes the app UID from
+the TUN before `establish()`.
+
+| Socket owner | Routing behavior |
+| --- | --- |
+| Rust libp2p TCP and QUIC | Physical Android networks |
+| Owned packet-plane QUIC and UDP | Physical Android networks |
+| Discovery and resolver sockets | Physical Android networks |
+| Other app overlay traffic | TUN routes |
+
+This process-level boundary covers sockets created internally by libp2p. It
+also preserves simultaneous LAN discovery across available interfaces.
+
+### Lockdown Boundary
+
+Lockdown is intentionally rejected on API 29 and newer.
+
+Android lockdown blocks traffic outside the VPN for other apps. The owning VPN
+process remains able to reach its physical underlay.
+
+p2p-vpn installs only overlay routes and cannot carry default internet traffic.
+
+The service remains foreground with a fixed error and a 30-second mode poll.
+It performs no transport reconnect loop while lockdown remains enabled.
+
+The user must disable **Block connections without VPN**.
 
 ## Persistence
 
@@ -196,6 +258,9 @@ Physical-network callbacks exclude VPN networks and rank candidates:
 
 The first callback establishes baseline state.
 
+The app UID remains outside the VPN route set. The selected underlay is used
+for recovery decisions, not as a hardcoded socket route.
+
 A selected-network change, loss, or recovery is debounced for 500 milliseconds.
 
 The service then calls `nativeNetworkChanged` without replacing the TUN,
@@ -235,7 +300,7 @@ backoff capped at 30 seconds.
 
 | Scope | Data |
 | --- | --- |
-| Service | Uptime, profile state, connection state, generation |
+| Service | Uptime, profile state, connection, always-on, lockdown, generation |
 | Network | Coarse underlay kind and aggregate recovery counters |
 | Runtime | Aggregate path, queue, drop, fallback, and demotion counters |
 | Process | CPU time, PSS, private dirty memory, heap, threads |
@@ -345,6 +410,23 @@ nix run .#android-e2e -- \
 | Reinstall | A repeated replacement install preserves the same identity |
 
 An uninstall or application-data clear still destroys the identity by design.
+
+Run always-on lifecycle coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario always-on \
+  --output ./android-always-on-evidence
+```
+
+| Check | Assertion |
+| --- | --- |
+| Ownership | Android reports always-on mode while the tunnel remains connected |
+| Disconnect | The app cannot stop an Android-owned tunnel |
+| Update | A fresh service process restores the same encrypted profile |
+| Lockdown | Unsupported blocked-connections mode stops with an actionable status |
+| Recovery | Disabling lockdown restores the tunnel without app interaction |
+| Cleanup | The harness clears Android's always-on settings before teardown |
 
 Run isolated Linux pairing and traffic coverage:
 
@@ -647,7 +729,7 @@ holds. It is absent from non-debug source sets.
 
 | Command | Input | Result |
 | --- | --- | --- |
-| `status` | None | Structured profile, connection, pairing, and path state |
+| `status` | None | Structured profile, VPN mode, connection, pairing, and path state |
 | `diagnostics` | None | Production aggregate-only diagnostic report |
 | `create-profile` | `network` | Queues normal encrypted profile creation |
 | `connect` | None | Starts the normal VPN flow after user consent |
@@ -686,7 +768,7 @@ The gate covers:
 | Java unit tests | RPC JSON, approval, status, underlay selection, diagnostics |
 | Android lint | Debug variant static analysis |
 | APK | Dual ABI, 16 KiB alignment, debug ID, signing, min/target SDK |
-| Manifest | LAN permission; always-on disabled; automation protected by `DUMP` |
+| Manifest | LAN permission; always-on enabled; automation protected by `DUMP` |
 
 ## Device E2E
 
@@ -715,6 +797,18 @@ The recorded runs through 2026-08-31 used a clean API 35 x86_64 emulator.
 | Update install | `adb install -r` preserved the profile |
 | Replacement install | A second replacement preserved the profile |
 | Cleanup | Emulator and private harness state were removed |
+
+### Always-On Lifecycle
+
+| Check | Result |
+| --- | --- |
+| Android ownership | Connected tunnel reported always-on mode |
+| Disconnect guard | In-app disconnect left the same runtime connected |
+| Update restart | Fresh process restored the same encrypted profile |
+| System action | `VpnService.SERVICE_INTERFACE` started the replacement process |
+| Lockdown guard | Runtime stopped with an actionable split-tunnel error |
+| Lockdown recovery | Runtime reconnected without app interaction |
+| Cleanup | Always-on setting and temporary AVD state were removed |
 
 ### Linux Pairing
 
@@ -796,8 +890,9 @@ The recovery run used the automatic path policy and one continuous runtime.
 | Process use | 2.333 CPU seconds, 51,933 KiB PSS, 12 threads |
 | Run storage | 956 MB net growth; temporary source and evidence removed |
 
-This proves isolated emulator pairing, bidirectional dual-stack traffic,
-owned QUIC, compatibility streams, relay behavior, and underlay recovery.
+This proves always-on lifecycle recovery, isolated emulator pairing,
+bidirectional dual-stack traffic, owned QUIC, compatibility streams, relay
+behavior, and underlay recovery.
 
 It does not prove public NAT traversal or physical-device behavior.
 
@@ -807,7 +902,8 @@ It does not prove public NAT traversal or physical-device behavior.
 | --- | --- |
 | Multiple simultaneous profiles | Excluded |
 | Android system overlay DNS | Excluded |
-| Always-on VPN | Excluded |
+| Always-on split tunnel | Included; API 29+ mode detection |
+| Lockdown / blocked connections | Excluded |
 | Custom route-grant UI | Excluded |
 | Identity import/export UI | Excluded |
 | Play Store release pipeline | Excluded |

@@ -39,6 +39,8 @@ final class DiagnosticReport {
         final boolean profileReadable;
         final boolean connectionRequested;
         final boolean connected;
+        final boolean alwaysOn;
+        final boolean lockdown;
         final boolean busy;
         final long runtimeGeneration;
         final String underlayKind;
@@ -65,6 +67,8 @@ final class DiagnosticReport {
                 boolean profileReadable,
                 boolean connectionRequested,
                 boolean connected,
+                boolean alwaysOn,
+                boolean lockdown,
                 boolean busy,
                 long runtimeGeneration,
                 String underlayKind,
@@ -89,6 +93,8 @@ final class DiagnosticReport {
             this.profileReadable = profileReadable;
             this.connectionRequested = connectionRequested;
             this.connected = connected;
+            this.alwaysOn = alwaysOn;
+            this.lockdown = lockdown;
             this.busy = busy;
             this.runtimeGeneration = nonNegative(runtimeGeneration);
             this.underlayKind = safeUnderlayKind(underlayKind);
@@ -152,6 +158,8 @@ final class DiagnosticReport {
         report.append(",\"profile_readable\":").append(input.profileReadable);
         report.append(",\"connection_requested\":").append(input.connectionRequested);
         report.append(",\"connected\":").append(input.connected);
+        report.append(",\"always_on\":").append(input.alwaysOn);
+        report.append(",\"lockdown\":").append(input.lockdown);
         report.append(",\"busy\":").append(input.busy);
         report.append(",\"runtime_generation\":").append(input.runtimeGeneration).append('}');
     }
