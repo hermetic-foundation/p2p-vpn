@@ -79,11 +79,11 @@ Status is conservative.
 | 2026-08-26 | Physical authenticated DNS mesh | Four signed names converged; short, canonical, PTR, IPv4, IPv6, and restart checks passed. |
 | 2026-08-29 | Android/Linux emulator E2E | Persistence, code-only pairing, four 5/5 traffic checks, and isolated QUIC/TCP stream paths passed. |
 | 2026-08-30 | Android relay-to-direct E2E | 20 relay and 20 direct packets passed; promotion took 10.300 seconds without restart. |
+| 2026-08-30 | Android autonomous recovery E2E | Wi-Fi, total loss, cellular, and Wi-Fi return recovered without runtime restart. |
 
 ## Main Remaining Gaps
 
 | Gap | Required Evidence |
 | --- | --- |
 | Public code pairing | Two fresh hosts pair from only a code and pass traffic without manual routes. |
-| Android recovery | Emulator survives process death and controlled underlay changes. |
-| Android hardware | Physical arm64 device pairs, reconnects, and passes dual-stack traffic. |
+| Android hardware | Interactive arm64 LAN, hotspot, upstream VPN, LAN return, Doze, endurance, process, and update audit. |

@@ -233,6 +233,9 @@ It requires identity and traffic persistence after both operations.
 
 Their evidence is explicitly marked `proof_eligible: false`.
 
+Proof-eligible runs require interactive confirmation of all three network
+transitions. Automated test confirmations require `--allow-short`.
+
 The result is `OUTPUT/evidence.json`, capped at 2 MiB.
 
 It excludes device serials, models, peer IDs, overlay addresses, pairing codes,

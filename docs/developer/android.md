@@ -465,6 +465,11 @@ Runs shorter than 30 minutes or five minutes of Doze require `--allow-short`.
 
 Those runs cannot set `contract.proof_eligible`.
 
+All three network transitions also require interactive operator confirmation.
+
+The fake-device auto-confirm mode is accepted only with `--allow-short` and can
+never produce proof-eligible evidence.
+
 ### Failure Cleanup
 
 Every exit path releases forced Doze and wakes the screen.

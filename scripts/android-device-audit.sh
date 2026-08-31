@@ -16,6 +16,7 @@ readonly minimum_proof_doze_seconds=300
 readonly default_transition_timeout_seconds=180
 readonly default_adb_timeout_seconds=60
 readonly cleanup_adb_timeout_seconds=5
+readonly required_transition_confirmations=3
 readonly default_minimum_free_bytes=$((4 * 1024 * 1024 * 1024))
 readonly maximum_evidence_bytes=$((2 * 1024 * 1024))
 
@@ -36,6 +37,8 @@ preflight_only=0
 pair_fresh_profile=0
 allow_short=0
 auto_confirm="${P2P_VPN_ANDROID_DEVICE_AUDIT_AUTO_CONFIRM:-0}"
+automatic_confirmation=false
+interactive_confirmation=true
 
 adb_command="${P2P_VPN_ADB:-adb}"
 host_ping="${P2P_VPN_ANDROID_DEVICE_AUDIT_PING:-ping}"
@@ -68,6 +71,7 @@ sustained_summary_json=null
 final_status_json=null
 evidence_path=""
 finalizing=0
+transition_confirmation_count=0
 
 usage() {
   cat <<'EOF'
@@ -222,6 +226,19 @@ transition_timeout_seconds=$((10#$transition_timeout_seconds))
 adb_timeout_seconds=$((10#$adb_timeout_seconds))
 minimum_free_bytes=$((10#$minimum_free_bytes))
 maximum_loss_percent=$((10#$maximum_loss_percent))
+
+if [[ "$auto_confirm" != 0 && "$auto_confirm" != 1 ]]; then
+  echo "P2P_VPN_ANDROID_DEVICE_AUDIT_AUTO_CONFIRM must be 0 or 1" >&2
+  exit 2
+fi
+if ((auto_confirm == 1)); then
+  automatic_confirmation=true
+  interactive_confirmation=false
+fi
+if ((auto_confirm == 1 && allow_short == 0 && preflight_only == 0)); then
+  echo "automatic physical-audit confirmations require --allow-short" >&2
+  exit 2
+fi
 
 if ((duration_seconds < 1 || duration_seconds > 43200)); then
   echo "--duration-seconds must be between 1 and 43200" >&2
@@ -545,6 +562,7 @@ wait_for_traffic() {
 
 prompt_operator() {
   local prompt="$1"
+  local confirmation_kind="${2:-other}"
   if [[ "$auto_confirm" == 1 ]]; then
     printf 'AUTO: %s\n' "$prompt" >&2
     return 0
@@ -554,6 +572,9 @@ prompt_operator() {
   fi
   printf '\n%s\n' "$prompt" >/dev/tty
   read -r -p "Press Enter when the transition is complete: " _ </dev/tty
+  if [[ "$confirmation_kind" == transition ]]; then
+    ((transition_confirmation_count += 1))
+  fi
 }
 
 wait_for_device() {
@@ -683,7 +704,7 @@ run_transition_checkpoint() {
   local before_generation before_selection after probe after_generation after_selection data
   before_generation="$(jq -r '.value.snapshot.runtime_generation' <<< "$before")"
   before_selection="$(jq -r '.value.snapshot.underlay.selection_changes' <<< "$before")"
-  prompt_operator "$instruction"
+  prompt_operator "$instruction" transition
   wait_for_device || fail_audit "$name: ADB management path did not return"
   after="$(wait_for_connected_status)" || fail_audit "$name: Android runtime did not reconnect"
   probe="$(wait_for_traffic)" || fail_audit "$name: bidirectional dual-stack traffic did not recover"
@@ -698,7 +719,9 @@ run_transition_checkpoint() {
   data="$(jq -nc \
     --argjson status "$(sanitize_status <<< "$after")" \
     --argjson traffic "$probe" \
-    '{status: $status, traffic: $traffic, runtime_generation_preserved: true}')"
+    --argjson operator_confirmed "$interactive_confirmation" \
+    '{status: $status, traffic: $traffic, runtime_generation_preserved: true,
+      operator_confirmed: $operator_confirmed}')"
   record_step "$name" passed \
     "Traffic recovered automatically without a native runtime restart" "$data"
   printf '%s\n' "$after"
@@ -928,6 +951,8 @@ finish_audit() {
   fi
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$outcome" == passed ]] && ((allow_short == 0 \
+    && auto_confirm == 0 \
+    && transition_confirmation_count >= required_transition_confirmations \
     && duration_seconds >= minimum_proof_duration_seconds \
     && doze_seconds >= minimum_proof_doze_seconds)); then
     proof_eligible=true
@@ -947,6 +972,9 @@ finish_audit() {
     --argjson sample_seconds "$sample_seconds" \
     --argjson doze_seconds "$doze_seconds" \
     --argjson maximum_loss_percent "$maximum_loss_percent" \
+    --argjson automatic_confirmation "$automatic_confirmation" \
+    --argjson transition_confirmations "$transition_confirmation_count" \
+    --argjson required_confirmations "$required_transition_confirmations" \
     --argjson sustained "$sustained_summary_json" \
     --argjson final_status "$final_status_json" \
     --argjson final_diagnostics "$diagnostics_end_json" \
@@ -968,7 +996,12 @@ finish_audit() {
         sample_seconds: $sample_seconds,
         doze_seconds: $doze_seconds,
         maximum_loss_percent: $maximum_loss_percent,
-        proof_eligible: $proof_eligible
+        proof_eligible: $proof_eligible,
+        operator: {
+          automatic_confirmation: $automatic_confirmation,
+          interactive_transition_confirmations: $transition_confirmations,
+          required_transition_confirmations: $required_confirmations
+        }
       },
       device: {abi: "arm64-v8a", android_api: $api, serial: "excluded", model: "excluded"},
       app: {package: "org.hermeticfoundation.p2pvpn.debug", installed_during_run: $installed_during_run},

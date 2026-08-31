@@ -1784,6 +1784,21 @@
                   P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
                   bash ${./scripts/android-device-audit.sh} \
                     --network physical-test \
+                    --peer-ipv4 100.64.0.1 \
+                    --peer-ipv6 fd42::1 \
+                    --output "$test_root/unattended-evidence" \
+                    --apk "$test_root/fake.apk"
+                unattended_status=$?
+                set -e
+                test "$unattended_status" -eq 2
+                ! grep -Fq ' install ' "$test_root/preflight-state/adb.log"
+
+                set +e
+                env \
+                  "''${common_environment[@]}" \
+                  P2P_VPN_ANDROID_DEVICE_AUDIT_FAKE_STATE="$test_root/preflight-state" \
+                  bash ${./scripts/android-device-audit.sh} \
+                    --network physical-test \
                     --peer-ipv4 '100.64.0.1;id' \
                     --peer-ipv6 fd42::1 \
                     --output "$test_root/rejected-evidence" \
@@ -1818,6 +1833,9 @@
                   .kind == "p2p-vpn-android-physical-audit" and
                   .outcome == "passed" and
                   (.contract.proof_eligible | not) and
+                  .contract.operator.automatic_confirmation and
+                  .contract.operator.interactive_transition_confirmations == 0 and
+                  .contract.operator.required_transition_confirmations == 3 and
                   .device.abi == "arm64-v8a" and
                   .device.android_api == 35 and
                   .device.serial == "excluded" and
@@ -1838,6 +1856,9 @@
                     "in_place_apk_update"
                   ] and
                   ([.steps[].state] | all(. == "passed")) and
+                  ([.steps[] | select(.name == "hotspot_or_cellular" or
+                    .name == "hotspot_upstream_vpn" or .name == "lan_return") |
+                    .data.operator_confirmed] | all(. == false)) and
                   (.steps[] | select(.name == "screen_off_doze") |
                     .data.deep_idle_observed) and
                   .sustained.sent >= 20 and
