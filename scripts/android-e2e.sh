@@ -9,6 +9,8 @@ readonly maximum_log_bytes=$((1024 * 1024))
 readonly default_minimum_free_bytes=$((16 * 1024 * 1024 * 1024))
 readonly default_maximum_runtime_growth_bytes=$((8 * 1024 * 1024 * 1024))
 readonly hard_maximum_runtime_growth_bytes=$((32 * 1024 * 1024 * 1024))
+readonly default_adb_timeout_seconds=120
+readonly cleanup_adb_timeout_seconds=5
 
 scenario=boot-smoke
 path_mode=automatic
@@ -29,17 +31,27 @@ state_dir=""
 runtime_storage_failure_file=""
 runtime_tmp_baseline_available_bytes=""
 runtime_output_baseline_available_bytes=""
+adb=()
+adb_timeout_seconds="${P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS:-$default_adb_timeout_seconds}"
 cleanup_emulator_stopped=false
 cleanup_fixture_stopped=false
 cleanup_private_state_removed=false
+cleanup_logs_redacted=false
+cleanup_diagnostic_report_redacted=true
+diagnostic_report_required=false
 readonly harness_pid="$BASHPID"
+
+adb_run() {
+  timeout --signal=TERM --kill-after=2s "${adb_timeout_seconds}s" "${adb[@]}" "$@"
+}
 
 usage() {
   cat <<'EOF'
 Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
-  --scenario NAME        Select boot-smoke, profile-persistence, or pairing-traffic.
+  --scenario NAME        Select boot-smoke, profile-persistence, pairing-traffic,
+                         or underlay-recovery.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -52,6 +64,8 @@ Environment:
                          Required runtime free space; defaults to 16 GiB.
   P2P_VPN_ANDROID_E2E_MAX_RUNTIME_GROWTH_BYTES
                          Runtime growth limit; defaults to 8 GiB and cannot exceed 32 GiB.
+  P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS
+                         Per-command ADB limit; defaults to 120 seconds.
 
 Exit codes:
   0   Scenario passed.
@@ -108,8 +122,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+pairing_scenario=0
 case "$scenario" in
-  boot-smoke|profile-persistence|pairing-traffic) ;;
+  boot-smoke|profile-persistence) ;;
+  pairing-traffic|underlay-recovery) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -123,8 +139,12 @@ case "$path_mode" in
     exit 2
     ;;
 esac
-if [[ "$scenario" != pairing-traffic && "$path_mode" != automatic ]]; then
-  echo "--path-mode is supported only by pairing-traffic" >&2
+if [[ "$pairing_scenario" -eq 0 && "$path_mode" != automatic ]]; then
+  echo "--path-mode is supported only by pairing scenarios" >&2
+  exit 2
+fi
+if [[ "$scenario" == underlay-recovery && "$path_mode" != automatic ]]; then
+  echo "underlay-recovery requires --path-mode automatic" >&2
   exit 2
 fi
 
@@ -148,6 +168,16 @@ if ((maximum_runtime_growth_bytes < 1 \
 fi
 readonly maximum_runtime_growth_bytes
 
+if [[ ! "$adb_timeout_seconds" =~ ^[0-9]{1,3}$ ]]; then
+  echo "P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS must be an integer from 1 to 300" >&2
+  exit 2
+fi
+adb_timeout_seconds=$((10#$adb_timeout_seconds))
+if ((adb_timeout_seconds < 1 || adb_timeout_seconds > 300)); then
+  echo "P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS must be between 1 and 300" >&2
+  exit 2
+fi
+
 if [[ -z "$output_dir" ]]; then
   output_dir="$(mktemp -d -t p2p-vpn-android-e2e-evidence.XXXXXXXX)"
 else
@@ -162,11 +192,13 @@ readonly device_file="$output_dir/.device.json"
 readonly evidence_file="$output_dir/evidence.json"
 readonly emulator_log="$output_dir/emulator.log"
 readonly fixture_log="$output_dir/fixture.log"
+readonly android_log="$output_dir/android.log"
 
 : > "$checks_file"
 : > "$steps_file"
 : > "$emulator_log"
 : > "$fixture_log"
+: > "$android_log"
 printf '{}\n' > "$device_file"
 
 record_check() {
@@ -269,7 +301,7 @@ android_automation() {
   shift
   local broadcast encoded
   if ! broadcast="$(
-    "${adb[@]}" shell am broadcast \
+    adb_run shell am broadcast \
       --receiver-foreground \
       -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION \
       -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver \
@@ -359,7 +391,7 @@ wait_for_android_ping_ready() {
     command=(ping6)
   fi
   for attempt in $(seq 1 30); do
-    if "${adb[@]}" shell "${command[@]}" -c 1 -W 2 "$destination" \
+    if adb_run shell "${command[@]}" -c 1 -W 2 "$destination" \
       > "$path" 2>&1 \
       && grep -Eq '1 packets? transmitted, 1 (packets? )?received' "$path"; then
       printf -v "$attempts_variable" '%d' "$attempt"
@@ -371,8 +403,132 @@ wait_for_android_ping_ready() {
   return 1
 }
 
+wait_for_transition_traffic_ready() {
+  local prefix="$1"
+  local context="$2"
+  local fixture_ipv4_attempts=0
+  local fixture_ipv6_attempts=0
+  local android_ipv4_attempts=0
+  local android_ipv6_attempts=0
+  if ! wait_for_fixture_probe_ready \
+    "$fixture_ipv4" \
+    "$android_ipv4" \
+    ipv4 \
+    "$state_dir/${prefix}-linux-ipv4-readiness.json" \
+    fixture_ipv4_attempts \
+    || ! wait_for_fixture_probe_ready \
+      "$fixture_ipv6" \
+      "$android_ipv6" \
+      ipv6 \
+      "$state_dir/${prefix}-linux-ipv6-readiness.json" \
+      fixture_ipv6_attempts \
+    || ! wait_for_android_ping_ready \
+      ipv4 \
+      "$fixture_ipv4" \
+      "$state_dir/${prefix}-android-ipv4-readiness.txt" \
+      android_ipv4_attempts \
+    || ! wait_for_android_ping_ready \
+      ipv6 \
+      "$fixture_ipv6" \
+      "$state_dir/${prefix}-android-ipv6-readiness.txt" \
+      android_ipv6_attempts; then
+    outcome=failed
+    outcome_detail="Bidirectional dual-stack forwarding did not converge $context"
+    record_step "${prefix}_traffic_readiness" failed "$outcome_detail"
+    return 1
+  fi
+  record_step "${prefix}_traffic_readiness" passed \
+    "Bidirectional dual-stack forwarding converged $context after $fixture_ipv4_attempts/$fixture_ipv6_attempts Linux and $android_ipv4_attempts/$android_ipv6_attempts Android attempts"
+}
+
+measure_bidirectional_traffic() {
+  local prefix="$1"
+  local context="$2"
+  local step_prefix=""
+  local detail_suffix=""
+  local file_prefix="$state_dir/baseline"
+  if [[ -n "$prefix" ]]; then
+    step_prefix="${prefix}_"
+    file_prefix="$state_dir/$prefix"
+  fi
+  if [[ -n "$context" ]]; then
+    detail_suffix=" $context"
+  fi
+
+  if ! "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv4" \
+    --destination "$android_ipv4" \
+    --count 5 > "${file_prefix}-linux-ipv4.json" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+      "${file_prefix}-linux-ipv4.json" >/dev/null; then
+    outcome=failed
+    outcome_detail="Linux-to-Android IPv4 overlay probe failed$detail_suffix"
+    record_step "${step_prefix}linux_to_android_ipv4" failed "$outcome_detail"
+    return 1
+  fi
+  record_step "${step_prefix}linux_to_android_ipv4" passed \
+    "Linux received 5 of 5 IPv4 replies$detail_suffix"
+
+  if ! "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv6" \
+    --destination "$android_ipv6" \
+    --count 5 > "${file_prefix}-linux-ipv6.json" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+      "${file_prefix}-linux-ipv6.json" >/dev/null; then
+    outcome=failed
+    outcome_detail="Linux-to-Android IPv6 overlay probe failed$detail_suffix"
+    record_step "${step_prefix}linux_to_android_ipv6" failed "$outcome_detail"
+    return 1
+  fi
+  record_step "${step_prefix}linux_to_android_ipv6" passed \
+    "Linux received 5 of 5 IPv6 replies$detail_suffix"
+
+  if ! adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
+    > "${file_prefix}-android-ipv4.txt" 2>&1 \
+    || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "${file_prefix}-android-ipv4.txt"; then
+    local received
+    received="$(ping_received_count "${file_prefix}-android-ipv4.txt")"
+    outcome=failed
+    outcome_detail="Android-to-Linux IPv4 ping received $received of 5 replies$detail_suffix"
+    record_step "${step_prefix}android_to_linux_ipv4" failed "$outcome_detail"
+    return 1
+  fi
+  record_step "${step_prefix}android_to_linux_ipv4" passed \
+    "Android received 5 of 5 IPv4 replies$detail_suffix"
+
+  if ! adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+    > "${file_prefix}-android-ipv6.txt" 2>&1 \
+    || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "${file_prefix}-android-ipv6.txt"; then
+    local received
+    received="$(ping_received_count "${file_prefix}-android-ipv6.txt")"
+    outcome=failed
+    outcome_detail="Android-to-Linux IPv6 ping received $received of 5 replies$detail_suffix"
+    record_step "${step_prefix}android_to_linux_ipv6" failed "$outcome_detail"
+    return 1
+  fi
+  record_step "${step_prefix}android_to_linux_ipv6" passed \
+    "Android received 5 of 5 IPv6 replies$detail_suffix"
+}
+
+ping_received_count() {
+  local path="$1"
+  local match
+  match="$(grep -Eo '[0-9]+ (packets )?received' "$path" | tail -n 1 || true)"
+  if [[ "$match" =~ ^([0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
 start_main_activity() {
-  "${adb[@]}" shell am start \
+  adb_run shell am start \
     -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity \
     >/dev/null
 }
@@ -400,19 +556,211 @@ sanitize_emulator_log() {
   mv -f "$emulator_log.sanitized" "$emulator_log"
 }
 
-sanitize_fixture_log() {
-  [[ -f "$fixture_log" ]] || return 0
+sanitize_runtime_log() {
+  local log_file="$1"
+  [[ -f "$log_file" ]] || return 0
   sed -E \
     -e 's#/home/[^/[:space:]]+#/home/REDACTED#g' \
     -e 's#/tmp/p2p-vpn-android-e2e-state\.[^/[:space:]]+#/tmp/p2p-vpn-android-e2e-state.REDACTED#g' \
     -e 's/[A-Z2-9]{4}(-[A-Z2-9]{4}){3}/PAIRING-CODE-REDACTED/g' \
+    -e 's/12D3KooW[A-Za-z0-9]+/PEER-ID-REDACTED/g' \
+    -e 's/(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)/\1OVERLAY-ID-REDACTED\2/g' \
+    -e 's#/members/[^[:space:]"}]*/membership-records#/members/MEMBERSHIP-TAG-REDACTED/membership-records#g' \
     -e '/(membership_key|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:)/d' \
     -e 's#/dns(4|6)?/[^/[:space:]"}]+#/dns/UNDERLAY-REDACTED#g' \
     -e 's#/ip6/[^/[:space:]"}]+#/ip6/IPV6-REDACTED#g' \
-    -e 's/\[?[[:xdigit:]]{1,4}(:[[:xdigit:]]{0,4}){2,7}\]?(:[0-9]+)?/IPV6-REDACTED/g' \
+    -e 's/(^|[^[:alnum:]_])(\[?[[:xdigit:]]{1,4}(:[[:xdigit:]]{0,4}){2,7}\]?)([^[:alnum:]_]|$)/\1IPV6-REDACTED\4/g' \
+    -e 's/(^|[^[:alnum:]_])(\[?::[[:xdigit:]:]+\]?)([^[:alnum:]_]|$)/\1IPV6-REDACTED\3/g' \
     -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/IPV4-REDACTED/g' \
-    "$fixture_log" > "$fixture_log.sanitized"
-  mv -f "$fixture_log.sanitized" "$fixture_log"
+    "$log_file" > "$log_file.sanitized"
+  mv -f "$log_file.sanitized" "$log_file"
+}
+
+sanitize_fixture_log() {
+  sanitize_runtime_log "$fixture_log"
+}
+
+sanitize_android_log() {
+  sanitize_runtime_log "$android_log"
+}
+
+sanitize_logs() {
+  sanitize_emulator_log
+  sanitize_fixture_log
+  sanitize_android_log
+}
+
+logs_are_redacted() {
+  local log_file
+  for log_file in "$fixture_log" "$android_log"; do
+    if grep -Eq \
+      '12D3KooW[A-Za-z0-9]+|(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)|[A-Z2-9]{4}(-[A-Z2-9]{4}){3}|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:|([0-9]{1,3}\.){3}[0-9]{1,3}|/ip6/[^I]|/dns(4|6)?/[^U]|/members/[^M]|\[[[:xdigit:]]*:[[:xdigit:]:]*\]' \
+      "$log_file"; then
+      return 1
+    fi
+  done
+}
+
+diagnostic_report_is_valid() {
+  local report_file="$1"
+  local report_size
+  report_size="$(wc -c < "$report_file")"
+  if (( report_size > 64 * 1024 )); then
+    return 1
+  fi
+
+  jq -e '
+    def exact_keys($expected):
+      type == "object" and ((keys | sort) == ($expected | sort));
+    def natural:
+      type == "number" and . >= 0 and . == floor;
+    def boolean:
+      type == "boolean";
+
+    exact_keys([
+      "app", "drops", "events", "generated_at", "kind", "lifecycle",
+      "pairing", "paths", "privacy", "queue", "resources",
+      "schema_version", "underlay"
+    ]) and
+    .schema_version == 1 and
+    .kind == "p2p-vpn-android-diagnostics" and
+    (.generated_at |
+      type == "string" and
+      test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$")) and
+    (.app |
+      exact_keys(["android_api", "version"]) and
+      (.android_api | natural) and
+      (.version |
+        type == "string" and
+        length >= 1 and length <= 64 and
+        test("^[A-Za-z0-9._+()-]+$") and
+        (startswith("12D3KooW") | not))) and
+    (.lifecycle |
+      exact_keys([
+        "busy", "connected", "connection_requested", "profile_readable",
+        "profile_stored", "runtime_generation", "service_uptime_millis"
+      ]) and
+      (.service_uptime_millis | natural) and
+      (.runtime_generation | natural) and
+      (.profile_stored | boolean) and
+      (.profile_readable | boolean) and
+      (.connection_requested | boolean) and
+      (.connected | boolean) and
+      (.busy | boolean)) and
+    (.underlay |
+      exact_keys([
+        "available_networks", "kind", "recoveries", "runtime_recovery_failures",
+        "runtime_recovery_requests", "selected_losses", "selection_changes",
+        "validated"
+      ]) and
+      (.kind | IN("unknown", "none", "ethernet", "wifi", "cellular", "bluetooth", "other")) and
+      (.validated | boolean) and
+      (.available_networks | natural) and
+      (.selection_changes | natural) and
+      (.selected_losses | natural) and
+      (.recoveries | natural) and
+      (.runtime_recovery_requests | natural) and
+      (.runtime_recovery_failures | natural)) and
+    (.paths |
+      exact_keys([
+        "connected_peers", "direct_quic_datagram", "direct_quic_stream",
+        "direct_tcp_stream", "direct_udp_datagram", "packet_plane_quic_sessions",
+        "peers_without_supported_path", "promotions_to_direct",
+        "public_routing_peers", "relay"
+      ]) and all(.[]; natural)) and
+    (.queue |
+      exact_keys([
+        "blocked_no_supported_path_events", "blocked_packet_window_events",
+        "oldest_packet_age_millis", "queued_bytes", "queued_packets"
+      ]) and all(.[]; natural)) and
+    (.drops |
+      exact_keys([
+        "expired_bytes", "expired_packets", "inbound_packets", "outbound_packets",
+        "packet_plane_datagrams", "packet_plane_path_demotions",
+        "path_fallbacks_to_relay", "queue_bytes", "queue_packets",
+        "stream_path_demotions"
+      ]) and all(.[]; natural)) and
+    (.resources |
+      exact_keys([
+        "active_threads", "java_heap_max_bytes", "java_heap_used_bytes",
+        "private_dirty_kib", "process_cpu_millis", "total_pss_kib"
+      ]) and all(.[]; natural)) and
+    (.pairing |
+      exact_keys(["candidate_pending", "operation_active"]) and
+      (.candidate_pending | boolean) and
+      (.operation_active | boolean)) and
+    (.events |
+      exact_keys(["discarded", "items"]) and
+      (.discarded | natural) and
+      (.items | type == "array" and length <= 64) and
+      all(.items[];
+        exact_keys(["name", "sequence", "since_service_start_millis"]) and
+        (.sequence | natural) and
+        (.since_service_start_millis | natural) and
+        (.name | type == "string" and test("^[a-z0-9_]{1,64}$")))) and
+    (.privacy |
+      exact_keys([
+        "identity_material", "pairing_secrets", "peers", "underlay_addresses"
+      ]) and
+      .identity_material == "excluded" and
+      .peers == "excluded" and
+      .pairing_secrets == "excluded" and
+      .underlay_addresses == "excluded")
+  ' "$report_file" >/dev/null
+}
+
+collect_android_diagnostics() {
+  [[ -n "$emulator_serial" && ${#adb[@]} -gt 0 ]] || return 0
+  local adb_timeout_seconds="$cleanup_adb_timeout_seconds"
+  if [[ "$(adb_run get-state 2>/dev/null || true)" != device ]]; then
+    return 0
+  fi
+
+  adb_run logcat -d -v epoch -s 'p2p-vpn:I' '*:S' \
+    > "$android_log" 2>&1 || true
+
+  local final_status="$output_dir/.final-status.json"
+  local coarse_status="$output_dir/.coarse-final-status.json"
+  if android_automation status > "$final_status" 2>/dev/null \
+    && jq -e '.schema_version == 1 and .ok and .value.service_ready' \
+      "$final_status" >/dev/null 2>&1; then
+    jq '{
+      connected: (.value.snapshot.connected // false),
+      busy: (.value.snapshot.busy // false),
+      runtime_generation: (.value.snapshot.runtime_generation // 0),
+      underlay: (.value.snapshot.underlay // {}),
+      paths: (.value.snapshot.paths // {})
+    }' "$final_status" > "$coarse_status"
+    jq --slurpfile final_runtime "$coarse_status" \
+      '.diagnostics = ((.diagnostics // {}) + {final_runtime: $final_runtime[0]})' \
+      "$device_file" > "$device_file.updated"
+    mv -f "$device_file.updated" "$device_file"
+  fi
+
+  if jq -e '.debug_automation == true' "$device_file" >/dev/null 2>&1; then
+    diagnostic_report_required=true
+    cleanup_diagnostic_report_redacted=false
+    local diagnostic_response="$output_dir/.diagnostic-response.json"
+    local diagnostic_report="$output_dir/.diagnostic-report.json"
+    for _ in $(seq 1 3); do
+      if android_automation diagnostics > "$diagnostic_response" 2>/dev/null \
+        && jq -e '.schema_version == 1 and .ok and .value.service_ready' \
+          "$diagnostic_response" >/dev/null 2>&1; then
+        if jq -c '.value.report' "$diagnostic_response" > "$diagnostic_report" \
+          && diagnostic_report_is_valid "$diagnostic_report"; then
+          jq --slurpfile diagnostic_report "$diagnostic_report" \
+            '.diagnostics = ((.diagnostics // {}) + {export: $diagnostic_report[0]})' \
+            "$device_file" > "$device_file.updated"
+          mv -f "$device_file.updated" "$device_file"
+          cleanup_diagnostic_report_redacted=true
+        fi
+        break
+      fi
+      sleep 1
+    done
+    rm -f "$diagnostic_response" "$diagnostic_report"
+  fi
+  rm -f "$final_status" "$coarse_status"
 }
 
 stop_emulator() {
@@ -492,10 +840,10 @@ finalize_evidence() {
   evidence_finalized=1
   local finished_utc
   finished_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sanitize_emulator_log
-  sanitize_fixture_log
+  sanitize_logs
   bound_file "$emulator_log"
   bound_file "$fixture_log"
+  bound_file "$android_log"
   jq -n \
     --argjson schema_version "$evidence_schema_version" \
     --arg scenario "$scenario" \
@@ -510,6 +858,8 @@ finalize_evidence() {
     --argjson emulator_stopped "$cleanup_emulator_stopped" \
     --argjson fixture_stopped "$cleanup_fixture_stopped" \
     --argjson private_state_removed "$cleanup_private_state_removed" \
+    --argjson logs_redacted "$cleanup_logs_redacted" \
+    --argjson diagnostic_report_redacted "$cleanup_diagnostic_report_redacted" \
     '{
       schema_version: $schema_version,
       kind: "p2p-vpn-android-e2e",
@@ -524,9 +874,12 @@ finalize_evidence() {
       cleanup: {
         emulator_stopped: $emulator_stopped,
         fixture_stopped: $fixture_stopped,
-        private_state_removed: $private_state_removed
+        private_state_removed: $private_state_removed,
+        logs_redacted: $logs_redacted,
+        diagnostic_report_redacted: $diagnostic_report_redacted
       },
       artifacts: {
+        android_log: "android.log",
         emulator_log: "emulator.log",
         fixture_log: "fixture.log"
       }
@@ -550,9 +903,25 @@ exit_handler() {
     outcome=failed
     outcome_detail="E2E harness terminated unexpectedly"
   fi
+  collect_android_diagnostics
   stop_emulator
   stop_fixture
   remove_private_state
+  sanitize_logs
+  if logs_are_redacted; then
+    cleanup_logs_redacted=true
+  else
+    cleanup_logs_redacted=false
+    status=1
+    outcome=failed
+    outcome_detail="E2E diagnostic redaction validation failed"
+  fi
+  if [[ "$diagnostic_report_required" == true \
+    && "$cleanup_diagnostic_report_redacted" != true ]]; then
+    status=1
+    outcome=failed
+    outcome_detail="Android diagnostic report validation failed"
+  fi
   finalize_evidence
   printf 'Android E2E evidence: %s\n' "$evidence_file" >&2
   exit "$status"
@@ -630,6 +999,13 @@ else
   missing_requirements+=(adb)
 fi
 
+if command -v timeout >/dev/null 2>&1; then
+  record_check timeout true true "Bounded subprocess runner is executable"
+else
+  record_check timeout true false "GNU timeout is unavailable"
+  missing_requirements+=(timeout)
+fi
+
 if [[ "$scenario" != boot-smoke ]]; then
   if [[ -n "$android_apk" && -f "$android_apk" ]]; then
     record_check android_apk true true "Reproducible debug APK is available"
@@ -641,7 +1017,7 @@ else
   record_check android_apk false false "boot-smoke does not reinstall the APK"
 fi
 
-if [[ "$scenario" == pairing-traffic ]]; then
+if [[ "$pairing_scenario" -eq 1 ]]; then
   if [[ -n "$fixture_command" && -x "$fixture_command" ]]; then
     record_check fixture_command true true "Rootless Linux fixture is executable"
   else
@@ -717,7 +1093,7 @@ fixture_owned_quic_guest_port=""
 fixture_relay_reservation=""
 fixture_promotion_path=""
 
-if [[ "$scenario" == pairing-traffic ]]; then
+if [[ "$pairing_scenario" -eq 1 ]]; then
   fixture_state_dir="$state_dir/fixture"
   mkdir -p "$fixture_state_dir"
   fixture_metadata="$fixture_state_dir/fixture.json"
@@ -845,7 +1221,7 @@ fi
 record_step emulator_start passed "Emulator reported an ADB serial"
 
 adb=("$adb_command" -s "$emulator_serial")
-if [[ "$("${adb[@]}" get-state)" != device ]]; then
+if [[ "$(adb_run get-state)" != device ]]; then
   outcome=failed
   outcome_detail="ADB did not report the emulator as a device"
   record_step adb failed "$outcome_detail"
@@ -853,7 +1229,7 @@ if [[ "$("${adb[@]}" get-state)" != device ]]; then
 fi
 
 if [[ "$path_mode" == owned-quic ]]; then
-  if ! "${adb[@]}" emu redir add \
+  if ! adb_run emu redir add \
     "udp:$fixture_owned_quic_host_port:$fixture_owned_quic_guest_port" >/dev/null; then
     outcome=failed
     outcome_detail="Emulator could not install the owned-QUIC UDP redirection"
@@ -864,10 +1240,10 @@ if [[ "$path_mode" == owned-quic ]]; then
     "Linux and Android owned-QUIC listeners are mutually reachable"
 fi
 
-api_level="$("${adb[@]}" shell getprop ro.build.version.sdk | tr -d '\r')"
-device_abi="$("${adb[@]}" shell getprop ro.product.cpu.abi | tr -d '\r')"
-package_path="$("${adb[@]}" shell pm path org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
-activity_state="$("${adb[@]}" shell dumpsys activity activities)"
+api_level="$(adb_run shell getprop ro.build.version.sdk | tr -d '\r')"
+device_abi="$(adb_run shell getprop ro.product.cpu.abi | tr -d '\r')"
+package_path="$(adb_run shell pm path org.hermeticfoundation.p2pvpn.debug | tr -d '\r')"
+activity_state="$(adb_run shell dumpsys activity activities)"
 
 jq -n \
   --arg api_level "$api_level" \
@@ -933,7 +1309,7 @@ if [[ "$scenario" == boot-smoke ]]; then
   exit 0
 fi
 
-if [[ "$scenario" == pairing-traffic ]]; then
+if [[ "$pairing_scenario" -eq 1 ]]; then
   pairing_profile="$state_dir/pairing-profile.json"
   command_response="$state_dir/automation-command.json"
   profile_arguments=(
@@ -983,7 +1359,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
   record_step profile_creation passed \
     "Encrypted profile configured with discovery bootstrap only"
 
-  if ! "${adb[@]}" shell appops set \
+  if ! adb_run shell appops set \
     org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow >/dev/null; then
     outcome=failed
     outcome_detail="ADB could not grant emulator VPN consent"
@@ -1227,69 +1603,260 @@ if [[ "$scenario" == pairing-traffic ]]; then
       "Both runtimes selected relay before the direct endpoint was enabled"
   fi
 
-  linux_ipv4_probe="$state_dir/linux-ipv4-probe.json"
-  linux_ipv6_probe="$state_dir/linux-ipv6-probe.json"
-  if ! "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv4" \
-    --destination "$android_ipv4" \
-    --count 5 > "$linux_ipv4_probe" \
-    || ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
-      "$linux_ipv4_probe" >/dev/null; then
-    outcome=failed
-    outcome_detail="Linux-to-Android IPv4 overlay probe failed"
-    record_step linux_to_android_ipv4 failed "$outcome_detail"
+  if ! measure_bidirectional_traffic "" ""; then
     exit 1
   fi
-  record_step linux_to_android_ipv4 passed "Linux received 5 of 5 IPv4 replies"
-  if ! "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv6" \
-    --destination "$android_ipv6" \
-    --count 5 > "$linux_ipv6_probe" \
-    || ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
-      "$linux_ipv6_probe" >/dev/null; then
-    outcome=failed
-    outcome_detail="Linux-to-Android IPv6 overlay probe failed"
-    record_step linux_to_android_ipv6 failed "$outcome_detail"
-    exit 1
-  fi
-  record_step linux_to_android_ipv6 passed "Linux received 5 of 5 IPv6 replies"
 
-  android_ipv4_ping="$state_dir/android-ipv4-ping.txt"
-  android_ipv6_ping="$state_dir/android-ipv6-ping.txt"
-  android_ipv4_ping_status=0
-  "${adb[@]}" shell ping -c 5 -W 5 "$fixture_ipv4" \
-    > "$android_ipv4_ping" 2>&1 || android_ipv4_ping_status=$?
-  if [[ "$android_ipv4_ping_status" -ne 0 ]]; then
-    outcome=failed
-    outcome_detail="Android-to-Linux IPv4 ping exited with status $android_ipv4_ping_status"
-    record_step android_to_linux_ipv4 failed "$outcome_detail"
-    exit 1
+  underlay_initial_kind=""
+  underlay_fallback_kind=""
+  underlay_recovered_kind=""
+  underlay_restored_kind=""
+  underlay_selection_changes_before=0
+  underlay_selection_changes_after=0
+  underlay_selected_losses_before=0
+  underlay_selected_losses_after=0
+  underlay_recoveries_before=0
+  underlay_recoveries_after=0
+  underlay_runtime_recovery_requests_before=0
+  underlay_runtime_recovery_requests_after=0
+  underlay_runtime_recovery_failures_before=0
+  underlay_runtime_recovery_failures_after=0
+  underlay_runtime_generation_before=0
+  underlay_runtime_generation_after=0
+  underlay_fallback_convergence_millis=0
+  underlay_loss_detection_millis=0
+  underlay_recovery_convergence_millis=0
+  underlay_restore_convergence_millis=0
+  underlay_outage_hold_millis=0
+  underlay_android_process_continuous=false
+  underlay_fixture_process_continuous=false
+  if [[ "$scenario" == underlay-recovery ]]; then
+    underlay_baseline="$state_dir/status-underlay-baseline.json"
+    if ! wait_for_automation_status \
+      "$underlay_baseline" \
+      '.value.snapshot.connected and (.value.snapshot.busy | not) and (.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.runtime_generation >= 1) and (.value.snapshot.underlay.kind == "wifi") and .value.snapshot.underlay.validated' \
+      60; then
+      outcome=failed
+      outcome_detail="Android did not report a validated Wi-Fi underlay baseline"
+      record_step underlay_baseline failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_initial_kind="$(jq -r '.value.snapshot.underlay.kind' "$underlay_baseline")"
+    underlay_selection_changes_before="$(
+      jq -r '.value.snapshot.underlay.selection_changes' "$underlay_baseline"
+    )"
+    underlay_selected_losses_before="$(
+      jq -r '.value.snapshot.underlay.selected_losses' "$underlay_baseline"
+    )"
+    underlay_recoveries_before="$(
+      jq -r '.value.snapshot.underlay.recoveries' "$underlay_baseline"
+    )"
+    underlay_runtime_recovery_requests_before="$(
+      jq -r '.value.snapshot.underlay.runtime_recovery_requests' "$underlay_baseline"
+    )"
+    underlay_runtime_recovery_failures_before="$(
+      jq -r '.value.snapshot.underlay.runtime_recovery_failures' "$underlay_baseline"
+    )"
+    underlay_runtime_generation_before="$(
+      jq -r '.value.snapshot.runtime_generation' "$underlay_baseline"
+    )"
+    android_process_before="$(
+      adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+    )"
+    if [[ ! "$android_process_before" =~ ^[0-9]+$ ]]; then
+      outcome=failed
+      outcome_detail="Android application process identity is unavailable"
+      record_step underlay_baseline failed "$outcome_detail"
+      exit 1
+    fi
+    record_step underlay_baseline passed \
+      "Validated Wi-Fi carried the measured baseline without configured peer addresses"
+
+    underlay_transition_started_millis="$(monotonic_millis)"
+    if ! adb_run shell svc wifi disable >/dev/null; then
+      outcome=failed
+      outcome_detail="Emulator Wi-Fi underlay could not be disabled"
+      record_step underlay_cellular_fallback failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_cellular="$state_dir/status-underlay-cellular.json"
+    if ! wait_for_automation_status \
+      "$underlay_cellular" \
+      ".value.snapshot.connected and (.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"cellular\") and .value.snapshot.underlay.validated and (.value.snapshot.underlay.selection_changes >= ($underlay_selection_changes_before + 1)) and (.value.snapshot.underlay.selected_losses >= ($underlay_selected_losses_before + 1)) and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 1)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      120; then
+      outcome=failed
+      outcome_detail="Android did not recover over cellular after Wi-Fi loss"
+      record_step underlay_cellular_fallback failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_fallback_kind="$(jq -r '.value.snapshot.underlay.kind' "$underlay_cellular")"
+    if ! wait_for_transition_traffic_ready \
+      cellular_fallback \
+      "after cellular fallback"; then
+      exit 1
+    fi
+    underlay_fallback_completed_millis="$(monotonic_millis)"
+    underlay_fallback_convergence_millis=$((
+      underlay_fallback_completed_millis - underlay_transition_started_millis
+    ))
+    if ! measure_bidirectional_traffic \
+      cellular_fallback \
+      "after cellular fallback"; then
+      exit 1
+    fi
+    record_step underlay_cellular_fallback passed \
+      "The existing runtime recovered through the cellular fallback"
+
+    underlay_loss_started_millis="$(monotonic_millis)"
+    if ! adb_run shell svc data disable >/dev/null; then
+      outcome=failed
+      outcome_detail="Emulator cellular underlay could not be disabled"
+      record_step underlay_total_loss failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_lost="$state_dir/status-underlay-lost.json"
+    if ! wait_for_automation_status \
+      "$underlay_lost" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"none\") and (.value.snapshot.underlay.available_networks == 0) and (.value.snapshot.underlay.selection_changes >= ($underlay_selection_changes_before + 2)) and (.value.snapshot.underlay.selected_losses >= ($underlay_selected_losses_before + 2)) and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 2)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      60; then
+      outcome=failed
+      outcome_detail="Android did not observe complete physical underlay loss"
+      record_step underlay_total_loss failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_loss_completed_millis="$(monotonic_millis)"
+    underlay_loss_detection_millis=$((
+      underlay_loss_completed_millis - underlay_loss_started_millis
+    ))
+    underlay_outage_hold_millis=5000
+    sleep 5
+    underlay_lost_held="$state_dir/status-underlay-lost-held.json"
+    if ! wait_for_automation_status \
+      "$underlay_lost_held" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"none\") and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 2)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      5; then
+      outcome=failed
+      outcome_detail="Android runtime did not remain alive during total underlay loss"
+      record_step underlay_total_loss failed "$outcome_detail"
+      exit 1
+    fi
+    record_step underlay_total_loss passed \
+      "The native runtime remained alive through a five-second physical outage"
+
+    underlay_recovery_started_millis="$(monotonic_millis)"
+    if ! adb_run shell svc data enable >/dev/null; then
+      outcome=failed
+      outcome_detail="Emulator cellular underlay could not be restored"
+      record_step underlay_cellular_recovery failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_recovered="$state_dir/status-underlay-recovered.json"
+    if ! wait_for_automation_status \
+      "$underlay_recovered" \
+      ".value.snapshot.connected and (.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"cellular\") and .value.snapshot.underlay.validated and (.value.snapshot.underlay.selection_changes >= ($underlay_selection_changes_before + 3)) and (.value.snapshot.underlay.recoveries >= ($underlay_recoveries_before + 1)) and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 3)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      180; then
+      outcome=failed
+      outcome_detail="Android did not recover automatically after physical connectivity returned"
+      record_step underlay_cellular_recovery failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_recovered_kind="$(jq -r '.value.snapshot.underlay.kind' "$underlay_recovered")"
+    if ! wait_for_transition_traffic_ready \
+      cellular_recovery \
+      "after total-loss recovery"; then
+      exit 1
+    fi
+    underlay_recovery_completed_millis="$(monotonic_millis)"
+    underlay_recovery_convergence_millis=$((
+      underlay_recovery_completed_millis - underlay_recovery_started_millis
+    ))
+    if ! measure_bidirectional_traffic \
+      cellular_recovery \
+      "after total-loss recovery"; then
+      exit 1
+    fi
+    record_step underlay_cellular_recovery passed \
+      "The same runtime recovered automatically after connectivity returned"
+
+    underlay_restore_started_millis="$(monotonic_millis)"
+    if ! adb_run shell svc wifi enable >/dev/null; then
+      outcome=failed
+      outcome_detail="Emulator Wi-Fi underlay could not be restored"
+      record_step underlay_wifi_restore failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_restored="$state_dir/status-underlay-restored.json"
+    if ! wait_for_automation_status \
+      "$underlay_restored" \
+      ".value.snapshot.connected and (.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"wifi\") and .value.snapshot.underlay.validated and (.value.snapshot.underlay.selection_changes >= ($underlay_selection_changes_before + 4)) and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 4)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      120; then
+      outcome=failed
+      outcome_detail="Android did not return autonomously to the preferred Wi-Fi underlay"
+      record_step underlay_wifi_restore failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_restored_kind="$(jq -r '.value.snapshot.underlay.kind' "$underlay_restored")"
+    if ! wait_for_transition_traffic_ready \
+      wifi_restore \
+      "after Wi-Fi restoration"; then
+      exit 1
+    fi
+    underlay_restore_completed_millis="$(monotonic_millis)"
+    underlay_restore_convergence_millis=$((
+      underlay_restore_completed_millis - underlay_restore_started_millis
+    ))
+    if ! measure_bidirectional_traffic wifi_restore "after Wi-Fi restoration"; then
+      exit 1
+    fi
+    record_step underlay_wifi_restore passed \
+      "The existing runtime returned to the preferred Wi-Fi underlay"
+
+    underlay_final="$state_dir/status-underlay-final.json"
+    if ! wait_for_automation_status \
+      "$underlay_final" \
+      ".value.snapshot.connected and (.value.snapshot.runtime_generation == $underlay_runtime_generation_before) and (.value.snapshot.underlay.kind == \"wifi\") and (.value.snapshot.underlay.runtime_recovery_requests >= ($underlay_runtime_recovery_requests_before + 4)) and (.value.snapshot.underlay.runtime_recovery_failures == $underlay_runtime_recovery_failures_before)" \
+      30; then
+      outcome=failed
+      outcome_detail="Android underlay continuity state could not be finalized"
+      record_step underlay_continuity failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_runtime_generation_after="$(
+      jq -r '.value.snapshot.runtime_generation' "$underlay_final"
+    )"
+    underlay_selection_changes_after="$(
+      jq -r '.value.snapshot.underlay.selection_changes' "$underlay_final"
+    )"
+    underlay_selected_losses_after="$(
+      jq -r '.value.snapshot.underlay.selected_losses' "$underlay_final"
+    )"
+    underlay_recoveries_after="$(
+      jq -r '.value.snapshot.underlay.recoveries' "$underlay_final"
+    )"
+    underlay_runtime_recovery_requests_after="$(
+      jq -r '.value.snapshot.underlay.runtime_recovery_requests' "$underlay_final"
+    )"
+    underlay_runtime_recovery_failures_after="$(
+      jq -r '.value.snapshot.underlay.runtime_recovery_failures' "$underlay_final"
+    )"
+    android_process_after="$(
+      adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+    )"
+    if [[ "$android_process_after" != "$android_process_before" \
+      || "$underlay_runtime_generation_after" -ne "$underlay_runtime_generation_before" \
+      || "$underlay_runtime_recovery_requests_after" -lt $((underlay_runtime_recovery_requests_before + 4)) \
+      || "$underlay_runtime_recovery_failures_after" -ne "$underlay_runtime_recovery_failures_before" \
+      || ! -d "/proc/$fixture_pid" ]]; then
+      outcome=failed
+      outcome_detail="An endpoint restarted during autonomous underlay recovery"
+      record_step underlay_continuity failed "$outcome_detail"
+      exit 1
+    fi
+    underlay_android_process_continuous=true
+    underlay_fixture_process_continuous=true
+    record_step underlay_continuity passed \
+      "Android process, native runtime, profile, and Linux fixture remained continuous"
   fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' "$android_ipv4_ping"; then
-    outcome=failed
-    outcome_detail="Android-to-Linux IPv4 ping did not report 5 replies"
-    record_step android_to_linux_ipv4 failed "$outcome_detail"
-    exit 1
-  fi
-  record_step android_to_linux_ipv4 passed "Android received 5 of 5 IPv4 replies"
-  android_ipv6_ping_status=0
-  "${adb[@]}" shell ping6 -c 5 -W 5 "$fixture_ipv6" \
-    > "$android_ipv6_ping" 2>&1 || android_ipv6_ping_status=$?
-  if [[ "$android_ipv6_ping_status" -ne 0 ]]; then
-    outcome=failed
-    outcome_detail="Android-to-Linux IPv6 ping exited with status $android_ipv6_ping_status"
-    record_step android_to_linux_ipv6 failed "$outcome_detail"
-    exit 1
-  fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' "$android_ipv6_ping"; then
-    outcome=failed
-    outcome_detail="Android-to-Linux IPv6 ping did not report 5 replies"
-    record_step android_to_linux_ipv6 failed "$outcome_detail"
-    exit 1
-  fi
-  record_step android_to_linux_ipv6 passed "Android received 5 of 5 IPv6 replies"
 
   if [[ "$path_mode" == relay-to-direct ]]; then
     promotion_linux_relay_after="$state_dir/fixture-promotion-relay-after.txt"
@@ -1453,23 +2020,25 @@ if [[ "$scenario" == pairing-traffic ]]; then
 
     promoted_android_ipv4_ping="$state_dir/promoted-android-ipv4-ping.txt"
     promoted_android_ipv6_ping="$state_dir/promoted-android-ipv6-ping.txt"
-    if ! "${adb[@]}" shell ping -c 5 -W 5 "$fixture_ipv4" \
+    if ! adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
       > "$promoted_android_ipv4_ping" 2>&1 \
       || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
         "$promoted_android_ipv4_ping"; then
+      received="$(ping_received_count "$promoted_android_ipv4_ping")"
       outcome=failed
-      outcome_detail="Promoted Android-to-Linux IPv4 ping failed"
+      outcome_detail="Promoted Android-to-Linux IPv4 ping received $received of 5 replies"
       record_step promoted_android_to_linux_ipv4 failed "$outcome_detail"
       exit 1
     fi
     record_step promoted_android_to_linux_ipv4 passed \
       "Android received 5 of 5 IPv4 replies over the promoted path"
-    if ! "${adb[@]}" shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+    if ! adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
       > "$promoted_android_ipv6_ping" 2>&1 \
       || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
         "$promoted_android_ipv6_ping"; then
+      received="$(ping_received_count "$promoted_android_ipv6_ping")"
       outcome=failed
-      outcome_detail="Promoted Android-to-Linux IPv6 ping failed"
+      outcome_detail="Promoted Android-to-Linux IPv6 ping received $received of 5 replies"
       record_step promoted_android_to_linux_ipv6 failed "$outcome_detail"
       exit 1
     fi
@@ -1638,6 +2207,7 @@ if [[ "$scenario" == pairing-traffic ]]; then
   fi
 
   jq \
+    --arg scenario "$scenario" \
     --arg path_mode "$path_mode" \
     --argjson paths "$(jq '.value.snapshot.paths' "$final_status")" \
     --argjson fixture_ipv4_ready_attempts "$fixture_ipv4_ready_attempts" \
@@ -1663,7 +2233,30 @@ if [[ "$scenario" == pairing-traffic ]]; then
     --argjson promotion_android_direct_packets_after "$promotion_android_direct_packets_after" \
     --argjson promotion_android_direct_packet_delta "$promotion_android_direct_packet_delta" \
     --argjson promotion_convergence_millis "$promotion_convergence_millis" \
-    --argjson promotion_fixture_process_continuous "$promotion_fixture_process_continuous" '
+    --argjson promotion_fixture_process_continuous "$promotion_fixture_process_continuous" \
+    --arg underlay_initial_kind "$underlay_initial_kind" \
+    --arg underlay_fallback_kind "$underlay_fallback_kind" \
+    --arg underlay_recovered_kind "$underlay_recovered_kind" \
+    --arg underlay_restored_kind "$underlay_restored_kind" \
+    --argjson underlay_selection_changes_before "$underlay_selection_changes_before" \
+    --argjson underlay_selection_changes_after "$underlay_selection_changes_after" \
+    --argjson underlay_selected_losses_before "$underlay_selected_losses_before" \
+    --argjson underlay_selected_losses_after "$underlay_selected_losses_after" \
+    --argjson underlay_recoveries_before "$underlay_recoveries_before" \
+    --argjson underlay_recoveries_after "$underlay_recoveries_after" \
+    --argjson underlay_runtime_recovery_requests_before "$underlay_runtime_recovery_requests_before" \
+    --argjson underlay_runtime_recovery_requests_after "$underlay_runtime_recovery_requests_after" \
+    --argjson underlay_runtime_recovery_failures_before "$underlay_runtime_recovery_failures_before" \
+    --argjson underlay_runtime_recovery_failures_after "$underlay_runtime_recovery_failures_after" \
+    --argjson underlay_runtime_generation_before "$underlay_runtime_generation_before" \
+    --argjson underlay_runtime_generation_after "$underlay_runtime_generation_after" \
+    --argjson underlay_fallback_convergence_millis "$underlay_fallback_convergence_millis" \
+    --argjson underlay_loss_detection_millis "$underlay_loss_detection_millis" \
+    --argjson underlay_recovery_convergence_millis "$underlay_recovery_convergence_millis" \
+    --argjson underlay_restore_convergence_millis "$underlay_restore_convergence_millis" \
+    --argjson underlay_outage_hold_millis "$underlay_outage_hold_millis" \
+    --argjson underlay_android_process_continuous "$underlay_android_process_continuous" \
+    --argjson underlay_fixture_process_continuous "$underlay_fixture_process_continuous" '
     . + {
       pairing_traffic: ({
         code_only_enrollment: true,
@@ -1718,12 +2311,66 @@ if [[ "$scenario" == pairing-traffic ]]; then
           }
         }
       } else {} end))
-    }
+    } + (if $scenario == "underlay-recovery" then {
+      underlay_recovery: {
+        underlays: {
+          initial: $underlay_initial_kind,
+          fallback: $underlay_fallback_kind,
+          outage: "none",
+          recovered: $underlay_recovered_kind,
+          restored: $underlay_restored_kind
+        },
+        events: {
+          selection_changes_before: $underlay_selection_changes_before,
+          selection_changes_after: $underlay_selection_changes_after,
+          selected_losses_before: $underlay_selected_losses_before,
+          selected_losses_after: $underlay_selected_losses_after,
+          recoveries_before: $underlay_recoveries_before,
+          recoveries_after: $underlay_recoveries_after,
+          runtime_recovery_requests_before: $underlay_runtime_recovery_requests_before,
+          runtime_recovery_requests_after: $underlay_runtime_recovery_requests_after,
+          runtime_recovery_failures_before: $underlay_runtime_recovery_failures_before,
+          runtime_recovery_failures_after: $underlay_runtime_recovery_failures_after
+        },
+        timing_millis: {
+          cellular_fallback: $underlay_fallback_convergence_millis,
+          total_loss_detection: $underlay_loss_detection_millis,
+          outage_hold: $underlay_outage_hold_millis,
+          cellular_recovery: $underlay_recovery_convergence_millis,
+          wifi_restore: $underlay_restore_convergence_millis
+        },
+        continuity: {
+          runtime_generation_before: $underlay_runtime_generation_before,
+          runtime_generation_after: $underlay_runtime_generation_after,
+          runtime_restarted: ($underlay_runtime_generation_before != $underlay_runtime_generation_after),
+          android_process_continuous: $underlay_android_process_continuous,
+          fixture_process_continuous: $underlay_fixture_process_continuous
+        },
+        traffic: {
+          cellular_fallback: {
+            linux_to_android: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}},
+            android_to_linux: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}}
+          },
+          cellular_recovery: {
+            linux_to_android: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}},
+            android_to_linux: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}}
+          },
+          wifi_restore: {
+            linux_to_android: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}},
+            android_to_linux: {ipv4: {sent: 5, received: 5}, ipv6: {sent: 5, received: 5}}
+          }
+        }
+      }
+    } else {} end)
   ' "$device_file" > "$device_file.updated"
   mv -f "$device_file.updated" "$device_file"
 
   outcome=passed
-  outcome_detail="Code pairing, $path_mode path isolation, and dual-stack traffic passed"
+  if [[ "$scenario" == underlay-recovery ]]; then
+    outcome_detail="Code pairing, autonomous underlay recovery, and dual-stack traffic passed"
+  else
+    outcome_detail="Code pairing, $path_mode path isolation, and dual-stack traffic passed"
+  fi
   exit 0
 fi
 
@@ -1767,7 +2414,7 @@ assert_profile_unchanged() {
   ' "$baseline_profile" "$current" >/dev/null
 }
 
-"${adb[@]}" shell am force-stop org.hermeticfoundation.p2pvpn.debug
+adb_run shell am force-stop org.hermeticfoundation.p2pvpn.debug
 start_main_activity
 process_profile="$state_dir/profile-after-process-death.json"
 if ! wait_for_automation_status "$process_profile" '.value.snapshot.has_profile' \
@@ -1780,7 +2427,7 @@ fi
 record_step process_death passed "Encrypted profile restored after process death"
 
 for install_kind in update reinstall; do
-  if ! "${adb[@]}" install -r "$android_apk" >/dev/null; then
+  if ! adb_run install -r "$android_apk" >/dev/null; then
     outcome=failed
     outcome_detail="ADB replacement install failed during $install_kind"
     record_step "$install_kind" failed "$outcome_detail"

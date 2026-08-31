@@ -403,6 +403,7 @@
                   "$test_root/launcher-tmp" \
                   "$test_root/tmp" \
                   "$test_root/evidence" \
+                  "$test_root/adb-timeout-evidence" \
                   "$test_root/persistence-evidence" \
                   "$test_root/pairing-evidence" \
                   "$test_root/runtime-budget-evidence" \
@@ -700,6 +701,7 @@
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
                     printf 'ControlCapabilities { membership_tag: Some("secret-tag"), owned_quic_packet_plane_certificate_der: Some([1, 2]), member_public_key: "secret-key", signature: "secret-signature" }\n'
                     printf 'underlay 192.0.2.44 [fd00::44]:42300 /dns4/private.example/udp/42300\n'
+                    printf 'peer 12D3KooWFakeFixturePeer overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef key /members/c2VjcmV0+/membership-records/1\n'
                     trap 'exit 0' INT TERM
                     while :; do sleep 1; done
                     ;;
@@ -792,10 +794,15 @@
                 #!${pkgs.bash}/bin/bash
                 set -euo pipefail
                 if [[ "''${1:-}" == -s ]]; then shift 2; fi
+                if [[ "''${P2P_VPN_ANDROID_E2E_FAKE_ADB_HANG:-}" == logcat \
+                  && "''${1:-}" == logcat ]]; then
+                  sleep 300
+                fi
                 pairing_state="''${P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE:-}"
                 path_mode="''${P2P_VPN_ANDROID_E2E_FAKE_PATH_MODE:-automatic}"
                 traffic_state="''${P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE:-}"
                 promotion_state="''${P2P_VPN_ANDROID_E2E_FAKE_PROMOTION_STATE:-}"
+                underlay_state="''${P2P_VPN_ANDROID_E2E_FAKE_UNDERLAY_STATE:-}"
                 record_fake_traffic() {
                   [[ -n "$traffic_state" ]] || return 0
                   current=0
@@ -828,6 +835,48 @@
                       outbound_direct_tcp_stream_packets=0
                       promotions_to_direct=0
                       runtime_generation=0
+                      underlay_kind=wifi
+                      underlay_validated=true
+                      underlay_available_networks=2
+                      underlay_selection_changes=0
+                      underlay_selected_losses=0
+                      underlay_recoveries=0
+                      underlay_runtime_recovery_requests=0
+                      underlay_runtime_recovery_failures=0
+                      if [[ -n "$underlay_state" && -s "$underlay_state" ]]; then
+                        case "$(< "$underlay_state")" in
+                          cellular)
+                            underlay_kind=cellular
+                            underlay_available_networks=1
+                            underlay_selection_changes=1
+                            underlay_selected_losses=1
+                            underlay_runtime_recovery_requests=1
+                            ;;
+                          none)
+                            underlay_kind=none
+                            underlay_validated=false
+                            underlay_available_networks=0
+                            underlay_selection_changes=2
+                            underlay_selected_losses=2
+                            underlay_runtime_recovery_requests=2
+                            ;;
+                          recovered-cellular)
+                            underlay_kind=cellular
+                            underlay_available_networks=1
+                            underlay_selection_changes=3
+                            underlay_selected_losses=2
+                            underlay_recoveries=1
+                            underlay_runtime_recovery_requests=3
+                            ;;
+                          restored-wifi)
+                            underlay_selection_changes=4
+                            underlay_selected_losses=2
+                            underlay_recoveries=1
+                            underlay_runtime_recovery_requests=4
+                            ;;
+                          *) exit 2 ;;
+                        esac
+                      fi
                       if [[ "$state" == connected || "$state" == paired ]]; then
                         connected=true
                         runtime_generation=1
@@ -879,6 +928,14 @@
                         --argjson outbound_direct_tcp_stream_packets "$outbound_direct_tcp_stream_packets" \
                         --argjson promotions_to_direct "$promotions_to_direct" \
                         --argjson runtime_generation "$runtime_generation" \
+                        --arg underlay_kind "$underlay_kind" \
+                        --argjson underlay_validated "$underlay_validated" \
+                        --argjson underlay_available_networks "$underlay_available_networks" \
+                        --argjson underlay_selection_changes "$underlay_selection_changes" \
+                        --argjson underlay_selected_losses "$underlay_selected_losses" \
+                        --argjson underlay_recoveries "$underlay_recoveries" \
+                        --argjson underlay_runtime_recovery_requests "$underlay_runtime_recovery_requests" \
+                        --argjson underlay_runtime_recovery_failures "$underlay_runtime_recovery_failures" \
                         '{
                           schema_version: 1,
                           ok: true,
@@ -894,6 +951,16 @@
                               addresses: ["100.64.0.9/32", "fd42::9/128"],
                               pairing_detail: $pairing_detail,
                               runtime_generation: $runtime_generation,
+                              underlay: {
+                                kind: $underlay_kind,
+                                validated: $underlay_validated,
+                                available_networks: $underlay_available_networks,
+                                selection_changes: $underlay_selection_changes,
+                                selected_losses: $underlay_selected_losses,
+                                recoveries: $underlay_recoveries,
+                                runtime_recovery_requests: $underlay_runtime_recovery_requests,
+                                runtime_recovery_failures: $underlay_runtime_recovery_failures
+                              },
                               paths: {
                                 connected_peers: $connected_peers,
                                 direct_udp_datagram: 0,
@@ -916,6 +983,195 @@
                     else
                       response='{"schema_version":1,"ok":true,"value":{"service_ready":true,"snapshot":{"has_profile":false,"profile_stored":false,"addresses":[],"paths":{"connected_peers":0}}}}'
                     fi
+                    printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
+                    ;;
+                  'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command diagnostics')
+                    profile_stored=false
+                    connected=false
+                    runtime_generation=0
+                    connected_peers=0
+                    direct_quic_datagram=0
+                    direct_quic_stream=0
+                    direct_tcp_stream=0
+                    relay=0
+                    packet_plane_quic_sessions=0
+                    promotions_to_direct=0
+                    if [[ -n "$pairing_state" && -f "$pairing_state" ]]; then
+                      profile_stored=true
+                      state="$(< "$pairing_state")"
+                      if [[ "$state" == connected || "$state" == paired ]]; then
+                        connected=true
+                        runtime_generation=1
+                      fi
+                      if [[ "$state" == paired ]]; then
+                        runtime_generation=2
+                        connected_peers=1
+                        case "$path_mode" in
+                          quic-stream) direct_quic_stream=1 ;;
+                          owned-quic)
+                            direct_quic_datagram=1
+                            direct_quic_stream=1
+                            direct_tcp_stream=1
+                            packet_plane_quic_sessions=1
+                            ;;
+                          relay-only) relay=1 ;;
+                          relay-to-direct)
+                            if [[ -s "$promotion_state" ]]; then
+                              direct_tcp_stream=1
+                              relay=1
+                              promotions_to_direct=1
+                            else
+                              relay=1
+                            fi
+                            ;;
+                          *) direct_tcp_stream=1 ;;
+                        esac
+                      fi
+                    elif [[ -n "''${P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE:-}" \
+                      && -f "$P2P_VPN_ANDROID_E2E_FAKE_PROFILE_STATE" ]]; then
+                      profile_stored=true
+                    fi
+
+                    underlay_kind=wifi
+                    underlay_validated=true
+                    underlay_available_networks=2
+                    underlay_selection_changes=0
+                    underlay_selected_losses=0
+                    underlay_recoveries=0
+                    underlay_runtime_recovery_requests=0
+                    if [[ -n "$underlay_state" && -s "$underlay_state" ]]; then
+                      case "$(< "$underlay_state")" in
+                        cellular)
+                          underlay_kind=cellular
+                          underlay_available_networks=1
+                          underlay_selection_changes=1
+                          underlay_selected_losses=1
+                          underlay_runtime_recovery_requests=1
+                          ;;
+                        none)
+                          underlay_kind=none
+                          underlay_validated=false
+                          underlay_available_networks=0
+                          underlay_selection_changes=2
+                          underlay_selected_losses=2
+                          underlay_runtime_recovery_requests=2
+                          ;;
+                        recovered-cellular)
+                          underlay_kind=cellular
+                          underlay_available_networks=1
+                          underlay_selection_changes=3
+                          underlay_selected_losses=2
+                          underlay_recoveries=1
+                          underlay_runtime_recovery_requests=3
+                          ;;
+                        restored-wifi)
+                          underlay_selection_changes=4
+                          underlay_selected_losses=2
+                          underlay_recoveries=1
+                          underlay_runtime_recovery_requests=4
+                          ;;
+                        *) exit 2 ;;
+                      esac
+                    fi
+
+                    report="$(jq -cn \
+                      --argjson profile_stored "$profile_stored" \
+                      --argjson connected "$connected" \
+                      --argjson runtime_generation "$runtime_generation" \
+                      --argjson connected_peers "$connected_peers" \
+                      --argjson direct_quic_datagram "$direct_quic_datagram" \
+                      --argjson direct_quic_stream "$direct_quic_stream" \
+                      --argjson direct_tcp_stream "$direct_tcp_stream" \
+                      --argjson relay "$relay" \
+                      --argjson packet_plane_quic_sessions "$packet_plane_quic_sessions" \
+                      --argjson promotions_to_direct "$promotions_to_direct" \
+                      --arg underlay_kind "$underlay_kind" \
+                      --argjson underlay_validated "$underlay_validated" \
+                      --argjson underlay_available_networks "$underlay_available_networks" \
+                      --argjson underlay_selection_changes "$underlay_selection_changes" \
+                      --argjson underlay_selected_losses "$underlay_selected_losses" \
+                      --argjson underlay_recoveries "$underlay_recoveries" \
+                      --argjson underlay_runtime_recovery_requests "$underlay_runtime_recovery_requests" \
+                      '{
+                        schema_version: 1,
+                        kind: "p2p-vpn-android-diagnostics",
+                        generated_at: "2026-08-30T12:00:00Z",
+                        app: {version: "0.1.0-debug", android_api: 35},
+                        lifecycle: {
+                          service_uptime_millis: 12000,
+                          profile_stored: $profile_stored,
+                          profile_readable: $profile_stored,
+                          connection_requested: $connected,
+                          connected: $connected,
+                          busy: false,
+                          runtime_generation: $runtime_generation
+                        },
+                        underlay: {
+                          kind: $underlay_kind,
+                          validated: $underlay_validated,
+                          available_networks: $underlay_available_networks,
+                          selection_changes: $underlay_selection_changes,
+                          selected_losses: $underlay_selected_losses,
+                          recoveries: $underlay_recoveries,
+                          runtime_recovery_requests: $underlay_runtime_recovery_requests,
+                          runtime_recovery_failures: 0
+                        },
+                        paths: {
+                          connected_peers: $connected_peers,
+                          peers_without_supported_path: 0,
+                          direct_udp_datagram: 0,
+                          direct_quic_datagram: $direct_quic_datagram,
+                          direct_quic_stream: $direct_quic_stream,
+                          direct_tcp_stream: $direct_tcp_stream,
+                          relay: $relay,
+                          public_routing_peers: 0,
+                          packet_plane_quic_sessions: $packet_plane_quic_sessions,
+                          promotions_to_direct: $promotions_to_direct
+                        },
+                        queue: {
+                          queued_packets: 0,
+                          queued_bytes: 0,
+                          oldest_packet_age_millis: 0,
+                          blocked_no_supported_path_events: 0,
+                          blocked_packet_window_events: 0
+                        },
+                        drops: {
+                          queue_packets: 0,
+                          queue_bytes: 0,
+                          expired_packets: 0,
+                          expired_bytes: 0,
+                          outbound_packets: 0,
+                          inbound_packets: 0,
+                          packet_plane_datagrams: 0,
+                          path_fallbacks_to_relay: 0,
+                          packet_plane_path_demotions: 0,
+                          stream_path_demotions: 0
+                        },
+                        resources: {
+                          process_cpu_millis: 150,
+                          total_pss_kib: 4096,
+                          private_dirty_kib: 2048,
+                          java_heap_used_bytes: 1048576,
+                          java_heap_max_bytes: 16777216,
+                          active_threads: 8
+                        },
+                        pairing: {operation_active: false, candidate_pending: false},
+                        events: {
+                          discarded: 0,
+                          items: [
+                            {sequence: 1, since_service_start_millis: 0, name: "service_created"},
+                            {sequence: 2, since_service_start_millis: 12000, name: "diagnostic_report_generated"}
+                          ]
+                        },
+                        privacy: {
+                          identity_material: "excluded",
+                          peers: "excluded",
+                          pairing_secrets: "excluded",
+                          underlay_addresses: "excluded"
+                        }
+                      }')"
+                    response="$(jq -cn --argjson report "$report" \
+                      '{schema_version: 1, ok: true, value: {service_ready: true, report: $report}}')"
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command create-profile --es network android-e2e')
@@ -943,6 +1199,29 @@
                     response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"join-pairing"}}'
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"
                     ;;
+                  'shell pidof org.hermeticfoundation.p2pvpn.debug') printf '4242\n' ;;
+                  logcat*)
+                    printf '1.0 I p2p-vpn: p2p_vpn::runtime::runner event=test peer=12D3KooWFakeAndroidPeer overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef address=/ip6/fd42::9/tcp/42300 key=/members/c2VjcmV0+/membership-records/1\n'
+                    ;;
+                  'shell svc wifi disable')
+                    : "''${underlay_state:?}"
+                    printf 'cellular\n' > "$underlay_state"
+                    ;;
+                  'shell svc data disable')
+                    : "''${underlay_state:?}"
+                    [[ "$(< "$underlay_state")" == cellular ]]
+                    printf 'none\n' > "$underlay_state"
+                    ;;
+                  'shell svc data enable')
+                    : "''${underlay_state:?}"
+                    [[ "$(< "$underlay_state")" == none ]]
+                    printf 'recovered-cellular\n' > "$underlay_state"
+                    ;;
+                  'shell svc wifi enable')
+                    : "''${underlay_state:?}"
+                    [[ "$(< "$underlay_state")" == recovered-cellular ]]
+                    printf 'restored-wifi\n' > "$underlay_state"
+                    ;;
                   shell\ ping\ -c\ 5\ -W\ 5\ *)
                     record_fake_traffic 5
                     printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
@@ -969,6 +1248,31 @@
                 EOF
                 chmod +x "$test_root/bin/fake-adb"
 
+                assert_diagnostic_evidence() {
+                  local evidence="$1"
+                  local expected_connected="$2"
+                  local diagnostic_size
+                  jq -e --argjson expected_connected "$expected_connected" '
+                    .cleanup.diagnostic_report_redacted and
+                    (.device.diagnostics.export |
+                      .schema_version == 1 and
+                      .kind == "p2p-vpn-android-diagnostics" and
+                      .app.android_api == 35 and
+                      .lifecycle.connected == $expected_connected and
+                      (.events.items | length <= 64) and
+                      .privacy == {
+                        identity_material: "excluded",
+                        peers: "excluded",
+                        pairing_secrets: "excluded",
+                        underlay_addresses: "excluded"
+                      })
+                  ' "$evidence" >/dev/null
+                  diagnostic_size="$(jq -c '.device.diagnostics.export' "$evidence" | wc -c)"
+                  test "$diagnostic_size" -le ${toString (64 * 1024)}
+                  ! jq -c '.device.diagnostics.export' "$evidence" | grep -Eq \
+                    '12D3KooW[A-Za-z0-9]+|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef|ABCD-EFGH-JKLM-NPQR|100\.64\.0\.9|fd42::9'
+                }
+
                 set +e
                 TMPDIR="$test_root/tmp" \
                   P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
@@ -994,13 +1298,40 @@
                   .device.debug_automation and
                   (.preflight[] | select(.name == "disk_space") | .available == true) and
                   .cleanup.emulator_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/evidence/evidence.json" >/dev/null
+                assert_diagnostic_evidence "$test_root/evidence/evidence.json" false
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
                 test "$(wc -c < "$test_root/evidence/emulator.log")" -le ${toString (1024 * 1024)}
                 ! grep -Fq 'Sending adb public key' "$test_root/evidence/emulator.log"
                 ! grep -Fq 'test-user' "$test_root/evidence/emulator.log"
                 grep -Fq '/tmp/android-REDACTED/crash.db' "$test_root/evidence/emulator.log"
+
+                adb_timeout_started="$(date +%s)"
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_FAKE_ADB_HANG=logcat \
+                  P2P_VPN_ANDROID_E2E_ADB_TIMEOUT_SECONDS=2 \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario boot-smoke \
+                    --output "$test_root/adb-timeout-evidence"
+                adb_timeout_status=$?
+                set -e
+                adb_timeout_elapsed=$(($(date +%s) - adb_timeout_started))
+
+                test "$adb_timeout_status" -eq 0
+                test "$adb_timeout_elapsed" -le 15
+                jq -e '
+                  .status == "passed" and
+                  .cleanup.emulator_stopped and
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
+                ' "$test_root/adb-timeout-evidence/evidence.json" >/dev/null
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 rm -f "$test_root/runtime-storage-trigger"
                 set +e
@@ -1023,7 +1354,8 @@
                   .status == "failed" and
                   .detail == "Android E2E stopped because runtime storage growth exceeded the per-run limit" and
                   .cleanup.emulator_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/runtime-budget-evidence/evidence.json" >/dev/null
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
@@ -1053,8 +1385,10 @@
                   .device.profile_persistence.ipv4 and
                   .device.profile_persistence.ipv6 and
                   .cleanup.emulator_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/persistence-evidence/evidence.json" >/dev/null
+                assert_diagnostic_evidence "$test_root/persistence-evidence/evidence.json" false
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 set +e
@@ -1094,8 +1428,10 @@
                   .device.pairing_traffic.paths.direct_tcp_stream == 1 and
                   .cleanup.emulator_stopped and
                   .cleanup.fixture_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/pairing-evidence/evidence.json" >/dev/null
+                assert_diagnostic_evidence "$test_root/pairing-evidence/evidence.json" true
                 test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
                 test "$(wc -c < "$test_root/pairing-evidence/fixture.log")" -le ${toString (1024 * 1024)}
                 ! grep -Fq 'ABCD-EFGH-JKLM-NPQR' "$test_root/pairing-evidence/fixture.log"
@@ -1105,6 +1441,95 @@
                   "$test_root/pairing-evidence/fixture.log"
                 ! grep -Eq '(192\.0\.2\.44|fd00::44|private\.example)' \
                   "$test_root/pairing-evidence/fixture.log"
+                ! grep -Eq '12D3KooW[A-Za-z0-9]+' \
+                  "$test_root/pairing-evidence/fixture.log"
+                ! grep -Fq '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
+                  "$test_root/pairing-evidence/fixture.log"
+                ! grep -Fq 'c2VjcmV0+' "$test_root/pairing-evidence/fixture.log"
+                grep -Fq 'peer PEER-ID-REDACTED' \
+                  "$test_root/pairing-evidence/fixture.log"
+                grep -Fq 'overlay=OVERLAY-ID-REDACTED' \
+                  "$test_root/pairing-evidence/fixture.log"
+                grep -Fq '/members/MEMBERSHIP-TAG-REDACTED/membership-records/1' \
+                  "$test_root/pairing-evidence/fixture.log"
+                test "$(wc -c < "$test_root/pairing-evidence/android.log")" -le ${toString (1024 * 1024)}
+                ! grep -Eq '12D3KooW[A-Za-z0-9]+|fd42::9|c2VjcmV0+|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
+                  "$test_root/pairing-evidence/android.log"
+                grep -Fq 'p2p_vpn::runtime::runner' \
+                  "$test_root/pairing-evidence/android.log"
+                grep -Fq 'peer=PEER-ID-REDACTED' \
+                  "$test_root/pairing-evidence/android.log"
+                grep -Fq 'overlay=OVERLAY-ID-REDACTED' \
+                  "$test_root/pairing-evidence/android.log"
+
+                underlay_pairing_state="$test_root/fake-pairing-underlay"
+                underlay_traffic_state="$test_root/fake-traffic-underlay"
+                underlay_state="$test_root/fake-underlay"
+                printf '0\n' > "$underlay_traffic_state"
+                set +e
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_E2E_FAKE_PAIRING_STATE="$underlay_pairing_state" \
+                  P2P_VPN_ANDROID_E2E_FAKE_TRAFFIC_STATE="$underlay_traffic_state" \
+                  P2P_VPN_ANDROID_E2E_FAKE_UNDERLAY_STATE="$underlay_state" \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                  P2P_VPN_ANDROID_E2E_FIXTURE="$test_root/bin/fake-fixture" \
+                  P2P_VPN_BIN="$test_root/bin/fake-p2p-vpn" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario underlay-recovery \
+                    --output "$test_root/underlay-evidence"
+                underlay_status=$?
+                set -e
+
+                if [[ "$underlay_status" -ne 0 ]]; then
+                  jq . "$test_root/underlay-evidence/evidence.json" >&2
+                  exit "$underlay_status"
+                fi
+                jq -e '
+                  .scenario == "underlay-recovery" and
+                  .status == "passed" and
+                  .device.pairing_traffic.code_only_enrollment and
+                  .device.pairing_traffic.configured_overlay_peer_addresses == 0 and
+                  .device.pairing_traffic.path_mode == "automatic" and
+                  .device.underlay_recovery.underlays == {
+                    initial: "wifi",
+                    fallback: "cellular",
+                    outage: "none",
+                    recovered: "cellular",
+                    restored: "wifi"
+                  } and
+                  (.device.underlay_recovery.events.selection_changes_after -
+                    .device.underlay_recovery.events.selection_changes_before) >= 4 and
+                  (.device.underlay_recovery.events.selected_losses_after -
+                    .device.underlay_recovery.events.selected_losses_before) >= 2 and
+                  (.device.underlay_recovery.events.recoveries_after -
+                    .device.underlay_recovery.events.recoveries_before) >= 1 and
+                  (.device.underlay_recovery.events.runtime_recovery_requests_after -
+                    .device.underlay_recovery.events.runtime_recovery_requests_before) >= 4 and
+                  (.device.underlay_recovery.events.runtime_recovery_failures_after -
+                    .device.underlay_recovery.events.runtime_recovery_failures_before) == 0 and
+                  .device.underlay_recovery.timing_millis.outage_hold == 5000 and
+                  (.device.underlay_recovery.continuity.runtime_restarted | not) and
+                  .device.underlay_recovery.continuity.android_process_continuous and
+                  .device.underlay_recovery.continuity.fixture_process_continuous and
+                  .device.underlay_recovery.traffic.cellular_fallback.linux_to_android.ipv4.received == 5 and
+                  .device.underlay_recovery.traffic.cellular_fallback.android_to_linux.ipv6.received == 5 and
+                  .device.underlay_recovery.traffic.cellular_recovery.linux_to_android.ipv6.received == 5 and
+                  .device.underlay_recovery.traffic.cellular_recovery.android_to_linux.ipv4.received == 5 and
+                  .device.underlay_recovery.traffic.wifi_restore.linux_to_android.ipv4.received == 5 and
+                  .device.underlay_recovery.traffic.wifi_restore.android_to_linux.ipv6.received == 5 and
+                  .cleanup.emulator_stopped and
+                  .cleanup.fixture_stopped and
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
+                ' "$test_root/underlay-evidence/evidence.json" >/dev/null
+                assert_diagnostic_evidence "$test_root/underlay-evidence/evidence.json" true
+                jq -e '.device.diagnostics.export.underlay.kind == "wifi"' \
+                  "$test_root/underlay-evidence/evidence.json" >/dev/null
+                test "$(< "$underlay_state")" = restored-wifi
+                test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
 
                 for path_mode in quic-stream tcp-stream owned-quic relay-only relay-to-direct; do
                   path_state="$test_root/fake-pairing-$path_mode"
@@ -1172,8 +1597,10 @@
                     end) and
                     .cleanup.emulator_stopped and
                     .cleanup.fixture_stopped and
-                    .cleanup.private_state_removed
+                    .cleanup.private_state_removed and
+                    .cleanup.logs_redacted
                   ' "$path_evidence/evidence.json" >/dev/null
+                  assert_diagnostic_evidence "$path_evidence/evidence.json" true
                   test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
                 done
 
@@ -1194,7 +1621,8 @@
                   .detail == "Missing requirements: emulator_command" and
                   (.preflight[] | select(.name == "emulator_command") | .available == false) and
                   .cleanup.emulator_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/skip-evidence/evidence.json" >/dev/null
                 test ! -s "$test_root/skip-evidence/emulator.log"
 
@@ -1217,7 +1645,8 @@
                   .detail == "Missing requirements: disk_space" and
                   (.preflight[] | select(.name == "disk_space") | .available == false) and
                   .cleanup.emulator_stopped and
-                  .cleanup.private_state_removed
+                  .cleanup.private_state_removed and
+                  .cleanup.logs_redacted
                 ' "$test_root/space-evidence/evidence.json" >/dev/null
                 test ! -s "$test_root/space-evidence/emulator.log"
 

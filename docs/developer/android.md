@@ -24,6 +24,8 @@ MainActivity
 | --- | --- |
 | `android/app/src/main/java/.../MainActivity.java` | Native pair-and-connect UI |
 | `android/app/src/main/java/.../P2pVpnService.java` | VPN and recovery lifecycle |
+| `android/app/src/main/java/.../UnderlayTracker.java` | Deterministic physical-network selection |
+| `android/app/src/main/java/.../DiagnosticReport.java` | Bounded aggregate-only support report |
 | `android/app/src/main/java/.../ProfileStore.java` | Keystore-backed persistence |
 | `android/app/src/main/java/.../PairRpc.java` | Existing pairing RPC shapes |
 | `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
@@ -57,6 +59,7 @@ Linux behavior and protocol encodings remain unchanged.
 | `nativeInspectProfile` | Peer ID, MTU, addresses, and routes |
 | `nativeStart` | Starts one runtime over the supplied TUN descriptor |
 | `nativeStatus` | Runtime phase and control status lines |
+| `nativeNetworkChanged` | Invalidates stale paths and rediscovers without stopping TUN |
 | `nativeStop` | Requests shutdown and joins the runtime thread |
 | `nativePairRpc` | Calls the existing daemon pairing state machine |
 | `nativeApplyPairingArtifacts` | Applies signed artifacts to the profile |
@@ -169,14 +172,59 @@ Physical-network callbacks exclude VPN networks and rank candidates:
 | 1100 | Validated Bluetooth |
 | 0-400 | Equivalent unvalidated transports |
 
-The first callback establishes baseline state without restarting.
+The first callback establishes baseline state.
 
-A better network, current-network loss, or total-loss recovery schedules a
-runtime restart after 1.5 seconds.
+A selected-network change, loss, or recovery is debounced for 500 milliseconds.
 
-Repeated startup failures back off to 30 seconds.
+The service then calls `nativeNetworkChanged` without replacing the TUN,
+profile, process, or native runtime.
 
-The restarted Rust runtime retains LAN-first discovery and relay fallback.
+The runtime performs one recovery transaction:
+
+1. Advance the connection epoch.
+2. Disconnect active and pending connections to every known peer.
+3. Ignore connection-bound events from the previous epoch.
+4. Retire relay listeners and learned external endpoints by ID.
+5. Invalidate selected paths and packet-plane sessions.
+6. Clear stale in-flight packet state and recovery backoff.
+7. Restart LAN discovery and ordered direct dialing.
+8. Resume public routing, hole punching, and relay fallback as needed.
+
+Recovery submits one known-peer dial per peer.
+
+Its addresses are ordered fallbacks with dial concurrency set to one.
+
+| Dial Rule | Effect |
+| --- | --- |
+| `NotDialing` | Prevents parallel recovery attempts for one overlay peer |
+| Ordered addresses | Tries direct candidates before circuit-relay fallback |
+| Deterministic initiator | Keeps one direct connection when both peers dial |
+| Pre-selection deduplication | Never selects a connection already retiring |
+
+The service retries a failed JNI recovery signal twice. A third failure falls
+back to the existing bounded native-runtime restart path.
+
+Startup and native-health failures still restart the runtime with exponential
+backoff capped at 30 seconds.
+
+## Diagnostic Report
+
+`DiagnosticReport` serializes a fixed schema capped at 64 KiB.
+
+| Scope | Data |
+| --- | --- |
+| Service | Uptime, profile state, connection state, generation |
+| Network | Coarse underlay kind and aggregate recovery counters |
+| Runtime | Aggregate path, queue, drop, fallback, and demotion counters |
+| Process | CPU time, PSS, private dirty memory, heap, threads |
+| History | Bounded ring of 64 allowlisted event names |
+
+The schema contains no free-form runtime error text.
+
+It excludes peer IDs, overlay addresses, hostnames, pairing codes, membership
+material, underlay addresses, network handles, and SSIDs.
+
+The Android document picker writes the report to a user-selected destination.
 
 ## Build Outputs
 
@@ -283,6 +331,7 @@ nix run .#android-e2e -- \
 | Discovery | A private Kademlia bootstrap locates the Linux inviter |
 | Traffic | IPv4 and IPv6 pass 5/5 in both directions |
 | Evidence | Logs are redacted, capped, and contain no pairing secret |
+| Diagnostics | Exported report passes its bounded aggregate-only schema |
 | Cleanup | Emulator, fixture, and private runtime state are removed |
 
 Select one isolated data path:
@@ -303,6 +352,21 @@ nix run .#android-e2e -- \
 | `relay-only` | Circuit relay carries packets; every direct path is absent |
 | `relay-to-direct` | Relay carries baseline traffic, then promotes to direct TCP |
 
+Run in-place underlay recovery coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario underlay-recovery \
+  --output ./android-underlay-evidence
+```
+
+| Transition | Assertion |
+| --- | --- |
+| Wi-Fi to cellular | Same process and runtime recover bidirectional traffic |
+| Total loss | Runtime stays alive while all physical networks are absent |
+| Cellular return | Discovery and traffic recover without intervention |
+| Wi-Fi return | Preferred underlay and traffic restore automatically |
+
 Run capability checks without starting Android:
 
 ```sh
@@ -317,9 +381,11 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 | `77` | Explicit preflight or `--allow-skip` skipped |
 
 `evidence.json` records preflight checks, the device contract, scenario steps,
-and cleanup results.
+the validated diagnostic report, and cleanup results.
 
-`emulator.log` and `fixture.log` are redacted and capped at 1 MiB each.
+`android.log`, `emulator.log`, and `fixture.log` are capped at 1 MiB each.
+
+Runtime logs are redacted before evidence validation.
 
 ### Storage Safety
 
@@ -353,8 +419,9 @@ nix = {
 | Nix realization | Daemon garbage collection starts below `min-free`. |
 | Harness runtime | Requires 16 GiB free before creating emulator state. |
 | Runtime growth | Stops the emulator run after 8 GiB of temporary or evidence growth. |
+| ADB commands | Stop after 120 seconds; cleanup diagnostics stop after 5 seconds. |
 | Emulator | Uses a temporary AVD and removes it on every exit path. |
-| Evidence | Redacted emulator log is capped at 1 MiB. |
+| Evidence | Three logs are capped at 1 MiB; diagnostic JSON is capped at 64 KiB. |
 
 Override the runtime threshold only for constrained test hosts:
 
@@ -419,6 +486,7 @@ holds. It is absent from non-debug source sets.
 | Command | Input | Result |
 | --- | --- | --- |
 | `status` | None | Structured profile, connection, pairing, and path state |
+| `diagnostics` | None | Production aggregate-only diagnostic report |
 | `create-profile` | `network` | Queues normal encrypted profile creation |
 | `connect` | None | Starts the normal VPN flow after user consent |
 | `disconnect` | None | Stops the normal VPN flow |
@@ -431,6 +499,9 @@ Responses are schema-versioned JSON encoded as base64 in broadcast result data.
 
 Status never includes config JSON, private keys, membership keys, or receipts.
 It can include an active pairing code; the harness keeps that in private state.
+
+Diagnostics uses the production report and cannot include those status-only
+identity or pairing fields.
 
 The isolated E2E scenario can also supply one private bootstrap router.
 
@@ -450,7 +521,7 @@ The gate covers:
 | --- | --- |
 | Rust host tests | Profile, artifacts, validation, secret unlink, runtime context |
 | Rust cross build | arm64 and x86_64 API 26 JNI libraries |
-| Java unit tests | RPC JSON, approval, status parsing, recovery policy |
+| Java unit tests | RPC JSON, approval, status, underlay selection, diagnostics |
 | Android lint | Debug variant static analysis |
 | APK | Dual ABI, JNI entry, debug ID, signing, min/target SDK |
 | Manifest | Always-on disabled; debug automation protected by `DUMP` |
@@ -471,7 +542,7 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The recorded runs through 2026-08-30 used a clean API 35 x86_64 emulator.
+The recorded runs through 2026-08-31 used a clean API 35 x86_64 emulator.
 
 ### Profile Lifecycle
 
@@ -517,7 +588,7 @@ Each isolated run repeated all four traffic checks.
 | `relay-only` | One circuit-relay path | Every direct path | 20/20 replies; 24 relay packets |
 | `relay-to-direct` | Circuit relay, then direct TCP | QUIC and datagram paths | 40/40 replies; no restart |
 
-The relay run also recorded three established circuits and no configured
+The relay run also recorded two established circuits and no configured
 overlay peer address.
 
 ### Relay Promotion
@@ -529,8 +600,8 @@ Both runtimes selected circuit relay and carried 20 measured packets.
 | Check | Result |
 | --- | --- |
 | Direct availability | Fixture opened a bounded TCP proxy after relay traffic |
-| Convergence | Direct TCP selected in 10.300 seconds |
-| Android runtime | Generation stayed at `3`; no restart occurred |
+| Convergence | Direct TCP selected in 21.670 seconds |
+| Android runtime | Generation stayed at `2`; no restart occurred |
 | Linux fixture | Original process remained active |
 | Promoted traffic | 20/20 replies; 20 direct packets per endpoint |
 | Relay backup | One healthy relay path remained available |
@@ -543,13 +614,30 @@ Both runtimes selected circuit relay and carried 20 measured packets.
 | Steady traffic | Every direction and address family passed 5/5 |
 | Processes | Emulator and Linux fixture stopped |
 | Private state | Pairing code, keys, and runtime state removed |
-| Evidence | Both redacted logs remained below 1 MiB |
+| Evidence | Three redacted logs stayed below 1 MiB; diagnostic JSON stayed below 64 KiB |
+
+### Underlay Recovery
+
+The recovery run used the automatic path policy and one continuous runtime.
+
+| Check | Result |
+| --- | --- |
+| Wi-Fi to cellular | Traffic resumed in 11.170 seconds |
+| Total-loss detection | Loss was recorded in 1.070 seconds |
+| Outage hold | Runtime stayed alive for 5 seconds without an underlay |
+| Cellular recovery | Traffic resumed in 3.170 seconds |
+| Wi-Fi restoration | Preferred-path traffic resumed in 6.270 seconds |
+| Runtime generation | Stayed at `2`; no restart occurred |
+| Recovery failures | `0` across four additional recovery requests |
+| Traffic | 5/5 IPv4 and IPv6 replies in both directions after each usable transition |
+| Final path | One direct QUIC stream; no duplicate TCP path |
+| Process use | 2.333 CPU seconds, 51,933 KiB PSS, 12 threads |
+| Run storage | 956 MB net growth; temporary source and evidence removed |
 
 This proves isolated emulator pairing, bidirectional dual-stack traffic,
-owned QUIC, both compatibility streams, relay forwarding, and direct promotion.
+owned QUIC, compatibility streams, relay behavior, and underlay recovery.
 
-It does not prove underlay changes, public NAT traversal, or physical-device
-behavior.
+It does not prove public NAT traversal or physical-device behavior.
 
 ## Current Exclusions
 
@@ -561,5 +649,5 @@ behavior.
 | Custom route-grant UI | Excluded |
 | Identity import/export UI | Excluded |
 | Play Store release pipeline | Excluded |
-| Automated emulator underlay changes | Not yet proven |
+| Automated emulator underlay changes | Proven on API 35 x86_64 |
 | Physical arm64 device | Not yet proven |
