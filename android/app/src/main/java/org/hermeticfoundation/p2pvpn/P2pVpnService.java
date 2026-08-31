@@ -59,7 +59,7 @@ public final class P2pVpnService extends VpnService {
     private static final long STATUS_POLL_MILLIS = 2_000;
     private static final long NETWORK_RECONNECT_DELAY_MILLIS = 1_500;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000;
-    private static final long UNDERLAY_RECOVERY_DELAY_MILLIS = 500;
+    private static final long UNDERLAY_RESTART_DELAY_MILLIS = 500;
     private static volatile P2pVpnService debugInstance;
 
     private final LocalBinder localBinder = new LocalBinder();
@@ -67,7 +67,6 @@ public final class P2pVpnService extends VpnService {
     private final Set<Listener> listeners =
             Collections.newSetFromMap(new ConcurrentHashMap<Listener, Boolean>());
     private final UnderlayTracker underlayTracker = new UnderlayTracker();
-    private final UnderlayRecoveryPolicy underlayRecoveryPolicy = new UnderlayRecoveryPolicy();
     private final DiagnosticEventBuffer diagnosticEvents = new DiagnosticEventBuffer();
 
     private ScheduledThreadPoolExecutor worker;
@@ -264,6 +263,14 @@ public final class P2pVpnService extends VpnService {
             publishSnapshot();
             return;
         }
+        if (connectivityManager != null
+                && underlayTracker.snapshot().availableNetworks == 0) {
+            connectionDetail = getString(R.string.waiting_for_underlay);
+            recordDiagnosticEvent("connection_waiting_for_underlay");
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
         if (!LocalNetworkPermission.isGranted(this)) {
             stopForMissingLocalNetworkPermission();
             return;
@@ -283,6 +290,12 @@ public final class P2pVpnService extends VpnService {
             builder.setSession(profile.networkName);
             builder.setMtu(profile.mtu);
             builder.setBlocking(true);
+            try {
+                // Every socket created by this process is VPN underlay traffic.
+                builder.addDisallowedApplication(getPackageName());
+            } catch (PackageManager.NameNotFoundException error) {
+                throw new P2pVpnException("Failed to isolate VPN transport sockets", error);
+            }
             for (AndroidProfile.Cidr address : profile.addresses) {
                 builder.addAddress(address.inetAddress, address.prefixLength);
             }
@@ -351,7 +364,6 @@ public final class P2pVpnService extends VpnService {
 
     private void stopNativeRuntime() {
         boolean wasConnected = connected;
-        underlayRecoveryPolicy.reset();
         cancel(statusFuture);
         statusFuture = null;
         try {
@@ -428,61 +440,60 @@ public final class P2pVpnService extends VpnService {
                 break;
         }
         if (change.requiresRuntimeRecovery() && desiredConnected) {
-            underlayRecoveryPolicy.reset();
             cancel(underlayRecoveryFuture);
             underlayRecoveryFuture =
                     worker.schedule(
-                            this::notifyNativeNetworkChanged,
-                            UNDERLAY_RECOVERY_DELAY_MILLIS,
+                            this::restartAfterUnderlayChange,
+                            UNDERLAY_RESTART_DELAY_MILLIS,
                             TimeUnit.MILLISECONDS);
+        } else if (change == UnderlayTracker.Change.INITIAL
+                && desiredConnected
+                && !connected
+                && !operationInProgress) {
+            startConnection("Connecting on the available network");
         }
         publishSnapshot();
     }
 
-    private void notifyNativeNetworkChanged() {
+    private void restartAfterUnderlayChange() {
         underlayRecoveryFuture = null;
-        if (!desiredConnected || !connected) {
+        if (!desiredConnected) {
             return;
         }
         if (operationInProgress) {
             underlayRecoveryFuture =
                     worker.schedule(
-                            this::notifyNativeNetworkChanged,
-                            UNDERLAY_RECOVERY_DELAY_MILLIS,
+                            this::restartAfterUnderlayChange,
+                            UNDERLAY_RESTART_DELAY_MILLIS,
                             TimeUnit.MILLISECONDS);
             return;
         }
         runtimeNetworkChangeRequests = increment(runtimeNetworkChangeRequests);
         recordDiagnosticEvent("underlay_recovery_requested");
         long requestSequence = runtimeNetworkChangeRequests;
-        Log.i(LOG_TAG, "event=underlay_runtime_recovery_requested sequence=" + requestSequence);
-        try {
-            NativeResponse.objectValue(NativeBridge.nativeNetworkChanged());
-            underlayRecoveryPolicy.reset();
+        Log.i(LOG_TAG, "event=underlay_runtime_restart_requested sequence=" + requestSequence);
+        if (connectivityManager != null
+                && underlayTracker.snapshot().availableNetworks == 0) {
+            operationInProgress = true;
+            stopNativeRuntime();
+            operationInProgress = false;
+            connectionDetail = getString(R.string.waiting_for_underlay);
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
+        reconnectDetail = "Recreating transport sockets after network change";
+        reconnectAfterNetworkChange();
+        if (connected) {
             recordDiagnosticEvent("underlay_recovery_completed");
-            Log.i(LOG_TAG, "event=underlay_runtime_recovery_completed sequence=" + requestSequence);
-        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            Log.i(
+                    LOG_TAG,
+                    "event=underlay_runtime_restart_completed sequence=" + requestSequence);
+        } else {
             runtimeNetworkChangeFailures = increment(runtimeNetworkChangeFailures);
             recordDiagnosticEvent("underlay_recovery_failed");
-            connectionDetail = "Network recovery signal failed: " + failureMessage(error);
-            Log.w(LOG_TAG, "event=underlay_runtime_recovery_failed sequence=" + requestSequence);
-            UnderlayRecoveryPolicy.FailureAction action =
-                    underlayRecoveryPolicy.recordSignalFailure();
-            if (action == UnderlayRecoveryPolicy.FailureAction.RETRY_SIGNAL
-                    && desiredConnected
-                    && connected) {
-                recordDiagnosticEvent("underlay_recovery_retry_scheduled");
-                underlayRecoveryFuture =
-                        worker.schedule(
-                                this::notifyNativeNetworkChanged,
-                                UNDERLAY_RECOVERY_DELAY_MILLIS,
-                                TimeUnit.MILLISECONDS);
-            } else {
-                recordDiagnosticEvent("underlay_recovery_restart_scheduled");
-                scheduleReconnect("Recovering after network signal failure", true);
-            }
+            Log.w(LOG_TAG, "event=underlay_runtime_restart_failed sequence=" + requestSequence);
         }
-        publishSnapshot();
     }
 
     private void scheduleStatusPoll() {

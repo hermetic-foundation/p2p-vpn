@@ -34,6 +34,7 @@
     <string name="lockdown_unsupported">Turn off Block connections without VPN. p2p-vpn uses split-tunnel routes.</string>
     <string name="always_on_profile_required">Create a profile before always-on VPN can connect</string>
     <string name="always_on_profile_unreadable">Reset the unreadable profile before always-on VPN can connect</string>
+    <string name="waiting_for_underlay">Waiting for a physical network</string>
     <string name="pairing_code_copied">Pairing code copied</string>
     <string name="notification_channel">VPN connection</string>
     <string name="notification_channel_description">p2p-vpn connection status</string>
