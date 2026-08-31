@@ -495,7 +495,8 @@ mod android {
     };
     use p2p_vpn::runtime::{
         control_socket::{
-            PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, runtime_control_channel,
+            PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeNetworkChange,
+            runtime_control_channel,
         },
         runner::{
             PreconfiguredTunRoutes, RuntimePlatform, ShutdownReason,
@@ -673,6 +674,14 @@ mod android {
         _class: JClass,
     ) -> jstring {
         jni_response(&mut env, |_| runtime_status())
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeNetworkChanged(
+        mut env: JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        jni_response(&mut env, |_| network_changed())
     }
 
     #[unsafe(no_mangle)]
@@ -901,6 +910,16 @@ mod android {
             .map(|instance| instance.control.clone())
             .ok_or_else(|| "p2p-vpn is not connected".to_owned())?;
         block_on_control(control.pair_rpc(request))
+    }
+
+    fn network_changed() -> Result<RuntimeNetworkChange, String> {
+        let control = RUNTIME
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|instance| instance.control.clone())
+            .ok_or_else(|| "p2p-vpn is not connected".to_owned())?;
+        block_on_control(control.network_changed())
     }
 
     fn read_string(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<String, String> {
