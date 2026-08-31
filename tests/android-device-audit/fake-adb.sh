@@ -43,7 +43,7 @@ case "${1:-} ${2:-} ${3:-}" in
   "getprop ro.build.version.sdk ")
     printf '35\n'
     ;;
-  "am start -n")
+  "am start -W")
     printf 'Starting: Intent\n'
     ;;
   "am force-stop org.hermeticfoundation.p2pvpn.debug")

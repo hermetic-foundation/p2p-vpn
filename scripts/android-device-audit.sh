@@ -308,6 +308,10 @@ adb_run() {
   timeout --signal=TERM --kill-after=2s "${adb_timeout_seconds}s" "${adb[@]}" "$@"
 }
 
+start_app() {
+  adb_run shell am start -W -n "$package_name/$activity_name" >/dev/null
+}
+
 device_abi="$(adb_run shell getprop ro.product.cpu.abilist | tr -d '\r')"
 device_api="$(adb_run shell getprop ro.build.version.sdk | tr -d '\r')"
 if [[ ",$device_abi," != *,arm64-v8a,* ]]; then
@@ -644,8 +648,8 @@ connect_with_permission() {
   if ! jq -e '.error == "vpn_permission_required"' <<< "$response" >/dev/null; then
     return 1
   fi
-  adb_run shell am start -n "$package_name/$activity_name" >/dev/null
-  prompt_operator "Approve the p2p-vpn Android VPN permission dialog."
+  start_app
+  prompt_operator "In p2p-vpn, tap Connect and approve the Android VPN permission dialog."
   response="$(android_automation connect)" || return 1
   jq -e '.ok' <<< "$response" >/dev/null
 }
@@ -866,7 +870,7 @@ run_process_recreation_checkpoint() {
   before_pid="$(adb_run shell pidof "$package_name" | tr -d '[:space:]')"
   adb_run shell am force-stop "$package_name" >/dev/null
   sleep 2
-  adb_run shell am start -n "$package_name/$activity_name" >/dev/null
+  start_app
   connect_with_permission || fail_audit "service recreation could not reconnect"
   after="$(wait_for_connected_status)" || fail_audit "service recreation did not restore runtime"
   after_pid="$(adb_run shell pidof "$package_name" | tr -d '[:space:]')"
@@ -891,7 +895,7 @@ run_update_checkpoint() {
   local identity after probe data
   identity="$(jq -r '.value.snapshot.peer_id' <<< "$before")"
   adb_run install -r "$apk" >/dev/null || fail_audit "ADB replacement install failed"
-  adb_run shell am start -n "$package_name/$activity_name" >/dev/null
+  start_app
   connect_with_permission || fail_audit "updated app could not reconnect"
   after="$(wait_for_connected_status)" || fail_audit "updated app did not restore runtime"
   if [[ "$(jq -r '.value.snapshot.peer_id' <<< "$after")" != "$identity" ]]; then
@@ -1064,7 +1068,7 @@ trap 'exit 143' TERM
 
 adb_run install -r "$apk" >/dev/null || fail_audit "failed to install the debug APK"
 installed_during_run=true
-adb_run shell am start -n "$package_name/$activity_name" >/dev/null
+start_app
 
 if [[ "$pair_fresh_profile" -eq 1 ]]; then
   pair_new_profile || fail_audit "fresh-profile code pairing did not complete"
