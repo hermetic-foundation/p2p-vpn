@@ -127,6 +127,25 @@ p2p-vpn peers --config p2p-vpn.json
 p2p-vpn peers --config p2p-vpn.json --live
 ```
 
+## Zsh Completion
+
+Nix installs the completion definition into the package automatically.
+
+Generate it manually for another installation:
+
+```sh
+mkdir -p ~/.zfunc
+p2p-vpn completions zsh > ~/.zfunc/_p2p-vpn
+```
+
+Add the directory before `compinit` in `~/.zshrc`:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
 ## Pairing Operations
 
 Use `--instance NAME` to target a NixOS daemon.

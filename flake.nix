@@ -60,8 +60,16 @@
           version = "0.1.0";
           src = rustSource;
           cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [
+            pkgs.installShellFiles
+            pkgs.pkg-config
+          ];
           RUST_MIN_STACK = "8388608";
+          postInstall = ''
+            completion="$TMPDIR/_p2p-vpn"
+            "$out/bin/p2p-vpn" completions zsh > "$completion"
+            installShellCompletion --zsh "$completion"
+          '';
         };
         vmPackage = package.overrideAttrs (_: {
           doCheck = false;
@@ -5232,8 +5240,11 @@
                   "$release_dir/docs/developer" \
                   "$release_dir/examples" \
                   "$release_dir/nix" \
+                  "$release_dir/share/zsh/site-functions" \
                   "$release_dir/scripts"
                 cp ${package}/bin/p2p-vpn "$release_dir/bin/"
+                cp ${package}/share/zsh/site-functions/_p2p-vpn \
+                  "$release_dir/share/zsh/site-functions/"
                 cp ${./README.md} "$release_dir/README.md"
                 cp ${./docs/user/README.md} "$release_dir/docs/user/README.md"
                 cp ${./docs/user/android.md} "$release_dir/docs/user/android.md"
@@ -5493,6 +5504,7 @@
                   "$root/nix/android.nix" \
                   "$root/nix/android-gradle-deps.json" \
                   "$root/nix/nixos-module.nix" \
+                  "$root/share/zsh/site-functions/_p2p-vpn" \
                   "$root/scripts/debug-bundle.sh" \
                   "$root/scripts/android-device-audit.sh" \
                   "$root/scripts/android-e2e.sh" \

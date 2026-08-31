@@ -10,7 +10,8 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, CommandFactory as _, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId as Libp2pPeerId, kad, mdns, multiaddr::Protocol, request_response::Message,
@@ -95,6 +96,11 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Command {
+    /// Generate shell completion definitions.
+    Completions {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     Keygen {
         #[arg(short, long, default_value = "-")]
         output: PathBuf,
@@ -878,6 +884,10 @@ async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Completions { shell } => {
+            completions(shell);
+            Ok(())
+        }
         Command::Keygen { output, force } => keygen(&output, force),
         Command::IdentityPublic {
             config,
@@ -1561,6 +1571,15 @@ async fn main() -> Result<(), String> {
             .await
         }
     }
+}
+
+fn completions(shell: Shell) {
+    write_completions(shell, &mut io::stdout());
+}
+
+fn write_completions(shell: Shell, output: &mut dyn io::Write) {
+    let mut command = Cli::command();
+    clap_complete::generate(shell, &mut command, "p2p-vpn", output);
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -11351,6 +11370,23 @@ mod tests {
         drop(alpha_socket);
         drop(beta_socket);
         fs::remove_dir_all(runtime_root).expect("cleanup runtime root");
+    }
+
+    #[test]
+    fn zsh_completion_includes_subcommands_and_peer_options() {
+        let cli = Cli::try_parse_from(["p2p-vpn", "completions", "zsh"]).expect("cli");
+        let Command::Completions { shell } = cli.command else {
+            panic!("expected completions command");
+        };
+        assert_eq!(shell, Shell::Zsh);
+
+        let mut output = Vec::new();
+        write_completions(Shell::Zsh, &mut output);
+        let output = String::from_utf8(output).expect("UTF-8 completion");
+        assert!(output.contains("peers"));
+        assert!(output.contains("--instance"));
+        assert!(output.contains("--config"));
+        assert!(output.contains("completions"));
     }
 
     #[test]
