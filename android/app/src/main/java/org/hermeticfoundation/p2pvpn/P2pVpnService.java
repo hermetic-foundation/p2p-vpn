@@ -104,6 +104,8 @@ public final class P2pVpnService extends VpnService {
     private long runtimeNetworkChangeRequests;
     private long runtimeNetworkChangeFailures;
     private long serviceStartedElapsedRealtime;
+    private volatile boolean legacySystemStartObserved;
+    private volatile VpnMode vpnMode = VpnMode.manual();
     private volatile Snapshot snapshot = Snapshot.initial();
 
     @Override
@@ -124,19 +126,26 @@ public final class P2pVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        boolean systemStart = isSystemVpnStart(action);
+        refreshVpnMode(systemStart);
         if (ACTION_CONNECT.equals(action)) {
             startForeground(
                     NOTIFICATION_ID,
                     notification(getString(R.string.notification_connecting)));
-            worker.execute(this::connectRequested);
+            worker.execute(() -> connectRequested(false));
         } else if (ACTION_DISCONNECT.equals(action)) {
-            worker.execute(this::disconnectRequested);
+            worker.execute(() -> disconnectRequested(false));
         } else if (ACTION_DEBUG_COMMAND.equals(action) && isDebuggable()) {
             String command = intent.getStringExtra(EXTRA_DEBUG_COMMAND);
             String value = intent.getStringExtra(EXTRA_DEBUG_VALUE);
             if (command != null) {
                 worker.execute(() -> executeDebugCommand(command, value));
             }
+        } else if (systemStart) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(getString(R.string.notification_connecting)));
+            worker.execute(() -> connectRequested(true));
         }
         return START_NOT_STICKY;
     }
@@ -151,7 +160,7 @@ public final class P2pVpnService extends VpnService {
 
     @Override
     public void onRevoke() {
-        worker.execute(this::disconnectRequested);
+        worker.execute(() -> disconnectRequested(true));
     }
 
     @Override
@@ -181,16 +190,32 @@ public final class P2pVpnService extends VpnService {
         super.onDestroy();
     }
 
-    private void connectRequested() {
-        if (desiredConnected) {
-            return;
+    private void connectRequested(boolean systemStart) {
+        refreshVpnMode(systemStart);
+        if (!desiredConnected) {
+            recordDiagnosticEvent(
+                    systemStart ? "always_on_start_requested" : "connection_requested");
         }
         desiredConnected = true;
-        recordDiagnosticEvent("connection_requested");
-        startConnection("Connecting");
+        if (connected || operationInProgress) {
+            return;
+        }
+        startConnection(systemStart ? "Starting always-on VPN" : "Connecting");
     }
 
-    private void disconnectRequested() {
+    private void disconnectRequested(boolean force) {
+        refreshVpnMode(false);
+        if (!force && !vpnMode.permitsDisconnect()) {
+            desiredConnected = true;
+            connectionDetail = "Always-on VPN is managed by Android";
+            recordDiagnosticEvent("always_on_disconnect_ignored");
+            updateForegroundNotification();
+            publishSnapshot();
+            if (!connected && !operationInProgress) {
+                startConnection("Restoring always-on VPN");
+            }
+            return;
+        }
         desiredConnected = false;
         recordDiagnosticEvent("disconnect_requested");
         cancel(reconnectFuture);
@@ -215,6 +240,28 @@ public final class P2pVpnService extends VpnService {
 
     private void startConnection(String initialDetail) {
         if (!desiredConnected || operationInProgress) {
+            return;
+        }
+        refreshVpnMode(false);
+        if (!vpnMode.permitsOverlayConnection()) {
+            connectionDetail = getString(R.string.lockdown_unsupported);
+            recordDiagnosticEvent("lockdown_connection_blocked");
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
+        if (!profilePresent) {
+            connectionDetail = getString(R.string.always_on_profile_required);
+            recordDiagnosticEvent("connection_waiting_for_profile");
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
+        if (profileUnreadable) {
+            connectionDetail = getString(R.string.always_on_profile_unreadable);
+            recordDiagnosticEvent("connection_waiting_for_readable_profile");
+            updateForegroundNotification();
+            publishSnapshot();
             return;
         }
         if (!LocalNetworkPermission.isGranted(this)) {
@@ -492,8 +539,11 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void stopForMissingLocalNetworkPermission() {
-        desiredConnected = false;
         recordDiagnosticEvent("local_network_permission_missing");
+        boolean remainStarted = vpnMode.alwaysOn;
+        if (!remainStarted) {
+            desiredConnected = false;
+        }
         if (connected) {
             stopNativeRuntime();
         }
@@ -501,6 +551,9 @@ public final class P2pVpnService extends VpnService {
         peerDetail = "Overlay peers: unavailable";
         updateForegroundNotification();
         publishSnapshot();
+        if (remainStarted) {
+            return;
+        }
         mainHandler.post(
                 () -> {
                     stopForeground(STOP_FOREGROUND_REMOVE);
@@ -628,6 +681,9 @@ public final class P2pVpnService extends VpnService {
         } finally {
             operationInProgress = false;
             publishSnapshot();
+            if (profile != null && desiredConnected && !connected) {
+                startConnection("Connecting with the new profile");
+            }
         }
     }
 
@@ -1163,6 +1219,7 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void publishSnapshot() {
+        refreshVpnMode(false);
         PairRpc.Candidate candidate = activePairing == null ? null : activePairing.candidate;
         snapshot =
                 new Snapshot(
@@ -1172,6 +1229,8 @@ public final class P2pVpnService extends VpnService {
                         connected,
                         desiredConnected,
                         operationInProgress,
+                        vpnMode.alwaysOn,
+                        vpnMode.lockdown,
                         profile == null ? null : profile.networkName,
                         profile == null ? null : profile.hostname,
                         profile == null ? null : profile.peerId,
@@ -1182,6 +1241,7 @@ public final class P2pVpnService extends VpnService {
                         runtimeNetworkChangeRequests,
                         runtimeNetworkChangeFailures,
                         underlayTracker.snapshot(),
+                        vpnModeDetail(),
                         connectionDetail,
                         peerDetail,
                         activePairing != null,
@@ -1289,6 +1349,50 @@ public final class P2pVpnService extends VpnService {
     static String debugDiagnosticReport() {
         P2pVpnService current = debugInstance;
         return current == null ? null : current.createDiagnosticReport();
+    }
+
+    private boolean isSystemVpnStart(String action) {
+        if (ACTION_CONNECT.equals(action)
+                || ACTION_DISCONNECT.equals(action)
+                || ACTION_DEBUG_COMMAND.equals(action)) {
+            return false;
+        }
+        return action == null || (Build.VERSION.SDK_INT >= 29 && isAlwaysOn());
+    }
+
+    private void refreshVpnMode(boolean systemStart) {
+        if (Build.VERSION.SDK_INT < 29 && systemStart) {
+            legacySystemStartObserved = true;
+        }
+        boolean platformAlwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
+        boolean platformLockdown = Build.VERSION.SDK_INT >= 29 && isLockdownEnabled();
+        VpnMode updated =
+                VpnMode.resolve(
+                        Build.VERSION.SDK_INT,
+                        legacySystemStartObserved,
+                        platformAlwaysOn,
+                        platformLockdown);
+        VpnMode previous = vpnMode;
+        vpnMode = updated;
+        if (!updated.equals(previous)) {
+            if (updated.lockdown) {
+                recordDiagnosticEvent("vpn_mode_lockdown");
+            } else if (updated.alwaysOn) {
+                recordDiagnosticEvent("vpn_mode_always_on");
+            } else {
+                recordDiagnosticEvent("vpn_mode_manual");
+            }
+        }
+    }
+
+    private String vpnModeDetail() {
+        if (vpnMode.lockdown) {
+            return getString(R.string.vpn_mode_lockdown);
+        }
+        if (vpnMode.alwaysOn) {
+            return getString(R.string.vpn_mode_always_on);
+        }
+        return getString(R.string.vpn_mode_manual);
     }
 
     private boolean isDebuggable() {
@@ -1442,6 +1546,8 @@ public final class P2pVpnService extends VpnService {
         final boolean connected;
         final boolean connectionRequested;
         final boolean busy;
+        final boolean alwaysOn;
+        final boolean lockdown;
         final String networkName;
         final String hostname;
         final String peerId;
@@ -1452,6 +1558,7 @@ public final class P2pVpnService extends VpnService {
         final long runtimeNetworkChangeRequests;
         final long runtimeNetworkChangeFailures;
         final UnderlayTracker.Snapshot underlay;
+        final String vpnModeDetail;
         final String connectionDetail;
         final String peerDetail;
         final boolean pairingActive;
@@ -1469,6 +1576,8 @@ public final class P2pVpnService extends VpnService {
                 boolean connected,
                 boolean connectionRequested,
                 boolean busy,
+                boolean alwaysOn,
+                boolean lockdown,
                 String networkName,
                 String hostname,
                 String peerId,
@@ -1479,6 +1588,7 @@ public final class P2pVpnService extends VpnService {
                 long runtimeNetworkChangeRequests,
                 long runtimeNetworkChangeFailures,
                 UnderlayTracker.Snapshot underlay,
+                String vpnModeDetail,
                 String connectionDetail,
                 String peerDetail,
                 boolean pairingActive,
@@ -1494,6 +1604,8 @@ public final class P2pVpnService extends VpnService {
             this.connected = connected;
             this.connectionRequested = connectionRequested;
             this.busy = busy;
+            this.alwaysOn = alwaysOn;
+            this.lockdown = lockdown;
             this.networkName = networkName;
             this.hostname = hostname;
             this.peerId = peerId;
@@ -1504,6 +1616,7 @@ public final class P2pVpnService extends VpnService {
             this.runtimeNetworkChangeRequests = runtimeNetworkChangeRequests;
             this.runtimeNetworkChangeFailures = runtimeNetworkChangeFailures;
             this.underlay = underlay;
+            this.vpnModeDetail = vpnModeDetail;
             this.connectionDetail = connectionDetail;
             this.peerDetail = peerDetail;
             this.pairingActive = pairingActive;
@@ -1523,6 +1636,8 @@ public final class P2pVpnService extends VpnService {
                     false,
                     false,
                     true,
+                    false,
+                    false,
                     null,
                     null,
                     null,
@@ -1533,6 +1648,7 @@ public final class P2pVpnService extends VpnService {
                     0,
                     0,
                     UnderlayTracker.Snapshot.empty(),
+                    "Manual connection",
                     "Loading",
                     "Overlay peers: unavailable",
                     false,

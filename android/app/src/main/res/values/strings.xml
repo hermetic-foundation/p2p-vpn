@@ -27,7 +27,13 @@
     <string name="identity_unavailable">No profile</string>
     <string name="identity_unavailable_stored">Saved profile unavailable</string>
     <string name="identity_format">%1$s\n%2$s\n%3$s</string>
-    <string name="status_format">%1$s\n%2$s\n%3$s</string>
+    <string name="status_format">%1$s\n%2$s\n%3$s\n%4$s</string>
+    <string name="vpn_mode_manual">Manual connection</string>
+    <string name="vpn_mode_always_on">Always-on VPN</string>
+    <string name="vpn_mode_lockdown">Always-on VPN with blocked connections</string>
+    <string name="lockdown_unsupported">Turn off Block connections without VPN. p2p-vpn uses split-tunnel routes.</string>
+    <string name="always_on_profile_required">Create a profile before always-on VPN can connect</string>
+    <string name="always_on_profile_unreadable">Reset the unreadable profile before always-on VPN can connect</string>
     <string name="pairing_code_copied">Pairing code copied</string>
     <string name="notification_channel">VPN connection</string>
     <string name="notification_channel_description">p2p-vpn connection status</string>

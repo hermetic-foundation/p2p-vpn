@@ -145,8 +145,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                         && !snapshot.connectionRequested
                         && !snapshot.busy);
         connect.setEnabled(
-                snapshot.hasProfile && !snapshot.connectionRequested && !snapshot.busy);
-        disconnect.setEnabled(snapshot.connectionRequested);
+                snapshot.hasProfile
+                        && (!snapshot.connectionRequested || !snapshot.connected)
+                        && !snapshot.busy
+                        && !snapshot.lockdown);
+        disconnect.setEnabled(snapshot.connectionRequested && !snapshot.alwaysOn);
         openPairing.setEnabled(snapshot.connected && !snapshot.busy);
         joinPairing.setEnabled(snapshot.connected && !snapshot.busy);
 
@@ -181,6 +184,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         status.setText(
                 getString(
                         R.string.status_format,
+                        snapshot.vpnModeDetail,
                         snapshot.connectionDetail,
                         snapshot.peerDetail,
                         snapshot.pairingDetail));
