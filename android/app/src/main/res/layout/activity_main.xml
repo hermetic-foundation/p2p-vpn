@@ -72,7 +72,7 @@
                 android:layout_height="wrap_content"
                 android:backgroundTint="@color/danger"
                 android:text="@string/reset_profile"
-                android:textColor="@color/on_primary" />
+                android:textColor="@color/on_danger" />
         </LinearLayout>
 
         <TextView
@@ -150,7 +150,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:backgroundTint="@color/secondary"
-                android:textColor="@color/on_primary"
+                android:textColor="@color/on_secondary"
                 android:text="@string/copy_code" />
         </LinearLayout>
 
@@ -232,7 +232,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:backgroundTint="@color/danger"
-                    android:textColor="@color/on_primary"
+                    android:textColor="@color/on_danger"
                     android:text="@string/reject" />
             </LinearLayout>
         </LinearLayout>

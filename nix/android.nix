@@ -596,6 +596,39 @@ let
             exit 1
           fi
 
+          ${androidHome}/build-tools/${buildToolsVersion}/aapt2 \
+            dump resources "$apk" > apk-resources.txt
+          for resource in \
+            danger \
+            muted \
+            on_danger \
+            on_primary \
+            on_secondary \
+            on_surface \
+            primary \
+            secondary \
+            surface
+          do
+            if ! awk -v name="color/$resource" '
+              $1 == "resource" { selected = ($3 == name); next }
+              selected && $1 == "(night)" { found = 1 }
+              END { exit found ? 0 : 1 }
+            ' apk-resources.txt
+            then
+              echo "APK color/$resource is missing a night-qualified value" >&2
+              exit 1
+            fi
+          done
+          if ! awk '
+            $1 == "resource" { selected = ($3 == "style/Theme.P2pVpn"); next }
+            selected && $1 == "(night)" && $2 == "(style)" { found = 1 }
+            END { exit found ? 0 : 1 }
+          ' apk-resources.txt
+          then
+            echo "APK Theme.P2pVpn is missing a night-qualified style" >&2
+            exit 1
+          fi
+
           ${androidSdk}/bin/apkanalyzer manifest print "$apk" > apk-manifest.xml
           if ! grep -F 'android.permission.ACCESS_LOCAL_NETWORK' \
             apk-manifest.xml >/dev/null

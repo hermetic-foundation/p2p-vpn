@@ -15,6 +15,13 @@ The current artifact is a debug build for test environments.
 | Installation | ADB with the device authorized |
 | Application ID | `org.hermeticfoundation.p2pvpn.debug` |
 
+## Appearance
+
+The app follows Android's current light or dark system appearance.
+
+Changing the system appearance recreates the activity without replacing the
+running VPN service.
+
 ## Build
 
 Build the APK from the repository root:

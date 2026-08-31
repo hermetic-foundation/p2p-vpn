@@ -29,6 +29,7 @@ MainActivity
 | `android/app/src/main/java/.../ProfileStore.java` | Keystore-backed persistence |
 | `android/app/src/main/java/.../PairRpc.java` | Existing pairing RPC shapes |
 | `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
+| `android/app/src/main/res/values[-night]/` | System-selected light and dark themes |
 | `crates/p2p-vpn-android/src/lib.rs` | JNI and runtime adapter |
 | `scripts/android-device-audit.sh` | Physical arm64 transition and endurance audit |
 | `src/runtime/tun.rs` | Platform-neutral packet I/O and route hooks |
