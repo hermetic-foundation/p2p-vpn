@@ -251,5 +251,12 @@
             android:minHeight="64dp"
             android:textIsSelectable="true" />
 
+        <Button
+            android:id="@+id/export_diagnostics"
+            style="@style/CommandButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/export_diagnostics" />
+
     </LinearLayout>
 </ScrollView>

@@ -1,8 +1,9 @@
-use std::{error::Error, num::NonZeroU8, time::Duration};
+use std::{collections::HashSet, error::Error, num::NonZeroU8, time::Duration};
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, allow_block_list, autonat, connection_limits, dcutr,
-    dns, identify,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, allow_block_list, autonat, connection_limits,
+    core::transport::ListenerId,
+    dcutr, dns, identify,
     identity::Keypair,
     kad, mdns,
     multiaddr::Protocol,
@@ -62,7 +63,10 @@ pub struct P2pNode {
     pub bootstrap_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub relay_peer_addresses: Vec<(PeerId, Multiaddr)>,
     pub relay_reservation_addresses: Vec<Multiaddr>,
+    pub configured_relay_reservation_listeners: HashSet<ListenerId>,
+    pub retiring_configured_relay_reservation_listeners: HashSet<ListenerId>,
     pub configured_peer_addresses: Vec<(PeerId, Multiaddr)>,
+    pub configured_external_addresses: Vec<Multiaddr>,
     pub packet_endpoint_candidates: Vec<String>,
     pub startup: StartupStatus,
 }
@@ -112,6 +116,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let relay_peer_addresses = relay_peer_addresses_from_reservations(&config.relay_reservations);
     let relay_reservation_addresses = config.relay_reservations.clone();
     let configured_peer_addresses = config.known_peers.clone();
+    let configured_external_addresses = config.external_addresses.clone();
 
     let discovery = config.discovery.clone();
     let behaviour_discovery = discovery.clone();
@@ -200,7 +205,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         .build();
 
     let relay_reservations_started = config.relay_reservations.len();
-    install_listeners_and_dials(&mut swarm, config)?;
+    let configured_relay_reservation_listeners = install_listeners_and_dials(&mut swarm, config)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
     let (kademlia_rendezvous_key, kademlia_membership_records_key, kademlia) =
         start_configured_kademlia(&mut swarm, config)?;
@@ -217,7 +222,10 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
         bootstrap_peer_addresses,
         relay_peer_addresses,
         relay_reservation_addresses,
+        configured_relay_reservation_listeners,
+        retiring_configured_relay_reservation_listeners: HashSet::new(),
         configured_peer_addresses,
+        configured_external_addresses,
         packet_endpoint_candidates: Vec::new(),
         startup: startup_status(
             config,
@@ -306,7 +314,7 @@ fn autonat_server_addresses(config: &HostConfig) -> Vec<(PeerId, Multiaddr)> {
 fn install_listeners_and_dials(
     swarm: &mut Swarm<Behaviour>,
     config: &HostConfig,
-) -> Result<(), P2pBuildError> {
+) -> Result<HashSet<ListenerId>, P2pBuildError> {
     for address in &config.listen_addresses {
         swarm.listen_on(address.clone())?;
     }
@@ -315,9 +323,11 @@ fn install_listeners_and_dials(
         swarm.add_external_address(address.clone());
     }
 
-    for address in &config.relay_reservations {
-        swarm.listen_on(relay_reservation_listen_address(address.clone()))?;
-    }
+    let configured_relay_reservation_listeners = config
+        .relay_reservations
+        .iter()
+        .map(|address| swarm.listen_on(relay_reservation_listen_address(address.clone())))
+        .collect::<Result<HashSet<_>, _>>()?;
 
     for (peer, address) in &config.bootstrap_peers {
         if should_seed_kademlia_address_book(&config.discovery, address) {
@@ -339,7 +349,7 @@ fn install_listeners_and_dials(
         swarm.dial(dial_address)?;
     }
 
-    Ok(())
+    Ok(configured_relay_reservation_listeners)
 }
 
 fn should_seed_kademlia_address_book(discovery: &DiscoveryConfig, address: &Multiaddr) -> bool {

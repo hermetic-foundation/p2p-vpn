@@ -187,15 +187,52 @@ The service watches non-VPN networks with internet capability.
 
 It prefers validated Ethernet, then Wi-Fi, cellular, and Bluetooth.
 
-When the selected network changes or disappears, the app restarts the native
-runtime and retries with bounded backoff.
+The TUN interface and native runtime stay active when the selected network
+changes or disappears.
 
-The Rust runtime then performs LAN-first discovery, public routing, hole
-punching, and relay fallback using the saved configuration.
+Existing transports migrate when possible. Failed transports are rediscovered
+through LAN, public routing, hole punching, or relay fallback.
+
+If the in-place recovery signal fails three times, the app restarts only the
+native runtime and continues automatically.
+
+After complete connectivity loss, recovery starts when Android reports a new
+physical network. Validation affects which available network is preferred.
+
+No profile change or service restart is required.
 
 Public discovery starts after a 60-second LAN-first grace period.
 
 Traffic may pause during that convergence window after an underlay change.
+
+## Export Diagnostics
+
+1. Open `p2p-vpn`.
+2. Select **Export diagnostics**.
+3. Choose where to create `p2p-vpn-diagnostics.json`.
+
+The report is capped at 64 KiB.
+
+| Section | Included Data |
+| --- | --- |
+| Lifecycle | Service uptime, profile readability, connection state, runtime generation |
+| Underlay | Coarse transport kind, validation, selection, loss, and recovery counts |
+| Paths | Aggregate direct, relay, routing-peer, and packet-session counts |
+| Queue and drops | Aggregate queue gauges, drops, expiry, fallback, and demotion counts |
+| Resources | Process CPU, memory, Java heap, and thread counts |
+| Pairing | Whether an operation or candidate is pending |
+| Events | Up to 64 coarse lifecycle and recovery event names |
+
+Runtime queue and drop counters describe the current native runtime generation.
+
+| Excluded Data | Examples |
+| --- | --- |
+| Identity material | Private key, public peer ID, membership key, certificates |
+| Peer details | Peer IDs, hostnames, overlay addresses |
+| Pairing secrets | Pairing code, fingerprints, signed artifacts |
+| Underlay details | Network handles, local addresses, gateways, SSIDs |
+
+Review the file before sharing it outside your organization.
 
 ## Stored Data
 

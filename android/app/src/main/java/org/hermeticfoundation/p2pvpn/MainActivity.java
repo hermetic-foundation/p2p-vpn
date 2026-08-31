@@ -12,6 +12,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.net.VpnService;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -22,10 +23,15 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity implements P2pVpnService.Listener {
     private static final int VPN_PERMISSION_REQUEST = 100;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 101;
+    private static final int DIAGNOSTIC_EXPORT_REQUEST = 102;
+    private static final String STATE_DIAGNOSTIC_REPORT = "pending_diagnostic_report";
 
     private LinearLayout profileSetup;
     private LinearLayout profileRecovery;
@@ -46,10 +52,12 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private Button joinPairing;
     private Button approvePairing;
     private Button rejectPairing;
+    private Button exportDiagnostics;
 
     private P2pVpnService.LocalBinder binder;
     private P2pVpnService.Snapshot latestSnapshot;
     private String displayedCandidatePeer;
+    private String pendingDiagnosticReport;
     private boolean bound;
 
     private final ServiceConnection serviceConnection =
@@ -68,6 +76,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                     }
                     binder = null;
                     bound = false;
+                    exportDiagnostics.setEnabled(false);
                     showLocalStatus("VPN service stopped");
                 }
             };
@@ -78,6 +87,10 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         setContentView(R.layout.activity_main);
         bindViews();
         bindActions();
+        if (savedInstanceState != null) {
+            pendingDiagnosticReport =
+                    savedInstanceState.getString(STATE_DIAGNOSTIC_REPORT);
+        }
         requestNotificationPermission();
     }
 
@@ -97,6 +110,14 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             bound = false;
         }
         super.onStop();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (pendingDiagnosticReport != null) {
+            state.putString(STATE_DIAGNOSTIC_REPORT, pendingDiagnosticReport);
+        }
     }
 
     @Override
@@ -132,6 +153,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         candidateGroup.setVisibility(hasCandidate ? View.VISIBLE : View.GONE);
         approvePairing.setEnabled(hasCandidate && snapshot.connected);
         rejectPairing.setEnabled(hasCandidate && snapshot.connected);
+        exportDiagnostics.setEnabled(true);
         if (hasCandidate) {
             StringBuilder details = new StringBuilder(snapshot.candidatePeer);
             if (snapshot.candidateFingerprint != null) {
@@ -169,6 +191,12 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             } else {
                 showLocalStatus("VPN permission was not granted");
             }
+        } else if (requestCode == DIAGNOSTIC_EXPORT_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                writeDiagnosticReport(data.getData());
+            } else {
+                pendingDiagnosticReport = null;
+            }
         }
     }
 
@@ -192,6 +220,8 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         joinPairing = findViewById(R.id.join_pairing);
         approvePairing = findViewById(R.id.approve_pairing);
         rejectPairing = findViewById(R.id.reject_pairing);
+        exportDiagnostics = findViewById(R.id.export_diagnostics);
+        exportDiagnostics.setEnabled(false);
     }
 
     private void bindActions() {
@@ -248,6 +278,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                         binder.rejectPairing();
                     }
                 });
+        exportDiagnostics.setOnClickListener(view -> exportDiagnostics());
         findViewById(R.id.copy_code)
                 .setOnClickListener(
                         view -> {
@@ -296,6 +327,62 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         Intent intent = new Intent(this, P2pVpnService.class);
         intent.setAction(P2pVpnService.ACTION_DISCONNECT);
         startService(intent);
+    }
+
+    private void exportDiagnostics() {
+        if (binder == null) {
+            Toast.makeText(this, R.string.diagnostics_unavailable, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            pendingDiagnosticReport = binder.createDiagnosticReport();
+            Intent destination = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            destination.addCategory(Intent.CATEGORY_OPENABLE);
+            destination.setType("application/json");
+            destination.putExtra(Intent.EXTRA_TITLE, "p2p-vpn-diagnostics.json");
+            startActivityForResult(destination, DIAGNOSTIC_EXPORT_REQUEST);
+        } catch (RuntimeException error) {
+            pendingDiagnosticReport = null;
+            Toast.makeText(this, R.string.diagnostics_unavailable, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void writeDiagnosticReport(Uri destination) {
+        String report = pendingDiagnosticReport;
+        pendingDiagnosticReport = null;
+        if (report == null) {
+            Toast.makeText(this, R.string.diagnostics_unavailable, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Context application = getApplicationContext();
+        new Thread(
+                        () -> {
+                            boolean written = false;
+                            try (OutputStream output =
+                                    application
+                                            .getContentResolver()
+                                            .openOutputStream(destination, "wt")) {
+                                if (output != null) {
+                                    output.write(report.getBytes(StandardCharsets.UTF_8));
+                                    written = true;
+                                }
+                            } catch (IOException | RuntimeException ignored) {
+                                // The selected document provider reports the failure to the user.
+                            }
+                            int message =
+                                    written
+                                            ? R.string.diagnostics_exported
+                                            : R.string.diagnostics_export_failed;
+                            runOnUiThread(
+                                    () ->
+                                            Toast.makeText(
+                                                            application,
+                                                            message,
+                                                            Toast.LENGTH_SHORT)
+                                                    .show());
+                        },
+                        "p2p-vpn-diagnostic-export")
+                .start();
     }
 
     private void requestNotificationPermission() {

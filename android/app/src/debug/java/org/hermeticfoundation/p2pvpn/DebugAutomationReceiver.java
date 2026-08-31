@@ -30,6 +30,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                 case "status":
                     status(context);
                     return;
+                case "diagnostics":
+                    diagnostics(context);
+                    return;
                 case "create-profile":
                     createProfile(context, intent);
                     return;
@@ -68,6 +71,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
             enqueueService(context, "ensure", null);
         } else {
             value.put("snapshot", snapshotJson(snapshot));
+        }
+        respond(true, value, null);
+    }
+
+    private void diagnostics(Context context) throws JSONException {
+        String report = P2pVpnService.debugDiagnosticReport();
+        JSONObject value = new JSONObject();
+        value.put("service_ready", report != null);
+        if (report == null) {
+            enqueueService(context, "ensure", null);
+        } else {
+            value.put("report", new JSONObject(report));
         }
         respond(true, value, null);
     }
@@ -180,6 +195,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         value.put("peer_detail", snapshot.peerDetail);
         value.put("pairing_detail", snapshot.pairingDetail);
         value.put("runtime_generation", snapshot.runtimeGeneration);
+
+        UnderlayTracker.Snapshot underlaySnapshot = snapshot.underlay;
+        JSONObject underlay = new JSONObject();
+        underlay.put("kind", underlaySnapshot.kind);
+        underlay.put("validated", underlaySnapshot.validated);
+        underlay.put("available_networks", underlaySnapshot.availableNetworks);
+        underlay.put("selection_changes", underlaySnapshot.selectionChanges);
+        underlay.put("selected_losses", underlaySnapshot.selectedLosses);
+        underlay.put("recoveries", underlaySnapshot.recoveries);
+        underlay.put("runtime_recovery_requests", snapshot.runtimeNetworkChangeRequests);
+        underlay.put("runtime_recovery_failures", snapshot.runtimeNetworkChangeFailures);
+        value.put("underlay", underlay);
 
         RuntimeSummary summary = snapshot.runtimeSummary;
         JSONObject paths = new JSONObject();

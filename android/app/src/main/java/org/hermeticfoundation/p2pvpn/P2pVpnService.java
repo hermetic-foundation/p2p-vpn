@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -14,13 +16,19 @@ import android.net.NetworkRequest;
 import android.net.VpnService;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
+import android.os.Build;
+import android.os.Debug;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
+import android.os.SystemClock;
+import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -35,6 +43,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class P2pVpnService extends VpnService {
+    private static final String LOG_TAG = "p2p-vpn";
     static final String ACTION_CONNECT = "org.hermeticfoundation.p2pvpn.CONNECT";
     static final String ACTION_DISCONNECT = "org.hermeticfoundation.p2pvpn.DISCONNECT";
     static final String ACTION_DEBUG_COMMAND = "org.hermeticfoundation.p2pvpn.debug.COMMAND";
@@ -50,13 +59,16 @@ public final class P2pVpnService extends VpnService {
     private static final long STATUS_POLL_MILLIS = 2_000;
     private static final long NETWORK_RECONNECT_DELAY_MILLIS = 1_500;
     private static final long MAX_RECONNECT_DELAY_MILLIS = 30_000;
+    private static final long UNDERLAY_RECOVERY_DELAY_MILLIS = 500;
     private static volatile P2pVpnService debugInstance;
 
     private final LocalBinder localBinder = new LocalBinder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Set<Listener> listeners =
             Collections.newSetFromMap(new ConcurrentHashMap<Listener, Boolean>());
-    private final ReconnectPolicy reconnectPolicy = new ReconnectPolicy();
+    private final UnderlayTracker underlayTracker = new UnderlayTracker();
+    private final UnderlayRecoveryPolicy underlayRecoveryPolicy = new UnderlayRecoveryPolicy();
+    private final DiagnosticEventBuffer diagnosticEvents = new DiagnosticEventBuffer();
 
     private ScheduledThreadPoolExecutor worker;
     private ProfileStore profileStore;
@@ -68,6 +80,7 @@ public final class P2pVpnService extends VpnService {
     private ConnectivityManager.NetworkCallback networkCallback;
     private WifiManager.MulticastLock multicastLock;
     private ScheduledFuture<?> reconnectFuture;
+    private ScheduledFuture<?> underlayRecoveryFuture;
     private ScheduledFuture<?> statusFuture;
     private ScheduledFuture<?> pairingFuture;
 
@@ -83,15 +96,21 @@ public final class P2pVpnService extends VpnService {
     private String pairingDetail = "No pairing operation";
     private String reconnectDetail = "Recovering connection";
     private RuntimeSummary latestRuntimeSummary = RuntimeSummary.empty();
+    private RuntimeDiagnostics latestRuntimeDiagnostics = RuntimeDiagnostics.empty();
     private final RuntimeSummaryAccumulator runtimeSummaryAccumulator =
             new RuntimeSummaryAccumulator();
     private int reconnectAttempts;
     private long runtimeGeneration;
+    private long runtimeNetworkChangeRequests;
+    private long runtimeNetworkChangeFailures;
+    private long serviceStartedElapsedRealtime;
     private volatile Snapshot snapshot = Snapshot.initial();
 
     @Override
     public void onCreate() {
         super.onCreate();
+        serviceStartedElapsedRealtime = SystemClock.elapsedRealtime();
+        recordDiagnosticEvent("service_created");
         debugInstance = this;
         worker = new ScheduledThreadPoolExecutor(1);
         worker.setRemoveOnCancelPolicy(true);
@@ -145,6 +164,7 @@ public final class P2pVpnService extends VpnService {
             }
         }
         cancel(reconnectFuture);
+        cancel(underlayRecoveryFuture);
         cancel(statusFuture);
         cancel(pairingFuture);
         if (worker != null && !worker.isShutdown()) {
@@ -166,13 +186,17 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         desiredConnected = true;
+        recordDiagnosticEvent("connection_requested");
         startConnection("Connecting");
     }
 
     private void disconnectRequested() {
         desiredConnected = false;
+        recordDiagnosticEvent("disconnect_requested");
         cancel(reconnectFuture);
         reconnectFuture = null;
+        cancel(underlayRecoveryFuture);
+        underlayRecoveryFuture = null;
         cancelActivePairingBestEffort();
         clearActivePairing();
         cancel(pairingFuture);
@@ -247,6 +271,7 @@ public final class P2pVpnService extends VpnService {
                 runtimeGeneration++;
             }
             connected = true;
+            recordDiagnosticEvent("runtime_started");
             reconnectAttempts = 0;
             cancel(reconnectFuture);
             reconnectFuture = null;
@@ -258,6 +283,7 @@ public final class P2pVpnService extends VpnService {
             updateForegroundNotification();
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             String failure = failureMessage(error);
+            recordDiagnosticEvent("runtime_start_failed");
             // nativeStart may have accepted the detached descriptor before reporting failure.
             stopNativeRuntime();
             connectionDetail = failure;
@@ -273,6 +299,8 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void stopNativeRuntime() {
+        boolean wasConnected = connected;
+        underlayRecoveryPolicy.reset();
         cancel(statusFuture);
         statusFuture = null;
         try {
@@ -281,6 +309,10 @@ public final class P2pVpnService extends VpnService {
             connectionDetail = failureMessage(error);
         }
         connected = false;
+        latestRuntimeDiagnostics = RuntimeDiagnostics.empty();
+        if (wasConnected) {
+            recordDiagnosticEvent("runtime_stopped");
+        }
         peerDetail = "Overlay peers: unavailable";
         latestRuntimeSummary = runtimeSummaryAccumulator.finishRuntime();
         releaseMulticastLock();
@@ -326,6 +358,82 @@ public final class P2pVpnService extends VpnService {
                 worker.schedule(this::reconnectAfterNetworkChange, delay, TimeUnit.MILLISECONDS);
     }
 
+    private void handleUnderlayChange(UnderlayTracker.Change change) {
+        switch (change) {
+            case INITIAL:
+                recordDiagnosticEvent("underlay_baseline_selected");
+                break;
+            case CHANGED:
+                recordDiagnosticEvent("underlay_selection_changed");
+                break;
+            case LOST:
+                recordDiagnosticEvent("underlay_lost");
+                break;
+            case RECOVERED:
+                recordDiagnosticEvent("underlay_recovered");
+                break;
+            case AVAILABLE_CHANGED:
+            case UNCHANGED:
+                break;
+        }
+        if (change.requiresRuntimeRecovery() && desiredConnected) {
+            underlayRecoveryPolicy.reset();
+            cancel(underlayRecoveryFuture);
+            underlayRecoveryFuture =
+                    worker.schedule(
+                            this::notifyNativeNetworkChanged,
+                            UNDERLAY_RECOVERY_DELAY_MILLIS,
+                            TimeUnit.MILLISECONDS);
+        }
+        publishSnapshot();
+    }
+
+    private void notifyNativeNetworkChanged() {
+        underlayRecoveryFuture = null;
+        if (!desiredConnected || !connected) {
+            return;
+        }
+        if (operationInProgress) {
+            underlayRecoveryFuture =
+                    worker.schedule(
+                            this::notifyNativeNetworkChanged,
+                            UNDERLAY_RECOVERY_DELAY_MILLIS,
+                            TimeUnit.MILLISECONDS);
+            return;
+        }
+        runtimeNetworkChangeRequests = increment(runtimeNetworkChangeRequests);
+        recordDiagnosticEvent("underlay_recovery_requested");
+        long requestSequence = runtimeNetworkChangeRequests;
+        Log.i(LOG_TAG, "event=underlay_runtime_recovery_requested sequence=" + requestSequence);
+        try {
+            NativeResponse.objectValue(NativeBridge.nativeNetworkChanged());
+            underlayRecoveryPolicy.reset();
+            recordDiagnosticEvent("underlay_recovery_completed");
+            Log.i(LOG_TAG, "event=underlay_runtime_recovery_completed sequence=" + requestSequence);
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            runtimeNetworkChangeFailures = increment(runtimeNetworkChangeFailures);
+            recordDiagnosticEvent("underlay_recovery_failed");
+            connectionDetail = "Network recovery signal failed: " + failureMessage(error);
+            Log.w(LOG_TAG, "event=underlay_runtime_recovery_failed sequence=" + requestSequence);
+            UnderlayRecoveryPolicy.FailureAction action =
+                    underlayRecoveryPolicy.recordSignalFailure();
+            if (action == UnderlayRecoveryPolicy.FailureAction.RETRY_SIGNAL
+                    && desiredConnected
+                    && connected) {
+                recordDiagnosticEvent("underlay_recovery_retry_scheduled");
+                underlayRecoveryFuture =
+                        worker.schedule(
+                                this::notifyNativeNetworkChanged,
+                                UNDERLAY_RECOVERY_DELAY_MILLIS,
+                                TimeUnit.MILLISECONDS);
+            } else {
+                recordDiagnosticEvent("underlay_recovery_restart_scheduled");
+                scheduleReconnect("Recovering after network signal failure", true);
+            }
+        }
+        publishSnapshot();
+    }
+
     private void scheduleStatusPoll() {
         cancel(statusFuture);
         statusFuture =
@@ -351,13 +459,17 @@ public final class P2pVpnService extends VpnService {
             } else {
                 connectionDetail = capitalize(phase);
             }
-            latestRuntimeSummary = runtimeSummaryAccumulator.observe(runtimeSummary(status));
+            List<String> metrics = runtimeMetrics(status);
+            latestRuntimeSummary =
+                    runtimeSummaryAccumulator.observe(RuntimeSummary.fromLines(metrics));
+            latestRuntimeDiagnostics = RuntimeDiagnostics.fromLines(metrics);
             peerDetail = latestRuntimeSummary.describe();
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             runtimeFailed = true;
             failure = failureMessage(error);
         }
         if (runtimeFailed) {
+            recordDiagnosticEvent("runtime_health_failed");
             stopNativeRuntime();
             connectionDetail = failure;
             updateForegroundNotification();
@@ -382,6 +494,13 @@ public final class P2pVpnService extends VpnService {
             connectionDetail = failureMessage(error);
         } catch (LinkageError error) {
             connectionDetail = failureMessage(error);
+        }
+        if (profile != null) {
+            recordDiagnosticEvent("profile_loaded");
+        } else if (profileUnreadable) {
+            recordDiagnosticEvent("profile_unreadable");
+        } else {
+            recordDiagnosticEvent("profile_absent");
         }
         try {
             if (profileStore.exists() && profileStore.pairingExists()) {
@@ -477,6 +596,7 @@ public final class P2pVpnService extends VpnService {
             profile = created;
             profilePresent = true;
             profileUnreadable = false;
+            recordDiagnosticEvent("profile_created");
             connectionDetail = "Profile ready";
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             connectionDetail = failureMessage(error);
@@ -531,6 +651,7 @@ public final class P2pVpnService extends VpnService {
             profileUnreadable = false;
             activePairing = null;
             pairingDetail = "No pairing operation";
+            recordDiagnosticEvent("profile_reset");
             connectionDetail = "Profile removed";
         } catch (P2pVpnException | IOException | RuntimeException error) {
             connectionDetail = failureMessage(error);
@@ -552,6 +673,7 @@ public final class P2pVpnService extends VpnService {
         }
         try {
             activePairing = ActivePairing.inviter(PairingOperationId.generate());
+            recordDiagnosticEvent("pairing_open_started");
             persistActivePairing();
             pairingDetail = "Creating a pairing code";
             publishSnapshot();
@@ -575,6 +697,7 @@ public final class P2pVpnService extends VpnService {
         }
         try {
             activePairing = ActivePairing.joiner(PairingOperationId.generate(), normalized);
+            recordDiagnosticEvent("pairing_join_started");
             persistActivePairing();
             pairingDetail = "Starting the join operation";
             publishSnapshot();
@@ -676,6 +799,7 @@ public final class P2pVpnService extends VpnService {
                                     activePairing.candidate.approvalId));
             PairRpc.operationStatus(result);
             pairingDetail = "Pairing request rejected";
+            recordDiagnosticEvent("pairing_rejected");
             clearActivePairing();
             cancel(pairingFuture);
             pairingFuture = null;
@@ -814,6 +938,7 @@ public final class P2pVpnService extends VpnService {
 
         String remotePeer = activePairing.remotePeer;
         clearActivePairing();
+        recordDiagnosticEvent("pairing_completed");
         pairingDetail = remotePeer == null ? "Pairing complete" : "Paired with " + remotePeer;
         publishSnapshot();
 
@@ -921,12 +1046,10 @@ public final class P2pVpnService extends VpnService {
 
                     @Override
                     public void onLost(Network network) {
-                        if (reconnectPolicy.lost(network.toString())) {
-                            worker.execute(
-                                    () ->
-                                            scheduleReconnect(
-                                                    "Recovering after physical network loss",
-                                                    true));
+                        UnderlayTracker.Change change =
+                                underlayTracker.lost(network.toString());
+                        if (change != UnderlayTracker.Change.UNCHANGED) {
+                            worker.execute(() -> handleUnderlayChange(change));
                         }
                     }
                 };
@@ -942,11 +1065,13 @@ public final class P2pVpnService extends VpnService {
         if (!isPhysicalNetwork(capabilities)) {
             return;
         }
-        ReconnectPolicy.Change change =
-                reconnectPolicy.observe(network.toString(), physicalNetworkPriority(capabilities));
-        if (change == ReconnectPolicy.Change.RECONNECT) {
-            worker.execute(
-                    () -> scheduleReconnect("Reconnecting after physical network change", true));
+        UnderlayTracker.Change change =
+                underlayTracker.observe(
+                        network.toString(),
+                        physicalNetworkKind(capabilities),
+                        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+        if (change != UnderlayTracker.Change.UNCHANGED) {
+            worker.execute(() -> handleUnderlayChange(change));
         }
     }
 
@@ -956,24 +1081,21 @@ public final class P2pVpnService extends VpnService {
                 && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
     }
 
-    private static int physicalNetworkPriority(NetworkCapabilities capabilities) {
-        int priority =
-                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                        ? 1_000
-                        : 0;
+    private static UnderlayTracker.Kind physicalNetworkKind(
+            NetworkCapabilities capabilities) {
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-            return priority + 400;
+            return UnderlayTracker.Kind.ETHERNET;
         }
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-            return priority + 300;
+            return UnderlayTracker.Kind.WIFI;
         }
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-            return priority + 200;
+            return UnderlayTracker.Kind.CELLULAR;
         }
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) {
-            return priority + 100;
+            return UnderlayTracker.Kind.BLUETOOTH;
         }
-        return priority;
+        return UnderlayTracker.Kind.OTHER;
     }
 
     private void createNotificationChannel() {
@@ -1029,9 +1151,14 @@ public final class P2pVpnService extends VpnService {
                         profile == null ? null : profile.peerId,
                         profileAddresses(profile),
                         latestRuntimeSummary,
+                        latestRuntimeDiagnostics,
                         runtimeGeneration,
+                        runtimeNetworkChangeRequests,
+                        runtimeNetworkChangeFailures,
+                        underlayTracker.snapshot(),
                         connectionDetail,
                         peerDetail,
+                        activePairing != null,
                         pairingDetail,
                         activePairing == null ? null : activePairing.displayCode(),
                         candidate == null ? null : candidate.peerId,
@@ -1058,9 +1185,84 @@ public final class P2pVpnService extends VpnService {
         return addresses;
     }
 
+    private String createDiagnosticReport() {
+        recordDiagnosticEvent("diagnostic_report_generated");
+        Snapshot current = snapshot;
+        UnderlayTracker.Snapshot underlay = current.underlay;
+        long serviceUptime =
+                Math.max(0, SystemClock.elapsedRealtime() - serviceStartedElapsedRealtime);
+        Runtime javaRuntime = Runtime.getRuntime();
+        Debug.MemoryInfo memory = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(memory);
+        DiagnosticReport.Resources resources =
+                new DiagnosticReport.Resources(
+                        Process.getElapsedCpuTime(),
+                        memory.getTotalPss(),
+                        memory.getTotalPrivateDirty(),
+                        javaRuntime.totalMemory() - javaRuntime.freeMemory(),
+                        javaRuntime.maxMemory(),
+                        Thread.activeCount());
+        return DiagnosticReport.create(
+                new DiagnosticReport.Input(
+                        Instant.now().toString(),
+                        appVersion(),
+                        Build.VERSION.SDK_INT,
+                        serviceUptime,
+                        current.profileStored,
+                        current.hasProfile && !current.profileUnreadable,
+                        current.connectionRequested,
+                        current.connected,
+                        current.busy,
+                        current.runtimeGeneration,
+                        underlay.kind,
+                        underlay.validated,
+                        underlay.availableNetworks,
+                        underlay.selectionChanges,
+                        underlay.selectedLosses,
+                        underlay.recoveries,
+                        current.runtimeNetworkChangeRequests,
+                        current.runtimeNetworkChangeFailures,
+                        current.pairingActive,
+                        current.candidatePeer != null,
+                        current.runtimeSummary,
+                        current.runtimeDiagnostics,
+                        resources,
+                        diagnosticEvents.snapshot()));
+    }
+
+    @SuppressWarnings("deprecation")
+    private String appVersion() {
+        try {
+            PackageInfo info;
+            if (Build.VERSION.SDK_INT >= 33) {
+                info =
+                        getPackageManager()
+                                .getPackageInfo(
+                                        getPackageName(),
+                                        PackageManager.PackageInfoFlags.of(0));
+            } else {
+                info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            }
+            return info.versionName == null ? "unknown" : info.versionName;
+        } catch (PackageManager.NameNotFoundException error) {
+            return "unknown";
+        }
+    }
+
+    private void recordDiagnosticEvent(String name) {
+        diagnosticEvents.record(
+                name,
+                Math.max(0, SystemClock.elapsedRealtime() - serviceStartedElapsedRealtime));
+    }
+
     static Snapshot debugSnapshot() {
         P2pVpnService current = debugInstance;
         return current == null ? null : current.snapshot;
+    }
+
+    static String debugDiagnosticReport() {
+        P2pVpnService current = debugInstance;
+        return current == null ? null : current.createDiagnosticReport();
     }
 
     private boolean isDebuggable() {
@@ -1072,7 +1274,7 @@ public final class P2pVpnService extends VpnService {
         return ("inviter".equals(status.role) ? "Inviting: " : "Joining: ") + phase;
     }
 
-    private static RuntimeSummary runtimeSummary(JSONObject status) throws P2pVpnException {
+    private static List<String> runtimeMetrics(JSONObject status) throws P2pVpnException {
         JSONArray encodedLines = status.optJSONArray("lines");
         if (encodedLines == null) {
             throw new P2pVpnException("Native runtime status does not contain metrics");
@@ -1084,7 +1286,7 @@ public final class P2pVpnService extends VpnService {
                 lines.add((String) line);
             }
         }
-        return RuntimeSummary.fromLines(lines);
+        return lines;
     }
 
     private static String normalizeHostname(String hostname) {
@@ -1153,6 +1355,10 @@ public final class P2pVpnService extends VpnService {
         return Character.toUpperCase(value.charAt(0)) + value.substring(1).replace('_', ' ');
     }
 
+    private static long increment(long value) {
+        return value == Long.MAX_VALUE ? value : value + 1;
+    }
+
     private static void cancel(ScheduledFuture<?> future) {
         if (future != null) {
             future.cancel(false);
@@ -1197,6 +1403,10 @@ public final class P2pVpnService extends VpnService {
         void rejectPairing() {
             worker.execute(P2pVpnService.this::rejectPairing);
         }
+
+        String createDiagnosticReport() {
+            return P2pVpnService.this.createDiagnosticReport();
+        }
     }
 
     public static final class Snapshot {
@@ -1210,9 +1420,14 @@ public final class P2pVpnService extends VpnService {
         final String peerId;
         final List<String> addresses;
         final RuntimeSummary runtimeSummary;
+        final RuntimeDiagnostics runtimeDiagnostics;
         final long runtimeGeneration;
+        final long runtimeNetworkChangeRequests;
+        final long runtimeNetworkChangeFailures;
+        final UnderlayTracker.Snapshot underlay;
         final String connectionDetail;
         final String peerDetail;
+        final boolean pairingActive;
         final String pairingDetail;
         final String pairingCode;
         final String candidatePeer;
@@ -1231,9 +1446,14 @@ public final class P2pVpnService extends VpnService {
                 String peerId,
                 List<String> addresses,
                 RuntimeSummary runtimeSummary,
+                RuntimeDiagnostics runtimeDiagnostics,
                 long runtimeGeneration,
+                long runtimeNetworkChangeRequests,
+                long runtimeNetworkChangeFailures,
+                UnderlayTracker.Snapshot underlay,
                 String connectionDetail,
                 String peerDetail,
+                boolean pairingActive,
                 String pairingDetail,
                 String pairingCode,
                 String candidatePeer,
@@ -1250,9 +1470,14 @@ public final class P2pVpnService extends VpnService {
             this.peerId = peerId;
             this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
             this.runtimeSummary = runtimeSummary;
+            this.runtimeDiagnostics = runtimeDiagnostics;
             this.runtimeGeneration = runtimeGeneration;
+            this.runtimeNetworkChangeRequests = runtimeNetworkChangeRequests;
+            this.runtimeNetworkChangeFailures = runtimeNetworkChangeFailures;
+            this.underlay = underlay;
             this.connectionDetail = connectionDetail;
             this.peerDetail = peerDetail;
+            this.pairingActive = pairingActive;
             this.pairingDetail = pairingDetail;
             this.pairingCode = pairingCode;
             this.candidatePeer = candidatePeer;
@@ -1273,9 +1498,14 @@ public final class P2pVpnService extends VpnService {
                     null,
                     Collections.emptyList(),
                     RuntimeSummary.empty(),
+                    RuntimeDiagnostics.empty(),
                     0,
+                    0,
+                    0,
+                    UnderlayTracker.Snapshot.empty(),
                     "Loading",
                     "Overlay peers: unavailable",
+                    false,
                     "No pairing operation",
                     null,
                     null,

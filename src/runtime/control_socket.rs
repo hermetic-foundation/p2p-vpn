@@ -508,6 +508,9 @@ pub enum RuntimeControlRequest {
         request: DnsControlRequest,
         respond_to: oneshot::Sender<Vec<String>>,
     },
+    NetworkChanged {
+        respond_to: oneshot::Sender<RuntimeNetworkChange>,
+    },
     Shutdown {
         respond_to: oneshot::Sender<Vec<String>>,
     },
@@ -515,6 +518,15 @@ pub enum RuntimeControlRequest {
         request: PairRpcRequest,
         respond_to: oneshot::Sender<PairRpcResponseEnvelope>,
     },
+}
+
+/// Coarse result of invalidating transport state after the host network changes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RuntimeNetworkChange {
+    pub disconnected_peers: usize,
+    pub invalidated_paths: usize,
+    pub invalidated_packet_plane_sessions: usize,
+    pub cleared_in_flight_packets: usize,
 }
 
 /// Sends control requests directly to a running p2p-vpn runtime.
@@ -596,6 +608,13 @@ impl RuntimeControlHandle {
             respond_to,
         })
         .await
+    }
+
+    pub async fn network_changed(&self) -> io::Result<RuntimeNetworkChange> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::NetworkChanged { respond_to })
+            .await?;
+        response.await.map_err(|_| runtime_response_dropped())
     }
 
     pub async fn shutdown(&self) -> io::Result<Vec<String>> {
@@ -1714,6 +1733,19 @@ mod tests {
                 ))
                 .expect("pair response accepted");
 
+            let Some(RuntimeControlRequest::NetworkChanged { respond_to }) = receiver.recv().await
+            else {
+                panic!("expected network change request");
+            };
+            respond_to
+                .send(RuntimeNetworkChange {
+                    disconnected_peers: 2,
+                    invalidated_paths: 1,
+                    invalidated_packet_plane_sessions: 1,
+                    cleared_in_flight_packets: 3,
+                })
+                .expect("network change response accepted");
+
             let Some(RuntimeControlRequest::Shutdown { respond_to }) = receiver.recv().await else {
                 panic!("expected shutdown request");
             };
@@ -1741,6 +1773,15 @@ mod tests {
                 }
             }
         ));
+        assert_eq!(
+            handle.network_changed().await.expect("network changed"),
+            RuntimeNetworkChange {
+                disconnected_peers: 2,
+                invalidated_paths: 1,
+                invalidated_packet_plane_sessions: 1,
+                cleared_in_flight_packets: 3,
+            }
+        );
         assert_eq!(
             handle.shutdown().await.expect("shutdown"),
             vec!["shutdown accepted".to_owned()]

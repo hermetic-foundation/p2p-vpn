@@ -19,6 +19,10 @@
     <string name="approve">Approve</string>
     <string name="reject">Reject</string>
     <string name="status_title">Status</string>
+    <string name="export_diagnostics">Export diagnostics</string>
+    <string name="diagnostics_exported">Diagnostics exported</string>
+    <string name="diagnostics_export_failed">Could not export diagnostics</string>
+    <string name="diagnostics_unavailable">Diagnostics are not available</string>
     <string name="profile_title">Network</string>
     <string name="identity_unavailable">No profile</string>
     <string name="identity_unavailable_stored">Saved profile unavailable</string>

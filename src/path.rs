@@ -423,6 +423,21 @@ impl PathSet {
             .filter(move |candidate| candidate.peer == peer)
     }
 
+    /// Invalidates connection-backed paths without discarding path history.
+    pub fn invalidate_connections(&mut self) -> usize {
+        let mut invalidated = 0;
+        for candidate in &mut self.candidates {
+            if candidate.healthy || candidate.established_connections > 0 {
+                invalidated += 1;
+            }
+            candidate.healthy = false;
+            candidate.established_connections = 0;
+            candidate.latest_connection_id = None;
+        }
+        self.connection_inventories.clear();
+        invalidated
+    }
+
     pub fn mark_unhealthy(&mut self, peer: PeerId, kind: PathKind) -> Option<PathSelectionChange> {
         self.mark_unhealthy_for_relay(peer, kind, None)
     }
@@ -895,6 +910,27 @@ mod tests {
                 Some(PathKind::CircuitRelay)
             ))
         );
+    }
+
+    #[test]
+    fn network_change_invalidates_connections_but_keeps_path_history() {
+        let mut paths = PathSet::new();
+        paths.record_established(peer(1), PathKind::DirectQuicStream);
+        paths.record_established(peer(1), PathKind::CircuitRelay);
+        paths.upsert(PathCandidate {
+            healthy: false,
+            ..PathCandidate::new(peer(2), PathKind::DirectTcpStream)
+        });
+
+        assert_eq!(paths.invalidate_connections(), 2);
+        assert_eq!(paths.best_for(peer(1)), None);
+        assert_eq!(paths.candidates_for(peer(1)).count(), 2);
+        assert!(paths.candidates_for(peer(1)).all(|candidate| {
+            !candidate.healthy
+                && candidate.established_connections == 0
+                && candidate.latest_connection_id.is_none()
+        }));
+        assert_eq!(paths.invalidate_connections(), 0);
     }
 
     #[test]

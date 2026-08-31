@@ -1198,6 +1198,17 @@ impl PacketPlaneRuntime {
         self.expire_sessions_at(Instant::now(), max_age)
     }
 
+    pub fn forget_all_sessions(&mut self) -> Vec<PacketPlaneSessionSnapshot> {
+        let mut removed = self
+            .sessions
+            .drain()
+            .map(|(_, session)| session.snapshot())
+            .collect::<Vec<_>>();
+        self.session_endpoints.clear();
+        removed.sort_by_key(|session| session.peer.to_string());
+        removed
+    }
+
     fn expire_sessions_at(
         &mut self,
         now: Instant,
@@ -1540,6 +1551,20 @@ impl PacketPlaneQuicRuntime {
 
     pub fn expire_sessions(&mut self, max_age: Duration) -> Vec<PacketPlaneSessionSnapshot> {
         self.expire_sessions_at(Instant::now(), max_age)
+    }
+
+    pub fn forget_all_sessions(&mut self) -> Vec<PacketPlaneSessionSnapshot> {
+        for connection in self.connections.values() {
+            connection.close(0u32.into(), b"host network changed");
+        }
+        self.connections.clear();
+        let mut removed = self
+            .sessions
+            .drain()
+            .map(|(_, session)| session.snapshot())
+            .collect::<Vec<_>>();
+        removed.sort_by_key(|session| session.peer.to_string());
+        removed
     }
 
     fn expire_sessions_at(
@@ -2576,6 +2601,25 @@ mod tests {
         assert_eq!(runtime.session_count(), 0);
         assert!(!runtime.has_session(accept.peer));
         assert!(runtime.session_endpoints.is_empty());
+    }
+
+    #[test]
+    fn runtime_forgets_sessions_without_dropping_listeners() {
+        let (initiator_secret, _responder_secret, hello, accept) = verified_session_pair();
+        let mut runtime = PacketPlaneRuntime::disabled();
+        let session = runtime
+            .establish_session(
+                PacketPlaneSessionRole::Initiator,
+                &initiator_secret,
+                &hello,
+                &accept,
+            )
+            .expect("establish session");
+
+        assert_eq!(runtime.forget_all_sessions(), vec![session]);
+        assert_eq!(runtime.session_count(), 0);
+        assert!(runtime.session_endpoints.is_empty());
+        assert!(runtime.forget_all_sessions().is_empty());
     }
 
     #[test]

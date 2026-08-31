@@ -3,6 +3,7 @@ use std::{
     future::Future,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket},
+    num::NonZeroU8,
     path::PathBuf,
     process::ExitStatus,
     sync::Arc,
@@ -18,7 +19,10 @@ use libp2p::{
     multiaddr::Protocol,
     ping, relay,
     request_response::{self, Message},
-    swarm::{ConnectionId, DialError, SwarmEvent},
+    swarm::{
+        ConnectionId, DialError, SwarmEvent,
+        dial_opts::{DialOpts, PeerCondition},
+    },
 };
 use rand_core::{OsRng, RngCore as _};
 use rustls::pki_types::CertificateDer;
@@ -77,7 +81,7 @@ use crate::{
             PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
             PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
             PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlReceiver,
-            RuntimeControlRequest, runtime_control_channel,
+            RuntimeControlRequest, RuntimeNetworkChange, runtime_control_channel,
         },
         dns::{DnsRuntime, DnsRuntimeError},
         forward::{ForwardError, Forwarder, ForwarderUpdate, packet_destination, packet_source},
@@ -319,6 +323,15 @@ impl PacketPlaneNegotiator {
         self.pending_responders.remove(&peer);
         self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Initiator);
         self.abort_quic_connection_task(peer, PacketPlaneQuicNegotiationRole::Responder);
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+        self.pending_responders.clear();
+        for (_, task) in self.quic_connection_task_handles.drain() {
+            task.abort_handle.abort();
+        }
+        self.quic_connection_tasks.abort_all();
     }
 
     fn start_quic_connection(
@@ -1268,7 +1281,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
     packet_plane_replay_windows_per_session: usize,
     auto_relay_config: AutoRelayConfig,
     public_bootstrap_defaults: bool,
-    public_discovery_holdoff_until: Option<Instant>,
+    mut public_discovery_holdoff_until: Option<Instant>,
     shutdown: Shutdown,
 ) -> Result<(), RunnerError>
 where
@@ -1383,6 +1396,7 @@ where
     });
     let mut active_connections: HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint> =
         HashMap::new();
+    let mut connection_epochs = ConnectionEpochs::default();
     let mut membership_probe_connections = MembershipProbeConnections::default();
     let mut kademlia_rendezvous_key = node.kademlia_rendezvous_key.clone();
     let mut kademlia_lookup_keys = kademlia_lookup_keys(
@@ -1424,6 +1438,9 @@ where
             packet_plane_quic_endpoint_candidates.push(listener);
         }
     }
+    let persistent_packet_endpoint_candidates = packet_endpoint_candidates.clone();
+    let persistent_packet_plane_quic_endpoint_candidates =
+        packet_plane_quic_endpoint_candidates.clone();
     let mut local_capabilities =
         ControlCapabilities::local(&node.network_name, node.membership_tag.clone(), mtu)
             .with_packet_endpoint_candidates(packet_endpoint_candidates)
@@ -1554,8 +1571,16 @@ where
                         relay_readiness: &mut relay_readiness,
                         auto_relay: &mut auto_relay,
                         public_discovery_backoff: &mut public_discovery_backoff,
+                        public_discovery_holdoff_active: public_discovery_holdoff_active(
+                            public_discovery_holdoff_until,
+                            Instant::now(),
+                        ),
                         relay_addresses: &node.relay_peer_addresses,
                         configured_peer_addresses: &node.configured_peer_addresses,
+                        configured_relay_reservation_listeners:
+                            &mut node.configured_relay_reservation_listeners,
+                        retiring_configured_relay_reservation_listeners:
+                            &mut node.retiring_configured_relay_reservation_listeners,
                         relay_server_enabled: node.startup.relay_server_enabled,
                         discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                         packet_in_flight: &mut queue_runtime.packet_in_flight,
@@ -1566,6 +1591,10 @@ where
                         pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                         metrics: &metrics,
                         local_capabilities: &mut local_capabilities,
+                        persistent_packet_endpoint_candidates:
+                            &persistent_packet_endpoint_candidates,
+                        persistent_packet_plane_quic_endpoint_candidates:
+                            &persistent_packet_plane_quic_endpoint_candidates,
                         previous_membership_tags: &previous_membership_tags,
                         discovery: &discovery,
                         identity: &node.identity,
@@ -1579,6 +1608,7 @@ where
                         code_pairing_sessions: &mut code_pairing_sessions,
                         pairing_state_store: pairing_state_store.as_ref(),
                         active_connections: &mut active_connections,
+                        connection_epochs: &mut connection_epochs,
                         membership_probe_connections: &mut membership_probe_connections,
                     },
                     event,
@@ -1861,6 +1891,49 @@ where
                     .await
             }, if control_rx.is_some() => {
                 let request = match request {
+                    RuntimeControlRequest::NetworkChanged { respond_to } => {
+                        if public_bootstrap_defaults {
+                            public_discovery_holdoff_until =
+                                Some(Instant::now() + PUBLIC_DISCOVERY_LAN_FIRST_GRACE);
+                        }
+                        let response = handle_runtime_network_change(
+                            RuntimeNetworkChangeContext {
+                                node: &mut node,
+                                forwarder: &forwarder,
+                                paths: &mut paths,
+                                peer_capabilities: &mut peer_capabilities,
+                                relay_readiness: &mut relay_readiness,
+                                configured_relay_reservation_retries:
+                                    &mut configured_relay_reservation_retries,
+                                auto_relay: &mut auto_relay,
+                                public_discovery_backoff: &mut public_discovery_backoff,
+                                infrastructure_peers: &infrastructure_peers,
+                                routing_infrastructure_peers:
+                                    &routing_infrastructure_peers,
+                                discovered_peer_addresses:
+                                    &mut queue_runtime.discovered_peer_addresses,
+                                packet_in_flight: &mut queue_runtime.packet_in_flight,
+                                last_blocked_queue_redial:
+                                    &mut queue_runtime.last_blocked_queue_redial,
+                                packet_plane: &mut packet_plane,
+                                packet_plane_quic: packet_plane_quic.as_mut(),
+                                packet_plane_negotiator: &mut packet_plane_negotiator,
+                                path_probe_tracker: &mut path_probe_tracker,
+                                local_capabilities: &mut local_capabilities,
+                                persistent_packet_endpoint_candidates:
+                                    &persistent_packet_endpoint_candidates,
+                                persistent_packet_plane_quic_endpoint_candidates:
+                                    &persistent_packet_plane_quic_endpoint_candidates,
+                                public_bootstrap_defaults,
+                                metrics: &metrics,
+                                connection_epochs: &mut connection_epochs,
+                            },
+                        );
+                        if respond_to.send(response).is_err() {
+                            eprintln!("runtime network change response receiver dropped");
+                        }
+                        continue;
+                    }
                     RuntimeControlRequest::PairRpc { request, respond_to } => {
                         let mut promote_peer = None;
                         let response = handle_pair_rpc_request(
@@ -1892,8 +1965,17 @@ where
                                 relay_readiness: &mut relay_readiness,
                                 auto_relay: &mut auto_relay,
                                 public_discovery_backoff: &mut public_discovery_backoff,
+                                public_discovery_holdoff_active:
+                                    public_discovery_holdoff_active(
+                                        public_discovery_holdoff_until,
+                                        Instant::now(),
+                                    ),
                                 relay_addresses: &node.relay_peer_addresses,
                                 configured_peer_addresses: &node.configured_peer_addresses,
+                                configured_relay_reservation_listeners:
+                                    &mut node.configured_relay_reservation_listeners,
+                                retiring_configured_relay_reservation_listeners:
+                                    &mut node.retiring_configured_relay_reservation_listeners,
                                 relay_server_enabled: node.startup.relay_server_enabled,
                                 discovered_peer_addresses: &mut queue_runtime.discovered_peer_addresses,
                                 packet_in_flight: &mut queue_runtime.packet_in_flight,
@@ -1904,6 +1986,10 @@ where
                                 pairing_handshake_rate_limiter: &mut pairing_handshake_rate_limiter,
                                 metrics: &metrics,
                                 local_capabilities: &mut local_capabilities,
+                                persistent_packet_endpoint_candidates:
+                                    &persistent_packet_endpoint_candidates,
+                                persistent_packet_plane_quic_endpoint_candidates:
+                                    &persistent_packet_plane_quic_endpoint_candidates,
                                 previous_membership_tags: &previous_membership_tags,
                                 discovery: &discovery,
                                 identity: &node.identity,
@@ -1917,6 +2003,7 @@ where
                                 code_pairing_sessions: &mut code_pairing_sessions,
                                 pairing_state_store: pairing_state_store.as_ref(),
                                 active_connections: &mut active_connections,
+                                connection_epochs: &mut connection_epochs,
                                 membership_probe_connections: &mut membership_probe_connections,
                             };
                             promote_all_authenticated_overlay_connections(
@@ -2931,6 +3018,10 @@ impl PathProbeTracker {
             .retain(|_, probe| probe.peer != peer || probe.path != path);
     }
 
+    fn clear(&mut self) {
+        self.pending.clear();
+    }
+
     fn drop_rtt_expired(&mut self, now: Instant) {
         self.pending
             .retain(|_, probe| now.saturating_duration_since(probe.sent_at) <= PATH_PROBE_RTT_TTL);
@@ -3854,6 +3945,196 @@ fn bounded_pair_rpc_response(response: PairRpcResponseEnvelope) -> PairRpcRespon
     }
 }
 
+struct RuntimeNetworkChangeContext<'a> {
+    node: &'a mut P2pNode,
+    forwarder: &'a Forwarder,
+    paths: &'a mut PathSet,
+    peer_capabilities: &'a mut PeerCapabilities,
+    relay_readiness: &'a mut RelayReadiness,
+    configured_relay_reservation_retries: &'a mut ConfiguredRelayReservationRetries,
+    auto_relay: &'a mut AutoRelayState,
+    public_discovery_backoff: &'a mut PublicDiscoveryBackoff,
+    infrastructure_peers: &'a InfrastructurePeers,
+    routing_infrastructure_peers: &'a RoutingInfrastructurePeers,
+    discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
+    packet_in_flight: &'a mut PacketInFlight,
+    last_blocked_queue_redial: &'a mut Option<Instant>,
+    packet_plane: &'a mut PacketPlaneRuntime,
+    packet_plane_quic: Option<&'a mut PacketPlaneQuicRuntime>,
+    packet_plane_negotiator: &'a mut PacketPlaneNegotiator,
+    path_probe_tracker: &'a mut PathProbeTracker,
+    local_capabilities: &'a mut ControlCapabilities,
+    persistent_packet_endpoint_candidates: &'a [String],
+    persistent_packet_plane_quic_endpoint_candidates: &'a [String],
+    public_bootstrap_defaults: bool,
+    metrics: &'a RuntimeMetrics,
+    connection_epochs: &'a mut ConnectionEpochs,
+}
+
+fn handle_runtime_network_change(
+    mut context: RuntimeNetworkChangeContext<'_>,
+) -> RuntimeNetworkChange {
+    let invalidated_connection_attempts = context.connection_epochs.advance();
+    let connected_peers = context
+        .node
+        .swarm
+        .connected_peers()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut disconnect_peers = connected_peers.clone();
+    disconnect_peers.extend(context.forwarder.configured_transport_peers());
+    disconnect_peers.extend(
+        context
+            .node
+            .bootstrap_peer_addresses
+            .iter()
+            .map(|(peer, _)| *peer),
+    );
+    disconnect_peers.extend(
+        context
+            .node
+            .relay_peer_addresses
+            .iter()
+            .map(|(peer, _)| *peer),
+    );
+    disconnect_peers.extend(context.infrastructure_peers.peer_ids());
+    disconnect_peers.extend(context.routing_infrastructure_peers.peer_ids());
+    disconnect_peers.extend(context.discovered_peer_addresses.peer_ids());
+    disconnect_peers.remove(context.node.swarm.local_peer_id());
+    let invalidated_paths = context.paths.invalidate_connections();
+    let mut invalidated_packet_plane_sessions = context.packet_plane.forget_all_sessions().len();
+    if let Some(packet_plane_quic) = context.packet_plane_quic.as_deref_mut() {
+        invalidated_packet_plane_sessions = invalidated_packet_plane_sessions
+            .saturating_add(packet_plane_quic.forget_all_sessions().len());
+    }
+    context.packet_plane_negotiator.clear();
+    context.path_probe_tracker.clear();
+    let cleared_in_flight_packets = context.packet_in_flight.clear();
+    *context.last_blocked_queue_redial = None;
+    context.discovered_peer_addresses.reset_recovery_backoff();
+    context.configured_relay_reservation_retries.reset();
+    context.relay_readiness.reset();
+    context.public_discovery_backoff.reset();
+
+    for peer in context.forwarder.configured_overlay_peers() {
+        context.peer_capabilities.remove(peer);
+    }
+    for listener in context.auto_relay.reset_for_network_change() {
+        context.node.swarm.remove_listener(listener);
+    }
+    let configured_relay_listeners = context
+        .node
+        .configured_relay_reservation_listeners
+        .drain()
+        .collect::<Vec<_>>();
+    for listener in configured_relay_listeners {
+        context
+            .node
+            .retiring_configured_relay_reservation_listeners
+            .insert(listener);
+        context.node.swarm.remove_listener(listener);
+    }
+
+    let configured_external_addresses = context
+        .node
+        .configured_external_addresses
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let obsolete_external_addresses = context
+        .node
+        .swarm
+        .external_addresses()
+        .filter(|address| !configured_external_addresses.contains(*address))
+        .cloned()
+        .collect::<Vec<_>>();
+    for address in &obsolete_external_addresses {
+        context.node.swarm.remove_external_address(address);
+    }
+
+    context.local_capabilities.packet_endpoint_candidates =
+        context.persistent_packet_endpoint_candidates.to_vec();
+    context
+        .local_capabilities
+        .owned_quic_packet_endpoint_candidates = context
+        .persistent_packet_plane_quic_endpoint_candidates
+        .to_vec();
+    context.local_capabilities.direct_address_candidates.clear();
+
+    let mut disconnected_peers = 0;
+    for peer in disconnect_peers {
+        if context.node.swarm.disconnect_peer_id(peer).is_ok() && connected_peers.contains(&peer) {
+            disconnected_peers += 1;
+        }
+    }
+
+    reconcile_public_kademlia_mode(
+        &mut context.node.swarm,
+        &context.node.discovery,
+        context.public_bootstrap_defaults,
+    );
+    publish_kademlia_peer_address_record_for_capabilities(
+        &mut context.node.swarm,
+        &context.node.discovery,
+        context.local_capabilities,
+        &context.node.identity,
+    );
+    handle_redial_tick(
+        context.node,
+        context.forwarder,
+        context.discovered_peer_addresses,
+        context.paths,
+        context.relay_readiness,
+        context.configured_relay_reservation_retries,
+        context.public_discovery_backoff,
+        context.public_bootstrap_defaults,
+        context.metrics,
+    );
+
+    let disconnected_peers_text = disconnected_peers.to_string();
+    let invalidated_paths_text = invalidated_paths.to_string();
+    let invalidated_packet_plane_sessions_text = invalidated_packet_plane_sessions.to_string();
+    let cleared_in_flight_packets_text = cleared_in_flight_packets.to_string();
+    let expired_external_addresses_text = obsolete_external_addresses.len().to_string();
+    let invalidated_connection_attempts_text = invalidated_connection_attempts.to_string();
+    log_runtime_event(
+        LogLevel::Info,
+        "runtime_network_changed",
+        &[
+            ("disconnected_peers", &disconnected_peers_text),
+            ("invalidated_paths", &invalidated_paths_text),
+            (
+                "invalidated_packet_plane_sessions",
+                &invalidated_packet_plane_sessions_text,
+            ),
+            ("cleared_in_flight_packets", &cleared_in_flight_packets_text),
+            (
+                "expired_external_addresses",
+                &expired_external_addresses_text,
+            ),
+            (
+                "invalidated_connection_attempts",
+                &invalidated_connection_attempts_text,
+            ),
+            (
+                "lan_first_holdoff",
+                if context.public_bootstrap_defaults {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ],
+    );
+
+    RuntimeNetworkChange {
+        disconnected_peers,
+        invalidated_paths,
+        invalidated_packet_plane_sessions,
+        cleared_in_flight_packets,
+    }
+}
+
 struct RuntimeControlContext<'a> {
     forwarder: &'a Forwarder,
     paths: &'a PathSet,
@@ -4005,6 +4286,12 @@ fn handle_runtime_control_request(
             };
             if respond_to.send(lines).is_err() {
                 eprintln!("control socket DNS response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::NetworkChanged { respond_to } => {
+            if respond_to.send(RuntimeNetworkChange::default()).is_err() {
+                eprintln!("runtime network change response receiver dropped");
             }
             None
         }
@@ -5067,6 +5354,7 @@ fn handle_redial_tick(
     retry_configured_relay_reservations(
         &mut node.swarm,
         &node.relay_reservation_addresses,
+        &mut node.configured_relay_reservation_listeners,
         relay_readiness,
         configured_relay_reservation_retries,
     );
@@ -5201,6 +5489,7 @@ fn configured_peer_recovery_discovery_targets(
 fn retry_configured_relay_reservations(
     swarm: &mut Swarm<Behaviour>,
     relay_reservation_addresses: &[Multiaddr],
+    configured_relay_reservation_listeners: &mut HashSet<ListenerId>,
     relay_readiness: &RelayReadiness,
     retries: &mut ConfiguredRelayReservationRetries,
 ) {
@@ -5222,16 +5511,21 @@ fn retry_configured_relay_reservations(
                 ("address", &listen_address.to_string()),
             ],
         );
-        if let Err(error) = swarm.listen_on(listen_address.clone()) {
-            log_runtime_event(
-                LogLevel::Warn,
-                "configured_relay_reservation_retry_failed",
-                &[
-                    ("relay", &relay.to_string()),
-                    ("address", &listen_address.to_string()),
-                    ("error", &error.to_string()),
-                ],
-            );
+        match swarm.listen_on(listen_address.clone()) {
+            Ok(listener_id) => {
+                configured_relay_reservation_listeners.insert(listener_id);
+            }
+            Err(error) => {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "configured_relay_reservation_retry_failed",
+                    &[
+                        ("relay", &relay.to_string()),
+                        ("address", &listen_address.to_string()),
+                        ("error", &error.to_string()),
+                    ],
+                );
+            }
         }
     }
 }
@@ -5347,7 +5641,15 @@ impl LogLevel {
 }
 
 fn log_runtime_event(level: LogLevel, event: &str, fields: &[(&str, &str)]) {
-    eprintln!("{}", runtime_log_line(level, event, fields));
+    let line = runtime_log_line(level, event, fields);
+    #[cfg(target_os = "android")]
+    match level {
+        LogLevel::Info => log::info!("{line}"),
+        LogLevel::Warn => log::warn!("{line}"),
+        LogLevel::Error => log::error!("{line}"),
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("{line}");
 }
 
 fn runtime_log_line(level: LogLevel, event: &str, fields: &[(&str, &str)]) -> String {
@@ -6010,6 +6312,11 @@ fn redial_known_addresses(
     relay_ready: impl FnMut(Libp2pPeerId) -> bool,
 ) {
     let local_peer = *swarm.local_peer_id();
+    let overlay_peers = configured_peer_addresses
+        .iter()
+        .chain(discovered_peer_addresses.iter())
+        .map(|(peer, _)| *peer)
+        .collect::<HashSet<_>>();
     let targets = pending_redial_targets(
         local_peer,
         bootstrap_addresses,
@@ -6024,29 +6331,83 @@ fn redial_known_addresses(
         metrics.record_redial_skipped_connected();
     }
 
-    for (peer, address) in targets.addresses {
+    for (peer, addresses) in group_peer_dial_targets(targets.addresses) {
         let now = Instant::now();
-        if !discovered_address_state.should_attempt_recovery_dial_at(peer, &address, now) {
+        let ready_addresses = addresses
+            .into_iter()
+            .filter(|address| {
+                discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
+            })
+            .collect::<Vec<_>>();
+        if ready_addresses.is_empty() {
             continue;
         }
         metrics.record_redial_attempt();
-        let dial_address = peer_dial_address(peer, address.clone());
-        if let Err(error) = swarm.dial(dial_address.clone()) {
-            discovered_address_state.record_recovery_dial_failure_at(peer, &address, now);
-            let discovered = discovered_address_state.record_failure_at(peer, &address, now);
+        let condition = if overlay_peers.contains(&peer) {
+            PeerCondition::NotDialing
+        } else {
+            PeerCondition::DisconnectedAndNotDialing
+        };
+        if let Err(error) =
+            dial_known_peer_addresses(swarm, peer, ready_addresses.iter().cloned(), condition)
+        {
+            if matches!(error, DialError::DialPeerConditionFalse(_)) {
+                metrics.record_redial_skipped_connected();
+                continue;
+            }
+            let mut discovered = false;
+            for address in &ready_addresses {
+                discovered_address_state.record_recovery_dial_failure_at(peer, address, now);
+                discovered |= discovered_address_state.record_failure_at(peer, address, now);
+            }
             metrics.record_redial_failure();
+            let address_count = ready_addresses.len().to_string();
             log_runtime_event(
                 LogLevel::Warn,
                 "redial_failed",
                 &[
                     ("peer", &peer.to_string()),
-                    ("address", &dial_address.to_string()),
+                    ("address_count", &address_count),
                     ("error", &error.to_string()),
                     ("discovered", &discovered.to_string()),
                 ],
             );
         }
     }
+}
+
+fn group_peer_dial_targets(
+    targets: Vec<(Libp2pPeerId, Multiaddr)>,
+) -> Vec<(Libp2pPeerId, Vec<Multiaddr>)> {
+    let mut peer_indices = HashMap::new();
+    let mut grouped = Vec::<(Libp2pPeerId, Vec<Multiaddr>)>::new();
+    for (peer, address) in targets {
+        let index = *peer_indices.entry(peer).or_insert_with(|| {
+            grouped.push((peer, Vec::new()));
+            grouped.len() - 1
+        });
+        grouped[index].1.push(address);
+    }
+    grouped
+}
+
+fn dial_known_peer_addresses(
+    swarm: &mut Swarm<Behaviour>,
+    peer: Libp2pPeerId,
+    addresses: impl IntoIterator<Item = Multiaddr>,
+    condition: PeerCondition,
+) -> Result<(), DialError> {
+    let addresses = addresses
+        .into_iter()
+        .map(|address| peer_dial_address(peer, address))
+        .collect::<Vec<_>>();
+    swarm.dial(
+        DialOpts::peer_id(peer)
+            .condition(condition)
+            .override_dial_concurrency_factor(NonZeroU8::MIN)
+            .addresses(addresses)
+            .build(),
+    )
 }
 
 #[derive(Debug, Default)]
@@ -6058,6 +6419,13 @@ struct RelayReadiness {
 #[derive(Debug, Default)]
 struct ConfiguredRelayReservationRetries {
     last_attempts: HashMap<Multiaddr, Instant>,
+}
+
+impl RelayReadiness {
+    fn reset(&mut self) {
+        self.accepted_reservations.clear();
+        self.relayed_listen_addresses.clear();
+    }
 }
 
 impl ConfiguredRelayReservationRetries {
@@ -6079,6 +6447,10 @@ impl ConfiguredRelayReservationRetries {
         }
         self.last_attempts.insert(address.clone(), now);
         true
+    }
+
+    fn reset(&mut self) {
+        self.last_attempts.clear();
     }
 }
 
@@ -6147,6 +6519,11 @@ impl PublicDiscoveryBackoff {
             .min(PUBLIC_DISCOVERY_BACKOFF_MAX);
         self.suppressed_until = Some(now + delay);
         Some(delay)
+    }
+
+    fn reset(&mut self) {
+        self.consecutive_no_route_failures = 0;
+        self.suppressed_until = None;
     }
 }
 
@@ -6267,6 +6644,21 @@ impl AutoRelayState {
 
         self.candidates.push((peer, address));
         true
+    }
+
+    fn reset_for_network_change(&mut self) -> Vec<ListenerId> {
+        let listeners = self
+            .reservation_listeners
+            .drain()
+            .map(|(_, id)| id)
+            .collect();
+        self.candidates.clear();
+        self.attempted_reservations.clear();
+        self.pending_reservations.clear();
+        self.accepted_reservation_peers.clear();
+        self.retry_after.clear();
+        self.reservation_failures.clear();
+        listeners
     }
 
     fn remove_candidate(&mut self, peer: Libp2pPeerId) -> bool {
@@ -6443,6 +6835,10 @@ struct RelayInfrastructurePeerSnapshot {
 }
 
 impl InfrastructurePeers {
+    fn peer_ids(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        self.peers.keys().copied()
+    }
+
     fn can_admit(&self, peer: Libp2pPeerId) -> bool {
         self.peers.contains_key(&peer) || self.peers.len() < AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS
     }
@@ -6499,6 +6895,10 @@ struct RoutingInfrastructurePeers {
 }
 
 impl RoutingInfrastructurePeers {
+    fn peer_ids(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        self.peers.iter().copied()
+    }
+
     fn admit(&mut self, peer: Libp2pPeerId) -> RoutingInfrastructureAdmission {
         if self.peers.contains(&peer) {
             return RoutingInfrastructureAdmission::Existing;
@@ -6578,7 +6978,15 @@ fn admit_discovered_relay_infrastructure_peer<'a>(
     }
 
     metrics.record_auto_relay_infrastructure_dial_attempt();
-    if let Err(error) = swarm.dial(address.clone()) {
+    if let Err(error) = dial_known_peer_addresses(
+        swarm,
+        peer,
+        std::iter::once(address.clone()),
+        PeerCondition::DisconnectedAndNotDialing,
+    ) {
+        if matches!(error, DialError::DialPeerConditionFalse(_)) {
+            return;
+        }
         metrics.record_auto_relay_infrastructure_dial_failure();
         infrastructure_peers.remove(peer);
         auto_relay.remove_candidate(peer);
@@ -7115,7 +7523,7 @@ fn dial_relay_ready_configured_peers(
         &local_interface_networks(""),
     );
 
-    for (peer, address) in relay_ready_configured_peer_targets(
+    let targets = relay_ready_configured_peer_targets(
         *swarm.local_peer_id(),
         relay,
         forwarder.configured_transport_peers(),
@@ -7123,24 +7531,42 @@ fn dial_relay_ready_configured_peers(
         configured_peer_addresses,
         discovered_peer_addresses,
         |peer| redial_connection_state(paths, *peer, swarm.is_connected(peer)),
-    ) {
+    );
+    for (peer, addresses) in group_peer_dial_targets(targets) {
         let now = Instant::now();
-        if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
+        let ready_addresses = addresses
+            .into_iter()
+            .filter(|address| {
+                discovered_peer_addresses.should_attempt_recovery_dial_at(peer, address, now)
+            })
+            .collect::<Vec<_>>();
+        if ready_addresses.is_empty() {
             continue;
         }
         metrics.record_redial_attempt();
-        let dial_address = peer_dial_address(peer, address.clone());
+        let address_count = ready_addresses.len().to_string();
         log_runtime_event(
             LogLevel::Info,
             "relay_ready_peer_dial",
             &[
                 ("relay", &relay.to_string()),
                 ("peer", &peer.to_string()),
-                ("address", &dial_address.to_string()),
+                ("address_count", &address_count),
             ],
         );
-        if let Err(error) = swarm.dial(dial_address.clone()) {
-            discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
+        if let Err(error) = dial_known_peer_addresses(
+            swarm,
+            peer,
+            ready_addresses.iter().cloned(),
+            PeerCondition::NotDialing,
+        ) {
+            if matches!(error, DialError::DialPeerConditionFalse(_)) {
+                metrics.record_redial_skipped_connected();
+                continue;
+            }
+            for address in &ready_addresses {
+                discovered_peer_addresses.record_recovery_dial_failure_at(peer, address, now);
+            }
             metrics.record_redial_failure();
             log_runtime_event(
                 LogLevel::Warn,
@@ -7242,26 +7668,46 @@ fn redial_selected_addresses(
         |_| true,
     );
 
-    for (peer, address) in targets.addresses {
-        if !selected_peers.contains(&peer) {
-            continue;
-        }
+    let selected_targets = targets
+        .addresses
+        .into_iter()
+        .filter(|(peer, _)| selected_peers.contains(peer))
+        .collect();
+    for (peer, addresses) in group_peer_dial_targets(selected_targets) {
         let now = Instant::now();
-        if !discovered_address_state.should_attempt_recovery_dial_at(peer, &address, now) {
+        let ready_addresses = addresses
+            .into_iter()
+            .filter(|address| {
+                discovered_address_state.should_attempt_recovery_dial_at(peer, address, now)
+            })
+            .collect::<Vec<_>>();
+        if ready_addresses.is_empty() {
             continue;
         }
         metrics.record_redial_attempt();
-        let dial_address = peer_dial_address(peer, address.clone());
-        if let Err(error) = swarm.dial(dial_address.clone()) {
-            discovered_address_state.record_recovery_dial_failure_at(peer, &address, now);
-            let discovered = discovered_address_state.record_failure_at(peer, &address, now);
+        if let Err(error) = dial_known_peer_addresses(
+            swarm,
+            peer,
+            ready_addresses.iter().cloned(),
+            PeerCondition::NotDialing,
+        ) {
+            if matches!(error, DialError::DialPeerConditionFalse(_)) {
+                metrics.record_redial_skipped_connected();
+                continue;
+            }
+            let mut discovered = false;
+            for address in &ready_addresses {
+                discovered_address_state.record_recovery_dial_failure_at(peer, address, now);
+                discovered |= discovered_address_state.record_failure_at(peer, address, now);
+            }
             metrics.record_redial_failure();
+            let address_count = ready_addresses.len().to_string();
             log_runtime_event(
                 LogLevel::Warn,
                 "redial_failed",
                 &[
                     ("peer", &peer.to_string()),
-                    ("address", &dial_address.to_string()),
+                    ("address_count", &address_count),
                     ("error", &error.to_string()),
                     ("discovered", &discovered.to_string()),
                 ],
@@ -7281,32 +7727,45 @@ fn redial_packet_plane_recovery_addresses(
     let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
     let ready_discovered_addresses = discovered_peer_addresses.redial_candidates_at(now);
-    for (peer, address) in packet_plane_recovery_targets(
+    let ready_addresses = packet_plane_recovery_targets(
         local_peer,
         peer,
         configured_peer_addresses,
         relay_addresses,
         &ready_discovered_addresses,
+    )
+    .into_iter()
+    .map(|(_, address)| address)
+    .filter(|address| discovered_peer_addresses.should_attempt_recovery_dial_at(peer, address, now))
+    .collect::<Vec<_>>();
+    if ready_addresses.is_empty() {
+        return;
+    }
+    metrics.record_packet_plane_path_recovery_dial_attempt();
+    if let Err(error) = dial_known_peer_addresses(
+        swarm,
+        peer,
+        ready_addresses.iter().cloned(),
+        PeerCondition::NotDialing,
     ) {
-        if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
-            continue;
+        if matches!(error, DialError::DialPeerConditionFalse(_)) {
+            return;
         }
-        metrics.record_packet_plane_path_recovery_dial_attempt();
-        let dial_address = peer_dial_address(peer, address.clone());
-        if let Err(error) = swarm.dial(dial_address.clone()) {
-            discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
-            discovered_peer_addresses.record_failure_at(peer, &address, now);
-            metrics.record_packet_plane_path_recovery_dial_failure();
-            log_runtime_event(
-                LogLevel::Warn,
-                "packet_plane_path_recovery_dial_failed",
-                &[
-                    ("peer", &peer.to_string()),
-                    ("address", &dial_address.to_string()),
-                    ("error", &error.to_string()),
-                ],
-            );
+        for address in &ready_addresses {
+            discovered_peer_addresses.record_recovery_dial_failure_at(peer, address, now);
+            discovered_peer_addresses.record_failure_at(peer, address, now);
         }
+        metrics.record_packet_plane_path_recovery_dial_failure();
+        let address_count = ready_addresses.len().to_string();
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_plane_path_recovery_dial_failed",
+            &[
+                ("peer", &peer.to_string()),
+                ("address_count", &address_count),
+                ("error", &error.to_string()),
+            ],
+        );
     }
 }
 
@@ -7744,6 +8203,10 @@ fn record_public_discovery_address_rejected(
 }
 
 impl DiscoveredPeerAddresses {
+    fn peer_ids(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        self.addresses.iter().map(|entry| entry.peer)
+    }
+
     fn insert(&mut self, peer: Libp2pPeerId, address: Multiaddr) {
         self.insert_at(peer, address, Instant::now());
     }
@@ -7765,6 +8228,17 @@ impl DiscoveredPeerAddresses {
             failure_count: 0,
             quarantined_until: None,
         });
+    }
+
+    fn reset_recovery_backoff(&mut self) {
+        for entry in &mut self.addresses {
+            entry.failure_count = 0;
+            entry.quarantined_until = None;
+        }
+        self.recovery_dial_attempts.clear();
+        self.last_recovery_dial_prune = None;
+        self.recovery_discovery_queries.clear();
+        self.recovery_discovery_query_peers.clear();
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
@@ -8801,6 +9275,13 @@ impl PacketInFlight {
         Some(request)
     }
 
+    fn clear(&mut self) -> usize {
+        let cleared = self.requests.len();
+        self.requests.clear();
+        self.peers.clear();
+        cleared
+    }
+
     fn stats(&self) -> PacketInFlightStats {
         PacketInFlightStats {
             packets: self.requests.len(),
@@ -9090,7 +9571,7 @@ fn public_discovery_suppressed(
     packet_plane: Option<&PacketPlaneRuntime>,
     packet_plane_quic: Option<&PacketPlaneQuicRuntime>,
 ) -> bool {
-    holdoff_until.is_some_and(|until| Instant::now() < until)
+    public_discovery_holdoff_active(holdoff_until, Instant::now())
         || public_discovery_quiet_mode(
             forwarder,
             paths,
@@ -9098,6 +9579,10 @@ fn public_discovery_suppressed(
             packet_plane,
             packet_plane_quic,
         )
+}
+
+fn public_discovery_holdoff_active(holdoff_until: Option<Instant>, now: Instant) -> bool {
+    holdoff_until.is_some_and(|until| now < until)
 }
 
 fn reconcile_public_kademlia_mode(
@@ -9555,8 +10040,11 @@ struct SwarmEventContext<'a> {
     relay_readiness: &'a mut RelayReadiness,
     auto_relay: &'a mut AutoRelayState,
     public_discovery_backoff: &'a mut PublicDiscoveryBackoff,
+    public_discovery_holdoff_active: bool,
     relay_addresses: &'a [(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &'a [(Libp2pPeerId, Multiaddr)],
+    configured_relay_reservation_listeners: &'a mut HashSet<ListenerId>,
+    retiring_configured_relay_reservation_listeners: &'a mut HashSet<ListenerId>,
     relay_server_enabled: bool,
     discovered_peer_addresses: &'a mut DiscoveredPeerAddresses,
     packet_in_flight: &'a mut PacketInFlight,
@@ -9567,6 +10055,8 @@ struct SwarmEventContext<'a> {
     pairing_handshake_rate_limiter: &'a mut GlobalRateLimiter,
     metrics: &'a RuntimeMetrics,
     local_capabilities: &'a mut ControlCapabilities,
+    persistent_packet_endpoint_candidates: &'a [String],
+    persistent_packet_plane_quic_endpoint_candidates: &'a [String],
     previous_membership_tags: &'a [String],
     discovery: &'a DiscoveryConfig,
     identity: &'a NodeIdentity,
@@ -9580,7 +10070,92 @@ struct SwarmEventContext<'a> {
     code_pairing_sessions: &'a mut CodePairingSessions,
     pairing_state_store: Option<&'a PairingStateStore>,
     active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    connection_epochs: &'a mut ConnectionEpochs,
     membership_probe_connections: &'a mut MembershipProbeConnections,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionEpochs {
+    current: u64,
+    connections: HashMap<ConnectionId, u64>,
+    established: HashSet<ConnectionId>,
+    retiring: HashSet<ConnectionId>,
+}
+
+impl ConnectionEpochs {
+    fn record_started(&mut self, connection_id: ConnectionId) {
+        self.connections.insert(connection_id, self.current);
+        self.established.remove(&connection_id);
+        self.retiring.remove(&connection_id);
+    }
+
+    fn record_established(&mut self, connection_id: ConnectionId) -> bool {
+        let is_current = *self
+            .connections
+            .entry(connection_id)
+            .or_insert(self.current)
+            == self.current;
+        if is_current {
+            self.established.insert(connection_id);
+        }
+        is_current
+    }
+
+    fn is_current(&self, connection_id: ConnectionId) -> bool {
+        self.connections
+            .get(&connection_id)
+            .is_some_and(|epoch| *epoch == self.current)
+    }
+
+    fn is_usable(&self, connection_id: ConnectionId) -> bool {
+        self.is_current(connection_id) && !self.retiring.contains(&connection_id)
+    }
+
+    fn advance(&mut self) -> usize {
+        self.current = self.current.saturating_add(1);
+        self.connections
+            .iter()
+            .filter(|(connection_id, epoch)| {
+                **epoch != self.current && !self.established.contains(connection_id)
+            })
+            .count()
+    }
+
+    fn remove(&mut self, connection_id: ConnectionId) {
+        self.connections.remove(&connection_id);
+        self.established.remove(&connection_id);
+        self.retiring.remove(&connection_id);
+    }
+
+    fn mark_retiring(&mut self, connection_id: ConnectionId) -> bool {
+        self.retiring.insert(connection_id)
+    }
+}
+
+fn log_stale_connection_event(protocol: &str, connection_id: ConnectionId) {
+    log_runtime_event(
+        LogLevel::Info,
+        "stale_underlay_event_ignored",
+        &[
+            ("protocol", protocol),
+            ("connection_id", &connection_id.to_string()),
+        ],
+    );
+}
+
+fn request_response_message_is_usable<Request, Response>(
+    connection_epochs: &ConnectionEpochs,
+    event: &request_response::Event<Request, Response>,
+    protocol: &str,
+) -> bool {
+    let request_response::Event::Message { connection_id, .. } = event else {
+        return true;
+    };
+    if connection_epochs.is_usable(*connection_id) {
+        return true;
+    }
+    log_stale_connection_event(protocol, *connection_id);
+    false
 }
 
 #[derive(Debug, Default)]
@@ -9642,13 +10217,14 @@ async fn handle_swarm_event(
             handle_service_event(swarm, &mut context, event)?;
         }
         SwarmEvent::Behaviour(event) => {
-            let public_discovery_quiet = public_discovery_quiet_mode(
-                context.forwarder,
-                context.paths,
-                context.peer_capabilities,
-                Some(context.packet_plane),
-                context.packet_plane_quic.as_deref(),
-            );
+            let public_discovery_quiet = context.public_discovery_holdoff_active
+                || public_discovery_quiet_mode(
+                    context.forwarder,
+                    context.paths,
+                    context.peer_capabilities,
+                    Some(context.packet_plane),
+                    context.packet_plane_quic.as_deref(),
+                );
             let mut behaviour_context = BehaviourEventContext {
                 forwarder: context.forwarder,
                 membership: context.membership,
@@ -9670,9 +10246,14 @@ async fn handle_swarm_event(
                 identity: context.identity,
                 code_pairing_sessions: context.code_pairing_sessions,
                 membership_probe_connections: context.membership_probe_connections,
+                connection_epochs: context.connection_epochs,
                 public_discovery_quiet,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
+        }
+        SwarmEvent::IncomingConnection { connection_id, .. }
+        | SwarmEvent::Dialing { connection_id, .. } => {
+            context.connection_epochs.record_started(connection_id);
         }
         SwarmEvent::ConnectionEstablished {
             peer_id,
@@ -9681,6 +10262,20 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            if !context.connection_epochs.record_established(connection_id) {
+                context.connection_epochs.mark_retiring(connection_id);
+                let close_requested = swarm.close_connection(connection_id);
+                log_runtime_event(
+                    LogLevel::Info,
+                    "stale_underlay_connection_rejected",
+                    &[
+                        ("peer", &peer_id.to_string()),
+                        ("connection_id", &connection_id.to_string()),
+                        ("close_requested", &close_requested.to_string()),
+                    ],
+                );
+                return Ok(());
+            }
             context
                 .active_connections
                 .insert((peer_id, connection_id), endpoint.clone());
@@ -9907,51 +10502,61 @@ async fn handle_swarm_event(
                     return Ok(());
                 }
             }
-            invalidate_peer_capabilities_on_first_connection(
-                context.forwarder,
-                context.peer_capabilities,
-                peer_id,
-                num_established.get(),
-            );
-            advertise_direct_packet_plane_endpoint_from_path(
-                context.local_capabilities,
-                context.packet_plane.primary_listener(),
-                &endpoint,
-                &context
-                    .forwarder
-                    .local_advertised_route_prefixes()
-                    .collect::<Vec<_>>(),
-                context.metrics,
-            );
-            record_path_established_and_maybe_send_packet_plane_hello(
-                swarm,
-                context.paths,
-                context.forwarder,
-                context.peer_capabilities,
-                context.metrics,
-                context.local_capabilities,
-                context.identity,
-                context.packet_plane,
-                context.packet_plane_quic.as_deref(),
-                context.packet_plane_negotiator,
-                peer_id,
-                connection_id,
-                &endpoint,
-            );
-            send_control_capabilities(
+            close_redundant_direct_connections(
                 swarm,
                 context.forwarder,
+                context.active_connections,
+                context.connection_epochs,
                 peer_id,
-                context.local_capabilities,
-                context.metrics,
+                "connection_established",
             );
-            send_service_status_request(
-                swarm,
-                context.forwarder,
-                peer_id,
-                context.local_capabilities,
-                context.metrics,
-            );
+            if context.connection_epochs.is_usable(connection_id) {
+                invalidate_peer_capabilities_on_first_connection(
+                    context.forwarder,
+                    context.peer_capabilities,
+                    peer_id,
+                    num_established.get(),
+                );
+                advertise_direct_packet_plane_endpoint_from_path(
+                    context.local_capabilities,
+                    context.packet_plane.primary_listener(),
+                    &endpoint,
+                    &context
+                        .forwarder
+                        .local_advertised_route_prefixes()
+                        .collect::<Vec<_>>(),
+                    context.metrics,
+                );
+                record_path_established_and_maybe_send_packet_plane_hello(
+                    swarm,
+                    context.paths,
+                    context.forwarder,
+                    context.peer_capabilities,
+                    context.metrics,
+                    context.local_capabilities,
+                    context.identity,
+                    context.packet_plane,
+                    context.packet_plane_quic.as_deref(),
+                    context.packet_plane_negotiator,
+                    peer_id,
+                    connection_id,
+                    &endpoint,
+                );
+                send_control_capabilities(
+                    swarm,
+                    context.forwarder,
+                    peer_id,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+                send_service_status_request(
+                    swarm,
+                    context.forwarder,
+                    peer_id,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+            }
             context
                 .metrics
                 .record_connection_established(endpoint.is_relayed());
@@ -9973,6 +10578,7 @@ async fn handle_swarm_event(
             num_established,
             ..
         } => {
+            context.connection_epochs.remove(connection_id);
             context.active_connections.remove(&(peer_id, connection_id));
             let membership_probe_closed = context
                 .membership_probe_connections
@@ -10086,7 +10692,15 @@ async fn handle_swarm_event(
                 ],
             );
         }
-        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+        SwarmEvent::IncomingConnectionError { connection_id, .. } => {
+            context.connection_epochs.remove(connection_id);
+        }
+        SwarmEvent::OutgoingConnectionError {
+            peer_id,
+            connection_id,
+            error,
+        } => {
+            context.connection_epochs.remove(connection_id);
             if let Some(delay) = context.public_discovery_backoff.record_outgoing_error(
                 peer_id,
                 &error,
@@ -10215,6 +10829,12 @@ async fn handle_swarm_event(
                     context.local_capabilities,
                     context.metrics,
                 );
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
+                );
             }
             log_runtime_event(
                 LogLevel::Info,
@@ -10224,13 +10844,70 @@ async fn handle_swarm_event(
         }
         SwarmEvent::ExternalAddrExpired { address } => {
             context.metrics.record_external_address_expired();
+            let packet_plane_quic_snapshot = context
+                .packet_plane_quic
+                .as_deref()
+                .map(PacketPlaneQuicRuntime::snapshot);
+            let withdrawn = withdraw_observed_packet_plane_endpoints(
+                context.local_capabilities,
+                &address,
+                context.packet_plane.primary_listener(),
+                packet_plane_quic_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.listener),
+                packet_plane_quic_snapshot.and_then(|snapshot| snapshot.certificate_der),
+                &context
+                    .forwarder
+                    .local_advertised_route_prefixes()
+                    .collect::<Vec<_>>(),
+                context.persistent_packet_endpoint_candidates,
+                context.persistent_packet_plane_quic_endpoint_candidates,
+            );
+            if withdrawn.changed() {
+                send_control_capabilities_to_connected_peers(
+                    swarm,
+                    context.forwarder,
+                    context.local_capabilities,
+                    context.metrics,
+                );
+                publish_kademlia_peer_address_record_for_capabilities(
+                    swarm,
+                    context.discovery,
+                    context.local_capabilities,
+                    context.identity,
+                );
+            }
             log_runtime_event(
                 LogLevel::Info,
                 "external_address_expired",
-                &[("address", &address.to_string())],
+                &[
+                    ("address", &address.to_string()),
+                    ("udp_candidate_removed", &withdrawn.udp_removed.to_string()),
+                    (
+                        "quic_candidate_removed",
+                        &withdrawn.quic_removed.to_string(),
+                    ),
+                ],
             );
         }
-        SwarmEvent::NewListenAddr { address, .. } => {
+        SwarmEvent::NewListenAddr {
+            listener_id,
+            address,
+        } => {
+            if context
+                .retiring_configured_relay_reservation_listeners
+                .contains(&listener_id)
+            {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "retired_relay_reservation_address_ignored",
+                    &[
+                        ("listener", &listener_id.to_string()),
+                        ("address", &address.to_string()),
+                    ],
+                );
+                return Ok(());
+            }
             let mut publish_peer_address_record = kademlia_peer_address_is_advertisable(&address);
             if let Some(relay) = relayed_address_relay_peer(&address) {
                 if let Some(relay_base_address) =
@@ -10270,7 +10947,16 @@ async fn handle_swarm_event(
                 );
             }
         }
-        SwarmEvent::ExpiredListenAddr { address, .. } => {
+        SwarmEvent::ExpiredListenAddr {
+            listener_id,
+            address,
+        } => {
+            if context
+                .retiring_configured_relay_reservation_listeners
+                .contains(&listener_id)
+            {
+                return Ok(());
+            }
             if let Some(relay) = relayed_address_relay_peer(&address)
                 && let Some(relay_base_address) =
                     relay_base_address_from_relayed_listen_address(&address)
@@ -10303,26 +10989,57 @@ async fn handle_swarm_event(
             addresses,
             ..
         } => {
-            for address in addresses {
-                if let Some(relay) = relayed_address_relay_peer(&address)
-                    && let Some(relay_base_address) =
-                        relay_base_address_from_relayed_listen_address(&address)
-                    && context
-                        .relay_readiness
-                        .record_relay_listen_address_lost(relay, &relay_base_address)
+            let retired_configured_listener = context
+                .retiring_configured_relay_reservation_listeners
+                .remove(&listener_id);
+            context
+                .configured_relay_reservation_listeners
+                .remove(&listener_id);
+            if retired_configured_listener {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "retired_relay_reservation_listener_closed",
+                    &[("listener", &listener_id.to_string())],
+                );
+            } else {
+                for address in addresses {
+                    if let Some(relay) = relayed_address_relay_peer(&address)
+                        && let Some(relay_base_address) =
+                            relay_base_address_from_relayed_listen_address(&address)
+                        && context
+                            .relay_readiness
+                            .record_relay_listen_address_lost(relay, &relay_base_address)
+                    {
+                        context
+                            .auto_relay
+                            .release_reservation_for_retry_after(relay, Instant::now());
+                        context.metrics.record_relay_reservation_lost();
+                        log_runtime_event(
+                            LogLevel::Warn,
+                            "relay_listen_address_lost",
+                            &[
+                                ("relay", &relay.to_string()),
+                                ("address", &address.to_string()),
+                            ],
+                        );
+                        publish_kademlia_peer_address_record_for_capabilities(
+                            swarm,
+                            context.discovery,
+                            context.local_capabilities,
+                            context.identity,
+                        );
+                    }
+                }
+                if record_auto_relay_listener_termination(
+                    context.auto_relay,
+                    context.relay_readiness,
+                    context.metrics,
+                    listener_id,
+                    Instant::now(),
+                    "auto_relay_reservation_listener_closed",
+                )
+                .is_some_and(|released| released.was_accepted)
                 {
-                    context
-                        .auto_relay
-                        .release_reservation_for_retry_after(relay, Instant::now());
-                    context.metrics.record_relay_reservation_lost();
-                    log_runtime_event(
-                        LogLevel::Warn,
-                        "relay_listen_address_lost",
-                        &[
-                            ("relay", &relay.to_string()),
-                            ("address", &address.to_string()),
-                        ],
-                    );
                     publish_kademlia_peer_address_record_for_capabilities(
                         swarm,
                         context.discovery,
@@ -10331,34 +11048,24 @@ async fn handle_swarm_event(
                     );
                 }
             }
-            if record_auto_relay_listener_termination(
-                context.auto_relay,
-                context.relay_readiness,
-                context.metrics,
-                listener_id,
-                Instant::now(),
-                "auto_relay_reservation_listener_closed",
-            )
-            .is_some_and(|released| released.was_accepted)
-            {
-                publish_kademlia_peer_address_record_for_capabilities(
-                    swarm,
-                    context.discovery,
-                    context.local_capabilities,
-                    context.identity,
-                );
-            }
         }
         SwarmEvent::ListenerError { listener_id, error } => {
-            if record_auto_relay_listener_termination(
-                context.auto_relay,
-                context.relay_readiness,
-                context.metrics,
-                listener_id,
-                Instant::now(),
-                "auto_relay_reservation_listener_error",
-            )
-            .is_some_and(|released| released.was_accepted)
+            let retired_configured_listener = context
+                .retiring_configured_relay_reservation_listeners
+                .remove(&listener_id);
+            context
+                .configured_relay_reservation_listeners
+                .remove(&listener_id);
+            if !retired_configured_listener
+                && record_auto_relay_listener_termination(
+                    context.auto_relay,
+                    context.relay_readiness,
+                    context.metrics,
+                    listener_id,
+                    Instant::now(),
+                    "auto_relay_reservation_listener_error",
+                )
+                .is_some_and(|released| released.was_accepted)
             {
                 publish_kademlia_peer_address_record_for_capabilities(
                     swarm,
@@ -10546,6 +11253,9 @@ async fn handle_control_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<ControlRequest, ControlResponse>,
 ) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "control") {
+        return Ok(());
+    }
     match event {
         request_response::Event::Message {
             peer,
@@ -10676,6 +11386,9 @@ fn handle_packet_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<crate::wire::Frame, crate::runtime::packet::PacketResponse>,
 ) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "packet") {
+        return Ok(());
+    }
     match event {
         request_response::Event::Message {
             peer,
@@ -10753,6 +11466,12 @@ fn handle_pinned_packet_stream_event(
     context: &mut SwarmEventContext<'_>,
     event: pinned_packet_stream::Event,
 ) -> Result<(), RunnerError> {
+    if let Some(connection_id) = pinned_packet_stream_message_connection_id(&event)
+        && !context.connection_epochs.is_usable(connection_id)
+    {
+        log_stale_connection_event("pinned_packet_stream", connection_id);
+        return Ok(());
+    }
     match event {
         pinned_packet_stream::Event::InboundRequest {
             peer,
@@ -10824,6 +11543,20 @@ fn handle_pinned_packet_stream_event(
     }
 
     Ok(())
+}
+
+fn pinned_packet_stream_message_connection_id(
+    event: &pinned_packet_stream::Event,
+) -> Option<ConnectionId> {
+    match event {
+        pinned_packet_stream::Event::InboundRequest { connection_id, .. }
+        | pinned_packet_stream::Event::OutboundResponse { connection_id, .. } => {
+            Some(*connection_id)
+        }
+        pinned_packet_stream::Event::OutboundFailure { .. }
+        | pinned_packet_stream::Event::InboundFailure { .. }
+        | pinned_packet_stream::Event::ResponseSent { .. } => None,
+    }
 }
 
 fn handle_packet_response(
@@ -11307,6 +12040,9 @@ fn handle_service_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<ServiceRequest, ServiceResponse>,
 ) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "service") {
+        return Ok(());
+    }
     match event {
         request_response::Event::Message {
             peer,
@@ -11670,6 +12406,9 @@ fn handle_pairing_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<PairingRequest, PairingResponse>,
 ) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "pairing") {
+        return Ok(());
+    }
     match event {
         request_response::Event::Message {
             peer,
@@ -11734,6 +12473,9 @@ fn handle_pairing_code_event(
     context: &mut SwarmEventContext<'_>,
     event: request_response::Event<PairingCodeRequest, PairingCodeResponse>,
 ) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "pairing_code") {
+        return Ok(());
+    }
     match event {
         request_response::Event::Message {
             peer,
@@ -12969,7 +13711,9 @@ fn promote_authenticated_overlay_connection(
     connection_id: ConnectionId,
     reason: &str,
 ) {
-    if !context.forwarder.is_configured_transport_peer(peer) {
+    if !context.forwarder.is_configured_transport_peer(peer)
+        || !context.connection_epochs.is_current(connection_id)
+    {
         return;
     }
     authorize_membership_probe_peer(swarm, context.membership_probe_connections, peer, reason);
@@ -12986,6 +13730,17 @@ fn promote_authenticated_overlay_connection(
         peer,
         reason,
     );
+    close_redundant_direct_connections(
+        swarm,
+        context.forwarder,
+        context.active_connections,
+        context.connection_epochs,
+        peer,
+        reason,
+    );
+    if !context.connection_epochs.is_usable(connection_id) {
+        return;
+    }
 
     let endpoint = context
         .active_connections
@@ -13045,7 +13800,8 @@ fn promote_all_authenticated_overlay_connections(
         .active_connections
         .keys()
         .filter_map(|(connected_peer, connection_id)| {
-            (*connected_peer == peer).then_some(*connection_id)
+            (*connected_peer == peer && context.connection_epochs.is_current(*connection_id))
+                .then_some(*connection_id)
         })
         .collect::<Vec<_>>();
     for connection_id in &connection_ids {
@@ -15592,6 +16348,80 @@ fn update_observed_packet_plane_endpoints(
     update
 }
 
+fn withdraw_observed_packet_plane_endpoints(
+    capabilities: &mut ControlCapabilities,
+    external_address: &Multiaddr,
+    udp_listener: Option<SocketAddr>,
+    quic_listener: Option<SocketAddr>,
+    quic_certificate_der: Option<Vec<u8>>,
+    overlay_prefixes: &[IpCidr],
+    persistent_udp_candidates: &[String],
+    persistent_quic_candidates: &[String],
+) -> ObservedPacketPlaneEndpointWithdrawal {
+    let endpoints = observed_packet_plane_endpoints(
+        external_address,
+        udp_listener,
+        quic_listener,
+        overlay_prefixes,
+    );
+    let udp_removed = endpoints.udp.is_some_and(|endpoint| {
+        remove_nonpersistent_endpoint_candidate(
+            &mut capabilities.packet_endpoint_candidates,
+            persistent_udp_candidates,
+            &endpoint,
+        )
+    });
+    let quic_removed = endpoints.quic.is_some_and(|endpoint| {
+        remove_nonpersistent_endpoint_candidate(
+            &mut capabilities.owned_quic_packet_endpoint_candidates,
+            persistent_quic_candidates,
+            &endpoint,
+        )
+    });
+
+    if udp_removed || quic_removed {
+        let supports_udp =
+            udp_listener.is_some() && !capabilities.packet_endpoint_candidates.is_empty();
+        let supports_quic = quic_listener.is_some()
+            && quic_certificate_der.is_some()
+            && !capabilities
+                .owned_quic_packet_endpoint_candidates
+                .is_empty();
+        let mut reconciled = capabilities
+            .clone()
+            .with_owned_udp_packet_plane(supports_udp);
+        reconciled = if supports_quic {
+            reconciled.with_owned_quic_packet_plane_certificate(
+                quic_certificate_der.expect("QUIC support requires a certificate"),
+            )
+        } else {
+            reconciled.with_owned_quic_packet_plane(false)
+        };
+        *capabilities = reconciled;
+    }
+
+    ObservedPacketPlaneEndpointWithdrawal {
+        udp_removed,
+        quic_removed,
+    }
+}
+
+fn remove_nonpersistent_endpoint_candidate(
+    candidates: &mut Vec<String>,
+    persistent_candidates: &[String],
+    endpoint: &str,
+) -> bool {
+    if persistent_candidates
+        .iter()
+        .any(|persistent| persistent == endpoint)
+    {
+        return false;
+    }
+    let original_len = candidates.len();
+    candidates.retain(|candidate| candidate != endpoint);
+    candidates.len() != original_len
+}
+
 fn advertise_direct_packet_plane_endpoint_from_path(
     capabilities: &mut ControlCapabilities,
     udp_listener: Option<SocketAddr>,
@@ -15699,6 +16529,18 @@ struct ObservedPacketPlaneEndpointUpdate {
 impl ObservedPacketPlaneEndpointUpdate {
     fn changed(self) -> bool {
         self.udp_candidate_added || self.quic_candidate_added
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ObservedPacketPlaneEndpointWithdrawal {
+    udp_removed: bool,
+    quic_removed: bool,
+}
+
+impl ObservedPacketPlaneEndpointWithdrawal {
+    fn changed(self) -> bool {
+        self.udp_removed || self.quic_removed
     }
 }
 
@@ -16672,6 +17514,112 @@ fn path_kind_for_endpoint(endpoint: &ConnectedPoint) -> PathKind {
     }
 }
 
+fn redundant_direct_connection_ids(
+    local_peer: Libp2pPeerId,
+    remote_peer: Libp2pPeerId,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    connection_epochs: &ConnectionEpochs,
+) -> Vec<ConnectionId> {
+    let local_is_preferred_initiator = local_peer.to_bytes() < remote_peer.to_bytes();
+    let mut redundant = Vec::new();
+
+    for kind in [PathKind::DirectQuicStream, PathKind::DirectTcpStream] {
+        let direct_connections = active_connections
+            .iter()
+            .filter_map(|((peer, connection_id), endpoint)| {
+                (*peer == remote_peer
+                    && connection_epochs.is_usable(*connection_id)
+                    && path_kind_for_endpoint(endpoint) == kind)
+                    .then_some((*connection_id, endpoint))
+            })
+            .collect::<Vec<_>>();
+        let desired_is_outbound = local_is_preferred_initiator;
+        let desired = direct_connections
+            .iter()
+            .filter_map(|(connection_id, endpoint)| {
+                let is_outbound = matches!(endpoint, ConnectedPoint::Dialer { .. });
+                (is_outbound == desired_is_outbound).then_some(*connection_id)
+            })
+            .collect::<Vec<_>>();
+
+        if desired.is_empty() {
+            let outbound = direct_connections
+                .iter()
+                .filter_map(|(connection_id, endpoint)| {
+                    matches!(endpoint, ConnectedPoint::Dialer { .. }).then_some(*connection_id)
+                })
+                .collect::<Vec<_>>();
+            let latest_outbound = outbound.iter().max().copied();
+            redundant.extend(
+                outbound
+                    .into_iter()
+                    .filter(|connection_id| Some(*connection_id) != latest_outbound),
+            );
+            continue;
+        }
+
+        redundant.extend(
+            direct_connections
+                .iter()
+                .filter_map(|(connection_id, endpoint)| {
+                    let is_outbound = matches!(endpoint, ConnectedPoint::Dialer { .. });
+                    (is_outbound != desired_is_outbound).then_some(*connection_id)
+                }),
+        );
+        if desired_is_outbound {
+            let latest_desired = desired.iter().max().copied();
+            redundant.extend(
+                desired
+                    .into_iter()
+                    .filter(|connection_id| Some(*connection_id) != latest_desired),
+            );
+        }
+    }
+
+    redundant
+}
+
+fn close_redundant_direct_connections(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
+    connection_epochs: &mut ConnectionEpochs,
+    peer: Libp2pPeerId,
+    reason: &str,
+) {
+    if !forwarder.is_configured_transport_peer(peer) {
+        return;
+    }
+
+    let local_peer = *swarm.local_peer_id();
+    for connection_id in
+        redundant_direct_connection_ids(local_peer, peer, active_connections, connection_epochs)
+    {
+        if !connection_epochs.mark_retiring(connection_id) {
+            continue;
+        }
+        let close_requested = swarm.close_connection(connection_id);
+        log_runtime_event(
+            LogLevel::Info,
+            "overlay_direct_connection_deduplicated",
+            &[
+                ("peer", &peer.to_string()),
+                ("connection_id", &connection_id.to_string()),
+                ("close_requested", &close_requested.to_string()),
+                (
+                    "preferred_initiator",
+                    if local_peer.to_bytes() < peer.to_bytes() {
+                        "local"
+                    } else {
+                        "remote"
+                    },
+                ),
+                ("reason", reason),
+            ],
+        );
+    }
+}
+
 fn path_origin_for_endpoint(endpoint: &ConnectedPoint) -> PathOrigin {
     if endpoint.is_relayed() {
         PathOrigin::RelayCircuit
@@ -16721,6 +17669,7 @@ struct BehaviourEventContext<'a> {
     identity: &'a NodeIdentity,
     code_pairing_sessions: &'a mut CodePairingSessions,
     membership_probe_connections: &'a mut MembershipProbeConnections,
+    connection_epochs: &'a ConnectionEpochs,
     public_discovery_quiet: bool,
 }
 
@@ -16729,6 +17678,13 @@ fn handle_behaviour_event(
     context: &mut BehaviourEventContext<'_>,
     event: BehaviourEvent,
 ) {
+    if let Some(connection_id) = behaviour_event_connection_id(&event)
+        && !context.connection_epochs.is_usable(connection_id)
+    {
+        log_stale_connection_event("behaviour", connection_id);
+        return;
+    }
+
     match event {
         BehaviourEvent::Mdns(mdns::Event::Discovered(peers)) if context.discovery.mdns => {
             for (peer, address) in peers {
@@ -16913,6 +17869,15 @@ fn handle_behaviour_event(
             );
         }
         _ => {}
+    }
+}
+
+fn behaviour_event_connection_id(event: &BehaviourEvent) -> Option<ConnectionId> {
+    match event {
+        BehaviourEvent::Identify(event) => Some(event.connection_id()),
+        BehaviourEvent::Ping(event) => Some(event.connection),
+        BehaviourEvent::Dcutr(event) => event.result.as_ref().ok().copied(),
+        _ => None,
     }
 }
 
@@ -17859,12 +18824,19 @@ fn learn_peer_address(
         return;
     }
 
-    let dial_address = peer_dial_address(peer, address.clone());
     if !discovered_peer_addresses.should_attempt_recovery_dial_at(peer, &address, now) {
         return;
     }
     metrics.record_discovered_address_dial_attempt();
-    if let Err(error) = swarm.dial(dial_address) {
+    if let Err(error) = dial_known_peer_addresses(
+        swarm,
+        peer,
+        std::iter::once(address.clone()),
+        PeerCondition::NotDialing,
+    ) {
+        if matches!(error, DialError::DialPeerConditionFalse(_)) {
+            return;
+        }
         discovered_peer_addresses.record_recovery_dial_failure_at(peer, &address, now);
         discovered_peer_addresses.record_failure_at(peer, &address, now);
         metrics.record_discovered_address_dial_failure();
@@ -23045,6 +24017,33 @@ mod tests {
     }
 
     #[test]
+    fn recovery_dials_group_addresses_by_peer_without_reordering() {
+        let first = peer_id();
+        let second = peer_id();
+        let first_quic: Multiaddr = "/ip4/192.0.2.1/udp/4001/quic-v1"
+            .parse()
+            .expect("first QUIC address");
+        let second_tcp: Multiaddr = "/ip4/192.0.2.2/tcp/4001"
+            .parse()
+            .expect("second TCP address");
+        let first_tcp: Multiaddr = "/ip4/192.0.2.1/tcp/4001"
+            .parse()
+            .expect("first TCP address");
+
+        assert_eq!(
+            group_peer_dial_targets(vec![
+                (first, first_quic.clone()),
+                (second, second_tcp.clone()),
+                (first, first_tcp.clone()),
+            ]),
+            vec![
+                (first, vec![first_quic, first_tcp]),
+                (second, vec![second_tcp]),
+            ]
+        );
+    }
+
+    #[test]
     fn redial_targets_wait_for_configured_relay_reservation_readiness() {
         let local = peer_id();
         let relay = peer_id();
@@ -23558,6 +24557,18 @@ mod tests {
             None,
             None
         ));
+    }
+
+    #[test]
+    fn public_discovery_holdoff_expires_at_its_deadline() {
+        let now = Instant::now();
+
+        assert!(!public_discovery_holdoff_active(None, now));
+        assert!(public_discovery_holdoff_active(
+            Some(now + Duration::from_secs(1)),
+            now,
+        ));
+        assert!(!public_discovery_holdoff_active(Some(now), now));
     }
 
     #[test]
@@ -26827,6 +27838,110 @@ mod tests {
                 send_back_addr: "/ip4/127.0.0.1/tcp/5000".parse().expect("send back"),
             }),
             PathKind::DirectTcpStream
+        );
+    }
+
+    #[test]
+    fn connection_epochs_reject_attempts_started_before_network_change() {
+        let stale = ConnectionId::new_unchecked(1);
+        let current = ConnectionId::new_unchecked(2);
+        let unobserved = ConnectionId::new_unchecked(3);
+        let mut epochs = ConnectionEpochs::default();
+
+        epochs.record_started(stale);
+        assert_eq!(epochs.advance(), 1);
+        assert!(!epochs.record_established(stale));
+
+        epochs.record_started(current);
+        assert!(epochs.record_established(current));
+        assert!(epochs.record_established(unobserved));
+        assert!(epochs.is_current(current));
+        assert!(!epochs.is_current(stale));
+
+        epochs.remove(stale);
+        assert!(!epochs.is_current(stale));
+    }
+
+    #[test]
+    fn connection_epoch_attempt_metric_excludes_established_connections() {
+        let pending = ConnectionId::new_unchecked(1);
+        let established = ConnectionId::new_unchecked(2);
+        let mut epochs = ConnectionEpochs::default();
+
+        epochs.record_started(pending);
+        epochs.record_started(established);
+        assert!(epochs.record_established(established));
+
+        assert_eq!(epochs.advance(), 1);
+        assert!(!epochs.is_current(pending));
+        assert!(!epochs.is_current(established));
+    }
+
+    #[test]
+    fn direct_connection_deduplication_keeps_the_preferred_initiator() {
+        let first_peer = peer_id();
+        let second_peer = peer_id();
+        let (preferred, other) = if first_peer.to_bytes() < second_peer.to_bytes() {
+            (first_peer, second_peer)
+        } else {
+            (second_peer, first_peer)
+        };
+        let first_outbound = ConnectionId::new_unchecked(1);
+        let latest_outbound = ConnectionId::new_unchecked(2);
+        let inbound = ConnectionId::new_unchecked(3);
+        let outbound_endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/udp/4001/quic-v1"
+                .parse()
+                .expect("outbound address"),
+            role_override: Endpoint::Dialer,
+            port_use: PortUse::Reuse,
+        };
+        let inbound_endpoint = ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/udp/4001/quic-v1"
+                .parse()
+                .expect("listener address"),
+            send_back_addr: "/ip4/127.0.0.1/udp/5001/quic-v1"
+                .parse()
+                .expect("send back address"),
+        };
+
+        let mut preferred_connections = HashMap::new();
+        preferred_connections.insert((other, first_outbound), outbound_endpoint.clone());
+        preferred_connections.insert((other, latest_outbound), outbound_endpoint.clone());
+        preferred_connections.insert((other, inbound), inbound_endpoint.clone());
+        let mut epochs = ConnectionEpochs::default();
+        epochs.record_started(first_outbound);
+        epochs.record_started(latest_outbound);
+        epochs.record_started(inbound);
+        assert_eq!(
+            redundant_direct_connection_ids(preferred, other, &preferred_connections, &epochs,)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([first_outbound, inbound])
+        );
+
+        let mut nonpreferred_connections = HashMap::new();
+        nonpreferred_connections.insert((preferred, first_outbound), outbound_endpoint.clone());
+        nonpreferred_connections.insert((preferred, latest_outbound), outbound_endpoint);
+        nonpreferred_connections.insert((preferred, inbound), inbound_endpoint);
+        assert_eq!(
+            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([first_outbound, latest_outbound])
+        );
+
+        epochs.mark_retiring(inbound);
+        assert_eq!(
+            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,),
+            vec![first_outbound]
+        );
+
+        epochs.advance();
+        epochs.record_started(latest_outbound);
+        assert!(
+            redundant_direct_connection_ids(other, preferred, &nonpreferred_connections, &epochs,)
+                .is_empty()
         );
     }
 
@@ -32778,6 +33893,87 @@ mod tests {
                 quic_candidate_added: false,
             }
         );
+    }
+
+    #[test]
+    fn expired_external_address_withdraws_only_derived_packet_endpoints() {
+        let external_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("multiaddr");
+        let persistent_udp = vec!["192.168.1.10:51820".to_owned()];
+        let persistent_quic = vec!["192.168.1.10:51821".to_owned()];
+        let mut capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec![
+                persistent_udp[0].clone(),
+                "8.8.8.8:51820".to_owned(),
+            ])
+            .with_owned_quic_packet_endpoint_candidates(vec![
+                persistent_quic[0].clone(),
+                "8.8.8.8:51821".to_owned(),
+            ])
+            .with_owned_udp_packet_plane(true)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01, 0x02]);
+
+        let withdrawal = withdraw_observed_packet_plane_endpoints(
+            &mut capabilities,
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+            Some(vec![0x30, 0x01, 0x02]),
+            &[],
+            &persistent_udp,
+            &persistent_quic,
+        );
+
+        assert_eq!(
+            withdrawal,
+            ObservedPacketPlaneEndpointWithdrawal {
+                udp_removed: true,
+                quic_removed: true,
+            }
+        );
+        assert_eq!(capabilities.packet_endpoint_candidates, persistent_udp);
+        assert_eq!(
+            capabilities.owned_quic_packet_endpoint_candidates,
+            persistent_quic
+        );
+        assert!(capabilities.supports_owned_udp_packet_plane);
+        assert!(capabilities.supports_owned_quic_packet_plane);
+    }
+
+    #[test]
+    fn expired_external_address_disables_empty_owned_packet_planes() {
+        let external_address: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().expect("multiaddr");
+        let mut capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_packet_endpoint_candidates(vec!["8.8.8.8:51820".to_owned()])
+            .with_owned_quic_packet_endpoint_candidates(vec!["8.8.8.8:51821".to_owned()])
+            .with_owned_udp_packet_plane(true)
+            .with_owned_quic_packet_plane_certificate(vec![0x30, 0x01, 0x02]);
+
+        let withdrawal = withdraw_observed_packet_plane_endpoints(
+            &mut capabilities,
+            &external_address,
+            Some("0.0.0.0:51820".parse().expect("udp listener")),
+            Some("0.0.0.0:51821".parse().expect("quic listener")),
+            Some(vec![0x30, 0x01, 0x02]),
+            &[],
+            &[],
+            &[],
+        );
+
+        assert!(withdrawal.changed());
+        assert!(capabilities.packet_endpoint_candidates.is_empty());
+        assert!(
+            capabilities
+                .owned_quic_packet_endpoint_candidates
+                .is_empty()
+        );
+        assert!(!capabilities.supports_owned_udp_packet_plane);
+        assert!(!capabilities.supports_owned_quic_packet_plane);
+        assert!(
+            capabilities
+                .owned_quic_packet_plane_certificate_der
+                .is_none()
+        );
+        assert!(!capabilities.supports_quic_datagrams);
     }
 
     #[test]

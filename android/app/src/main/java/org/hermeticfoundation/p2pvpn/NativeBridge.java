@@ -30,6 +30,8 @@ final class NativeBridge {
 
     static native String nativeStatus();
 
+    static native String nativeNetworkChanged();
+
     static native String nativePairRpc(String requestJson);
 
     static native String nativeApplyPairingArtifacts(
