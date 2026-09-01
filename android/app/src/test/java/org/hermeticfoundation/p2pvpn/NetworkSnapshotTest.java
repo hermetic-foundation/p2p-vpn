@@ -2,6 +2,8 @@ package org.hermeticfoundation.p2pvpn;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -23,7 +25,8 @@ public final class NetworkSnapshotTest {
         Map<String, AndroidProfile> profiles = profiles();
         ProfileCollection collection = collection(profiles);
         Map<String, P2pVpnService.NetworkRuntimeStatus> statuses = new LinkedHashMap<>();
-        statuses.put(ALPHA, runtimeStatus(ALPHA, "running", ""));
+        statuses.put(ALPHA, runtimeStatus(ALPHA, "running", "", true));
+        statuses.put(GAMMA, runtimeStatus(GAMMA, "running", "", true));
 
         List<P2pVpnService.NetworkSnapshot> snapshots =
                 P2pVpnService.networkSnapshots(
@@ -34,11 +37,14 @@ public final class NetworkSnapshotTest {
         assertTrue(snapshots.get(0).selected);
         assertTrue(snapshots.get(0).enabled);
         assertEquals("running", snapshots.get(0).phase);
+        assertNotNull(snapshots.get(0).peers);
+        assertEquals("peerAlpha", snapshots.get(0).peers.peers.get(0).peerId);
         assertFalse(snapshots.get(1).selected);
         assertEquals("starting", snapshots.get(1).phase);
         assertEquals("Waiting for runtime status", snapshots.get(1).detail);
         assertFalse(snapshots.get(2).enabled);
         assertEquals("disabled", snapshots.get(2).phase);
+        assertNull(snapshots.get(2).peers);
         assertThrows(UnsupportedOperationException.class, snapshots::clear);
         assertThrows(UnsupportedOperationException.class, snapshots.get(0).addresses::clear);
     }
@@ -126,13 +132,35 @@ public final class NetworkSnapshotTest {
     }
 
     private static P2pVpnService.NetworkRuntimeStatus runtimeStatus(
-            String id, String phase, String detail) throws Exception {
+            String id, String phase, String detail, boolean withPeerSnapshot) throws Exception {
         JSONObject value = new JSONObject();
         value.put("id", id);
         value.put("phase", phase);
         value.put("detail", detail);
         value.put("lines", new JSONArray());
+        if (withPeerSnapshot) {
+            value.put("peer_snapshot", peerSnapshot(id));
+        }
         return P2pVpnService.NetworkRuntimeStatus.from(value);
+    }
+
+    private static JSONObject peerSnapshot(String id) throws Exception {
+        JSONObject peer =
+                new JSONObject()
+                        .put("peer_id", ALPHA.equals(id) ? "peerAlpha" : "peerGamma")
+                        .put("hostnames", new JSONArray().put("device"))
+                        .put("ipv4", new JSONArray().put("10.42.0.1"))
+                        .put("ipv6", new JSONArray())
+                        .put("local", true)
+                        .put("membership_sources", new JSONArray().put("local_configuration"))
+                        .put("connection_state", "local");
+        return new JSONObject()
+                .put("schema_version", 1)
+                .put("observed_at_unix_seconds", 1_788_291_000L)
+                .put("total_peers", 1)
+                .put("returned_peers", 1)
+                .put("truncated", false)
+                .put("peers", new JSONArray().put(peer));
     }
 
     private static JSONObject cidr(String address, int prefixLength) throws Exception {

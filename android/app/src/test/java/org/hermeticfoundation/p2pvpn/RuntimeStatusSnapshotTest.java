@@ -22,7 +22,7 @@ public final class RuntimeStatusSnapshotTest {
                                 + "\"detail\":\"1 running, 0 starting, 1 failed of 2 networks\","
                                 + "\"lines\":[\"android_supervisor_networks 2\"],"
                                 + "\"networks\":["
-                                + network(ALPHA, "running", null, 2)
+                                + networkWithPeerSnapshot(ALPHA, "running", null, 2)
                                 + ","
                                 + network(BETA, "failed", "isolated failure", 3)
                                 + "]}");
@@ -33,6 +33,10 @@ public final class RuntimeStatusSnapshotTest {
 
         assertFalse(status.requiresWholeRuntimeRestart());
         assertTrue(status.networks.get(ALPHA).isAvailable());
+        assertTrue(status.networks.get(ALPHA).peerSnapshot.isPresent());
+        assertEquals(
+                "alpha-device",
+                status.networks.get(ALPHA).peerSnapshot.get().peers.get(0).hostnames.get(0));
         assertFalse(status.networks.get(BETA).isAvailable());
         assertEquals(5, summary.connectedPeers);
         assertEquals("Connected: 1 running, 0 starting, 1 unavailable", status.describeConnection());
@@ -91,6 +95,25 @@ public final class RuntimeStatusSnapshotTest {
                                 value, Arrays.asList(ALPHA, BETA)));
     }
 
+    @Test
+    public void rejectsMalformedKnownPeerSnapshots() throws Exception {
+        String malformedNetwork =
+                network(ALPHA, "running", null, 1).replace(
+                        "}", ",\"peer_snapshot\":{\"schema_version\":1}}" );
+        JSONObject value =
+                new JSONObject(
+                        "{\"phase\":\"running\",\"detail\":null,\"lines\":[],"
+                                + "\"networks\":["
+                                + malformedNetwork
+                                + "]}");
+
+        assertThrows(
+                P2pVpnException.class,
+                () ->
+                        P2pVpnService.RuntimeStatusSnapshot.from(
+                                value, Collections.singletonList(ALPHA)));
+    }
+
     private static String network(String id, String phase, String detail, int peers) {
         String encodedDetail = detail == null ? "null" : JSONObject.quote(detail);
         return "{\"id\":"
@@ -102,5 +125,31 @@ public final class RuntimeStatusSnapshotTest {
                 + ",\"lines\":[\"path_peers_with_supported_path "
                 + peers
                 + "\"]}";
+    }
+
+    private static String networkWithPeerSnapshot(
+            String id, String phase, String detail, int peers) throws Exception {
+        JSONObject network = new JSONObject(network(id, phase, detail, peers));
+        JSONObject peer =
+                new JSONObject()
+                        .put("peer_id", "alphaPeer")
+                        .put("hostnames", new org.json.JSONArray().put("alpha-device"))
+                        .put("ipv4", new org.json.JSONArray().put("10.42.0.1"))
+                        .put("ipv6", new org.json.JSONArray())
+                        .put("local", true)
+                        .put(
+                                "membership_sources",
+                                new org.json.JSONArray().put("local_configuration"))
+                        .put("connection_state", "local");
+        network.put(
+                "peer_snapshot",
+                new JSONObject()
+                        .put("schema_version", 1)
+                        .put("observed_at_unix_seconds", 1_788_291_000L)
+                        .put("total_peers", 1)
+                        .put("returned_peers", 1)
+                        .put("truncated", false)
+                        .put("peers", new org.json.JSONArray().put(peer)));
+        return network.toString();
     }
 }

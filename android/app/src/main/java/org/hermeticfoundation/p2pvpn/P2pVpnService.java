@@ -41,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -2315,6 +2316,12 @@ public final class P2pVpnService extends VpnService {
                 phase = "stopped";
                 detail = "";
             }
+            boolean peersAvailable =
+                    entry.enabled
+                            && runtimeStatus != null
+                            && "running".equals(runtimeStatus.phase);
+            PeerSnapshot peers =
+                    peersAvailable ? runtimeStatus.peerSnapshot.orElse(null) : null;
             result.add(
                     new NetworkSnapshot(
                             entry.id,
@@ -2325,7 +2332,8 @@ public final class P2pVpnService extends VpnService {
                             entry.enabled,
                             entry.id.equals(collection.selectedNetworkId),
                             phase,
-                            detail));
+                            detail,
+                            peers));
         }
         return Collections.unmodifiableList(result);
     }
@@ -2823,6 +2831,7 @@ public final class P2pVpnService extends VpnService {
         final boolean selected;
         final String phase;
         final String detail;
+        final PeerSnapshot peers;
 
         private NetworkSnapshot(
                 String id,
@@ -2833,7 +2842,8 @@ public final class P2pVpnService extends VpnService {
                 boolean enabled,
                 boolean selected,
                 String phase,
-                String detail) {
+                String detail,
+                PeerSnapshot peers) {
             this.id = id;
             this.name = name;
             this.hostname = hostname;
@@ -2843,6 +2853,7 @@ public final class P2pVpnService extends VpnService {
             this.selected = selected;
             this.phase = phase;
             this.detail = detail;
+            this.peers = peers;
         }
     }
 
@@ -2863,13 +2874,19 @@ public final class P2pVpnService extends VpnService {
         final String phase;
         final String detail;
         final List<String> metrics;
+        final Optional<PeerSnapshot> peerSnapshot;
 
         private NetworkRuntimeStatus(
-                String id, String phase, String detail, List<String> metrics) {
+                String id,
+                String phase,
+                String detail,
+                List<String> metrics,
+                Optional<PeerSnapshot> peerSnapshot) {
             this.id = id;
             this.phase = phase;
             this.detail = detail;
             this.metrics = Collections.unmodifiableList(new ArrayList<>(metrics));
+            this.peerSnapshot = peerSnapshot;
         }
 
         static NetworkRuntimeStatus from(JSONObject value) throws P2pVpnException {
@@ -2879,7 +2896,12 @@ public final class P2pVpnService extends VpnService {
                 String phase = requireRuntimePhase(value.getString("phase"));
                 String detail =
                         value.isNull("detail") ? "" : value.optString("detail", "");
-                return new NetworkRuntimeStatus(id, phase, detail, runtimeMetrics(value));
+                return new NetworkRuntimeStatus(
+                        id,
+                        phase,
+                        detail,
+                        runtimeMetrics(value),
+                        PeerSnapshot.parseOptional(value, "peer_snapshot"));
             } catch (JSONException error) {
                 throw new P2pVpnException("Native network runtime status is malformed", error);
             }
