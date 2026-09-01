@@ -14,6 +14,7 @@ use p2p_vpn::{
     dns::canonical_dns_label,
     identity::NodeIdentity,
     membership::SignedMembershipRecord,
+    network_peer::NetworkPeerSnapshot,
     route::IpCidr,
     runtime::{control_socket::PairRpcCompletionArtifacts, tun::TunRuntimeConfig},
 };
@@ -101,6 +102,8 @@ pub struct AndroidNetworkRuntimeStatus {
     pub phase: AndroidRuntimePhase,
     pub detail: Option<String>,
     pub lines: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_snapshot: Option<NetworkPeerSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -932,6 +935,7 @@ mod android {
     const TUN_WRITE_POLL_TIMEOUT: Duration = Duration::from_millis(250);
     const RUNTIME_HEALTH_INITIAL_DELAY: Duration = Duration::from_millis(500);
     const RUNTIME_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+    const PEER_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(1);
     const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(4);
     const RUNTIME_ABORT_GRACE: Duration = Duration::from_secs(1);
 
@@ -1038,6 +1042,7 @@ mod android {
                         phase: AndroidRuntimePhase::Starting,
                         detail: None,
                         lines: Vec::new(),
+                        peer_snapshot: None,
                     },
                 }),
             }
@@ -1059,9 +1064,15 @@ mod android {
             state.status.phase = AndroidRuntimePhase::Starting;
             state.status.detail = Some(format!("Starting runtime generation {generation}"));
             state.status.lines.clear();
+            state.status.peer_snapshot = None;
         }
 
-        fn record_running(&self, generation: u64, lines: Vec<String>) {
+        fn record_running(
+            &self,
+            generation: u64,
+            lines: Vec<String>,
+            peer_snapshot: Option<NetworkPeerSnapshot>,
+        ) {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if state.generation != generation || state.control.is_none() {
                 return;
@@ -1069,6 +1080,7 @@ mod android {
             state.status.phase = AndroidRuntimePhase::Running;
             state.status.detail = None;
             state.status.lines = lines;
+            state.status.peer_snapshot = peer_snapshot;
         }
 
         fn record_health_failure(&self, generation: u64, failures: u8, error: &str) {
@@ -1100,6 +1112,7 @@ mod android {
                 delay.as_millis()
             ));
             state.status.lines.clear();
+            state.status.peer_snapshot = None;
         }
 
         fn record_activation_failure(
@@ -1117,6 +1130,7 @@ mod android {
                 delay.as_millis()
             ));
             state.status.lines.clear();
+            state.status.peer_snapshot = None;
         }
 
         fn record_stopped(&self, generation: Option<u64>) {
@@ -1128,6 +1142,7 @@ mod android {
             state.status.phase = AndroidRuntimePhase::Stopped;
             state.status.detail = None;
             state.status.lines.clear();
+            state.status.peer_snapshot = None;
         }
 
         fn record_supervisor_failure(&self, detail: String) {
@@ -1136,6 +1151,7 @@ mod android {
             state.status.phase = AndroidRuntimePhase::Failed;
             state.status.detail = Some(detail);
             state.status.lines.clear();
+            state.status.peer_snapshot = None;
         }
 
         fn snapshot(&self) -> AndroidNetworkRuntimeStatus {
@@ -1940,12 +1956,16 @@ mod android {
                     result = &mut runtime => break RuntimeAttemptExit::Runtime(result),
                     result = &mut probe => {
                         match result {
-                            Ok(lines) => {
+                            Ok(probe) => {
                                 health_failures = 0;
                                 running_since.get_or_insert_with(Instant::now);
                                 reset_backoff |= running_since
                                     .is_some_and(|since| since.elapsed() >= HEALTHY_RESET_AFTER);
-                                launch.slot.record_running(generation, lines);
+                                launch.slot.record_running(
+                                    generation,
+                                    probe.lines,
+                                    probe.peer_snapshot,
+                                );
                             }
                             Err(error) => {
                                 health_failures = health_failures.saturating_add(1);
@@ -2031,15 +2051,28 @@ mod android {
         Unhealthy(String),
     }
 
+    struct RuntimeHealthProbe {
+        lines: Vec<String>,
+        peer_snapshot: Option<NetworkPeerSnapshot>,
+    }
+
     async fn runtime_health_probe(
         control: RuntimeControlHandle,
         delay: Duration,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<RuntimeHealthProbe, String> {
         tokio::time::sleep(delay).await;
-        tokio::time::timeout(CONTROL_TIMEOUT, control.status())
+        let lines = tokio::time::timeout(CONTROL_TIMEOUT, control.status())
             .await
             .map_err(|_| "runtime control request timed out".to_owned())?
-            .map_err(|error| format!("runtime control request failed: {error}"))
+            .map_err(|error| format!("runtime control request failed: {error}"))?;
+        let peer_snapshot = tokio::time::timeout(PEER_SNAPSHOT_TIMEOUT, control.peer_snapshot())
+            .await
+            .ok()
+            .and_then(Result::ok);
+        Ok(RuntimeHealthProbe {
+            lines,
+            peer_snapshot,
+        })
     }
 
     async fn stop_runtime_attempt(
@@ -2490,6 +2523,11 @@ mod tests {
             MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
             issue_named_membership_record_for_subject_at,
         },
+        network_peer::{
+            NETWORK_PEER_SNAPSHOT_SCHEMA_VERSION, NetworkPeerConnectionState,
+            NetworkPeerMembershipSource, NetworkPeerPathKind, NetworkPeerPathOrigin,
+            NetworkPeerSnapshotPeer,
+        },
         pairing::{
             PairingOfferOptions, PairingResponseOptions, build_pairing_response_at,
             export_code_pairing_offer_at,
@@ -2514,6 +2552,51 @@ mod tests {
             block_on_control(async { Ok::<_, std::io::Error>("ready") }).expect("control response");
 
         assert_eq!(response, "ready");
+    }
+
+    #[test]
+    fn android_runtime_status_serializes_the_bounded_peer_snapshot() {
+        let status = AndroidNetworkRuntimeStatus {
+            id: ALPHA_NETWORK_ID.to_owned(),
+            phase: AndroidRuntimePhase::Running,
+            detail: None,
+            lines: Vec::new(),
+            peer_snapshot: Some(NetworkPeerSnapshot {
+                schema_version: NETWORK_PEER_SNAPSHOT_SCHEMA_VERSION,
+                observed_at_unix_seconds: 1_788_291_000,
+                total_peers: 1,
+                returned_peers: 1,
+                truncated: false,
+                peers: vec![NetworkPeerSnapshotPeer {
+                    peer_id: "12D3KooWAndroidPeer".to_owned(),
+                    hostnames: vec!["android-phone".to_owned()],
+                    ipv4: vec![Ipv4Addr::new(10, 42, 0, 2)],
+                    ipv6: Vec::new(),
+                    local: false,
+                    membership_sources: vec![NetworkPeerMembershipSource::SignedMembership],
+                    connection_state: NetworkPeerConnectionState::Connected,
+                    selected_path: Some(NetworkPeerPathKind::DirectQuicStream),
+                    path_origin: Some(NetworkPeerPathOrigin::Mdns),
+                }],
+            }),
+        };
+
+        let encoded = serde_json::to_value(status).expect("serialized runtime status");
+
+        assert_eq!(encoded["peer_snapshot"]["schema_version"], 1);
+        assert_eq!(
+            encoded["peer_snapshot"]["peers"][0]["connection_state"],
+            "connected"
+        );
+        assert_eq!(
+            encoded["peer_snapshot"]["peers"][0]["selected_path"],
+            "direct_quic_stream"
+        );
+        assert!(
+            encoded["peer_snapshot"]["peers"][0]
+                .get("multiaddr")
+                .is_none()
+        );
     }
 
     #[test]
