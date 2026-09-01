@@ -663,20 +663,41 @@ public final class P2pVpnService extends VpnService {
         ProfileCollection.Decoded decoded = ProfileCollection.decode(stored);
         ProfileCollection loadedCollection;
         Map<String, AndroidProfile> loadedProfiles = new LinkedHashMap<>();
-        boolean migrated = decoded.isLegacy();
-        if (migrated) {
-            AndroidProfile legacyProfile = inspectProfile(decoded.legacyConfigJson);
-            loadedCollection =
-                    ProfileCollection.migrated(
-                            decoded.legacyConfigJson,
-                            legacyProfile.networkName,
-                            legacyProfile.peerId);
-            loadedProfiles.put(loadedCollection.selectedNetworkId, legacyProfile);
-        } else {
-            loadedCollection = decoded.collection;
-            for (ProfileCollection.Entry network : loadedCollection.networks) {
-                loadedProfiles.put(network.id, inspectProfile(network.configJson));
-            }
+        boolean migrated = decoded.needsMigration();
+        switch (decoded.state) {
+            case LEGACY_PROFILE:
+                String legacyConfigJson = decoded.legacyConfigJson();
+                AndroidProfile legacyProfile = inspectProfile(legacyConfigJson);
+                loadedCollection =
+                        ProfileCollection.migrated(
+                                legacyConfigJson,
+                                legacyProfile.networkName,
+                                legacyProfile.peerId,
+                                ProfileCollection.PresentationAddresses.fromProfile(
+                                        legacyProfile));
+                loadedProfiles.put(loadedCollection.selectedNetworkId, legacyProfile);
+                break;
+            case SCHEMA_V1:
+                ProfileCollection.SchemaV1Collection schemaV1 = decoded.schemaV1Collection();
+                for (ProfileCollection.Entry network : schemaV1.networks) {
+                    loadedProfiles.put(network.id, inspectProfile(network.configJson));
+                }
+                AndroidProfile selectedV1 = loadedProfiles.get(schemaV1.selectedNetworkId);
+                if (selectedV1 == null) {
+                    throw new P2pVpnException("Selected network profile is unavailable");
+                }
+                loadedCollection =
+                        schemaV1.migrate(
+                                ProfileCollection.PresentationAddresses.fromProfile(selectedV1));
+                break;
+            case CURRENT:
+                loadedCollection = decoded.currentCollection();
+                for (ProfileCollection.Entry network : loadedCollection.networks) {
+                    loadedProfiles.put(network.id, inspectProfile(network.configJson));
+                }
+                break;
+            default:
+                throw new P2pVpnException("Stored profile collection has an unsupported schema");
         }
         validateProfileCollection(loadedCollection, loadedProfiles);
         AndroidProfile selected = prepareLoadedProfile(loadedCollection, loadedProfiles);
@@ -811,7 +832,10 @@ public final class P2pVpnService extends VpnService {
             ProfileCollection.Entry network =
                     new ProfileCollection.Entry(
                             ProfileCollection.newNetworkId(), true, created.configJson);
-            ProfileCollection collection = ProfileCollection.single(network);
+            ProfileCollection collection =
+                    ProfileCollection.single(
+                            network,
+                            ProfileCollection.PresentationAddresses.fromProfile(created));
             Map<String, AndroidProfile> profiles = new LinkedHashMap<>();
             profiles.put(network.id, created);
             validateProfileCollection(collection, profiles);
