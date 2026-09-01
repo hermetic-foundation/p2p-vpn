@@ -14596,6 +14596,13 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
         .map(canonical_dns_label)
         .transpose()
         .map_err(crate::pairing::PairingError::InvalidHostname)?;
+    validate_pairing_hostname_available(
+        config,
+        current_member_records,
+        &request.payload.joiner_peer,
+        assigned_hostname.as_deref(),
+        now_unix_seconds,
+    )?;
     let inviter_hostname = config.network.dns.hostname.clone();
     let assigned_vpn_ip = assigned_vpn_ip.or_else(|| request.payload.requested_vpn_ip.clone());
     let route_grants =
@@ -14677,6 +14684,51 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
     )?;
 
     Ok((offer, response))
+}
+
+fn validate_pairing_hostname_available(
+    config: &Config,
+    current_member_records: &[SignedMembershipRecord],
+    joiner_peer: &str,
+    assigned_hostname: Option<&str>,
+    now_unix_seconds: u64,
+) -> Result<(), crate::pairing::PairingError> {
+    let Some(assigned_hostname) = assigned_hostname else {
+        return Ok(());
+    };
+    let local_peer = config.local_peer()?;
+    if local_peer != joiner_peer
+        && config
+            .network
+            .dns
+            .hostname
+            .as_deref()
+            .and_then(|hostname| canonical_dns_label(hostname).ok())
+            .is_some_and(|hostname| hostname == assigned_hostname)
+    {
+        return Err(crate::pairing::PairingError::HostnameConflict {
+            hostname: assigned_hostname.to_owned(),
+            owner: local_peer,
+        });
+    }
+    let membership = effective_membership_at(
+        current_member_records,
+        &config.network.name,
+        now_unix_seconds,
+    )?;
+    if let Some(owner) = membership.overlay_members().find(|member| {
+        member.transport_peer.to_string() != joiner_peer
+            && member
+                .hostnames
+                .iter()
+                .any(|hostname| hostname == assigned_hostname)
+    }) {
+        return Err(crate::pairing::PairingError::HostnameConflict {
+            hostname: assigned_hostname.to_owned(),
+            owner: owner.transport_peer.to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn next_pairing_membership_version(
@@ -21393,6 +21445,63 @@ mod tests {
                 .as_deref(),
             Some("approved-host")
         );
+    }
+
+    #[test]
+    fn pairing_hostname_assignment_rejects_existing_owners() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let existing = NodeIdentity::generate_ed25519().expect("existing identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let mut config = config_with_peer(&inviter, joiner.peer_id.parse().expect("joiner peer"));
+        config.network.dns.hostname = Some("inviter-host".to_owned());
+        let existing_record = issue_named_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: config.network.name.clone(),
+                member: MembershipRecordSubject::from_identity(&existing)
+                    .expect("existing member subject"),
+                membership_epoch: 1,
+                sequence: 1_000,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            Some("existing-host"),
+            1_000,
+        )
+        .expect("existing hostname record");
+
+        assert!(matches!(
+            validate_pairing_hostname_available(
+                &config,
+                &[existing_record.clone()],
+                &joiner.peer_id,
+                Some("inviter-host"),
+                1_001,
+            ),
+            Err(crate::pairing::PairingError::HostnameConflict { hostname, owner })
+                if hostname == "inviter-host" && owner == inviter.peer_id
+        ));
+        assert!(matches!(
+            validate_pairing_hostname_available(
+                &config,
+                &[existing_record.clone()],
+                &joiner.peer_id,
+                Some("existing-host"),
+                1_001,
+            ),
+            Err(crate::pairing::PairingError::HostnameConflict { hostname, owner })
+                if hostname == "existing-host" && owner == existing.peer_id
+        ));
+        validate_pairing_hostname_available(
+            &config,
+            &[existing_record],
+            &existing.peer_id,
+            Some("existing-host"),
+            1_001,
+        )
+        .expect("same member may retain hostname");
     }
 
     #[test]

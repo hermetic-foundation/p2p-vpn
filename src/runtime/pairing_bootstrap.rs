@@ -46,6 +46,7 @@ pub const MAX_PAIRING_BOOTSTRAP_ADDRESSES_PER_PEER: usize = 8;
 pub const MAX_PAIRING_BOOTSTRAP_PENDING_HELLOS: usize = 32;
 pub const MAX_PAIRING_BOOTSTRAP_ATTEMPTS_PER_PEER: u8 = 8;
 pub const MAX_PAIRING_BOOTSTRAP_TOTAL_ATTEMPTS: u16 = 512;
+pub const MAX_PAIRING_BOOTSTRAP_EXISTING_NETWORKS: usize = 256;
 
 const BOOTSTRAP_IDENTIFY_PROTOCOL: &str = "/p2p-vpn/pairing-bootstrap/2";
 const BOOTSTRAP_TICK: Duration = Duration::from_millis(250);
@@ -57,6 +58,7 @@ const MAX_PUBLIC_LOOKUPS: u16 = 360;
 pub struct PairingBootstrapOptions {
     pub timeout: Duration,
     pub lan_grace: Duration,
+    pub existing_network_names: Vec<String>,
     pub requested_hostname: Option<String>,
     pub requested_vpn_ip: Option<String>,
     pub requested_routes: Vec<RouteConfig>,
@@ -67,6 +69,7 @@ impl Default for PairingBootstrapOptions {
         Self {
             timeout: DEFAULT_PAIRING_BOOTSTRAP_TIMEOUT,
             lan_grace: PAIRING_BOOTSTRAP_LAN_GRACE,
+            existing_network_names: Vec::new(),
             requested_hostname: None,
             requested_vpn_ip: None,
             requested_routes: Vec::new(),
@@ -87,6 +90,7 @@ pub enum PairingBootstrapError {
     Pairing(crate::pairing_code::PairingCodeError),
     Rejected(PairingCodeRejectionReason),
     UpgradeRequired { peers: usize },
+    AlreadyJoined { network_name: String },
     Unavailable,
     TimedOut,
 }
@@ -106,6 +110,12 @@ impl fmt::Display for PairingBootstrapError {
                 formatter,
                 "{peers} discovered inviter(s) do not support profile-free pairing protocol v2"
             ),
+            Self::AlreadyJoined { network_name } => {
+                write!(
+                    formatter,
+                    "a profile for network {network_name:?} already exists"
+                )
+            }
             Self::Unavailable => formatter.write_str("no pairing inviter was discovered"),
             Self::TimedOut => formatter.write_str("pairing discovery timed out"),
         }
@@ -361,6 +371,17 @@ fn validate_options(options: &PairingBootstrapOptions) -> Result<(), PairingBoot
         || options.lan_grace > options.timeout
     {
         return Err(PairingBootstrapError::InvalidTimeout);
+    }
+    if options.existing_network_names.len() > MAX_PAIRING_BOOTSTRAP_EXISTING_NETWORKS
+        || options.existing_network_names.iter().any(|network_name| {
+            network_name.is_empty()
+                || network_name.len() > 128
+                || network_name.chars().any(char::is_control)
+        })
+    {
+        return Err(PairingBootstrapError::Build(
+            "existing network names are invalid".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -736,6 +757,13 @@ fn handle_challenge_response(
         state.release_candidate(peer, Instant::now());
         return Ok(None);
     };
+    if options.existing_network_names.iter().any(|network_name| {
+        network_name.to_lowercase() == offer.payload.network_name.to_lowercase()
+    }) {
+        return Err(PairingBootstrapError::AlreadyJoined {
+            network_name: offer.payload.network_name,
+        });
+    }
     state.v2_challenge_opened = true;
     state.selected_peer = Some(peer);
     let mut request = build_named_pairing_request_at(
@@ -787,6 +815,22 @@ mod tests {
         assert!(matches!(
             validate_options(&options),
             Err(PairingBootstrapError::InvalidTimeout)
+        ));
+    }
+
+    #[test]
+    fn options_reject_unbounded_existing_networks() {
+        let options = PairingBootstrapOptions {
+            existing_network_names: vec![
+                "network".to_owned();
+                MAX_PAIRING_BOOTSTRAP_EXISTING_NETWORKS + 1
+            ],
+            ..PairingBootstrapOptions::default()
+        };
+
+        assert!(matches!(
+            validate_options(&options),
+            Err(PairingBootstrapError::Build(_))
         ));
     }
 

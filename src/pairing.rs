@@ -1258,6 +1258,7 @@ pub enum PairingError {
     MembershipVersionOverflow { issuer: String, member: String },
     ConflictingMembershipKey,
     ConflictingAssignedVpnIp,
+    HostnameConflict { hostname: String, owner: String },
     AssignedVpnIpNotAuthorized { assigned: String },
     LocalPeerNotParticipant { local: String },
     LocalIdentityMismatch { expected: String, actual: String },
