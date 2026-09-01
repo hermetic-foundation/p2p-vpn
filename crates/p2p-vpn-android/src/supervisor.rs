@@ -19,6 +19,8 @@ use p2p_vpn::{
     },
 };
 
+use crate::packet_translation::{PacketTranslator, PrimaryAddresses, validate_packet_isolation};
+
 pub(crate) const MAX_NETWORKS: usize = 16;
 pub(crate) const DEFAULT_QUEUE_MAX_PACKETS: usize = 256;
 pub(crate) const DEFAULT_QUEUE_MAX_BYTES: usize = 1024 * 1024;
@@ -75,6 +77,18 @@ impl PacketSwitch {
         networks: Vec<NetworkSpec>,
         limits: QueueLimits,
     ) -> Result<(Self, Vec<NetworkPort>), SupervisorError> {
+        let presentation = networks
+            .first()
+            .map(|network| primary_addresses(&network.tun))
+            .ok_or(SupervisorError::InvalidNetworkCount { actual: 0 })?;
+        Self::new_with_presentation(networks, presentation, limits)
+    }
+
+    pub(crate) fn new_with_presentation(
+        networks: Vec<NetworkSpec>,
+        presentation: PrimaryAddresses,
+        limits: QueueLimits,
+    ) -> Result<(Self, Vec<NetworkPort>), SupervisorError> {
         let limits = limits.validate()?;
         if networks.is_empty() || networks.len() > MAX_NETWORKS {
             return Err(SupervisorError::InvalidNetworkCount {
@@ -82,7 +96,9 @@ impl PacketSwitch {
             });
         }
 
-        let routes = DispatchRegistry::new(&networks)?;
+        validate_presentation(presentation)?;
+        let translation_policy = TranslationPolicy::new(&networks, presentation);
+        let routes = DispatchRegistry::new(&networks, presentation)?;
         let wake = Arc::new(WriterWake::default());
         let metrics = Arc::new(SwitchMetrics::default());
         let mut outbound = BTreeMap::new();
@@ -91,6 +107,7 @@ impl PacketSwitch {
         let mut ports = Vec::with_capacity(networks.len());
 
         for network in networks {
+            let translator = PacketTranslator::new(presentation, primary_addresses(&network.tun));
             let network_metrics = Arc::new(NetworkMetrics::default());
             metrics.insert_network(&network.id, Arc::clone(&network_metrics));
 
@@ -112,6 +129,8 @@ impl PacketSwitch {
                     sender: outbound_sender,
                     mtu: usize::from(network.tun.mtu),
                     metrics: Arc::clone(&network_metrics),
+                    translator,
+                    translation_policy,
                 },
             );
             inbound.push(InboundPort {
@@ -120,6 +139,8 @@ impl PacketSwitch {
                 metrics: Arc::clone(&network_metrics),
                 active: inbound_active,
                 routes: routes.clone(),
+                translator,
+                translation_policy,
             });
             controls.insert(network.id.clone(), control.clone());
             ports.push(NetworkPort {
@@ -198,7 +219,33 @@ impl PacketSwitch {
             return DispatchOutcome::Oversized { network_id };
         }
 
-        match port.sender.push(packet) {
+        let queue_result = if port.translator.outbound_requires_translation(source) {
+            match port.sender.reserve(packet.len()) {
+                Ok(reservation) => {
+                    let mut translated = packet.to_vec();
+                    if port.translator.translate_outbound(&mut translated).is_err() {
+                        port.metrics
+                            .outbound_translation_drops
+                            .fetch_add(1, Ordering::Relaxed);
+                        return DispatchOutcome::TranslationFailed { network_id };
+                    }
+                    reservation.commit(translated)
+                }
+                Err(outcome) => outcome,
+            }
+        } else if port.translation_policy.applies(source) {
+            if PacketTranslator::validate_supported(packet).is_err() {
+                port.metrics
+                    .outbound_translation_drops
+                    .fetch_add(1, Ordering::Relaxed);
+                return DispatchOutcome::TranslationFailed { network_id };
+            }
+            port.sender.push(packet)
+        } else {
+            port.sender.push(packet)
+        };
+
+        match queue_result {
             QueuePush::Queued => {
                 port.metrics
                     .outbound_enqueued_packets
@@ -223,6 +270,12 @@ impl PacketSwitch {
                     .fetch_add(1, Ordering::Relaxed);
                 DispatchOutcome::Closed { network_id }
             }
+            QueuePush::ReservationMismatch => {
+                port.metrics
+                    .outbound_translation_drops
+                    .fetch_add(1, Ordering::Relaxed);
+                DispatchOutcome::TranslationFailed { network_id }
+            }
         }
     }
 
@@ -244,7 +297,7 @@ impl PacketSwitch {
             if !*active {
                 continue;
             }
-            let Some(packet) = port.receiver.try_pop() else {
+            let Some(mut packet) = port.receiver.try_pop() else {
                 continue;
             };
             *next_inbound = (index + 1) % self.inbound.len();
@@ -252,6 +305,14 @@ impl PacketSwitch {
             let validation = port.routes.validate_inbound(&port.id, &packet);
             if validation != InboundValidation::Valid {
                 record_inbound_validation_drop(&port.metrics, validation);
+                return Ok(Some(port.id.clone()));
+            }
+            if port.translation_policy.applies_packet(&packet)
+                && port.translator.translate_inbound(&mut packet).is_err()
+            {
+                port.metrics
+                    .inbound_translation_drops
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(Some(port.id.clone()));
             }
             match writer.write_packet(&packet) {
@@ -332,6 +393,7 @@ pub(crate) enum DispatchOutcome {
     Oversized { network_id: String },
     Closed { network_id: String },
     SourceMismatch { network_id: String },
+    TranslationFailed { network_id: String },
     Malformed,
     NoRoute,
 }
@@ -351,6 +413,7 @@ pub(crate) struct NetworkSnapshot {
     pub outbound_queue_drops: u64,
     pub outbound_oversized_drops: u64,
     pub outbound_source_mismatch_drops: u64,
+    pub outbound_translation_drops: u64,
     pub outbound_removed_drops: u64,
     pub inbound_enqueued_packets: u64,
     pub inbound_queue_drops: u64,
@@ -358,6 +421,7 @@ pub(crate) struct NetworkSnapshot {
     pub inbound_malformed_drops: u64,
     pub inbound_source_mismatch_drops: u64,
     pub inbound_destination_mismatch_drops: u64,
+    pub inbound_translation_drops: u64,
     pub inbound_removed_drops: u64,
     pub inbound_written_packets: u64,
     pub inbound_write_backpressure_drops: u64,
@@ -410,7 +474,10 @@ struct DispatchRegistry {
 }
 
 impl DispatchRegistry {
-    fn new(networks: &[NetworkSpec]) -> Result<Self, SupervisorError> {
+    fn new(
+        networks: &[NetworkSpec],
+        presentation: PrimaryAddresses,
+    ) -> Result<Self, SupervisorError> {
         let mut configured = BTreeMap::new();
         for network in networks {
             validate_network_id(&network.id)?;
@@ -425,7 +492,10 @@ impl DispatchRegistry {
             }
         }
         Ok(Self {
-            state: Arc::new(RwLock::new(DispatchState::validated(configured)?)),
+            state: Arc::new(RwLock::new(DispatchState::validated(
+                configured,
+                presentation,
+            )?)),
         })
     }
 
@@ -441,7 +511,9 @@ impl DispatchRegistry {
         let Some(network) = state.networks.get(&route.network_id) else {
             return RouteResolution::NoRoute;
         };
-        if network.local.iter().any(|prefix| prefix.contains(source)) {
+        if network.local.iter().any(|prefix| prefix.contains(source))
+            || state.presentation.contains(source)
+        {
             RouteResolution::Routed(route.network_id.clone())
         } else {
             RouteResolution::SourceMismatch(route.network_id.clone())
@@ -476,9 +548,16 @@ impl DispatchRegistry {
         installed: &TunRuntimeConfig,
         next: &TunRuntimeConfig,
     ) -> Result<(), SupervisorError> {
+        if primary_addresses(installed) != primary_addresses(next)
+            || installed.additional_addresses != next.additional_addresses
+        {
+            return Err(SupervisorError::NetworkAddressChanged(
+                network_id.to_owned(),
+            ));
+        }
         let installed_routes = NetworkRoutes::try_from_tun(network_id, installed)?;
         let next_routes = NetworkRoutes::try_from_tun(network_id, next)?;
-        let (generation, mut candidate) = {
+        let (generation, presentation, mut candidate) = {
             let current = self.state.read().unwrap_or_else(|error| error.into_inner());
             let Some(expected) = current.networks.get(network_id) else {
                 return Err(SupervisorError::UnknownNetwork(network_id.to_owned()));
@@ -486,10 +565,14 @@ impl DispatchRegistry {
             if expected != &installed_routes {
                 return Err(SupervisorError::StaleRouteUpdate(network_id.to_owned()));
             }
-            (current.generation, current.networks.clone())
+            (
+                current.generation,
+                current.presentation,
+                current.networks.clone(),
+            )
         };
         candidate.insert(network_id.to_owned(), next_routes);
-        let mut candidate = DispatchState::validated(candidate)?;
+        let mut candidate = DispatchState::validated(candidate, presentation)?;
 
         let mut current = self
             .state
@@ -572,12 +655,16 @@ impl NetworkRoutes {
 
 struct DispatchState {
     generation: u64,
+    presentation: PrimaryAddresses,
     networks: BTreeMap<String, NetworkRoutes>,
     dispatch: Vec<DispatchRoute>,
 }
 
 impl DispatchState {
-    fn validated(networks: BTreeMap<String, NetworkRoutes>) -> Result<Self, SupervisorError> {
+    fn validated(
+        networks: BTreeMap<String, NetworkRoutes>,
+        presentation: PrimaryAddresses,
+    ) -> Result<Self, SupervisorError> {
         let total_prefixes = networks
             .values()
             .map(|routes| routes.local.len().saturating_add(routes.remote.len()))
@@ -615,10 +702,20 @@ impl DispatchState {
                     });
                 }
             }
+            for address in [IpAddr::V4(presentation.ipv4), IpAddr::V6(presentation.ipv6)] {
+                if let Some(remote) = routes.remote.iter().find(|remote| remote.contains(address)) {
+                    return Err(SupervisorError::PresentationRouteOverlap {
+                        network_id: network_id.clone(),
+                        presentation: address,
+                        remote: *remote,
+                    });
+                }
+            }
         }
 
         let mut state = Self {
             generation: 0,
+            presentation,
             networks,
             dispatch: Vec::new(),
         };
@@ -660,7 +757,9 @@ pub(crate) enum SupervisorError {
     InvalidNetworkId,
     DuplicateNetworkId(String),
     InvalidQueueLimits,
+    InvalidPresentationAddresses,
     UnknownNetwork(String),
+    NetworkAddressChanged(String),
     StaleRouteUpdate(String),
     TooManyNetworkPrefixes {
         network_id: String,
@@ -672,6 +771,11 @@ pub(crate) enum SupervisorError {
     LocalRouteOverlap {
         network_id: String,
         local: IpCidr,
+        remote: IpCidr,
+    },
+    PresentationRouteOverlap {
+        network_id: String,
+        presentation: IpAddr,
         remote: IpCidr,
     },
     OverlappingNetworks {
@@ -701,9 +805,19 @@ impl fmt::Display for SupervisorError {
             Self::InvalidQueueLimits => {
                 write!(formatter, "Android supervisor queue limits are invalid")
             }
+            Self::InvalidPresentationAddresses => {
+                write!(
+                    formatter,
+                    "Android supervisor presentation addresses are invalid"
+                )
+            }
             Self::UnknownNetwork(id) => {
                 write!(formatter, "Android supervisor network is unknown: {id}")
             }
+            Self::NetworkAddressChanged(id) => write!(
+                formatter,
+                "Android supervisor local addresses changed while {id} was active"
+            ),
             Self::StaleRouteUpdate(id) => {
                 write!(
                     formatter,
@@ -725,6 +839,14 @@ impl fmt::Display for SupervisorError {
             } => write!(
                 formatter,
                 "Android supervisor network {network_id} overlaps local address {local} with route {remote}"
+            ),
+            Self::PresentationRouteOverlap {
+                network_id,
+                presentation,
+                remote,
+            } => write!(
+                formatter,
+                "Android supervisor network {network_id} route {remote} overlaps presentation address {presentation}"
             ),
             Self::OverlappingNetworks {
                 first_network,
@@ -751,6 +873,61 @@ fn validate_network_id(network_id: &str) -> Result<(), SupervisorError> {
     Ok(())
 }
 
+fn primary_addresses(tun: &TunRuntimeConfig) -> PrimaryAddresses {
+    PrimaryAddresses {
+        ipv4: tun.addresses.ipv4,
+        ipv6: tun.addresses.ipv6,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TranslationPolicy {
+    ipv4: bool,
+    ipv6: bool,
+}
+
+impl TranslationPolicy {
+    fn new(networks: &[NetworkSpec], presentation: PrimaryAddresses) -> Self {
+        Self {
+            ipv4: networks
+                .iter()
+                .any(|network| network.tun.addresses.ipv4 != presentation.ipv4),
+            ipv6: networks
+                .iter()
+                .any(|network| network.tun.addresses.ipv6 != presentation.ipv6),
+        }
+    }
+
+    fn applies(self, address: IpAddr) -> bool {
+        match address {
+            IpAddr::V4(_) => self.ipv4,
+            IpAddr::V6(_) => self.ipv6,
+        }
+    }
+
+    fn applies_packet(self, packet: &[u8]) -> bool {
+        match packet.first().map(|byte| byte >> 4) {
+            Some(4) => self.ipv4,
+            Some(6) => self.ipv6,
+            _ => false,
+        }
+    }
+}
+
+fn validate_presentation(presentation: PrimaryAddresses) -> Result<(), SupervisorError> {
+    let invalid_ipv4 = presentation.ipv4.is_unspecified()
+        || presentation.ipv4.is_broadcast()
+        || presentation.ipv4.is_loopback()
+        || presentation.ipv4.is_multicast();
+    let invalid_ipv6 = presentation.ipv6.is_unspecified()
+        || presentation.ipv6.is_loopback()
+        || presentation.ipv6.is_multicast();
+    if invalid_ipv4 || invalid_ipv6 {
+        return Err(SupervisorError::InvalidPresentationAddresses);
+    }
+    Ok(())
+}
+
 fn push_unique_bounded(
     network_id: &str,
     prefixes: &mut Vec<IpCidr>,
@@ -772,6 +949,7 @@ fn push_unique_bounded(
 }
 
 fn packet_addresses(packet: &[u8]) -> Result<(IpAddr, IpAddr), PacketAddressError> {
+    validate_packet_isolation(packet).map_err(|_| PacketAddressError::InvalidPacket)?;
     let Some(version) = packet.first().map(|byte| byte >> 4) else {
         return Err(PacketAddressError::TooShort);
     };
@@ -821,6 +999,7 @@ fn packet_addresses(packet: &[u8]) -> Result<(IpAddr, IpAddr), PacketAddressErro
 enum PacketAddressError {
     TooShort,
     InvalidLength,
+    InvalidPacket,
     UnsupportedVersion,
 }
 
@@ -888,6 +1067,12 @@ impl PacketWrite for PortWriter {
                     "shared TUN packet switch is closed",
                 ));
             }
+            QueuePush::ReservationMismatch => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "shared TUN queue reservation length changed",
+                ));
+            }
         }
         // Queue pressure is a packet drop, not a fatal failure for this network runtime.
         Ok(packet.len())
@@ -898,6 +1083,8 @@ struct OutboundPort {
     sender: QueueSender,
     mtu: usize,
     metrics: Arc<NetworkMetrics>,
+    translator: PacketTranslator,
+    translation_policy: TranslationPolicy,
 }
 
 struct InboundPort {
@@ -906,6 +1093,8 @@ struct InboundPort {
     metrics: Arc<NetworkMetrics>,
     active: Arc<Mutex<bool>>,
     routes: DispatchRegistry,
+    translator: PacketTranslator,
+    translation_policy: TranslationPolicy,
 }
 
 #[derive(Clone)]
@@ -989,6 +1178,8 @@ struct PacketQueue {
 struct PacketQueueState {
     packets: VecDeque<Vec<u8>>,
     bytes: usize,
+    reserved_packets: usize,
+    reserved_bytes: usize,
     closed: bool,
 }
 
@@ -998,6 +1189,38 @@ struct QueueSender {
 }
 
 impl QueueSender {
+    fn reserve(&self, packet_len: usize) -> Result<QueueReservation, QueuePush> {
+        if packet_len > self.queue.limits.max_bytes {
+            return Err(QueuePush::Oversized);
+        }
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.closed {
+            return Err(QueuePush::Closed);
+        }
+        if state.packets.len().saturating_add(state.reserved_packets)
+            >= self.queue.limits.max_packets
+            || state
+                .bytes
+                .saturating_add(state.reserved_bytes)
+                .saturating_add(packet_len)
+                > self.queue.limits.max_bytes
+        {
+            return Err(QueuePush::Full);
+        }
+        state.reserved_packets += 1;
+        state.reserved_bytes += packet_len;
+        drop(state);
+        Ok(QueueReservation {
+            queue: Arc::clone(&self.queue),
+            packet_len,
+            active: true,
+        })
+    }
+
     fn push(&self, packet: &[u8]) -> QueuePush {
         if packet.len() > self.queue.limits.max_bytes {
             return QueuePush::Oversized;
@@ -1010,8 +1233,13 @@ impl QueueSender {
         if state.closed {
             return QueuePush::Closed;
         }
-        if state.packets.len() >= self.queue.limits.max_packets
-            || state.bytes.saturating_add(packet.len()) > self.queue.limits.max_bytes
+        if state.packets.len().saturating_add(state.reserved_packets)
+            >= self.queue.limits.max_packets
+            || state
+                .bytes
+                .saturating_add(state.reserved_bytes)
+                .saturating_add(packet.len())
+                > self.queue.limits.max_bytes
         {
             return QueuePush::Full;
         }
@@ -1035,6 +1263,56 @@ impl QueueSender {
         drop(state);
         self.queue.available.notify_all();
         dropped
+    }
+}
+
+struct QueueReservation {
+    queue: Arc<PacketQueue>,
+    packet_len: usize,
+    active: bool,
+}
+
+impl QueueReservation {
+    fn commit(mut self, packet: Vec<u8>) -> QueuePush {
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.reserved_packets = state.reserved_packets.saturating_sub(1);
+        state.reserved_bytes = state.reserved_bytes.saturating_sub(self.packet_len);
+        self.active = false;
+        if packet.len() != self.packet_len {
+            return QueuePush::ReservationMismatch;
+        }
+        if state.closed {
+            return QueuePush::Closed;
+        }
+        if state.packets.len() >= self.queue.limits.max_packets
+            || state.bytes.saturating_add(packet.len()) > self.queue.limits.max_bytes
+        {
+            return QueuePush::Full;
+        }
+        state.bytes += packet.len();
+        state.packets.push_back(packet);
+        drop(state);
+        self.queue.available.notify_one();
+        QueuePush::Queued
+    }
+}
+
+impl Drop for QueueReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let mut state = self
+            .queue
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.reserved_packets = state.reserved_packets.saturating_sub(1);
+        state.reserved_bytes = state.reserved_bytes.saturating_sub(self.packet_len);
     }
 }
 
@@ -1101,6 +1379,7 @@ enum QueuePush {
     Full,
     Oversized,
     Closed,
+    ReservationMismatch,
 }
 
 #[derive(Default)]
@@ -1181,6 +1460,7 @@ struct NetworkMetrics {
     outbound_queue_drops: AtomicU64,
     outbound_oversized_drops: AtomicU64,
     outbound_source_mismatch_drops: AtomicU64,
+    outbound_translation_drops: AtomicU64,
     outbound_removed_drops: AtomicU64,
     inbound_enqueued_packets: AtomicU64,
     inbound_queue_drops: AtomicU64,
@@ -1188,6 +1468,7 @@ struct NetworkMetrics {
     inbound_malformed_drops: AtomicU64,
     inbound_source_mismatch_drops: AtomicU64,
     inbound_destination_mismatch_drops: AtomicU64,
+    inbound_translation_drops: AtomicU64,
     inbound_removed_drops: AtomicU64,
     inbound_written_packets: AtomicU64,
     inbound_write_backpressure_drops: AtomicU64,
@@ -1205,6 +1486,7 @@ impl NetworkMetrics {
             outbound_source_mismatch_drops: self
                 .outbound_source_mismatch_drops
                 .load(Ordering::Relaxed),
+            outbound_translation_drops: self.outbound_translation_drops.load(Ordering::Relaxed),
             outbound_removed_drops: self.outbound_removed_drops.load(Ordering::Relaxed),
             inbound_enqueued_packets: self.inbound_enqueued_packets.load(Ordering::Relaxed),
             inbound_queue_drops: self.inbound_queue_drops.load(Ordering::Relaxed),
@@ -1216,6 +1498,7 @@ impl NetworkMetrics {
             inbound_destination_mismatch_drops: self
                 .inbound_destination_mismatch_drops
                 .load(Ordering::Relaxed),
+            inbound_translation_drops: self.inbound_translation_drops.load(Ordering::Relaxed),
             inbound_removed_drops: self.inbound_removed_drops.load(Ordering::Relaxed),
             inbound_written_packets: self.inbound_written_packets.load(Ordering::Relaxed),
             inbound_write_backpressure_drops: self
@@ -1230,7 +1513,7 @@ impl NetworkMetrics {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Arc, Mutex, mpsc},
+        sync::{Arc, Barrier, Mutex, mpsc},
         thread,
     };
 
@@ -1277,6 +1560,8 @@ mod tests {
     fn packet_with_len(source: [u8; 4], destination: [u8; 4], length: usize) -> Vec<u8> {
         let mut packet = vec![0_u8; length];
         packet[0] = 0x45;
+        packet[8] = 64;
+        packet[9] = 59;
         packet[2..4].copy_from_slice(
             &u16::try_from(length)
                 .expect("test packet length fits IPv4")
@@ -1284,6 +1569,42 @@ mod tests {
         );
         packet[12..16].copy_from_slice(&source);
         packet[16..20].copy_from_slice(&destination);
+        write_test_ipv4_checksum(&mut packet);
+        packet
+    }
+
+    fn write_test_ipv4_checksum(packet: &mut [u8]) {
+        let header_len = usize::from(packet[0] & 0x0f) * 4;
+        packet[10] = 0;
+        packet[11] = 0;
+        let mut sum = 0_u32;
+        for word in packet[..header_len].chunks_exact(2) {
+            sum += u32::from(u16::from_be_bytes([word[0], word[1]]));
+        }
+        while sum > u32::from(u16::MAX) {
+            sum = (sum & u32::from(u16::MAX)) + (sum >> 16);
+        }
+        packet[10..12].copy_from_slice(&(!u16::try_from(sum).expect("checksum")).to_be_bytes());
+    }
+
+    fn ipv4_source_route_packet(
+        source: [u8; 4],
+        destination: [u8; 4],
+        ultimate: [u8; 4],
+        option: u8,
+    ) -> Vec<u8> {
+        let mut packet = vec![0_u8; 28];
+        packet[0] = 0x47;
+        packet[2..4].copy_from_slice(&28_u16.to_be_bytes());
+        packet[8] = 64;
+        packet[9] = 59;
+        packet[12..16].copy_from_slice(&source);
+        packet[16..20].copy_from_slice(&destination);
+        packet[20] = option;
+        packet[21] = 7;
+        packet[22] = 4;
+        packet[23..27].copy_from_slice(&ultimate);
+        write_test_ipv4_checksum(&mut packet);
         packet
     }
 
@@ -1295,8 +1616,31 @@ mod tests {
         packet
     }
 
+    fn ipv6_routing_packet(source: Ipv6Addr, destination: Ipv6Addr, ultimate: Ipv6Addr) -> Vec<u8> {
+        let mut packet = vec![0_u8; 64];
+        packet[0] = 0x60;
+        packet[4..6].copy_from_slice(&24_u16.to_be_bytes());
+        packet[6] = 43;
+        packet[7] = 64;
+        packet[8..24].copy_from_slice(&source.octets());
+        packet[24..40].copy_from_slice(&destination.octets());
+        packet[40] = 59;
+        packet[41] = 2;
+        packet[42] = 4;
+        packet[43] = 1;
+        packet[48..64].copy_from_slice(&ultimate.octets());
+        packet
+    }
+
     fn local(seed: u8) -> [u8; 4] {
         tun(seed, &[]).addresses.ipv4.octets()
+    }
+
+    fn presentation(ipv4: Ipv4Addr) -> PrimaryAddresses {
+        PrimaryAddresses {
+            ipv4,
+            ipv6: "2001:db8::1".parse().expect("presentation IPv6"),
+        }
     }
 
     #[test]
@@ -1332,6 +1676,278 @@ mod tests {
         let mut buffer = vec![0_u8; 1280];
         let length = reader.read_packet(&mut buffer).expect("queued packet");
         assert_eq!(&buffer[..length], routed);
+    }
+
+    #[test]
+    fn presentation_addresses_translate_at_both_shared_tun_boundaries() {
+        let presentation = presentation(Ipv4Addr::new(192, 0, 2, 1));
+        let (switch, ports) = PacketSwitch::new_with_presentation(
+            vec![
+                NetworkSpec {
+                    id: "alpha".to_owned(),
+                    tun: tun(1, &[("10.10.0.0", 16)]),
+                },
+                NetworkSpec {
+                    id: "beta".to_owned(),
+                    tun: tun(2, &[("10.20.0.0", 16)]),
+                },
+            ],
+            presentation,
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let beta = ports
+            .into_iter()
+            .find(|port| port.id == "beta")
+            .expect("beta port");
+        let (mut beta_reader, mut beta_writer) = beta.packet_io.split();
+
+        let outbound = packet(presentation.ipv4.octets(), [10, 20, 1, 9]);
+        assert_eq!(
+            switch.dispatch_packet(&outbound),
+            DispatchOutcome::Queued {
+                network_id: "beta".to_owned()
+            }
+        );
+        let mut buffer = vec![0_u8; 1280];
+        let length = beta_reader
+            .read_packet(&mut buffer)
+            .expect("runtime packet");
+        assert_eq!(&buffer[..length], packet(local(2), [10, 20, 1, 9]));
+
+        let inbound = packet([10, 20, 1, 9], local(2));
+        beta_writer
+            .write_packet(&inbound)
+            .expect("runtime inbound packet");
+        let written = Arc::new(Mutex::new(Vec::new()));
+        switch
+            .write_next(&mut RecordingWriter(Arc::clone(&written)))
+            .expect("physical TUN write");
+        assert_eq!(
+            *written.lock().expect("written packets"),
+            vec![packet([10, 20, 1, 9], presentation.ipv4.octets())]
+        );
+    }
+
+    #[test]
+    fn translation_failures_drop_only_the_packet_and_are_counted() {
+        let presentation = presentation(Ipv4Addr::new(192, 0, 2, 1));
+        let (switch, mut ports) = PacketSwitch::new_with_presentation(
+            vec![NetworkSpec {
+                id: "alpha".to_owned(),
+                tun: tun(1, &[("10.10.0.0", 16)]),
+            }],
+            presentation,
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let mut unsupported = packet(presentation.ipv4.octets(), [10, 10, 1, 9]);
+        unsupported[9] = 99;
+        write_test_ipv4_checksum(&mut unsupported);
+
+        assert_eq!(
+            switch.dispatch_packet(&unsupported),
+            DispatchOutcome::TranslationFailed {
+                network_id: "alpha".to_owned()
+            }
+        );
+        assert_eq!(switch.snapshot().networks[0].outbound_translation_drops, 1);
+        assert_eq!(
+            switch.dispatch_packet(&packet(presentation.ipv4.octets(), [10, 10, 1, 10])),
+            DispatchOutcome::Queued {
+                network_id: "alpha".to_owned()
+            }
+        );
+
+        let (_, mut runtime_writer) = ports.pop().expect("alpha port").packet_io.split();
+        let mut unsupported_inbound = packet([10, 10, 1, 9], local(1));
+        unsupported_inbound[9] = 99;
+        write_test_ipv4_checksum(&mut unsupported_inbound);
+        runtime_writer
+            .write_packet(&unsupported_inbound)
+            .expect("unsupported inbound packet is queued");
+        let written = Arc::new(Mutex::new(Vec::new()));
+        assert_eq!(
+            switch
+                .write_next(&mut RecordingWriter(Arc::clone(&written)))
+                .expect("translation drop"),
+            Some("alpha".to_owned())
+        );
+        assert!(written.lock().expect("written packets").is_empty());
+        assert_eq!(switch.snapshot().networks[0].inbound_translation_drops, 1);
+
+        runtime_writer
+            .write_packet(&packet([10, 10, 1, 10], local(1)))
+            .expect("valid inbound packet");
+        switch
+            .write_next(&mut RecordingWriter(Arc::clone(&written)))
+            .expect("valid physical write");
+        assert_eq!(written.lock().expect("written packets").len(), 1);
+    }
+
+    #[test]
+    fn concurrent_translation_uses_one_protocol_policy_for_every_network() {
+        let (switch, ports) = PacketSwitch::new(
+            vec![
+                NetworkSpec {
+                    id: "alpha".to_owned(),
+                    tun: tun(1, &[("10.10.0.0", 16)]),
+                },
+                NetworkSpec {
+                    id: "beta".to_owned(),
+                    tun: tun(2, &[("10.20.0.0", 16)]),
+                },
+            ],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let mut alpha = packet(local(1), [10, 10, 1, 9]);
+        alpha[9] = 99;
+        write_test_ipv4_checksum(&mut alpha);
+        let mut beta = packet(local(1), [10, 20, 1, 9]);
+        beta[9] = 99;
+        write_test_ipv4_checksum(&mut beta);
+
+        assert!(matches!(
+            switch.dispatch_packet(&alpha),
+            DispatchOutcome::TranslationFailed { network_id } if network_id == "alpha"
+        ));
+        assert!(matches!(
+            switch.dispatch_packet(&beta),
+            DispatchOutcome::TranslationFailed { network_id } if network_id == "beta"
+        ));
+        let mut writers = ports
+            .into_iter()
+            .map(|port| {
+                let (_, writer) = port.packet_io.split();
+                (port.id, writer)
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (id, source, destination) in [
+            ("alpha", [10, 10, 1, 9], local(1)),
+            ("beta", [10, 20, 1, 9], local(2)),
+        ] {
+            let mut inbound = packet(source, destination);
+            inbound[9] = 99;
+            write_test_ipv4_checksum(&mut inbound);
+            writers
+                .get_mut(id)
+                .expect("network writer")
+                .write_packet(&inbound)
+                .expect("unsupported inbound packet is queued for policy validation");
+        }
+        let written = Arc::new(Mutex::new(Vec::new()));
+        switch
+            .write_next(&mut RecordingWriter(Arc::clone(&written)))
+            .expect("first policy drop");
+        switch
+            .write_next(&mut RecordingWriter(Arc::clone(&written)))
+            .expect("second policy drop");
+        assert!(written.lock().expect("written packets").is_empty());
+        let snapshot = switch.snapshot();
+        assert!(
+            snapshot
+                .networks
+                .iter()
+                .all(|network| network.outbound_translation_drops == 1
+                    && network.inbound_translation_drops == 1)
+        );
+    }
+
+    #[test]
+    fn single_identity_mapped_network_preserves_unsupported_protocol_compatibility() {
+        let (switch, _) = PacketSwitch::new(
+            vec![NetworkSpec {
+                id: "alpha".to_owned(),
+                tun: tun(1, &[("10.10.0.0", 16)]),
+            }],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let mut packet = packet(local(1), [10, 10, 1, 9]);
+        packet[9] = 99;
+        write_test_ipv4_checksum(&mut packet);
+
+        assert_eq!(
+            switch.dispatch_packet(&packet),
+            DispatchOutcome::Queued {
+                network_id: "alpha".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn source_routing_is_rejected_before_outbound_or_inbound_ownership() {
+        let alpha = tun(1, &[("10.10.0.0", 16), ("fd10::", 64)]);
+        let beta = tun(2, &[("10.20.0.0", 16), ("fd20::", 64)]);
+        let alpha_v6 = alpha.addresses.ipv6;
+        let (switch, ports) = PacketSwitch::new(
+            vec![
+                NetworkSpec {
+                    id: "alpha".to_owned(),
+                    tun: alpha,
+                },
+                NetworkSpec {
+                    id: "beta".to_owned(),
+                    tun: beta,
+                },
+            ],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+
+        let loose = ipv4_source_route_packet(local(1), [10, 10, 1, 9], [10, 20, 1, 9], 131);
+        assert_eq!(switch.dispatch_packet(&loose), DispatchOutcome::Malformed);
+        let routing = ipv6_routing_packet(
+            alpha_v6,
+            "fd10::9".parse().expect("IPv6 destination"),
+            "fd20::9".parse().expect("IPv6 ultimate destination"),
+        );
+        assert_eq!(switch.dispatch_packet(&routing), DispatchOutcome::Malformed);
+
+        let alpha_port = ports
+            .into_iter()
+            .find(|port| port.id == "alpha")
+            .expect("alpha port");
+        let (_, mut writer) = alpha_port.packet_io.split();
+        let strict = ipv4_source_route_packet([10, 10, 1, 9], local(1), local(2), 137);
+        writer
+            .write_packet(&strict)
+            .expect("source-routed inbound packet is dropped");
+        let alpha_metrics = switch
+            .snapshot()
+            .networks
+            .into_iter()
+            .find(|network| network.id == "alpha")
+            .expect("alpha metrics");
+        assert_eq!(alpha_metrics.inbound_malformed_drops, 1);
+    }
+
+    #[test]
+    fn rejects_invalid_or_routed_presentation_addresses() {
+        let network = NetworkSpec {
+            id: "alpha".to_owned(),
+            tun: tun(1, &[("10.10.0.0", 16)]),
+        };
+        assert!(matches!(
+            PacketSwitch::new_with_presentation(
+                vec![network.clone()],
+                PrimaryAddresses {
+                    ipv4: Ipv4Addr::UNSPECIFIED,
+                    ipv6: "2001:db8::1".parse().expect("presentation IPv6"),
+                },
+                QueueLimits::DEFAULT,
+            ),
+            Err(SupervisorError::InvalidPresentationAddresses)
+        ));
+        assert!(matches!(
+            PacketSwitch::new_with_presentation(
+                vec![network],
+                presentation(Ipv4Addr::new(10, 10, 1, 1)),
+                QueueLimits::DEFAULT,
+            ),
+            Err(SupervisorError::PresentationRouteOverlap { .. })
+        ));
     }
 
     #[test]
@@ -1492,6 +2108,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_live_additional_address_changes_before_dispatch_state_changes() {
+        let current = tun(1, &[("10.10.0.0", 16)]);
+        let (switch, mut ports) = PacketSwitch::new(
+            vec![NetworkSpec {
+                id: "alpha".to_owned(),
+                tun: current.clone(),
+            }],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let mut port = ports.pop().expect("alpha port");
+        let mut next = current.clone();
+        next.additional_addresses.push(cidr("192.0.2.9", 32));
+        let unchanged_update = current
+            .route_reconciliation_from(&current)
+            .expect("empty route update");
+
+        let result = port
+            .route_controller
+            .reconcile(&current, &next, &unchanged_update);
+
+        assert!(matches!(
+            result,
+            Err(RunnerError::Tun(TunRuntimeError::NonAdditiveUpdate(
+                ROUTE_UPDATE_REJECTED
+            )))
+        ));
+        assert_eq!(
+            switch.dispatch_packet(&packet(local(1), [10, 10, 1, 9])),
+            DispatchOutcome::NoRoute
+        );
+        assert_eq!(switch.snapshot().networks[0].route_update_rejections, 1);
+    }
+
+    #[test]
     fn queue_pressure_is_bounded_and_isolated_per_network() {
         let limits = QueueLimits {
             max_packets: 1,
@@ -1537,8 +2188,61 @@ mod tests {
     }
 
     #[test]
+    fn queue_reservations_exclude_concurrent_packet_and_byte_pushes() {
+        fn assert_reserved_capacity_is_exclusive(limits: QueueLimits, reserved_len: usize) {
+            let (sender, receiver) = packet_queue(limits);
+            let reserved = Arc::new(Barrier::new(2));
+            let release = Arc::new(Barrier::new(2));
+            let worker_sender = sender.clone();
+            let worker_reserved = Arc::clone(&reserved);
+            let worker_release = Arc::clone(&release);
+            let worker = thread::spawn(move || {
+                let reservation = worker_sender.reserve(reserved_len).expect("reservation");
+                worker_reserved.wait();
+                worker_release.wait();
+                reservation.commit(vec![0_u8; reserved_len])
+            });
+
+            reserved.wait();
+            assert_eq!(sender.push(&[0]), QueuePush::Full);
+            release.wait();
+            assert_eq!(
+                worker.join().expect("reservation worker"),
+                QueuePush::Queued
+            );
+            assert_eq!(receiver.try_pop(), Some(vec![0_u8; reserved_len]));
+        }
+
+        assert_reserved_capacity_is_exclusive(
+            QueueLimits {
+                max_packets: 1,
+                max_bytes: 64,
+            },
+            20,
+        );
+        assert_reserved_capacity_is_exclusive(
+            QueueLimits {
+                max_packets: 2,
+                max_bytes: 20,
+            },
+            20,
+        );
+
+        let (sender, _) = packet_queue(QueueLimits {
+            max_packets: 1,
+            max_bytes: 20,
+        });
+        let reservation = sender.reserve(20).expect("reservation");
+        assert_eq!(
+            reservation.commit(vec![0_u8; 19]),
+            QueuePush::ReservationMismatch
+        );
+        assert_eq!(sender.push(&[0]), QueuePush::Queued);
+    }
+
+    #[test]
     fn rejects_a_source_owned_by_another_network_without_poisoning_dispatch() {
-        let (switch, _) = PacketSwitch::new(
+        let (switch, _) = PacketSwitch::new_with_presentation(
             vec![
                 NetworkSpec {
                     id: "alpha".to_owned(),
@@ -1549,6 +2253,7 @@ mod tests {
                     tun: tun(2, &[("10.20.0.0", 16)]),
                 },
             ],
+            presentation(Ipv4Addr::new(192, 0, 2, 1)),
             QueueLimits::DEFAULT,
         )
         .expect("switch");
@@ -1644,6 +2349,7 @@ mod tests {
         let alpha_1 = packet([10, 10, 1, 1], local(1));
         let alpha_2 = packet([10, 10, 1, 2], local(1));
         let beta_1 = packet([10, 20, 1, 1], local(2));
+        let beta_presented = packet([10, 20, 1, 1], local(1));
         writers
             .get_mut("alpha")
             .expect("alpha writer")
@@ -1676,7 +2382,7 @@ mod tests {
         );
         assert_eq!(
             *written.lock().expect("recorded packets"),
-            vec![alpha_1, beta_1, alpha_2]
+            vec![alpha_1, beta_presented, alpha_2]
         );
     }
 

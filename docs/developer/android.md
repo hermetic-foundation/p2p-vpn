@@ -185,6 +185,7 @@ The supervisor validates the complete candidate route map before activation.
 | Any local or remote prefix overlaps another network | Reject supervisor creation |
 | Live update conflicts with another network | Reject update; fail affected network closed |
 | Live update is based on stale installed routes | Reject update; fail affected network closed |
+| Live update changes any local address | Reject update; require a TUN rebuild |
 | More than 1,024 prefixes in one network | Reject activation or update |
 | More than 4,096 prefixes across the supervisor | Reject activation or update |
 
@@ -218,6 +219,7 @@ Native status exposes aggregate supervisor counters without network IDs.
 | Supervisor | Malformed and unroutable outbound packets |
 | Supervisor | Source-ownership mismatch drops |
 | Per network index | Outbound enqueued, queue drops, oversized drops |
+| Per network index | Outbound and inbound presentation-translation drops |
 | Per network index | Inbound malformed, ownership, queue, and oversized drops |
 | Per network index | Packets discarded during removal or shutdown |
 | Per network index | Inbound written, backpressure drops, and write failures |
@@ -228,16 +230,26 @@ network identity privacy in status output.
 
 ### Current Boundary
 
-The supervisor can model multiple isolated network ports and validates their
-combined route ownership.
+The supervisor can model multiple isolated network ports, validates their
+combined route ownership, and accepts one stable IPv4/IPv6 presentation pair.
+
+At the shared TUN boundary, it translates that pair to each network's primary
+overlay addresses. IPv4 header, transport pseudo-header, and quoted ICMP
+checksums are updated in place.
+
+The concurrent data plane supports TCP, UDP, UDP-Lite, ICMP, ICMPv6, and packets
+without a next header. The policy applies uniformly to every active network.
+
+IP source routing and IPv6 Home Address options fail closed in the ownership
+parser and count as malformed packets. Mobility, HIP, Shim6, invalid mandatory
+checksums, and unsupported transports count as per-network translation drops.
+
+Fragment and quoted ICMP handling preserve checksums and presentation-side flow
+identity after reassembly. Queue or translation failure drops one packet without
+stopping another network.
 
 The Android service, JNI lifecycle, and UI still activate one selected network.
 Concurrent multi-network lifecycle support remains follow-up work.
-
-Android does not expose Linux-style per-route preferred source selection.
-Concurrent activation must define one shared TUN presentation address and
-translate it to each isolated network identity, or provide an equivalent
-source-selection mechanism with transport checksum coverage.
 
 `VpnService.Builder` routes are fixed when the interface is established.
 Runtime-learned custom prefixes currently update native dispatch only. The

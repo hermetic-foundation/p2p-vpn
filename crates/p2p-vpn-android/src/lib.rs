@@ -17,6 +17,8 @@ use p2p_vpn::{
 use serde::Serialize;
 
 #[cfg(any(target_os = "android", test))]
+mod packet_translation;
+#[cfg(any(target_os = "android", test))]
 mod supervisor;
 
 const BUILTIN_IPV4_NETWORK: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 0);
@@ -1139,11 +1141,12 @@ mod android {
         ));
         for (index, network) in snapshot.networks.iter().enumerate() {
             status.lines.push(format!(
-                "android_supervisor_network index={index} outbound_enqueued={} outbound_queue_drops={} outbound_oversized_drops={} outbound_source_mismatch_drops={} outbound_removed_drops={} inbound_enqueued={} inbound_queue_drops={} inbound_oversized_drops={} inbound_malformed_drops={} inbound_source_mismatch_drops={} inbound_destination_mismatch_drops={} inbound_removed_drops={} inbound_written={} inbound_write_backpressure_drops={} inbound_write_failures={} route_update_rejections={}",
+                "android_supervisor_network index={index} outbound_enqueued={} outbound_queue_drops={} outbound_oversized_drops={} outbound_source_mismatch_drops={} outbound_translation_drops={} outbound_removed_drops={} inbound_enqueued={} inbound_queue_drops={} inbound_oversized_drops={} inbound_malformed_drops={} inbound_source_mismatch_drops={} inbound_destination_mismatch_drops={} inbound_translation_drops={} inbound_removed_drops={} inbound_written={} inbound_write_backpressure_drops={} inbound_write_failures={} route_update_rejections={}",
                 network.outbound_enqueued_packets,
                 network.outbound_queue_drops,
                 network.outbound_oversized_drops,
                 network.outbound_source_mismatch_drops,
+                network.outbound_translation_drops,
                 network.outbound_removed_drops,
                 network.inbound_enqueued_packets,
                 network.inbound_queue_drops,
@@ -1151,6 +1154,7 @@ mod android {
                 network.inbound_malformed_drops,
                 network.inbound_source_mismatch_drops,
                 network.inbound_destination_mismatch_drops,
+                network.inbound_translation_drops,
                 network.inbound_removed_drops,
                 network.inbound_written_packets,
                 network.inbound_write_backpressure_drops,
