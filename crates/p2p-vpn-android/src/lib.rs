@@ -35,6 +35,7 @@ const BUILTIN_IPV6_NETWORK: Ipv6Addr =
 const BUILTIN_IPV6_PREFIX: u8 = 96;
 const E2E_PACKET_QUIC_ENDPOINT_MAX_LENGTH: usize = 512;
 const E2E_RELAY_RESERVATION_MAX_LENGTH: usize = 1_024;
+const E2E_ADDITIONAL_ROUTE_MAX_LENGTH: usize = 64;
 #[cfg(any(target_os = "android", test))]
 const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(any(target_os = "android", test))]
@@ -385,7 +386,7 @@ pub fn create_profile(network_name: &str) -> Result<AndroidProfile, String> {
     let network_name = validate_network_name(network_name)?;
     let identity = NodeIdentity::generate_ed25519()
         .map_err(|error| format!("failed to generate identity: {error:?}"))?;
-    create_profile_with_identity(network_name, identity, None, None, None)
+    create_profile_with_identity(network_name, identity, None, None, None, None)
 }
 
 pub fn create_profile_with_bootstrap(
@@ -414,6 +415,28 @@ fn create_profile_with_bootstrap_and_e2e_paths(
     packet_quic_external_endpoint: Option<&str>,
     relay_reservation: Option<&str>,
 ) -> Result<AndroidProfile, String> {
+    create_profile_with_bootstrap_and_e2e_paths_and_route(
+        network_name,
+        bootstrap_peer_id,
+        bootstrap_address,
+        kademlia_protocol,
+        packet_quic_listen,
+        packet_quic_external_endpoint,
+        relay_reservation,
+        None,
+    )
+}
+
+fn create_profile_with_bootstrap_and_e2e_paths_and_route(
+    network_name: &str,
+    bootstrap_peer_id: &str,
+    bootstrap_address: &str,
+    kademlia_protocol: &str,
+    packet_quic_listen: Option<&str>,
+    packet_quic_external_endpoint: Option<&str>,
+    relay_reservation: Option<&str>,
+    additional_route: Option<&str>,
+) -> Result<AndroidProfile, String> {
     let network_name = validate_network_name(network_name)?;
     let bootstrap_peer_id = validate_bootstrap_value("bootstrap peer ID", bootstrap_peer_id, 256)?;
     let bootstrap_address =
@@ -423,6 +446,12 @@ fn create_profile_with_bootstrap_and_e2e_paths(
     let relay_reservation = relay_reservation
         .map(|value| {
             validate_bootstrap_value("relay reservation", value, E2E_RELAY_RESERVATION_MAX_LENGTH)
+                .map(str::to_owned)
+        })
+        .transpose()?;
+    let additional_route = additional_route
+        .map(|value| {
+            validate_bootstrap_value("additional route", value, E2E_ADDITIONAL_ROUTE_MAX_LENGTH)
                 .map(str::to_owned)
         })
         .transpose()?;
@@ -451,6 +480,7 @@ fn create_profile_with_bootstrap_and_e2e_paths(
         )),
         packet_quic,
         relay_reservation,
+        additional_route,
     )
 }
 
@@ -460,6 +490,7 @@ fn create_profile_with_identity(
     bootstrap: Option<(BootstrapPeerConfig, DiscoveryConfig)>,
     packet_quic: Option<(String, String)>,
     relay_reservation: Option<String>,
+    additional_route: Option<String>,
 ) -> Result<AndroidProfile, String> {
     let mut config: Config = serde_json::from_value(serde_json::json!({
         "network": {
@@ -487,6 +518,12 @@ fn create_profile_with_identity(
         config.network.relay.reservations = vec![relay_reservation];
         config.network.discovery.dcutr = false;
         config.network.discovery.autonat = false;
+    }
+    if let Some(prefix) = additional_route {
+        config
+            .network
+            .routes
+            .push(RouteConfig { prefix, metric: 0 });
     }
     config
         .validate_runtime()
@@ -1161,6 +1198,7 @@ mod android {
         packet_quic_listen: JString,
         packet_quic_external_endpoint: JString,
         relay_reservation: JString,
+        additional_route: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
             let network_name = read_string(env, &network_name)?;
@@ -1171,7 +1209,8 @@ mod android {
             let packet_quic_external_endpoint =
                 read_optional_string(env, &packet_quic_external_endpoint)?;
             let relay_reservation = read_optional_string(env, &relay_reservation)?;
-            create_profile_with_bootstrap_and_e2e_paths(
+            let additional_route = read_optional_string(env, &additional_route)?;
+            create_profile_with_bootstrap_and_e2e_paths_and_route(
                 &network_name,
                 &bootstrap_peer_id,
                 &bootstrap_address,
@@ -1179,6 +1218,7 @@ mod android {
                 packet_quic_listen.as_deref(),
                 packet_quic_external_endpoint.as_deref(),
                 relay_reservation.as_deref(),
+                additional_route.as_deref(),
             )
         })
     }
@@ -2469,6 +2509,49 @@ mod tests {
         let encoded: serde_json::Value =
             serde_json::from_str(&profile.config_json).expect("profile JSON");
         assert!(encoded["network"].get("packet_plane").is_none());
+    }
+
+    #[test]
+    fn fixture_profile_adds_only_a_valid_requested_route() {
+        let bootstrap = NodeIdentity::generate_ed25519().expect("bootstrap identity");
+        let address = format!("/ip4/10.0.2.2/tcp/42300/p2p/{}", bootstrap.peer_id);
+        let profile = create_profile_with_bootstrap_and_e2e_paths_and_route(
+            "android-e2e",
+            &bootstrap.peer_id,
+            &address,
+            "/p2p-vpn/kad/1",
+            None,
+            None,
+            None,
+            Some("198.51.100.0/24"),
+        )
+        .expect("fixture profile with route");
+        let config: Config = serde_json::from_str(&profile.config_json).expect("profile config");
+
+        assert_eq!(
+            config.network.routes,
+            [RouteConfig {
+                prefix: "198.51.100.0/24".to_owned(),
+                metric: 0,
+            }]
+        );
+
+        let invalid_route = "sensitive invalid route";
+        let error = match create_profile_with_bootstrap_and_e2e_paths_and_route(
+            "android-e2e",
+            &bootstrap.peer_id,
+            &address,
+            "/p2p-vpn/kad/1",
+            None,
+            None,
+            None,
+            Some(invalid_route),
+        ) {
+            Ok(_) => panic!("invalid route was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.contains("invalid isolated E2E path configuration"));
+        assert!(!error.contains(invalid_route));
     }
 
     #[test]

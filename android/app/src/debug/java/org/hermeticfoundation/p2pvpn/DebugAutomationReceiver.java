@@ -129,10 +129,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                         intent,
                         "relay_reservation",
                         P2pVpnService.DEBUG_RELAY_RESERVATION_MAX_LENGTH);
+        String additionalRoute =
+                optionalProfileExtra(
+                        intent,
+                        "additional_route",
+                        P2pVpnService.DEBUG_ADDITIONAL_ROUTE_MAX_LENGTH);
         boolean customBootstrap =
                 bootstrapPeerId != null || bootstrapAddress != null || kademliaProtocol != null;
         boolean packetQuic = packetQuicListen != null || packetQuicExternalEndpoint != null;
-        if (!customBootstrap && !packetQuic && relayReservation == null) {
+        if (!customBootstrap
+                && !packetQuic
+                && relayReservation == null
+                && additionalRoute == null) {
             enqueue(context, "create-profile", network);
             return;
         }
@@ -156,6 +164,9 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         }
         if (relayReservation != null) {
             settings.put("relay_reservation", relayReservation);
+        }
+        if (additionalRoute != null) {
+            settings.put("additional_route", additionalRoute);
         }
         enqueueService(context, "create-e2e-profile", settings.toString());
         accepted("create-profile");

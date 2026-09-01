@@ -16,7 +16,8 @@ final class NativeBridge {
             String kademliaProtocol,
             String packetQuicListen,
             String packetQuicExternalEndpoint,
-            String relayReservation);
+            String relayReservation,
+            String additionalRoute);
 
     static native String nativeInspectProfile(String configJson);
 

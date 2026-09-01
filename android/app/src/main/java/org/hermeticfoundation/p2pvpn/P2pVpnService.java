@@ -57,6 +57,7 @@ public final class P2pVpnService extends VpnService {
     static final String EXTRA_DEBUG_VALUE = "value";
     static final int DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH = 512;
     static final int DEBUG_RELAY_RESERVATION_MAX_LENGTH = 1_024;
+    static final int DEBUG_ADDITIONAL_ROUTE_MAX_LENGTH = 64;
 
     private static final String NOTIFICATION_CHANNEL = "p2p-vpn-connection";
     private static final int NOTIFICATION_ID = 1;
@@ -852,7 +853,7 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void createProfile(String networkName) {
-        createProfile(networkName, null, null, null, null, null, null);
+        createProfile(networkName, null, null, null, null, null, null, null);
     }
 
     private void createE2eProfile(String encodedSettings) {
@@ -873,6 +874,11 @@ public final class P2pVpnService extends VpnService {
                             settings,
                             "relay_reservation",
                             DEBUG_RELAY_RESERVATION_MAX_LENGTH);
+            String additionalRoute =
+                    optionalDebugSetting(
+                            settings,
+                            "additional_route",
+                            DEBUG_ADDITIONAL_ROUTE_MAX_LENGTH);
             validateDebugE2ePaths(
                     packetQuicListen, packetQuicExternalEndpoint, relayReservation);
             createProfile(
@@ -882,7 +888,8 @@ public final class P2pVpnService extends VpnService {
                     requiredDebugSetting(settings, "kademlia_protocol", 128),
                     packetQuicListen,
                     packetQuicExternalEndpoint,
-                    relayReservation);
+                    relayReservation,
+                    additionalRoute);
         } catch (P2pVpnException | JSONException | RuntimeException error) {
             connectionDetail = failureMessage(error);
             publishSnapshot();
@@ -907,7 +914,8 @@ public final class P2pVpnService extends VpnService {
             String kademliaProtocol,
             String packetQuicListen,
             String packetQuicExternalEndpoint,
-            String relayReservation) {
+            String relayReservation,
+            String additionalRoute) {
         if (!beginNetworkMutation(
                 profileCollection == null ? "Creating profile" : "Adding network")) {
             return;
@@ -931,7 +939,8 @@ public final class P2pVpnService extends VpnService {
                                                     kademliaProtocol,
                                                     packetQuicListen,
                                                     packetQuicExternalEndpoint,
-                                                    relayReservation)));
+                                                    relayReservation,
+                                                    additionalRoute)));
             ProfileCollection.Entry network =
                     new ProfileCollection.Entry(
                             ProfileCollection.newNetworkId(), true, created.configJson);
