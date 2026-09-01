@@ -215,6 +215,7 @@ struct OpenOperation {
     id: String,
     code: Option<PairingCode>,
     locator: String,
+    v2_locator: String,
     opened_at: Instant,
     expires_at_unix_seconds: u64,
     expires_in_seconds: u64,
@@ -222,6 +223,10 @@ struct OpenOperation {
     provider_query: Option<kad::QueryId>,
     next_provider_attempt_at: Option<Instant>,
     provider_advertised: bool,
+    v2_provider_attempts: u16,
+    v2_provider_query: Option<kad::QueryId>,
+    v2_next_provider_attempt_at: Option<Instant>,
+    v2_provider_advertised: bool,
     inbound_handshakes: u16,
     selected_transport: Option<PairingTransport>,
     completed: Option<PairingResponse>,
@@ -371,6 +376,7 @@ pub struct PendingRemotePoll {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PairingExpiryActions {
     pub stop_providing_locator: Option<String>,
+    pub stop_providing_v2_locator: Option<String>,
 }
 
 #[derive(Debug)]
@@ -544,6 +550,7 @@ impl CodePairingSessions {
             .ok_or(CodePairingSessionError::ExpiryOverflow)?;
         let code = PairingCode::generate();
         let locator = code.locator(network_name)?;
+        let v2_locator = code.global_locator();
         let started = PairingOpenStarted {
             operation_id: operation_id.clone(),
             code: code.to_string(),
@@ -553,6 +560,7 @@ impl CodePairingSessions {
             id: operation_id,
             code: Some(code),
             locator,
+            v2_locator,
             opened_at: now,
             expires_at_unix_seconds,
             expires_in_seconds,
@@ -560,6 +568,10 @@ impl CodePairingSessions {
             provider_query: None,
             next_provider_attempt_at: None,
             provider_advertised: false,
+            v2_provider_attempts: 0,
+            v2_provider_query: None,
+            v2_next_provider_attempt_at: None,
+            v2_provider_advertised: false,
             inbound_handshakes: 0,
             selected_transport: None,
             completed: None,
@@ -771,7 +783,9 @@ impl CodePairingSessions {
             return Some(PairingSessionDiagnostics {
                 lan_candidates,
                 handshake_attempts: operation.inbound_handshakes,
-                public_provider_attempts: operation.provider_attempts,
+                public_provider_attempts: operation
+                    .provider_attempts
+                    .saturating_add(operation.v2_provider_attempts),
                 selected_transport: operation.selected_transport,
                 ..PairingSessionDiagnostics::default()
             });
@@ -807,10 +821,7 @@ impl CodePairingSessions {
                 ticket.outcome =
                     InboundTicketOutcome::Rejected(PairingCodeRejectionReason::Unavailable);
             }
-            let locator = self.deactivate_open(TerminalStatus::Cancelled);
-            return Ok(PairingExpiryActions {
-                stop_providing_locator: locator,
-            });
+            return Ok(self.deactivate_open(TerminalStatus::Cancelled));
         }
         if self
             .join
@@ -843,10 +854,7 @@ impl CodePairingSessions {
                 InboundTicketOutcome::Rejected(PairingCodeRejectionReason::UserRejected);
         }
         self.pending_approval.take();
-        let locator = self.deactivate_open(TerminalStatus::Rejected);
-        Ok(PairingExpiryActions {
-            stop_providing_locator: locator,
-        })
+        Ok(self.deactivate_open(TerminalStatus::Rejected))
     }
 
     pub fn pending_approval(
@@ -901,13 +909,20 @@ impl CodePairingSessions {
             .ok_or(CodePairingSessionError::NotFound)?;
         operation.code.take();
         operation.completed = Some(response);
-        let locator = (operation.provider_advertised || operation.provider_query.is_some())
-            .then(|| operation.locator.clone());
+        let stop_providing_locator = (operation.provider_advertised
+            || operation.provider_query.is_some())
+        .then(|| operation.locator.clone());
+        let stop_providing_v2_locator = (operation.v2_provider_advertised
+            || operation.v2_provider_query.is_some())
+        .then(|| operation.v2_locator.clone());
         operation.provider_query = None;
         operation.provider_advertised = false;
+        operation.v2_provider_query = None;
+        operation.v2_provider_advertised = false;
         self.clear_transient_handshakes();
         Ok(PairingExpiryActions {
-            stop_providing_locator: locator,
+            stop_providing_locator,
+            stop_providing_v2_locator,
         })
     }
 
@@ -1090,10 +1105,17 @@ impl CodePairingSessions {
             .open
             .as_mut()
             .expect("operation was validated immediately above");
-        let locator = if operation.completed.is_none()
+        let stop_providing_locator = if operation.completed.is_none()
             && (operation.provider_advertised || operation.provider_query.is_some())
         {
             Some(operation.locator.clone())
+        } else {
+            None
+        };
+        let stop_providing_v2_locator = if operation.completed.is_none()
+            && (operation.v2_provider_advertised || operation.v2_provider_query.is_some())
+        {
+            Some(operation.v2_locator.clone())
         } else {
             None
         };
@@ -1102,9 +1124,12 @@ impl CodePairingSessions {
         operation.terminal = None;
         operation.provider_query = None;
         operation.provider_advertised = false;
+        operation.v2_provider_query = None;
+        operation.v2_provider_advertised = false;
         self.clear_transient_handshakes();
         Ok(PairingExpiryActions {
-            stop_providing_locator: locator,
+            stop_providing_locator,
+            stop_providing_v2_locator,
         })
     }
 
@@ -1633,7 +1658,7 @@ impl CodePairingSessions {
                 ticket.outcome =
                     InboundTicketOutcome::Rejected(PairingCodeRejectionReason::Expired);
             }
-            actions.stop_providing_locator = self.deactivate_open(TerminalStatus::Expired);
+            actions = self.deactivate_open(TerminalStatus::Expired);
         }
         if self.join.as_ref().is_some_and(|operation| {
             operation.terminal.is_none()
@@ -1795,6 +1820,85 @@ impl CodePairingSessions {
     }
 
     #[must_use]
+    pub fn should_start_open_provider_v2(&self, now: Instant) -> Option<&str> {
+        let operation = self.active_open()?;
+        let due = operation.v2_provider_query.is_none()
+            && operation.v2_provider_attempts < MAX_CODE_PAIRING_PROVIDER_ATTEMPTS
+            && now.saturating_duration_since(operation.opened_at) >= CODE_PAIRING_LAN_GRACE
+            && operation
+                .v2_next_provider_attempt_at
+                .is_none_or(|next_attempt| now >= next_attempt);
+        due.then_some(operation.v2_locator.as_str())
+    }
+
+    pub fn mark_open_provider_v2_started(
+        &mut self,
+        locator: &str,
+        query_id: kad::QueryId,
+        now: Instant,
+    ) {
+        if let Some(operation) = self.open.as_mut()
+            && operation.v2_locator == locator
+            && operation.terminal.is_none()
+            && operation.completed.is_none()
+        {
+            operation.v2_provider_attempts = operation.v2_provider_attempts.saturating_add(1);
+            operation.v2_provider_query = Some(query_id);
+            operation.v2_next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.v2_locator.as_bytes(),
+                    operation.v2_provider_attempts,
+                ),
+            );
+        }
+    }
+
+    pub fn mark_open_provider_v2_start_failed(&mut self, locator: &str, now: Instant) {
+        if let Some(operation) = self.open.as_mut()
+            && operation.v2_locator == locator
+            && operation.terminal.is_none()
+            && operation.completed.is_none()
+        {
+            operation.v2_provider_attempts = operation.v2_provider_attempts.saturating_add(1);
+            operation.v2_provider_query = None;
+            operation.v2_next_provider_attempt_at = Some(
+                now + code_pairing_retry_delay(
+                    operation.v2_locator.as_bytes(),
+                    operation.v2_provider_attempts,
+                ),
+            );
+        }
+    }
+
+    pub fn finish_open_provider_v2(
+        &mut self,
+        query_id: kad::QueryId,
+        succeeded: bool,
+        now: Instant,
+    ) -> bool {
+        if let Some(operation) = self
+            .open
+            .as_mut()
+            .filter(|operation| operation.terminal.is_none() && operation.completed.is_none())
+            && operation.v2_provider_query == Some(query_id)
+        {
+            operation.v2_provider_query = None;
+            if succeeded {
+                operation.v2_provider_advertised = true;
+            } else {
+                operation.v2_next_provider_attempt_at = Some(
+                    now + code_pairing_retry_delay(
+                        operation.v2_locator.as_bytes(),
+                        operation.v2_provider_attempts,
+                    ),
+                );
+            }
+            return true;
+        }
+        false
+    }
+
+    #[must_use]
     pub fn should_start_join_lookup(&self, now: Instant) -> Option<&str> {
         let operation = self.active_join()?;
         let discovery_started_at = operation
@@ -1853,6 +1957,21 @@ impl CodePairingSessions {
     pub fn active_open_code_for_locator(&self, locator: &str) -> Option<(&str, &PairingCode, u64)> {
         let operation = self.active_open()?;
         (operation.locator == locator).then(|| {
+            (
+                operation.id.as_str(),
+                operation.code.as_ref().expect("active open retains code"),
+                operation.expires_at_unix_seconds,
+            )
+        })
+    }
+
+    #[must_use]
+    pub fn active_open_code_for_v2_locator(
+        &self,
+        locator: &str,
+    ) -> Option<(&str, &PairingCode, u64)> {
+        let operation = self.active_open()?;
+        (operation.v2_locator == locator).then(|| {
             (
                 operation.id.as_str(),
                 operation.code.as_ref().expect("active open retains code"),
@@ -2024,6 +2143,11 @@ impl CodePairingSessions {
             || self.inbound_ticket.as_ref().is_some_and(|ticket| {
                 ticket.peer == peer && matches!(ticket.outcome, InboundTicketOutcome::Pending)
             })
+    }
+
+    #[must_use]
+    pub fn has_active_open(&self) -> bool {
+        self.active_open().is_some()
     }
 
     pub fn insert_outbound_hello(
@@ -2445,16 +2569,27 @@ impl CodePairingSessions {
             .filter(|operation| operation.terminal.is_none() && operation.completed.is_none())
     }
 
-    fn deactivate_open(&mut self, terminal: TerminalStatus) -> Option<String> {
-        let operation = self.open.as_mut()?;
+    fn deactivate_open(&mut self, terminal: TerminalStatus) -> PairingExpiryActions {
+        let Some(operation) = self.open.as_mut() else {
+            return PairingExpiryActions::default();
+        };
         operation.code.take();
         operation.terminal = Some(terminal);
-        let locator = (operation.provider_advertised || operation.provider_query.is_some())
-            .then(|| operation.locator.clone());
+        let stop_providing_locator = (operation.provider_advertised
+            || operation.provider_query.is_some())
+        .then(|| operation.locator.clone());
+        let stop_providing_v2_locator = (operation.v2_provider_advertised
+            || operation.v2_provider_query.is_some())
+        .then(|| operation.v2_locator.clone());
         operation.provider_query = None;
         operation.provider_advertised = false;
+        operation.v2_provider_query = None;
+        operation.v2_provider_advertised = false;
         self.clear_transient_handshakes();
-        locator
+        PairingExpiryActions {
+            stop_providing_locator,
+            stop_providing_v2_locator,
+        }
     }
 
     fn deactivate_join(&mut self, terminal: TerminalStatus) {
@@ -2549,7 +2684,7 @@ impl CodePairingSessions {
 
 impl OpenOperation {
     fn discovery_stage(&self) -> PairingDiscoveryStage {
-        if self.provider_attempts > 0 {
+        if self.provider_attempts > 0 || self.v2_provider_attempts > 0 {
             PairingDiscoveryStage::Public
         } else {
             PairingDiscoveryStage::Lan
@@ -2973,10 +3108,14 @@ struct PersistedOpenOperation {
     id: String,
     code: Option<String>,
     locator: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    v2_locator: Option<String>,
     expires_at_unix_seconds: u64,
     expires_in_seconds: u64,
     #[serde(default)]
     provider_attempts: u16,
+    #[serde(default)]
+    v2_provider_attempts: u16,
     #[serde(default)]
     inbound_handshakes: u16,
     #[serde(default)]
@@ -3099,9 +3238,11 @@ impl PersistedOpenOperation {
             id: operation.id.clone(),
             code: operation.code.as_ref().map(ToString::to_string),
             locator: operation.locator.clone(),
+            v2_locator: (!operation.v2_locator.is_empty()).then(|| operation.v2_locator.clone()),
             expires_at_unix_seconds: operation.expires_at_unix_seconds,
             expires_in_seconds: operation.expires_in_seconds,
             provider_attempts: operation.provider_attempts,
+            v2_provider_attempts: operation.v2_provider_attempts,
             inbound_handshakes: operation.inbound_handshakes,
             selected_transport: operation.selected_transport,
             completed: operation.completed.clone(),
@@ -3117,7 +3258,9 @@ impl PersistedOpenOperation {
     ) -> Result<OpenOperation, CodePairingSessionError> {
         validate_pairing_operation_id(&self.id)?;
         validate_expiry(self.expires_in_seconds)?;
-        if self.provider_attempts > MAX_CODE_PAIRING_PROVIDER_ATTEMPTS {
+        if self.provider_attempts > MAX_CODE_PAIRING_PROVIDER_ATTEMPTS
+            || self.v2_provider_attempts > MAX_CODE_PAIRING_PROVIDER_ATTEMPTS
+        {
             return Err(CodePairingSessionError::InvalidPersistedState(
                 "inviter operation has too many provider attempts".to_owned(),
             ));
@@ -3133,10 +3276,20 @@ impl PersistedOpenOperation {
                 "inviter code locator does not match".to_owned(),
             ));
         }
+        let derived_v2_locator = code.as_ref().map(PairingCode::global_locator);
+        if let (Some(persisted), Some(derived)) = (&self.v2_locator, &derived_v2_locator)
+            && persisted != derived
+        {
+            return Err(CodePairingSessionError::InvalidPersistedState(
+                "inviter v2 code locator does not match".to_owned(),
+            ));
+        }
+        let v2_locator = self.v2_locator.or(derived_v2_locator).unwrap_or_default();
         let mut operation = OpenOperation {
             id: self.id,
             code,
             locator: self.locator,
+            v2_locator,
             opened_at: resumed_at,
             expires_at_unix_seconds: self.expires_at_unix_seconds,
             expires_in_seconds: self.expires_in_seconds,
@@ -3144,6 +3297,10 @@ impl PersistedOpenOperation {
             provider_query: None,
             next_provider_attempt_at: None,
             provider_advertised: false,
+            v2_provider_attempts: self.v2_provider_attempts,
+            v2_provider_query: None,
+            v2_next_provider_attempt_at: None,
+            v2_provider_advertised: false,
             inbound_handshakes: self.inbound_handshakes,
             selected_transport: self.selected_transport,
             completed: self.completed,
@@ -3973,8 +4130,10 @@ mod tests {
             }
         );
         let candidate = peer(9);
+        assert!(sessions.has_active_open());
         assert!(sessions.allows_pairing_probe(candidate));
         sessions.cancel(&started.operation_id).expect("cancel");
+        assert!(!sessions.has_active_open());
         assert!(!sessions.allows_pairing_probe(candidate));
     }
 
@@ -4274,6 +4433,36 @@ mod tests {
     }
 
     #[test]
+    fn v2_provider_publication_retries_independently() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions.open("runners", 600, 1_000, now).expect("open");
+        let first_attempt = now + CODE_PAIRING_LAN_GRACE;
+        let locator = sessions
+            .should_start_open_provider_v2(first_attempt)
+            .expect("v2 provider locator")
+            .to_owned();
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let query_id = kademlia
+            .start_providing(kad::RecordKey::new(&locator))
+            .expect("provider query");
+        sessions.mark_open_provider_v2_started(&locator, query_id, first_attempt);
+
+        assert_eq!(sessions.should_start_open_provider_v2(first_attempt), None);
+        assert!(sessions.finish_open_provider_v2(query_id, false, first_attempt));
+        assert_eq!(sessions.should_start_open_provider_v2(first_attempt), None);
+        assert_eq!(
+            sessions.should_start_open_provider_v2(
+                first_attempt + CODE_PAIRING_RETRY_MAX + Duration::from_secs(1)
+            ),
+            Some(locator.as_str())
+        );
+        assert!(sessions.should_start_open_provider(first_attempt).is_some());
+    }
+
+    #[test]
     fn successful_provider_publication_repeats_after_backoff() {
         let mut sessions = CodePairingSessions::new();
         let now = Instant::now();
@@ -4560,6 +4749,44 @@ mod tests {
     }
 
     #[test]
+    fn expiring_open_session_removes_both_provider_versions() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        sessions.open("runners", 10, 1_000, now).expect("open");
+        let attempt_at = now + CODE_PAIRING_LAN_GRACE;
+        let v1_locator = sessions
+            .should_start_open_provider(attempt_at)
+            .expect("v1 locator")
+            .to_owned();
+        let v2_locator = sessions
+            .should_start_open_provider_v2(attempt_at)
+            .expect("v2 locator")
+            .to_owned();
+        let local_peer = peer(8);
+        let mut kademlia =
+            kad::Behaviour::new(local_peer, kad::store::MemoryStore::new(local_peer));
+        let v1_query = kademlia
+            .start_providing(kad::RecordKey::new(&v1_locator))
+            .expect("v1 query");
+        let v2_query = kademlia
+            .start_providing(kad::RecordKey::new(&v2_locator))
+            .expect("v2 query");
+        sessions.mark_open_provider_started(&v1_locator, v1_query, attempt_at);
+        sessions.mark_open_provider_v2_started(&v2_locator, v2_query, attempt_at);
+
+        let actions = sessions.expire(1_011, now + Duration::from_secs(11));
+
+        assert_eq!(
+            actions.stop_providing_locator.as_deref(),
+            Some(v1_locator.as_str())
+        );
+        assert_eq!(
+            actions.stop_providing_v2_locator.as_deref(),
+            Some(v2_locator.as_str())
+        );
+    }
+
+    #[test]
     fn operation_ids_make_open_idempotent_and_detect_conflicts() {
         let mut sessions = CodePairingSessions::new();
         let operation_id = fresh_pairing_operation_id();
@@ -4607,13 +4834,67 @@ mod tests {
                         .expect("locator")
                 )
                 .map(|(_, code, _)| code.to_string()),
-            Some(started.code)
+            Some(started.code.clone())
         );
         assert!(
             restored
                 .should_start_open_provider(now + Duration::from_secs(10))
                 .is_some()
         );
+        let parsed_code = started.code.parse::<PairingCode>().expect("code");
+        assert_eq!(
+            restored
+                .active_open_code_for_v2_locator(&parsed_code.global_locator())
+                .map(|(_, code, _)| code.to_string()),
+            Some(parsed_code.to_string())
+        );
+        assert!(
+            restored
+                .should_start_open_provider_v2(now + Duration::from_secs(10))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn legacy_active_open_without_v2_fields_derives_global_locator() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let started = sessions
+            .open("runners", 600, 1_000, now)
+            .expect("open pairing");
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&sessions.encode_persisted("runners").expect("encode state"))
+                .expect("decode state");
+        let open = persisted["open"].as_object_mut().expect("open object");
+        open.remove("v2_locator");
+        open.remove("v2_provider_attempts");
+
+        let restored = restore_json(&persisted).expect("restore legacy state");
+        let code = started.code.parse::<PairingCode>().expect("code");
+
+        assert!(
+            restored
+                .active_open_code_for_v2_locator(&code.global_locator())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn persisted_active_open_rejects_mismatched_v2_locator() {
+        let mut sessions = CodePairingSessions::new();
+        sessions
+            .open("runners", 600, 1_000, Instant::now())
+            .expect("open pairing");
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&sessions.encode_persisted("runners").expect("encode state"))
+                .expect("decode state");
+        persisted["open"]["v2_locator"] = PairingCode::generate().global_locator().into();
+
+        assert!(matches!(
+            restore_json(&persisted),
+            Err(CodePairingSessionError::InvalidPersistedState(reason))
+                if reason.contains("v2 code locator")
+        ));
     }
 
     #[test]

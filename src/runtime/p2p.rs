@@ -1,7 +1,8 @@
 use std::{collections::HashSet, error::Error, num::NonZeroU8, time::Duration};
 
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, allow_block_list, autonat, connection_limits,
+    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, allow_block_list, autonat,
+    connection_limits,
     core::transport::ListenerId,
     dcutr, dns, identify,
     identity::Keypair,
@@ -13,13 +14,16 @@ use libp2p::{
 };
 
 use crate::{
-    config::{DiscoveryConfig, RelayResourceConfig, ResourceConfig},
+    config::{
+        DiscoveryConfig, PUBLIC_IPFS_KADEMLIA_PROTOCOL, RelayResourceConfig, ResourceConfig,
+        public_ipfs_bootstrap_peer_configs,
+    },
     identity::{IdentityError, NodeIdentity},
     runtime::{
         control::{self, ControlCodec},
         packet::{self, PacketCodec},
         pairing::{self, PairingCodec},
-        pairing_code::{self, PairingCodeCodec},
+        pairing_code::{self, PairingCodeCodec, PairingCodeV2Codec},
         pinned_packet_stream,
         service::{self, ServiceCodec},
     },
@@ -38,15 +42,18 @@ pub struct Behaviour {
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
     pub kad: kad::Behaviour<kad::store::MemoryStore>,
+    pub pairing_kad: Toggle<kad::Behaviour<kad::store::MemoryStore>>,
     pub relay: relay::client::Behaviour,
     pub relay_server: Toggle<relay::Behaviour>,
     pub dcutr: Toggle<dcutr::Behaviour>,
     pub autonat: Toggle<autonat::Behaviour>,
     pub mdns: Toggle<mdns::tokio::Behaviour>,
+    pub pairing_mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
     pub packet: request_response::Behaviour<PacketCodec>,
     pub pairing: request_response::Behaviour<PairingCodec>,
     pub pairing_code: request_response::Behaviour<PairingCodeCodec>,
+    pub pairing_code_v2: request_response::Behaviour<PairingCodeV2Codec>,
     pub pinned_packet_stream: pinned_packet_stream::Behaviour,
     pub service: request_response::Behaviour<ServiceCodec>,
 }
@@ -127,6 +134,8 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
     let control_streams = config.max_concurrent_control_streams;
     let packet_streams = config.max_concurrent_packet_streams;
     let kademlia_protocol = kademlia_stream_protocol(&discovery.kademlia_protocol)?;
+    let public_pairing_uses_primary_kad =
+        discovery.kademlia_protocol == PUBLIC_IPFS_KADEMLIA_PROTOCOL;
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -157,6 +166,16 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                 } else {
                     None
                 };
+                let pairing_kad = if public_pairing_uses_primary_kad {
+                    None
+                } else {
+                    let store = kad::store::MemoryStore::new(local_peer_id);
+                    let config =
+                        kad::Config::new(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL));
+                    let mut behaviour = kad::Behaviour::with_config(local_peer_id, store, config);
+                    behaviour.set_mode(Some(kad::Mode::Client));
+                    Some(behaviour)
+                };
 
                 Ok(Behaviour {
                     connection_limits: connection_limits::Behaviour::new(
@@ -173,6 +192,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                             .with_timeout(CONNECTION_PING_TIMEOUT),
                     ),
                     kad,
+                    pairing_kad: pairing_kad.into(),
                     relay,
                     relay_server: relay_server
                         .then(|| {
@@ -188,10 +208,12 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                         .then(|| autonat::Behaviour::new(local_peer_id, autonat::Config::default()))
                         .into(),
                     mdns: mdns.into(),
+                    pairing_mdns: None.into(),
                     control: control::behaviour(control_streams),
                     packet: packet::behaviour(mtu, packet_streams),
                     pairing: pairing::behaviour(control_streams),
                     pairing_code: pairing_code::behaviour(control_streams),
+                    pairing_code_v2: pairing_code::behaviour_v2(control_streams),
                     pinned_packet_stream: pinned_packet_stream::Behaviour::new(usize::from(mtu)),
                     service: service::behaviour(control_streams),
                 })
@@ -206,6 +228,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
 
     let relay_reservations_started = config.relay_reservations.len();
     let configured_relay_reservation_listeners = install_listeners_and_dials(&mut swarm, config)?;
+    seed_public_pairing_kademlia(&mut swarm)?;
     let autonat_servers_registered = register_autonat_servers(&mut swarm, config);
     let (kademlia_rendezvous_key, kademlia_membership_records_key, kademlia) =
         start_configured_kademlia(&mut swarm, config)?;
@@ -449,12 +472,47 @@ pub fn kademlia_pairing_code_key(locator: &str) -> kad::RecordKey {
     kad::RecordKey::new(&format!("/p2p-vpn/pairing-code/{locator}/providers/1"))
 }
 
+#[must_use]
+pub fn kademlia_pairing_code_v2_key(locator: &str) -> kad::RecordKey {
+    kad::RecordKey::new(&format!("/p2p-vpn/pairing-code/{locator}/providers/2"))
+}
+
+#[must_use]
+pub fn public_pairing_uses_primary_kad(behaviour: &Behaviour) -> bool {
+    !behaviour.pairing_kad.is_enabled()
+}
+
+pub fn public_pairing_kad_mut(
+    behaviour: &mut Behaviour,
+) -> &mut kad::Behaviour<kad::store::MemoryStore> {
+    if behaviour.pairing_kad.is_enabled() {
+        behaviour
+            .pairing_kad
+            .as_mut()
+            .expect("enabled public pairing Kademlia behaviour")
+    } else {
+        &mut behaviour.kad
+    }
+}
+
+fn seed_public_pairing_kademlia(swarm: &mut Swarm<Behaviour>) -> Result<(), P2pBuildError> {
+    for configured in public_ipfs_bootstrap_peer_configs() {
+        let (peer, mut address) = configured.peer_address()?;
+        if matches!(address.iter().last(), Some(Protocol::P2p(address_peer)) if address_peer == peer)
+        {
+            address.pop();
+        }
+        public_pairing_kad_mut(swarm.behaviour_mut()).add_address(&peer, address);
+    }
+    Ok(())
+}
+
 fn kademlia_stream_protocol(protocol: &str) -> Result<libp2p::StreamProtocol, P2pBuildError> {
     libp2p::StreamProtocol::try_from_owned(protocol.to_owned())
         .map_err(|_| P2pBuildError::InvalidKademliaProtocol(protocol.to_owned()))
 }
 
-fn decode_keypair(encoded: &str) -> Result<Keypair, IdentityError> {
+pub(crate) fn decode_keypair(encoded: &str) -> Result<Keypair, IdentityError> {
     let identity = NodeIdentity::from_private_key(encoded)?;
     let bytes = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
@@ -488,6 +546,7 @@ pub enum P2pBuildError {
     Multiaddr(libp2p::multiaddr::Error),
     InvalidP2pAddress(Box<Multiaddr>),
     InvalidKademliaProtocol(String),
+    Config(crate::config::ConfigError),
 }
 
 impl From<IdentityError> for P2pBuildError {
@@ -529,6 +588,12 @@ impl From<kad::store::Error> for P2pBuildError {
 impl From<libp2p::multiaddr::Error> for P2pBuildError {
     fn from(error: libp2p::multiaddr::Error) -> Self {
         Self::Multiaddr(error)
+    }
+}
+
+impl From<crate::config::ConfigError> for P2pBuildError {
+    fn from(error: crate::config::ConfigError) -> Self {
+        Self::Config(error)
     }
 }
 
@@ -662,8 +727,10 @@ mod tests {
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
         assert!(!node.swarm.behaviour().mdns.is_enabled());
+        assert!(!node.swarm.behaviour().pairing_mdns.is_enabled());
         assert!(!node.swarm.behaviour().dcutr.is_enabled());
         assert!(!node.swarm.behaviour().autonat.is_enabled());
+        assert!(node.swarm.behaviour().pairing_kad.is_enabled());
     }
 
     #[tokio::test]
@@ -693,8 +760,24 @@ mod tests {
         .expect("node should build");
 
         assert_eq!(node.discovery.kademlia_protocol, "/ipfs/kad/1.0.0");
+        assert!(!node.swarm.behaviour().pairing_kad.is_enabled());
+        assert!(public_pairing_uses_primary_kad(node.swarm.behaviour()));
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
+    }
+
+    #[test]
+    fn pairing_code_v2_provider_key_is_versioned_and_distinct() {
+        let locator = "global-locator";
+
+        assert_eq!(
+            kademlia_pairing_code_v2_key(locator).to_vec(),
+            b"/p2p-vpn/pairing-code/global-locator/providers/2"
+        );
+        assert_ne!(
+            kademlia_pairing_code_v2_key(locator),
+            kademlia_pairing_code_key(locator)
+        );
     }
 
     #[tokio::test]

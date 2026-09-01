@@ -57,7 +57,8 @@ use crate::{
         PairingResponse, apply_pairing_response_to_config_at, build_named_pairing_request_at,
     },
     pairing_code::{
-        answer_pairing_code_hello_at, authenticate_pairing_request, open_pairing_code_challenge_at,
+        answer_pairing_code_hello_at, answer_pairing_code_hello_v2_at,
+        authenticate_pairing_request, open_pairing_code_challenge_at,
         pairing_request_transcript_sha256, start_pairing_code_hello_at,
         verify_pairing_request_code_authentication,
     },
@@ -88,7 +89,8 @@ use crate::{
         membership_store::{MembershipStateStore, MembershipStateStoreError},
         p2p::{
             Behaviour, BehaviourEvent, HostConfig, P2pBuildError, P2pNode, build_node,
-            kademlia_pairing_code_key,
+            kademlia_pairing_code_key, kademlia_pairing_code_v2_key, public_pairing_kad_mut,
+            public_pairing_uses_primary_kad,
         },
         packet::{PacketRejectionReason, PacketResponse},
         packet_plane::{
@@ -99,13 +101,16 @@ use crate::{
             PacketPlaneRuntime, PacketPlaneSessionError, PacketPlaneSessionRole,
             PacketPlaneSessionSnapshot, PacketPlaneSnapshot, VerifiedPacketPlaneHandshake,
         },
-        pairing_code::{PairingCodeRejectionReason, PairingCodeRequest, PairingCodeResponse},
+        pairing_code::{
+            PairingCodeRejectionReason, PairingCodeRequest, PairingCodeResponse,
+            PairingCodeV2Request, PairingCodeV2Response,
+        },
         pairing_sessions::{
             CODE_PAIRING_TICK, CodePairingSessionError, CodePairingSessions, InboundSession,
             OutboundCodeRequest, OutboundHello, OutboundPairing, PairingDiscoveryStage,
             PairingEnrollmentPreparation, PairingEnrollmentReceipt, PairingEnrollmentRole,
-            PairingEnrollmentState, PairingJoinStatus, PairingOpenStatus, PairingTransport,
-            PendingApproval,
+            PairingEnrollmentState, PairingExpiryActions, PairingJoinStatus, PairingOpenStatus,
+            PairingTransport, PendingApproval,
         },
         pairing_store::{PairingStateStore, PairingStateStoreError},
         pinned_packet_stream,
@@ -1831,7 +1836,7 @@ where
                         .active_replay_tokens(now_unix_seconds)
                         .map(str::to_owned),
                 );
-                stop_code_pairing_provider(&mut node.swarm, actions.stop_providing_locator.as_deref());
+                stop_code_pairing_providers(&mut node.swarm, &actions);
                 expire_membership_probe_connections(
                     &mut node.swarm,
                     &mut membership_probe_connections,
@@ -2435,7 +2440,7 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
             PairingEnrollmentRole::Inviter => sessions
                 .recover_prepared_open(&network_name, enrollment)
                 .map(|actions| {
-                    stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
+                    stop_code_pairing_providers(swarm, &actions);
                 })?,
             PairingEnrollmentRole::Joiner => {
                 sessions.recover_prepared_join(&network_name, enrollment)?;
@@ -2459,14 +2464,17 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     Ok(())
 }
 
-fn stop_code_pairing_provider(swarm: &mut Swarm<Behaviour>, locator: Option<&str>) {
-    let Some(locator) = locator else {
-        return;
-    };
-    swarm
-        .behaviour_mut()
-        .kad
-        .stop_providing(&kademlia_pairing_code_key(locator));
+fn stop_code_pairing_providers(swarm: &mut Swarm<Behaviour>, actions: &PairingExpiryActions) {
+    if let Some(locator) = actions.stop_providing_locator.as_deref() {
+        swarm
+            .behaviour_mut()
+            .kad
+            .stop_providing(&kademlia_pairing_code_key(locator));
+    }
+    if let Some(locator) = actions.stop_providing_v2_locator.as_deref() {
+        public_pairing_kad_mut(swarm.behaviour_mut())
+            .stop_providing(&kademlia_pairing_code_v2_key(locator));
+    }
 }
 
 fn drive_code_pairing_discovery(
@@ -2477,6 +2485,7 @@ fn drive_code_pairing_discovery(
     discovery: &DiscoveryConfig,
     metrics: &RuntimeMetrics,
 ) {
+    reconcile_pairing_mdns(swarm, sessions, discovery);
     let now = Instant::now();
     let local_peer = *swarm.local_peer_id();
     for peer in sessions.pending_lan_peers(local_peer, now) {
@@ -2539,6 +2548,8 @@ fn drive_code_pairing_discovery(
         }
     }
 
+    drive_open_pairing_provider_v2(swarm, sessions, metrics, now);
+
     if !discovery.kademlia {
         return;
     }
@@ -2573,6 +2584,66 @@ fn drive_code_pairing_discovery(
         sessions.mark_join_lookup_started(&locator, query_id, now);
         metrics.record_kademlia_provider_lookup();
         metrics.record_code_pairing_public_lookup();
+    }
+}
+
+fn drive_open_pairing_provider_v2(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    metrics: &RuntimeMetrics,
+    now: Instant,
+) {
+    let Some(locator) = sessions
+        .should_start_open_provider_v2(now)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let key = kademlia_pairing_code_v2_key(&locator);
+    match public_pairing_kad_mut(swarm.behaviour_mut()).start_providing(key) {
+        Ok(query_id) => {
+            sessions.mark_open_provider_v2_started(&locator, query_id, now);
+            metrics.record_kademlia_provider_advertisement();
+            metrics.record_code_pairing_provider_advertisement_attempt();
+        }
+        Err(error) => {
+            sessions.mark_open_provider_v2_start_failed(&locator, now);
+            metrics.record_kademlia_provider_advertisement_failure();
+            metrics.record_code_pairing_provider_advertisement_attempt();
+            metrics.record_code_pairing_provider_advertisement_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_code_v2_provider_advertisement_failed",
+                &[("error", kademlia_store_error_name(&error))],
+            );
+        }
+    }
+}
+
+fn reconcile_pairing_mdns(
+    swarm: &mut Swarm<Behaviour>,
+    sessions: &CodePairingSessions,
+    discovery: &DiscoveryConfig,
+) {
+    if discovery.mdns {
+        return;
+    }
+    let enabled = swarm.behaviour().pairing_mdns.is_enabled();
+    if sessions.has_active_open() && !enabled {
+        match mdns::tokio::Behaviour::new(mdns::Config::default(), *swarm.local_peer_id()) {
+            Ok(behaviour) => {
+                swarm.behaviour_mut().pairing_mdns = Some(behaviour).into();
+            }
+            Err(error) => {
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "pairing_code_v2_mdns_start_failed",
+                    &[("error", &error.to_string())],
+                );
+            }
+        }
+    } else if !sessions.has_active_open() && enabled {
+        swarm.behaviour_mut().pairing_mdns = None.into();
     }
 }
 
@@ -3292,7 +3363,7 @@ fn handle_pair_rpc_request(
             sessions
                 .mark_enrollment_applied_at(&operation_id, now)
                 .map_err(code_session_pair_rpc)?;
-            stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
+            stop_code_pairing_providers(swarm, &actions);
             if let Err(error) = persist_code_pairing_sessions(store, sessions, &network_name) {
                 log_pairing_persistence_failure("inviter_finalization", &error);
             }
@@ -3308,7 +3379,7 @@ fn handle_pair_rpc_request(
             .reject(&operation_id, &approval_id)
             .map_err(code_session_pair_rpc)
             .and_then(|actions| {
-                stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
+                stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
                 pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
@@ -3318,7 +3389,7 @@ fn handle_pair_rpc_request(
             .cancel(&operation_id)
             .map_err(code_session_pair_rpc)
             .and_then(|actions| {
-                stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
+                stop_code_pairing_providers(swarm, &actions);
                 persist_code_pairing_sessions(store, sessions, &network_name)
                     .map_err(runner_error_pair_rpc)?;
                 pairing_rpc_status(sessions, &operation_id, &network_name, &local_peer)
@@ -10263,6 +10334,9 @@ async fn handle_swarm_event(
         SwarmEvent::Behaviour(BehaviourEvent::PairingCode(event)) => {
             handle_pairing_code_event(swarm, &mut context, event)?;
         }
+        SwarmEvent::Behaviour(BehaviourEvent::PairingCodeV2(event)) => {
+            handle_pairing_code_v2_event(swarm, &mut context, event)?;
+        }
         SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(event)) => {
             handle_pinned_packet_stream_event(swarm, &mut context, event)?;
         }
@@ -12631,6 +12705,351 @@ fn handle_pairing_code_event(
     Ok(())
 }
 
+fn handle_pairing_code_v2_event(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    event: request_response::Event<PairingCodeV2Request, PairingCodeV2Response>,
+) -> Result<(), RunnerError> {
+    if !request_response_message_is_usable(context.connection_epochs, &event, "pairing_code_v2") {
+        return Ok(());
+    }
+    match event {
+        request_response::Event::Message {
+            peer,
+            connection_id,
+            message: Message::Request {
+                request, channel, ..
+            },
+        } => {
+            let transport =
+                pairing_transport_for_connection(context.active_connections, peer, connection_id);
+            record_pairing_code_message_path(context.metrics, transport);
+            handle_pairing_code_v2_request(swarm, context, peer, transport, request, channel)?;
+        }
+        request_response::Event::Message {
+            peer,
+            message: Message::Response { .. },
+            ..
+        } => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_code_v2_unexpected_response",
+                &[("peer", &peer.to_string())],
+            );
+        }
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_code_v2_outbound_failure",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("error", pairing_code_outbound_failure_name(&error)),
+                ],
+            );
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            context.metrics.record_code_pairing_transport_failure();
+            log_runtime_event(
+                LogLevel::Warn,
+                "pairing_code_v2_inbound_failure",
+                &[
+                    ("peer", &peer.to_string()),
+                    ("error", pairing_code_inbound_failure_name(&error)),
+                ],
+            );
+        }
+        request_response::Event::ResponseSent { .. } => {}
+    }
+    Ok(())
+}
+
+fn handle_pairing_code_v2_request(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    transport: Option<PairingTransport>,
+    request: PairingCodeV2Request,
+    channel: request_response::ResponseChannel<PairingCodeV2Response>,
+) -> Result<(), RunnerError> {
+    let now = Instant::now();
+    if !context.pairing_request_rate_limiters.allow(peer, now) {
+        context.metrics.record_code_pairing_rate_limited();
+        send_pairing_code_v2_response(
+            swarm,
+            channel,
+            PairingCodeV2Response::Rejected {
+                reason: PairingCodeRejectionReason::RateLimited,
+            },
+        );
+        return Ok(());
+    }
+    if matches!(
+        &request,
+        PairingCodeV2Request::Hello { .. } | PairingCodeV2Request::Submit { .. }
+    ) && !context.pairing_handshake_rate_limiter.allow(now)
+    {
+        context.metrics.record_code_pairing_rate_limited();
+        send_pairing_code_v2_response(
+            swarm,
+            channel,
+            PairingCodeV2Response::Rejected {
+                reason: PairingCodeRejectionReason::RateLimited,
+            },
+        );
+        return Ok(());
+    }
+
+    match request {
+        PairingCodeV2Request::Hello { hello } => {
+            handle_pairing_code_v2_hello(swarm, context, peer, hello.as_ref(), channel);
+            Ok(())
+        }
+        PairingCodeV2Request::Submit { request } => {
+            handle_pairing_code_v2_submit(swarm, context, peer, transport, request, channel)
+        }
+        PairingCodeV2Request::Poll { ticket } => {
+            let response = context.code_pairing_sessions.poll_response(
+                peer,
+                &ticket,
+                current_unix_seconds_lossy(),
+            );
+            send_pairing_code_v2_response(
+                swarm,
+                channel,
+                pairing_code_v2_shared_response(response),
+            );
+            Ok(())
+        }
+    }
+}
+
+fn handle_pairing_code_v2_hello(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    hello: &crate::pairing_code::PairingCodeHelloV2,
+    channel: request_response::ResponseChannel<PairingCodeV2Response>,
+) {
+    let Some((operation_id, code, expires_at_unix_seconds)) = context
+        .code_pairing_sessions
+        .active_open_code_for_v2_locator(&hello.payload.locator)
+        .map(|(operation_id, code, expires)| (operation_id.to_owned(), code.clone(), expires))
+    else {
+        send_pairing_code_v2_unavailable(swarm, channel);
+        return;
+    };
+    let now = current_unix_seconds_lossy();
+    let expires_in_seconds = expires_at_unix_seconds.saturating_sub(now);
+    if expires_in_seconds == 0 {
+        send_pairing_code_v2_unavailable(swarm, channel);
+        return;
+    }
+    if !context.code_pairing_sessions.can_accept_inbound_hello() {
+        context.metrics.record_code_pairing_busy();
+        send_pairing_code_v2_response(
+            swarm,
+            channel,
+            PairingCodeV2Response::Rejected {
+                reason: PairingCodeRejectionReason::Busy,
+            },
+        );
+        return;
+    }
+    match answer_pairing_code_hello_v2_at(
+        context.forwarder.config(),
+        &code,
+        hello,
+        peer,
+        crate::pairing::PairingOfferOptions {
+            expires_in_seconds,
+            rendezvous_token: None,
+        },
+        now,
+    ) {
+        Ok((challenge, session)) => {
+            if context
+                .code_pairing_sessions
+                .insert_inbound_session(
+                    peer,
+                    InboundSession {
+                        operation_id: operation_id.clone(),
+                        session,
+                    },
+                )
+                .is_err()
+            {
+                context.metrics.record_code_pairing_busy();
+                send_pairing_code_v2_response(
+                    swarm,
+                    channel,
+                    PairingCodeV2Response::Rejected {
+                        reason: PairingCodeRejectionReason::Busy,
+                    },
+                );
+                return;
+            }
+            context
+                .code_pairing_sessions
+                .record_open_handshake(&operation_id);
+            send_pairing_code_v2_response(
+                swarm,
+                channel,
+                PairingCodeV2Response::Challenge {
+                    challenge: Box::new(challenge),
+                },
+            );
+        }
+        Err(_) => send_pairing_code_v2_unavailable(swarm, channel),
+    }
+}
+
+fn handle_pairing_code_v2_submit(
+    swarm: &mut Swarm<Behaviour>,
+    context: &mut SwarmEventContext<'_>,
+    peer: Libp2pPeerId,
+    transport: Option<PairingTransport>,
+    request: Box<PairingRequest>,
+    channel: request_response::ResponseChannel<PairingCodeV2Response>,
+) -> Result<(), RunnerError> {
+    let now = current_unix_seconds_lossy();
+    if let Some(response) = context
+        .code_pairing_sessions
+        .response_for_existing_submission(peer, &request, now)?
+    {
+        send_pairing_code_v2_response(swarm, channel, pairing_code_v2_shared_response(response));
+        return Ok(());
+    }
+    if !context.code_pairing_sessions.can_accept_pending_approval() {
+        context.metrics.record_code_pairing_busy();
+        send_pairing_code_v2_response(
+            swarm,
+            channel,
+            PairingCodeV2Response::Rejected {
+                reason: PairingCodeRejectionReason::Busy,
+            },
+        );
+        return Ok(());
+    }
+    let Some(inbound) = context
+        .code_pairing_sessions
+        .take_inbound_session(peer, &request.payload.rendezvous_token)
+    else {
+        send_pairing_code_v2_unavailable(swarm, channel);
+        return Ok(());
+    };
+    let valid =
+        verify_pairing_request_code_authentication(&request, &inbound.session).and_then(|()| {
+            pairing_response_for_request_with_mode_and_records(
+                context.forwarder.config(),
+                context.forwarder.member_records(),
+                context.identity,
+                &mut context.pairing_replay_tokens.code_approval,
+                peer,
+                &request,
+                now,
+                crate::pairing::PairingAcceptanceMode::CodeApproval,
+            )
+            .map(|_| ())
+            .map_err(crate::pairing_code::PairingCodeError::from)
+        });
+    if valid.is_err() {
+        send_pairing_code_v2_unavailable(swarm, channel);
+        return Ok(());
+    }
+    let approval = PendingApproval::new(
+        inbound.operation_id,
+        peer,
+        inbound.session.expires_at_unix_seconds(),
+        *request,
+    )?;
+    let operation_id = approval.operation_id.clone();
+    let response = match context.code_pairing_sessions.set_pending_approval(approval) {
+        Ok(response) => {
+            context
+                .code_pairing_sessions
+                .record_open_transport(&operation_id, transport);
+            pairing_code_v2_shared_response(response)
+        }
+        Err(CodePairingSessionError::Capacity) => {
+            context.metrics.record_code_pairing_busy();
+            PairingCodeV2Response::Rejected {
+                reason: PairingCodeRejectionReason::Busy,
+            }
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if let Err(error) = persist_code_pairing_sessions(
+        context.pairing_state_store,
+        context.code_pairing_sessions,
+        &context.local_capabilities.network_name,
+    ) {
+        log_pairing_persistence_failure("inbound_v2_approval", &error);
+        if let Ok(actions) = context.code_pairing_sessions.cancel(&operation_id) {
+            stop_code_pairing_providers(swarm, &actions);
+        }
+        if let Err(error) = persist_code_pairing_sessions(
+            context.pairing_state_store,
+            context.code_pairing_sessions,
+            &context.local_capabilities.network_name,
+        ) {
+            log_pairing_persistence_failure("inbound_v2_approval_fail_closed", &error);
+        }
+        send_pairing_code_v2_unavailable(swarm, channel);
+        return Ok(());
+    }
+    send_pairing_code_v2_response(swarm, channel, response);
+    Ok(())
+}
+
+fn pairing_code_v2_shared_response(response: PairingCodeResponse) -> PairingCodeV2Response {
+    match response {
+        PairingCodeResponse::Accepted { response } => PairingCodeV2Response::Accepted { response },
+        PairingCodeResponse::Pending {
+            ticket,
+            expires_at_unix_seconds,
+        } => PairingCodeV2Response::Pending {
+            ticket,
+            expires_at_unix_seconds,
+        },
+        PairingCodeResponse::Rejected { reason } => PairingCodeV2Response::Rejected { reason },
+        PairingCodeResponse::Challenge { .. } => PairingCodeV2Response::Rejected {
+            reason: PairingCodeRejectionReason::InvalidRequest,
+        },
+    }
+}
+
+fn send_pairing_code_v2_unavailable(
+    swarm: &mut Swarm<Behaviour>,
+    channel: request_response::ResponseChannel<PairingCodeV2Response>,
+) {
+    send_pairing_code_v2_response(
+        swarm,
+        channel,
+        PairingCodeV2Response::Rejected {
+            reason: PairingCodeRejectionReason::Unavailable,
+        },
+    );
+}
+
+fn send_pairing_code_v2_response(
+    swarm: &mut Swarm<Behaviour>,
+    channel: request_response::ResponseChannel<PairingCodeV2Response>,
+    response: PairingCodeV2Response,
+) {
+    if swarm
+        .behaviour_mut()
+        .pairing_code_v2
+        .send_response(channel, response)
+        .is_err()
+    {
+        log_runtime_event(
+            LogLevel::Warn,
+            "pairing_code_v2_response_dropped",
+            &[("reason", "response channel closed")],
+        );
+    }
+}
+
 fn pairing_transport_for_connection(
     active_connections: &HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     peer: Libp2pPeerId,
@@ -12873,7 +13292,7 @@ fn handle_pairing_code_request(
             ) {
                 log_pairing_persistence_failure("inbound_approval", &error);
                 if let Ok(actions) = context.code_pairing_sessions.cancel(&operation_id) {
-                    stop_code_pairing_provider(swarm, actions.stop_providing_locator.as_deref());
+                    stop_code_pairing_providers(swarm, &actions);
                 }
                 if let Err(error) = persist_code_pairing_sessions(
                     context.pairing_state_store,
@@ -17869,6 +18288,20 @@ fn handle_behaviour_event(
                 event,
             );
         }
+        BehaviourEvent::Kad(event) if public_pairing_uses_primary_kad(swarm.behaviour()) => {
+            handle_public_pairing_kademlia_event(
+                context.code_pairing_sessions,
+                context.metrics,
+                event,
+            );
+        }
+        BehaviourEvent::PairingKad(event) => {
+            handle_public_pairing_kademlia_event(
+                context.code_pairing_sessions,
+                context.metrics,
+                event,
+            );
+        }
         BehaviourEvent::Relay(event) => handle_relay_event(
             swarm,
             context.forwarder,
@@ -17939,8 +18372,11 @@ fn handle_identify_received(
 ) {
     let observed_addr = info.observed_addr.clone();
     let relay_hop = identify_protocols_include_relay_hop(&info.protocols);
-    let kademlia_routing = context.discovery.kademlia
+    let overlay_kademlia_routing = context.discovery.kademlia
         && identify_protocols_include(&info.protocols, &context.discovery.kademlia_protocol);
+    let public_pairing_kademlia_routing =
+        identify_protocols_include(&info.protocols, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
+    let kademlia_routing = overlay_kademlia_routing || public_pairing_kademlia_routing;
     let identify_source = if context.membership.allows(peer_id) {
         DiscoveredPeerAddressSource::AuthenticatedPeerIdentify
     } else {
@@ -17956,18 +18392,26 @@ fn handle_identify_received(
     let auto_relay_candidates = auto_relay_candidate_addresses(peer_id, &info, identify_source);
     let preserve_established_infrastructure_candidate =
         context.infrastructure_peers.contains(peer_id);
+    let pairing_routing_only = public_pairing_kademlia_routing
+        && !overlay_kademlia_routing
+        && !context.membership.allows(peer_id)
+        && !context.forwarder.is_configured_transport_peer(peer_id);
     for address in accepted_listen_addresses {
-        learn_peer_address(
-            swarm,
-            context.forwarder,
-            context.discovered_peer_addresses,
-            context.paths,
-            context.metrics,
-            peer_id,
-            address.clone(),
-            context.discovery,
-            identify_source,
-        );
+        if pairing_routing_only {
+            public_pairing_kad_mut(swarm.behaviour_mut()).add_address(&peer_id, address.clone());
+        } else {
+            learn_peer_address(
+                swarm,
+                context.forwarder,
+                context.discovered_peer_addresses,
+                context.paths,
+                context.metrics,
+                peer_id,
+                address.clone(),
+                context.discovery,
+                identify_source,
+            );
+        }
     }
     if !context.membership.allows(peer_id)
         && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
@@ -17981,7 +18425,14 @@ fn handle_identify_received(
                     "public_routing_peer_identified",
                     &[
                         ("peer", &peer_id.to_string()),
-                        ("protocol", &context.discovery.kademlia_protocol),
+                        (
+                            "protocol",
+                            if overlay_kademlia_routing {
+                                &context.discovery.kademlia_protocol
+                            } else {
+                                PUBLIC_IPFS_KADEMLIA_PROTOCOL
+                            },
+                        ),
                     ],
                 );
             }
@@ -18205,6 +18656,7 @@ fn handle_kademlia_event(
     mut context: KademliaEventContext<'_>,
     event: kad::Event,
 ) {
+    let handles_public_pairing = public_pairing_uses_primary_kad(swarm.behaviour());
     match event {
         kad::Event::OutboundQueryProgressed {
             id, result, step, ..
@@ -18251,6 +18703,13 @@ fn handle_kademlia_event(
                     context
                         .code_pairing_sessions
                         .finish_open_provider(id, true, Instant::now());
+                    if handles_public_pairing {
+                        context.code_pairing_sessions.finish_open_provider_v2(
+                            id,
+                            true,
+                            Instant::now(),
+                        );
+                    }
                 }
                 kad::QueryResult::StartProviding(Err(error)) => {
                     if context
@@ -18266,6 +18725,25 @@ fn handle_kademlia_event(
                         log_runtime_event(
                             LogLevel::Warn,
                             "pairing_code_provider_advertisement_failed",
+                            &[("error", kademlia_add_provider_error_name(error))],
+                        );
+                    }
+                    if handles_public_pairing
+                        && context.code_pairing_sessions.finish_open_provider_v2(
+                            id,
+                            false,
+                            Instant::now(),
+                        )
+                    {
+                        context
+                            .metrics
+                            .record_kademlia_provider_advertisement_failure();
+                        context
+                            .metrics
+                            .record_code_pairing_provider_advertisement_failure();
+                        log_runtime_event(
+                            LogLevel::Warn,
+                            "pairing_code_v2_provider_advertisement_failed",
                             &[("error", kademlia_add_provider_error_name(error))],
                         );
                     }
@@ -18344,6 +18822,33 @@ fn handle_kademlia_event(
                 &[("kind", kademlia_event_name(&other))],
             );
         }
+    }
+}
+
+fn handle_public_pairing_kademlia_event(
+    sessions: &mut CodePairingSessions,
+    metrics: &RuntimeMetrics,
+    event: kad::Event,
+) {
+    let kad::Event::OutboundQueryProgressed { id, result, .. } = event else {
+        return;
+    };
+    match result {
+        kad::QueryResult::StartProviding(Ok(_)) => {
+            sessions.finish_open_provider_v2(id, true, Instant::now());
+        }
+        kad::QueryResult::StartProviding(Err(error)) => {
+            if sessions.finish_open_provider_v2(id, false, Instant::now()) {
+                metrics.record_kademlia_provider_advertisement_failure();
+                metrics.record_code_pairing_provider_advertisement_failure();
+                log_runtime_event(
+                    LogLevel::Warn,
+                    "pairing_code_v2_provider_advertisement_failed",
+                    &[("error", kademlia_add_provider_error_name(&error))],
+                );
+            }
+        }
+        _ => {}
     }
 }
 
@@ -20059,6 +20564,50 @@ mod tests {
             },
             resources: ResourceConfig::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn profile_free_pairing_mdns_is_active_only_while_inviting() {
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let discovery = DiscoveryConfig {
+            mdns: false,
+            kademlia_protocol: crate::config::PRIVATE_KADEMLIA_PROTOCOL.to_owned(),
+            ..DiscoveryConfig::default()
+        };
+        let mut node = build_node(&HostConfig {
+            identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1_280,
+            max_concurrent_control_streams: 8,
+            max_concurrent_packet_streams: 8,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: ResourceConfig::default(),
+            discovery: discovery.clone(),
+        })
+        .expect("node");
+        let mut sessions = CodePairingSessions::new();
+
+        reconcile_pairing_mdns(&mut node.swarm, &sessions, &discovery);
+        assert!(!node.swarm.behaviour().pairing_mdns.is_enabled());
+
+        let opened = sessions
+            .open("lab", 600, 1_000, Instant::now())
+            .expect("open pairing");
+        reconcile_pairing_mdns(&mut node.swarm, &sessions, &discovery);
+        assert!(node.swarm.behaviour().pairing_mdns.is_enabled());
+
+        sessions
+            .cancel(&opened.operation_id)
+            .expect("cancel pairing");
+        reconcile_pairing_mdns(&mut node.swarm, &sessions, &discovery);
+        assert!(!node.swarm.behaviour().pairing_mdns.is_enabled());
     }
 
     fn test_pairing_state_path(name: &str) -> PathBuf {

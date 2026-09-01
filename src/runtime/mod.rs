@@ -8,6 +8,7 @@ pub mod p2p;
 pub mod packet;
 pub mod packet_plane;
 pub mod pairing;
+pub mod pairing_bootstrap;
 pub mod pairing_code;
 pub mod pairing_sessions;
 pub mod pairing_store;
