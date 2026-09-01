@@ -27,6 +27,20 @@ final class VpnMode {
         return new VpnMode(systemStarted, false);
     }
 
+    static VpnMode stabilize(
+            int androidApi,
+            VpnMode previous,
+            VpnMode observed,
+            boolean connectionRequested) {
+        if (androidApi >= 33
+                && connectionRequested
+                && previous.alwaysOn
+                && !observed.alwaysOn) {
+            return previous;
+        }
+        return observed;
+    }
+
     boolean permitsDisconnect() {
         return !alwaysOn;
     }

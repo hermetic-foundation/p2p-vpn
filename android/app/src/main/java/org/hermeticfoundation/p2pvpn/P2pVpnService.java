@@ -13,6 +13,8 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.VpnManager;
+import android.net.VpnProfileState;
 import android.net.VpnService;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
@@ -117,6 +119,7 @@ public final class P2pVpnService extends VpnService {
     private long runtimeNetworkChangeFailures;
     private long serviceStartedElapsedRealtime;
     private volatile boolean legacySystemStartObserved;
+    private volatile boolean vpnModeObservationGap;
     private volatile VpnMode vpnMode = VpnMode.manual();
     private volatile Snapshot snapshot = Snapshot.initial();
 
@@ -138,9 +141,17 @@ public final class P2pVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        VpnMode managerEventMode = vpnManagerEventMode(intent);
         boolean systemStart = isSystemVpnStart(action);
         refreshVpnMode(systemStart);
-        if (ACTION_CONNECT.equals(action)) {
+        if (managerEventMode != null) {
+            if (managerEventMode.alwaysOn || desiredConnected) {
+                startForeground(
+                        NOTIFICATION_ID,
+                        notification(getString(R.string.notification_connecting)));
+            }
+            worker.execute(() -> vpnManagerModeChanged(managerEventMode));
+        } else if (ACTION_CONNECT.equals(action)) {
             startForeground(
                     NOTIFICATION_ID,
                     notification(getString(R.string.notification_connecting)));
@@ -159,7 +170,14 @@ public final class P2pVpnService extends VpnService {
                     notification(getString(R.string.notification_connecting)));
             worker.execute(() -> connectRequested(true));
         }
-        return START_NOT_STICKY;
+        boolean managerAlwaysOn = managerEventMode != null && managerEventMode.alwaysOn;
+        return shouldRestartAfterProcessDeath(
+                        action,
+                        systemStart,
+                        desiredConnected,
+                        vpnMode.alwaysOn || managerAlwaysOn)
+                ? START_STICKY
+                : START_NOT_STICKY;
     }
 
     @Override
@@ -213,6 +231,36 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         startConnection(systemStart ? "Starting always-on VPN" : "Connecting");
+    }
+
+    private void vpnManagerModeChanged(VpnMode mode) {
+        recordDiagnosticEvent("vpn_manager_mode_event");
+        vpnModeObservationGap = false;
+        applyVpnMode(mode);
+        if (mode.alwaysOn) {
+            desiredConnected = true;
+        }
+        if (mode.lockdown) {
+            cancel(reconnectFuture);
+            reconnectFuture = null;
+            cancel(underlayRecoveryFuture);
+            underlayRecoveryFuture = null;
+            if (connected) {
+                stopNativeRuntime();
+            }
+            reportLockdownBlocked();
+            if (desiredConnected) {
+                scheduleBlockedModePoll();
+            }
+            return;
+        }
+        cancel(statusFuture);
+        statusFuture = null;
+        if (desiredConnected && !connected && !operationInProgress) {
+            startConnection("Restoring after VPN mode changed");
+        } else {
+            publishSnapshot();
+        }
     }
 
     private void disconnectRequested(boolean force) {
@@ -1974,12 +2022,41 @@ public final class P2pVpnService extends VpnService {
     private boolean isSystemVpnStart(String action) {
         if (ACTION_CONNECT.equals(action)
                 || ACTION_DISCONNECT.equals(action)
-                || ACTION_DEBUG_COMMAND.equals(action)) {
+                || ACTION_DEBUG_COMMAND.equals(action)
+                || VpnManager.ACTION_VPN_MANAGER_EVENT.equals(action)) {
             return false;
         }
         return action == null
                 || SERVICE_INTERFACE.equals(action)
                 || (Build.VERSION.SDK_INT >= 29 && isAlwaysOn());
+    }
+
+    private static VpnMode vpnManagerEventMode(Intent intent) {
+        if (Build.VERSION.SDK_INT < 33
+                || intent == null
+                || !VpnManager.ACTION_VPN_MANAGER_EVENT.equals(intent.getAction())
+                || !intent.hasCategory(VpnManager.CATEGORY_EVENT_ALWAYS_ON_STATE_CHANGED)) {
+            return null;
+        }
+        VpnProfileState state =
+                intent.getParcelableExtra(
+                        VpnManager.EXTRA_VPN_PROFILE_STATE, VpnProfileState.class);
+        if (state == null) {
+            return VpnMode.manual();
+        }
+        return VpnMode.resolve(
+                Build.VERSION.SDK_INT,
+                false,
+                state.isAlwaysOn(),
+                state.isLockdownEnabled());
+    }
+
+    static boolean shouldRestartAfterProcessDeath(
+            String action, boolean systemStart, boolean connectionRequested, boolean alwaysOn) {
+        if (ACTION_DISCONNECT.equals(action)) {
+            return false;
+        }
+        return ACTION_CONNECT.equals(action) || systemStart || connectionRequested || alwaysOn;
     }
 
     private void refreshVpnMode(boolean systemStart) {
@@ -1988,12 +2065,28 @@ public final class P2pVpnService extends VpnService {
         }
         boolean platformAlwaysOn = Build.VERSION.SDK_INT >= 29 && isAlwaysOn();
         boolean platformLockdown = Build.VERSION.SDK_INT >= 29 && isLockdownEnabled();
-        VpnMode updated =
+        VpnMode observed =
                 VpnMode.resolve(
                         Build.VERSION.SDK_INT,
                         legacySystemStartObserved,
                         platformAlwaysOn,
                         platformLockdown);
+        VpnMode previous = vpnMode;
+        VpnMode updated =
+                VpnMode.stabilize(
+                        Build.VERSION.SDK_INT, previous, observed, desiredConnected);
+        boolean observationGap = !updated.equals(observed);
+        if (observationGap != vpnModeObservationGap) {
+            recordDiagnosticEvent(
+                    observationGap
+                            ? "vpn_mode_observation_gap_started"
+                            : "vpn_mode_observation_gap_ended");
+            vpnModeObservationGap = observationGap;
+        }
+        applyVpnMode(updated);
+    }
+
+    private void applyVpnMode(VpnMode updated) {
         VpnMode previous = vpnMode;
         vpnMode = updated;
         if (!updated.equals(previous)) {

@@ -30,12 +30,16 @@
 
         <service
             android:name=".P2pVpnService"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:stopWithTask="false">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.net.action.VPN_MANAGER_EVENT" />
+                <category android:name="android.net.category.EVENT_ALWAYS_ON_STATE_CHANGED" />
             </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

@@ -52,4 +52,48 @@ public final class VpnModeTest {
         assertFalse(mode.alwaysOn);
         assertTrue(mode.permitsDisconnect());
     }
+
+    @Test
+    public void activeAlwaysOnOwnershipSurvivesANotRunningObservation() {
+        VpnMode previous = VpnMode.resolve(37, false, true, true);
+        VpnMode observed = VpnMode.resolve(37, false, false, false);
+
+        VpnMode stabilized = VpnMode.stabilize(37, previous, observed, true);
+
+        assertTrue(stabilized.alwaysOn);
+        assertTrue(stabilized.lockdown);
+    }
+
+    @Test
+    public void positivePlatformObservationReleasesLockdown() {
+        VpnMode previous = VpnMode.resolve(37, false, true, true);
+        VpnMode observed = VpnMode.resolve(37, false, true, false);
+
+        VpnMode stabilized = VpnMode.stabilize(37, previous, observed, true);
+
+        assertTrue(stabilized.alwaysOn);
+        assertFalse(stabilized.lockdown);
+    }
+
+    @Test
+    public void inactiveConnectionDoesNotRetainPlatformOwnership() {
+        VpnMode previous = VpnMode.resolve(37, false, true, true);
+        VpnMode observed = VpnMode.resolve(37, false, false, false);
+
+        VpnMode stabilized = VpnMode.stabilize(37, previous, observed, false);
+
+        assertFalse(stabilized.alwaysOn);
+        assertFalse(stabilized.lockdown);
+    }
+
+    @Test
+    public void preEventAndroidUsesPollingForLockdownRelease() {
+        VpnMode previous = VpnMode.resolve(32, false, true, true);
+        VpnMode observed = VpnMode.resolve(32, false, false, false);
+
+        VpnMode stabilized = VpnMode.stabilize(32, previous, observed, true);
+
+        assertFalse(stabilized.alwaysOn);
+        assertFalse(stabilized.lockdown);
+    }
 }
