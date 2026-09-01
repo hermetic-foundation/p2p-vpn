@@ -1,12 +1,16 @@
 package org.hermeticfoundation.p2pvpn;
 
 import android.app.Activity;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.StringJoiner;
 
 final class NetworkDetailScreen {
     interface Listener {
@@ -43,9 +47,12 @@ final class NetworkDetailScreen {
     private final Button approve;
     private final Button reject;
     private final TextView peersStatus;
+    private final LinearLayout peers;
     private final TextView detailStatus;
     private final Button remove;
     private String displayedCandidatePeer;
+    private String displayedPeerNetworkId;
+    private long displayedPeerSnapshotTime = -1;
     private P2pVpnService.NetworkSnapshot displayedNetwork;
 
     NetworkDetailScreen(Activity activity, View root, String networkId, Listener listener) {
@@ -67,6 +74,7 @@ final class NetworkDetailScreen {
         approve = root.findViewById(R.id.approve_pairing);
         reject = root.findViewById(R.id.reject_pairing);
         peersStatus = root.findViewById(R.id.peers_status);
+        peers = root.findViewById(R.id.peers);
         detailStatus = root.findViewById(R.id.detail_status);
         remove = root.findViewById(R.id.remove_network);
 
@@ -157,12 +165,167 @@ final class NetworkDetailScreen {
         reject.setEnabled(bound && hasCandidate && snapshot.connected);
         renderCandidate(snapshot, hasCandidate);
 
-        peersStatus.setText(
-                snapshot.peerDetail == null || snapshot.peerDetail.isEmpty()
-                        ? activity.getString(R.string.peers_unavailable)
-                        : snapshot.peerDetail);
+        renderPeers(network);
         detailStatus.setText(statusText);
         remove.setEnabled(bound && !snapshot.busy && !snapshot.pairingActive);
+    }
+
+    private void renderPeers(P2pVpnService.NetworkSnapshot network) {
+        PeerSnapshot snapshot = network.peers;
+        if (snapshot == null) {
+            clearPeerRows();
+            if (!network.enabled) {
+                peersStatus.setText(R.string.peers_enable_network);
+            } else if ("starting".equals(network.phase)) {
+                peersStatus.setText(R.string.peers_loading);
+            } else {
+                peersStatus.setText(R.string.peers_unavailable);
+            }
+            return;
+        }
+
+        if (snapshot.truncated) {
+            peersStatus.setText(
+                    activity.getString(
+                            R.string.peers_truncated,
+                            snapshot.returnedPeers,
+                            snapshot.totalPeers));
+        } else {
+            peersStatus.setText(
+                    activity.getResources()
+                            .getQuantityString(
+                                    R.plurals.peer_count,
+                                    snapshot.returnedPeers,
+                                    snapshot.returnedPeers));
+        }
+        if (network.id.equals(displayedPeerNetworkId)
+                && snapshot.observedAtUnixSeconds == displayedPeerSnapshotTime) {
+            return;
+        }
+
+        peers.removeAllViews();
+        displayedPeerNetworkId = network.id;
+        displayedPeerSnapshotTime = snapshot.observedAtUnixSeconds;
+        LayoutInflater inflater = LayoutInflater.from(activity);
+        for (PeerSnapshot.Peer peer : snapshot.peers) {
+            View row = inflater.inflate(R.layout.row_peer, peers, false);
+            ((TextView) row.findViewById(R.id.peer_name)).setText(peerName(peer));
+            ((TextView) row.findViewById(R.id.peer_state)).setText(peerState(peer));
+            ((TextView) row.findViewById(R.id.peer_addresses)).setText(peerAddresses(peer));
+            ((TextView) row.findViewById(R.id.peer_membership))
+                    .setText(peerMembership(peer));
+            ((TextView) row.findViewById(R.id.peer_identity)).setText(peer.peerId);
+            peers.addView(row);
+        }
+    }
+
+    private void clearPeerRows() {
+        if (displayedPeerNetworkId != null || peers.getChildCount() > 0) {
+            peers.removeAllViews();
+        }
+        displayedPeerNetworkId = null;
+        displayedPeerSnapshotTime = -1;
+    }
+
+    private String peerName(PeerSnapshot.Peer peer) {
+        if (!peer.hostnames.isEmpty()) {
+            return String.join(", ", peer.hostnames);
+        }
+        int prefixLength = Math.min(16, peer.peerId.length());
+        return peer.peerId.substring(0, prefixLength)
+                + (prefixLength < peer.peerId.length() ? "..." : "");
+    }
+
+    private String peerState(PeerSnapshot.Peer peer) {
+        String state;
+        switch (peer.connectionState) {
+            case LOCAL:
+                return activity.getString(R.string.peer_state_local);
+            case CONNECTED:
+                state = activity.getString(R.string.peer_state_connected);
+                break;
+            case CONNECTING:
+                state = activity.getString(R.string.peer_state_connecting);
+                break;
+            case RECOVERING:
+                state = activity.getString(R.string.peer_state_recovering);
+                break;
+            case DISCONNECTED:
+            default:
+                state = activity.getString(R.string.peer_state_disconnected);
+                break;
+        }
+        if (peer.selectedPath.isEmpty() || peer.pathOrigin.isEmpty()) {
+            return state;
+        }
+        return activity.getString(
+                R.string.peer_state_path,
+                state,
+                pathName(peer.selectedPath.get()),
+                pathOriginName(peer.pathOrigin.get()));
+    }
+
+    private String peerAddresses(PeerSnapshot.Peer peer) {
+        List<String> addresses = new ArrayList<>(peer.ipv4.size() + peer.ipv6.size());
+        addresses.addAll(peer.ipv4);
+        addresses.addAll(peer.ipv6);
+        return String.join("\n", addresses);
+    }
+
+    private String peerMembership(PeerSnapshot.Peer peer) {
+        StringJoiner sources = new StringJoiner(", ");
+        for (PeerSnapshot.MembershipSource source : peer.membershipSources) {
+            switch (source) {
+                case LOCAL_CONFIGURATION:
+                    sources.add(activity.getString(R.string.peer_membership_local));
+                    break;
+                case PEER_CONFIGURATION:
+                    sources.add(activity.getString(R.string.peer_membership_configured));
+                    break;
+                case SIGNED_MEMBERSHIP:
+                    sources.add(activity.getString(R.string.peer_membership_signed));
+                    break;
+            }
+        }
+        return activity.getString(R.string.peer_membership, sources.toString());
+    }
+
+    private String pathName(PeerSnapshot.PathKind path) {
+        switch (path) {
+            case DIRECT_UDP_DATAGRAM:
+                return activity.getString(R.string.peer_path_udp);
+            case DIRECT_QUIC_DATAGRAM:
+                return activity.getString(R.string.peer_path_quic_datagram);
+            case DIRECT_QUIC_STREAM:
+                return activity.getString(R.string.peer_path_quic_stream);
+            case DIRECT_TCP_STREAM:
+                return activity.getString(R.string.peer_path_tcp_stream);
+            case CIRCUIT_RELAY:
+            default:
+                return activity.getString(R.string.peer_path_relay);
+        }
+    }
+
+    private String pathOriginName(PeerSnapshot.PathOrigin origin) {
+        switch (origin) {
+            case CONFIGURED:
+                return activity.getString(R.string.peer_origin_configured);
+            case MDNS:
+                return activity.getString(R.string.peer_origin_mdns);
+            case KADEMLIA:
+                return activity.getString(R.string.peer_origin_kademlia);
+            case IDENTIFY:
+                return activity.getString(R.string.peer_origin_identify);
+            case RELAY_CIRCUIT:
+                return activity.getString(R.string.peer_origin_relay);
+            case DCUTR:
+                return activity.getString(R.string.peer_origin_dcutr);
+            case PACKET_PLANE_NEGOTIATION:
+                return activity.getString(R.string.peer_origin_packet_plane);
+            case UNKNOWN:
+            default:
+                return activity.getString(R.string.peer_origin_unknown);
+        }
     }
 
     private void renderCandidate(P2pVpnService.Snapshot snapshot, boolean hasCandidate) {
