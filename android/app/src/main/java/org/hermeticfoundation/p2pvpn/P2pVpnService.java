@@ -329,6 +329,7 @@ public final class P2pVpnService extends VpnService {
             }
             NativeResponse.objectValue(
                     NativeBridge.nativeStart(
+                            selectedNetworkId,
                             profile.configJson,
                             tunFd,
                             pairingStateFile.getAbsolutePath(),

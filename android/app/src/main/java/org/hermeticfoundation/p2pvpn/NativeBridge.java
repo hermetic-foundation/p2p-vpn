@@ -21,6 +21,7 @@ final class NativeBridge {
     static native String nativeInspectProfile(String configJson);
 
     static native String nativeStart(
+            String networkId,
             String configJson,
             int tunFd,
             String pairingStatePath,

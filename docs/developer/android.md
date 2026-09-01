@@ -14,6 +14,9 @@ MainActivity
         -> versioned ProfileCollection
      -> JNI NativeBridge
         -> p2p-vpn-android
+           -> shared Android packet supervisor
+              -> one physical TUN reader and writer
+              -> isolated per-network packet ports
            -> shared p2p-vpn runtime
            -> in-process runtime control channel
            -> libp2p discovery and packet paths
@@ -34,6 +37,7 @@ MainActivity
 | `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
 | `android/app/src/main/res/values[-night]/` | System-selected light and dark themes |
 | `crates/p2p-vpn-android/src/lib.rs` | JNI and runtime adapter |
+| `crates/p2p-vpn-android/src/supervisor.rs` | Shared TUN dispatch, bounded queues, and route isolation |
 | `scripts/android-device-audit.sh` | Physical arm64 transition and endurance audit |
 | `src/runtime/tun.rs` | Platform-neutral packet I/O and route hooks |
 | `src/runtime/control.rs` | In-process runtime control channel |
@@ -43,14 +47,17 @@ MainActivity
 
 The shared runtime receives a `RuntimePlatform`.
 
-Android supplies packet I/O and marks TUN routes as preconfigured.
+Android supplies supervisor-backed packet I/O. Java establishes the physical
+TUN and initial routes; Rust validates packet dispatch and live route updates.
 
 | Concern | Linux | Android |
 | --- | --- | --- |
 | TUN creation | Rust `tun` crate | `VpnService.Builder` |
 | Interface addresses | Netlink commands | `Builder.addAddress` |
 | Overlay routes | Netlink commands | `Builder.addRoute` |
-| Packet read/write | Linux TUN file | Detached Android TUN descriptor |
+| Physical packet read/write | Linux TUN file | One reader and one writer over the detached descriptor |
+| Runtime packet I/O | Linux TUN file | Isolated supervisor port and queues |
+| Runtime route updates | Netlink reconciliation | Atomic in-memory dispatch validation |
 | Local control | Unix socket | In-process channel |
 | Service lifecycle | systemd or CLI | Foreground `VpnService` |
 
@@ -91,20 +98,151 @@ Every JNI response uses a bounded JSON envelope:
 
 Native panics are caught before crossing JNI.
 
+`nativeStart` remains a compatibility entry point for one network. It routes
+that network through the shared supervisor seam; concurrent service and UI
+activation is not implemented by this change.
+
 ## TUN Ownership
 
 `ParcelFileDescriptor.detachFd()` transfers ownership to JNI.
 
 JNI adopts the descriptor before any fallible string conversion.
 
-The native adapter duplicates it once:
+The native adapter duplicates it once. The supervisor owns one physical reader
+and one physical writer for the complete Android VPN interface.
 
 | Descriptor | Use |
 | --- | --- |
-| Original | Packet writer |
-| Duplicate | Blocking packet reader |
+| Original | Shared polling packet writer |
+| Duplicate | Shared polling packet reader |
 
-Shutdown signals the reader and closes both owners through Rust RAII.
+Both descriptors use nonblocking I/O with bounded polling. Shutdown signals
+the workers, closes queues, and joins the runtime and TUN threads.
+
+Rust RAII then closes both descriptor owners.
+
+Physical TUN write backpressure is bounded to 250 ms per packet. A timeout
+drops that packet and releases any network-removal gate.
+
+## Shared Packet Supervisor
+
+The supervisor separates physical TUN ownership from network runtimes.
+
+Each network receives an isolated `PacketIo` port and route controller. The
+current JNI compatibility path creates one port and starts one runtime.
+
+### Packet Flow
+
+```text
+physical TUN reader
+  -> parse inner destination address
+  -> deterministic route lookup
+  -> selected network outbound queue
+  -> network runtime
+  -> network inbound queue
+  -> fair physical TUN writer
+```
+
+The outbound dispatcher uses the packet's inner IPv4 or IPv6 destination.
+Routes are ordered by longest prefix, then stable network ID order.
+
+Cross-network overlap is rejected, so one destination cannot belong to two
+active networks.
+
+The packet source must belong to the selected network. An unowned source or a
+source owned by another network is dropped before it reaches either runtime.
+
+Runtime-to-TUN packets are parsed again at the supervisor boundary. Their
+source must be remote-owned and their destination must be local to that port.
+
+### Queue Bounds
+
+Every network has independent queues in both directions.
+
+| Direction | Packet limit | Byte limit |
+| --- | ---: | ---: |
+| TUN to runtime | 256 | 1 MiB |
+| Runtime to TUN | 256 | 1 MiB |
+
+Full and oversized queues drop the packet without failing the runtime. Queue
+pressure in one network does not consume another network's queue allowance.
+
+Packets larger than a network's MTU are dropped before its runtime reader.
+Disabling marks its writer inactive, removes its routes, then closes and
+discards its packet queues.
+
+The inbound writer visits ready network queues in round-robin order. A busy
+network cannot continuously take the first write slot.
+
+### Route Validation
+
+The supervisor validates the complete candidate route map before activation.
+
+| Conflict | Result |
+| --- | --- |
+| Duplicate network ID | Reject supervisor creation |
+| Local address or prefix overlaps its remote route | Reject supervisor creation |
+| Any local or remote prefix overlaps another network | Reject supervisor creation |
+| Live update conflicts with another network | Reject update; fail affected network closed |
+| Live update is based on stale installed routes | Reject update; fail affected network closed |
+| More than 1,024 prefixes in one network | Reject activation or update |
+| More than 4,096 prefixes across the supervisor | Reject activation or update |
+
+Live updates replace the dispatch map atomically only after validation.
+
+Removing a network removes its routes and closes only its packet queues.
+Rejected reconciliation also closes only that network, even if the core
+membership source had already committed its candidate records.
+
+### Network Isolation
+
+Isolation is enforced at the packet port, route, and queue boundaries.
+
+| Boundary | Guarantee |
+| --- | --- |
+| Runtime input | Receives only packets dispatched to its network routes |
+| Runtime output | Must match current remote-source and local-destination ownership |
+| Queue capacity | Cannot consume another network's packet or byte allowance |
+| Route ownership | Cannot activate a prefix owned by another network |
+| Removal | Closes only the removed network's routes and queues |
+
+All runtimes remain in one native process. The supervisor is packet-plane
+isolation, not an operating-system process sandbox.
+
+### Counters
+
+Native status exposes aggregate supervisor counters without network IDs.
+
+| Scope | Counters |
+| --- | --- |
+| Supervisor | Malformed and unroutable outbound packets |
+| Supervisor | Source-ownership mismatch drops |
+| Per network index | Outbound enqueued, queue drops, oversized drops |
+| Per network index | Inbound malformed, ownership, queue, and oversized drops |
+| Per network index | Packets discarded during removal or shutdown |
+| Per network index | Inbound written, backpressure drops, and write failures |
+| Per network index | Rejected live route updates |
+
+These counters distinguish route failures from queue pressure while preserving
+network identity privacy in status output.
+
+### Current Boundary
+
+The supervisor can model multiple isolated network ports and validates their
+combined route ownership.
+
+The Android service, JNI lifecycle, and UI still activate one selected network.
+Concurrent multi-network lifecycle support remains follow-up work.
+
+Android does not expose Linux-style per-route preferred source selection.
+Concurrent activation must define one shared TUN presentation address and
+translate it to each isolated network identity, or provide an equivalent
+source-selection mechanism with transport checksum coverage.
+
+`VpnService.Builder` routes are fixed when the interface is established.
+Runtime-learned custom prefixes currently update native dispatch only. The
+multi-network lifecycle must re-establish or replace the TUN before reporting
+those prefixes as active Android routes.
 
 ## Profile Lifecycle
 

@@ -16,6 +16,9 @@ use p2p_vpn::{
 };
 use serde::Serialize;
 
+#[cfg(any(target_os = "android", test))]
+mod supervisor;
+
 const BUILTIN_IPV4_NETWORK: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 0);
 const BUILTIN_IPV4_PREFIX: u8 = 16;
 const BUILTIN_IPV6_NETWORK: Ipv6Addr =
@@ -486,6 +489,7 @@ mod android {
             atomic::{AtomicBool, AtomicU8, Ordering},
         },
         thread,
+        time::{Duration, Instant},
     };
 
     use jni::{
@@ -498,27 +502,31 @@ mod android {
             PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeNetworkChange,
             runtime_control_channel,
         },
-        runner::{
-            PreconfiguredTunRoutes, RuntimePlatform, ShutdownReason,
-            run_config_until_with_runtime_platform,
-        },
-        tun::{PacketIo, PacketRead, PacketWrite},
+        runner::{RuntimePlatform, ShutdownReason, run_config_until_with_runtime_platform},
+        tun::{PacketRead, PacketWrite, TunRuntimeConfig},
     };
     use tokio::sync::oneshot;
 
-    use super::*;
+    use super::{
+        supervisor::{NetworkSpec, PacketSwitch, QueueLimits},
+        *,
+    };
 
     static LOG_INIT: Once = Once::new();
     static RUNTIME: Mutex<Option<RuntimeInstance>> = Mutex::new(None);
     const CONTROL_FAILURE_LIMIT: u8 = 3;
+    const TUN_WRITE_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 
     struct RuntimeInstance {
         control: RuntimeControlHandle,
         shutdown: Option<oneshot::Sender<ShutdownReason>>,
-        reader_stop: Arc<AtomicBool>,
+        tun_stop: Arc<AtomicBool>,
+        tun_error: Arc<Mutex<Option<String>>>,
+        packet_switch: Arc<PacketSwitch>,
         control_failures: Arc<AtomicU8>,
         status: Arc<Mutex<AndroidRuntimeStatus>>,
         thread: Option<thread::JoinHandle<()>>,
+        tun_threads: Vec<thread::JoinHandle<()>>,
     }
 
     struct AndroidTunReader {
@@ -528,6 +536,7 @@ mod android {
 
     struct AndroidTunWriter {
         file: File,
+        stop: Arc<AtomicBool>,
     }
 
     impl PacketRead for AndroidTunReader {
@@ -558,7 +567,10 @@ mod android {
                         "Android TUN descriptor became unavailable",
                     ));
                 }
-                let length = self.file.read(buffer)?;
+                let length = match self.file.read(buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                    result => result?,
+                };
                 if length == 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -572,8 +584,82 @@ mod android {
 
     impl PacketWrite for AndroidTunWriter {
         fn write_packet(&mut self, packet: &[u8]) -> io::Result<usize> {
-            self.file.write(packet)
+            let started = Instant::now();
+            loop {
+                if self.stop.load(Ordering::Acquire) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "shared Android TUN writer stopped",
+                    ));
+                }
+                let Some(remaining) = TUN_WRITE_POLL_TIMEOUT.checked_sub(started.elapsed()) else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "shared Android TUN writer remained blocked",
+                    ));
+                };
+                if remaining.is_zero() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "shared Android TUN writer remained blocked",
+                    ));
+                }
+                let timeout_millis =
+                    i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+                let mut descriptor = libc::pollfd {
+                    fd: self.file.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                // `descriptor` is valid for one element for the duration of this call.
+                let result = unsafe { libc::poll(&mut descriptor, 1, timeout_millis) };
+                if result < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if result == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "shared Android TUN writer remained blocked",
+                    ));
+                }
+                if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                    return Err(io::Error::other(
+                        "Android TUN descriptor became unavailable",
+                    ));
+                }
+                match self.file.write(packet) {
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) => {}
+                    result => return result,
+                }
+            }
         }
+    }
+
+    fn set_nonblocking(file: &File) -> Result<(), String> {
+        // The descriptor is owned and valid for both `fcntl` calls.
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return Err(format!(
+                "failed to read Android TUN descriptor flags: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // `O_NONBLOCK` is shared by the duplicated descriptor's open file description.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            return Err(format!(
+                "failed to make Android TUN descriptor nonblocking: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
 
     #[unsafe(no_mangle)]
@@ -637,6 +723,7 @@ mod android {
     pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeStart(
         mut env: JNIEnv,
         _class: JClass,
+        network_id: JString,
         config_json: JString,
         tun_fd: jint,
         pairing_state_path: JString,
@@ -648,10 +735,12 @@ mod android {
             }
             // `VpnService` detached the descriptor, so JNI must adopt it before any fallible work.
             let tun_file = unsafe { File::from_raw_fd(tun_fd) };
+            let network_id = read_string(env, &network_id)?;
             let config_json = read_string(env, &config_json)?;
             let pairing_state_path = read_string(env, &pairing_state_path)?;
             let membership_state_path = read_string(env, &membership_state_path)?;
             start_runtime(
+                network_id,
                 &config_json,
                 tun_file,
                 pairing_state_path,
@@ -719,6 +808,7 @@ mod android {
     }
 
     fn start_runtime(
+        network_id: String,
         config_json: &str,
         writer_file: File,
         pairing_state_path: String,
@@ -731,6 +821,27 @@ mod android {
         config
             .validate_runtime()
             .map_err(|error| format!("invalid profile: {error:?}"))?;
+        let tun = TunRuntimeConfig::from_config(&config)
+            .map_err(|error| format!("invalid profile routes: {error:?}"))?;
+        let tun_mtu = tun.mtu;
+        let (packet_switch, mut ports) = PacketSwitch::new(
+            vec![NetworkSpec {
+                id: network_id.clone(),
+                tun,
+            }],
+            QueueLimits::DEFAULT,
+        )
+        .map_err(|error| error.to_string())?;
+        let packet_switch = Arc::new(packet_switch);
+        let network_port = ports
+            .pop()
+            .ok_or_else(|| "Android packet supervisor did not create a network port".to_owned())?;
+        if network_port.id != network_id {
+            return Err("Android packet supervisor returned the wrong network port".to_owned());
+        }
+        let network_lease = packet_switch
+            .network_lease(&network_id)
+            .map_err(|error| error.to_string())?;
 
         // The reader and writer need independent owners for the same TUN endpoint.
         let reader_fd = unsafe { libc::dup(writer_file.as_raw_fd()) };
@@ -741,14 +852,79 @@ mod android {
             ));
         }
         let reader_file = unsafe { File::from_raw_fd(reader_fd) };
-        let reader_stop = Arc::new(AtomicBool::new(false));
-        let packet_io = PacketIo::new(
-            AndroidTunReader {
-                file: reader_file,
-                stop: Arc::clone(&reader_stop),
-            },
-            AndroidTunWriter { file: writer_file },
-        );
+        set_nonblocking(&writer_file)?;
+        let tun_stop = Arc::new(AtomicBool::new(false));
+        let tun_error = Arc::new(Mutex::new(None));
+
+        let reader_switch = Arc::clone(&packet_switch);
+        let reader_stop = Arc::clone(&tun_stop);
+        let reader_error = Arc::clone(&tun_error);
+        let reader_thread = thread::Builder::new()
+            .name("p2p-vpn-tun-reader".to_owned())
+            .spawn(move || {
+                let mut reader = AndroidTunReader {
+                    file: reader_file,
+                    stop: Arc::clone(&reader_stop),
+                };
+                let mut buffer = vec![0_u8; usize::from(tun_mtu)];
+                loop {
+                    match reader.read_packet(&mut buffer) {
+                        Ok(0) if reader_stop.load(Ordering::Acquire) => return,
+                        Ok(0) => continue,
+                        Ok(length) => {
+                            let _ = reader_switch.dispatch_packet(&buffer[..length]);
+                        }
+                        Err(error) => {
+                            if !reader_stop.load(Ordering::Acquire) {
+                                record_tun_error(&reader_error, "read", &error);
+                            }
+                            reader_stop.store(true, Ordering::Release);
+                            reader_switch.close();
+                            return;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| format!("failed to start shared TUN reader: {error}"))?;
+
+        let writer_switch = Arc::clone(&packet_switch);
+        let writer_stop = Arc::clone(&tun_stop);
+        let writer_error = Arc::clone(&tun_error);
+        let writer_thread = match thread::Builder::new()
+            .name("p2p-vpn-tun-writer".to_owned())
+            .spawn(move || {
+                let mut writer = AndroidTunWriter {
+                    file: writer_file,
+                    stop: Arc::clone(&writer_stop),
+                };
+                while !writer_stop.load(Ordering::Acquire) {
+                    let generation = writer_switch.inbound_generation();
+                    match writer_switch.write_next(&mut writer) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            let _ = writer_switch
+                                .wait_for_inbound_since(generation, Duration::from_millis(250));
+                        }
+                        Err(error) => {
+                            if !writer_stop.load(Ordering::Acquire) {
+                                record_tun_error(&writer_error, "write", &error);
+                            }
+                            writer_stop.store(true, Ordering::Release);
+                            writer_switch.close();
+                            return;
+                        }
+                    }
+                }
+            }) {
+            Ok(thread) => thread,
+            Err(error) => {
+                tun_stop.store(true, Ordering::Release);
+                packet_switch.close();
+                let _ = reader_thread.join();
+                return Err(format!("failed to start shared TUN writer: {error}"));
+            }
+        };
+
         let (control, receiver) = runtime_control_channel();
         let (shutdown, shutdown_rx) = oneshot::channel();
         let status = Arc::new(Mutex::new(AndroidRuntimeStatus {
@@ -758,9 +934,10 @@ mod android {
         }));
         let control_failures = Arc::new(AtomicU8::new(0));
         let thread_status = Arc::clone(&status);
-        let thread = thread::Builder::new()
+        let thread = match thread::Builder::new()
             .name("p2p-vpn-runtime".to_owned())
             .spawn(move || {
+                let _network_lease = network_lease;
                 let result = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
                     .enable_all()
@@ -769,7 +946,10 @@ mod android {
                     .and_then(|runtime| {
                         runtime.block_on(run_config_until_with_runtime_platform(
                             config,
-                            RuntimePlatform::new(packet_io, PreconfiguredTunRoutes)
+                            RuntimePlatform::new(
+                                network_port.packet_io,
+                                network_port.route_controller,
+                            )
                                 .with_control(receiver),
                             None,
                             None,
@@ -794,22 +974,40 @@ mod android {
                         status.detail = Some(error);
                     }
                 }
-            })
-            .map_err(|error| format!("failed to start runtime thread: {error}"))?;
+            }) {
+            Ok(thread) => thread,
+            Err(error) => {
+                tun_stop.store(true, Ordering::Release);
+                packet_switch.close();
+                let _ = reader_thread.join();
+                let _ = writer_thread.join();
+                return Err(format!("failed to start runtime thread: {error}"));
+            }
+        };
 
         let instance = RuntimeInstance {
             control,
             shutdown: Some(shutdown),
-            reader_stop,
+            tun_stop,
+            tun_error,
+            packet_switch,
             control_failures,
             status: Arc::clone(&status),
             thread: Some(thread),
+            tun_threads: vec![reader_thread, writer_thread],
         };
         *RUNTIME.lock().unwrap_or_else(|error| error.into_inner()) = Some(instance);
         Ok(status
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone())
+    }
+
+    fn record_tun_error(target: &Mutex<Option<String>>, operation: &str, error: &io::Error) {
+        let mut target = target.lock().unwrap_or_else(|error| error.into_inner());
+        if target.is_none() {
+            *target = Some(format!("shared Android TUN {operation} failed: {error}"));
+        }
     }
 
     fn stop_runtime() -> Result<AndroidRuntimeStatus, String> {
@@ -829,11 +1027,21 @@ mod android {
         if let Some(shutdown) = instance.shutdown.take() {
             let _ = shutdown.send(ShutdownReason::Terminate);
         }
-        instance.reader_stop.store(true, Ordering::Release);
+        instance.tun_stop.store(true, Ordering::Release);
+        instance.packet_switch.close();
+        let mut join_error = None;
         if let Some(thread) = instance.thread.take() {
-            thread
-                .join()
-                .map_err(|_| "runtime thread panicked while stopping".to_owned())?;
+            if thread.join().is_err() {
+                join_error = Some("runtime thread panicked while stopping".to_owned());
+            }
+        }
+        for thread in instance.tun_threads {
+            if thread.join().is_err() && join_error.is_none() {
+                join_error = Some("shared TUN thread panicked while stopping".to_owned());
+            }
+        }
+        if let Some(error) = join_error {
+            return Err(error);
         }
         Ok(instance
             .status
@@ -843,7 +1051,7 @@ mod android {
     }
 
     fn runtime_status() -> Result<AndroidRuntimeStatus, String> {
-        let (control, control_failures, status) = {
+        let (control, control_failures, status, tun_error, packet_switch) = {
             let runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
             let Some(instance) = runtime.as_ref() else {
                 return Ok(AndroidRuntimeStatus {
@@ -856,6 +1064,8 @@ mod android {
                 instance.control.clone(),
                 Arc::clone(&instance.control_failures),
                 Arc::clone(&instance.status),
+                Arc::clone(&instance.tun_error),
+                Arc::clone(&instance.packet_switch),
             )
         };
 
@@ -863,6 +1073,14 @@ mod android {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        let tun_failure = tun_error
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(error) = tun_failure {
+            snapshot.phase = AndroidRuntimePhase::Failed;
+            snapshot.detail = Some(error);
+        }
         if matches!(
             snapshot.phase,
             AndroidRuntimePhase::Starting | AndroidRuntimePhase::Running
@@ -895,11 +1113,51 @@ mod android {
                 current.phase,
                 AndroidRuntimePhase::Stopped | AndroidRuntimePhase::Failed
             ) {
-                return Ok(current.clone());
+                snapshot = current.clone();
+            } else {
+                *current = snapshot.clone();
             }
-            *current = snapshot.clone();
         }
+        append_switch_status(&mut snapshot, &packet_switch);
         Ok(snapshot)
+    }
+
+    fn append_switch_status(status: &mut AndroidRuntimeStatus, packet_switch: &PacketSwitch) {
+        status
+            .lines
+            .retain(|line| !line.starts_with("android_supervisor_"));
+        let snapshot = packet_switch.snapshot();
+        status.lines.push(format!(
+            "android_supervisor_networks {}",
+            snapshot.networks.len()
+        ));
+        status.lines.push(format!(
+            "android_supervisor_outbound malformed={} no_route={} source_mismatch={}",
+            snapshot.malformed_outbound_packets,
+            snapshot.unroutable_outbound_packets,
+            snapshot.source_mismatch_outbound_packets,
+        ));
+        for (index, network) in snapshot.networks.iter().enumerate() {
+            status.lines.push(format!(
+                "android_supervisor_network index={index} outbound_enqueued={} outbound_queue_drops={} outbound_oversized_drops={} outbound_source_mismatch_drops={} outbound_removed_drops={} inbound_enqueued={} inbound_queue_drops={} inbound_oversized_drops={} inbound_malformed_drops={} inbound_source_mismatch_drops={} inbound_destination_mismatch_drops={} inbound_removed_drops={} inbound_written={} inbound_write_backpressure_drops={} inbound_write_failures={} route_update_rejections={}",
+                network.outbound_enqueued_packets,
+                network.outbound_queue_drops,
+                network.outbound_oversized_drops,
+                network.outbound_source_mismatch_drops,
+                network.outbound_removed_drops,
+                network.inbound_enqueued_packets,
+                network.inbound_queue_drops,
+                network.inbound_oversized_drops,
+                network.inbound_malformed_drops,
+                network.inbound_source_mismatch_drops,
+                network.inbound_destination_mismatch_drops,
+                network.inbound_removed_drops,
+                network.inbound_written_packets,
+                network.inbound_write_backpressure_drops,
+                network.inbound_write_failures,
+                network.route_update_rejections,
+            ));
+        }
     }
 
     fn pair_rpc(request: PairRpcRequest) -> Result<PairRpcResponseEnvelope, String> {
