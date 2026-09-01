@@ -389,6 +389,21 @@ pub fn create_profile(network_name: &str) -> Result<AndroidProfile, String> {
     create_profile_with_identity(network_name, identity, None, None, None, None)
 }
 
+pub fn create_profile_with_hostname(
+    network_name: &str,
+    hostname: &str,
+) -> Result<AndroidProfile, String> {
+    let profile = create_profile(network_name)?;
+    let mut config: Config = serde_json::from_str(&profile.config_json)
+        .map_err(|error| format!("failed to decode generated profile: {error}"))?;
+    let hostname = canonical_dns_label(hostname)
+        .map_err(|_| "Android profile contains an invalid hostname".to_owned())?;
+    config.network.dns.hostname = Some(hostname);
+    let config_json = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode generated profile: {error}"))?;
+    inspect_profile(&config_json)
+}
+
 pub fn create_profile_with_bootstrap(
     network_name: &str,
     bootstrap_peer_id: &str,
@@ -1180,10 +1195,12 @@ mod android {
         mut env: JNIEnv,
         _class: JClass,
         network_name: JString,
+        hostname: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
             let network_name = read_string(env, &network_name)?;
-            create_profile(&network_name)
+            let hostname = read_string(env, &hostname)?;
+            create_profile_with_hostname(&network_name, &hostname)
         })
     }
 
@@ -2464,6 +2481,18 @@ mod tests {
             address: BUILTIN_IPV6_NETWORK.to_string(),
             prefix_length: BUILTIN_IPV6_PREFIX,
         }));
+    }
+
+    #[test]
+    fn generated_profile_accepts_an_explicit_android_device_hostname() {
+        let profile = create_profile_with_hostname("personal", "midi-pixel")
+            .expect("profile with device hostname");
+        let encoded: serde_json::Value =
+            serde_json::from_str(&profile.config_json).expect("profile JSON");
+
+        assert_eq!(profile.hostname, "midi-pixel");
+        assert_eq!(encoded["network"]["dns"]["hostname"], "midi-pixel");
+        assert!(create_profile_with_hostname("personal", "not valid!").is_err());
     }
 
     #[test]

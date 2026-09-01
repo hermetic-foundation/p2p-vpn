@@ -7,7 +7,7 @@ final class NativeBridge {
 
     private NativeBridge() {}
 
-    static native String nativeCreateProfile(String networkName);
+    static native String nativeCreateProfile(String networkName, String hostname);
 
     static native String nativeCreateE2eProfile(
             String networkName,

@@ -979,7 +979,9 @@ public final class P2pVpnService extends VpnService {
                     AndroidProfile.fromNative(
                             NativeResponse.objectValue(
                                     bootstrapPeerId == null
-                                            ? NativeBridge.nativeCreateProfile(networkName.trim())
+                                            ? NativeBridge.nativeCreateProfile(
+                                                    networkName.trim(),
+                                                    DeviceHostname.resolve(this))
                                             : NativeBridge.nativeCreateE2eProfile(
                                                     networkName.trim(),
                                                     bootstrapPeerId,
