@@ -5933,16 +5933,13 @@
                 execStartStateBacked = moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStart;
                 execStartJson = moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStart;
                 execStartPreFileSecret = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre;
-                execStartPreFileSecretScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre
-                );
+                execStartPreFileSecretScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPre;
                 execStartPreStateBacked = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre;
-                execStartPreStateBackedScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre
-                );
-                execStartPreJsonScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPre
-                );
+                execStartPreStateBackedScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-f.serviceConfig.ExecStartPre;
+                execStartPreJsonScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g.serviceConfig.ExecStartPre;
                 execStartPostDisabled = builtins.toJSON (
                   moduleEval.config.systemd.services.p2p-vpn-node-a.serviceConfig.ExecStartPost or [ ]
                 );
@@ -5956,17 +5953,14 @@
                   moduleEval.config.systemd.services.p2p-vpn-node-c.serviceConfig.ExecStopPost or [ ]
                 );
                 resolvedExecStartDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStart;
-                resolvedExecStartDnsScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStart
-                );
+                resolvedExecStartDnsScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStart;
                 resolvedExecStartJson = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-g-resolved.serviceConfig.ExecStart;
-                resolvedExecStartJsonScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g-resolved.serviceConfig.ExecStart
-                );
+                resolvedExecStartJsonScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-g-resolved.serviceConfig.ExecStart;
                 resolvedExecStopDns = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStop;
-                resolvedExecStopDnsScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStop
-                );
+                resolvedExecStopDnsScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.ExecStop;
                 dnsAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.after;
                 dnsWants = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.wants;
                 dnsBindsTo = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c.bindsTo;
@@ -5977,15 +5971,12 @@
                 resolvedPartOf = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.partOf;
                 resolvedRemainAfterExit = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-node-c-resolved.serviceConfig.RemainAfterExit;
                 dnsGuardExecStart = moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStart;
-                dnsGuardExecStartPreScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPre
-                );
-                dnsGuardExecStartPostScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPost
-                );
-                dnsGuardExecStopPostScript = builtins.readFile (
-                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStopPost
-                );
+                dnsGuardExecStartPreScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPre;
+                dnsGuardExecStartPostScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStartPost;
+                dnsGuardExecStopPostScriptPath =
+                  builtins.head moduleEval.config.systemd.services.p2p-vpn-dns-guard.serviceConfig.ExecStopPost;
                 dnsGuardAfter = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.after;
                 dnsGuardBindsTo = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.bindsTo;
                 dnsGuardPartOf = builtins.toJSON moduleEval.config.systemd.services.p2p-vpn-dns-guard.partOf;
@@ -6043,6 +6034,18 @@
                 tmpfilesRules = builtins.toJSON moduleEval.config.systemd.tmpfiles.rules;
               }
               ''
+                # Inspect generated units at build time so flake evaluation never
+                # caches references to garbage-collected script derivations.
+                execStartPreFileSecretScript="$(<"$execStartPreFileSecretScriptPath")"
+                execStartPreStateBackedScript="$(<"$execStartPreStateBackedScriptPath")"
+                execStartPreJsonScript="$(<"$execStartPreJsonScriptPath")"
+                resolvedExecStartDnsScript="$(<"$resolvedExecStartDnsScriptPath")"
+                resolvedExecStartJsonScript="$(<"$resolvedExecStartJsonScriptPath")"
+                resolvedExecStopDnsScript="$(<"$resolvedExecStopDnsScriptPath")"
+                dnsGuardExecStartPreScript="$(<"$dnsGuardExecStartPreScriptPath")"
+                dnsGuardExecStartPostScript="$(<"$dnsGuardExecStartPostScriptPath")"
+                dnsGuardExecStopPostScript="$(<"$dnsGuardExecStopPostScriptPath")"
+
                 case "$execStart" in
                   *"p2p-vpn up --config /run/p2p-vpn-node-a/config.json --metrics-interval-seconds 10 --control-socket /run/p2p-vpn-node-a/control.sock --pairing-state /var/lib/p2p-vpn/node-a/pairing-state.json"*) ;;
                   *) echo "unexpected ExecStart: $execStart" >&2; exit 1 ;;
