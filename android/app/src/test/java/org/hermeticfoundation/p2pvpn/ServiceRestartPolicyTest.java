@@ -29,6 +29,13 @@ public final class ServiceRestartPolicyTest {
     }
 
     @Test
+    public void networkActivationKeepsTheRequestedVpnSticky() {
+        assertTrue(
+                P2pVpnService.shouldRestartAfterProcessDeath(
+                        P2pVpnService.ACTION_SET_NETWORK_ENABLED, false, false, false));
+    }
+
+    @Test
     public void idleDebugStartDoesNotKeepServiceAlive() {
         assertFalse(
                 P2pVpnService.shouldRestartAfterProcessDeath(

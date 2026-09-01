@@ -38,6 +38,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private static final int LOCAL_NETWORK_PERMISSION_REQUEST = 103;
     private static final String STATE_DIAGNOSTIC_REPORT = "pending_diagnostic_report";
     private static final String STATE_ADD_NETWORK = "add_network_visible";
+    private static final String STATE_PENDING_ENABLE_NETWORK = "pending_enable_network";
 
     private LinearLayout profileSetup;
     private LinearLayout profileRecovery;
@@ -76,6 +77,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private boolean networkCreationObservedBusy;
     private int networksAtCreationRequest;
     private boolean bound;
+    private String pendingEnableNetworkId;
 
     private final ServiceConnection serviceConnection =
             new ServiceConnection() {
@@ -112,6 +114,8 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             pendingDiagnosticReport =
                     savedInstanceState.getString(STATE_DIAGNOSTIC_REPORT);
             addNetworkVisible = savedInstanceState.getBoolean(STATE_ADD_NETWORK, false);
+            pendingEnableNetworkId =
+                    savedInstanceState.getString(STATE_PENDING_ENABLE_NETWORK);
         }
         requestNotificationPermission();
     }
@@ -141,6 +145,9 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             state.putString(STATE_DIAGNOSTIC_REPORT, pendingDiagnosticReport);
         }
         state.putBoolean(STATE_ADD_NETWORK, addNetworkVisible);
+        if (pendingEnableNetworkId != null) {
+            state.putString(STATE_PENDING_ENABLE_NETWORK, pendingEnableNetworkId);
+        }
     }
 
     @Override
@@ -294,8 +301,8 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                             network.name));
             enabled.setOnCheckedChangeListener(
                     (button, checked) -> {
-                        if (binder != null && checked != network.enabled) {
-                            binder.setNetworkEnabled(network.id, checked);
+                        if (checked != network.enabled) {
+                            requestNetworkEnabled(network.id, checked);
                         }
                     });
 
@@ -367,9 +374,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == VPN_PERMISSION_REQUEST) {
             if (resultCode == RESULT_OK) {
-                startVpnService();
+                completePendingVpnRequest();
             } else {
+                pendingEnableNetworkId = null;
                 showLocalStatus("VPN permission was not granted");
+                renderLatestSnapshot();
             }
         } else if (requestCode == DIAGNOSTIC_EXPORT_REQUEST) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
@@ -388,9 +397,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             return;
         }
         if (LocalNetworkPermission.isGranted(this)) {
-            requestVpnConnection();
+            prepareVpnRequest();
         } else {
+            pendingEnableNetworkId = null;
             showLocalStatus("Local network permission was not granted");
+            renderLatestSnapshot();
         }
     }
 
@@ -547,11 +558,55 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                     LOCAL_NETWORK_PERMISSION_REQUEST);
             return;
         }
+        prepareVpnRequest();
+    }
+
+    private void requestNetworkEnabled(String networkId, boolean enabled) {
+        if (!enabled) {
+            startNetworkActivationService(networkId, false);
+            return;
+        }
+        pendingEnableNetworkId = networkId;
+        if (!LocalNetworkPermission.isGranted(this)) {
+            requestPermissions(
+                    new String[] {LocalNetworkPermission.NAME},
+                    LOCAL_NETWORK_PERMISSION_REQUEST);
+            return;
+        }
+        prepareVpnRequest();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void prepareVpnRequest() {
         Intent permission = VpnService.prepare(this);
         if (permission == null) {
-            startVpnService();
+            completePendingVpnRequest();
         } else {
             startActivityForResult(permission, VPN_PERMISSION_REQUEST);
+        }
+    }
+
+    private void completePendingVpnRequest() {
+        String networkId = pendingEnableNetworkId;
+        pendingEnableNetworkId = null;
+        if (networkId == null) {
+            startVpnService();
+        } else {
+            startNetworkActivationService(networkId, true);
+        }
+    }
+
+    private void startNetworkActivationService(String networkId, boolean enabled) {
+        Intent intent = new Intent(this, P2pVpnService.class);
+        intent.setAction(P2pVpnService.ACTION_SET_NETWORK_ENABLED);
+        intent.putExtra(P2pVpnService.EXTRA_NETWORK_ID, networkId);
+        intent.putExtra(P2pVpnService.EXTRA_NETWORK_ENABLED, enabled);
+        startForegroundService(intent);
+    }
+
+    private void renderLatestSnapshot() {
+        if (latestSnapshot != null) {
+            onSnapshot(latestSnapshot);
         }
     }
 

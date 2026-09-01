@@ -54,7 +54,11 @@ public final class P2pVpnService extends VpnService {
     private static final String LOG_TAG = "p2p-vpn";
     static final String ACTION_CONNECT = "org.hermeticfoundation.p2pvpn.CONNECT";
     static final String ACTION_DISCONNECT = "org.hermeticfoundation.p2pvpn.DISCONNECT";
+    static final String ACTION_SET_NETWORK_ENABLED =
+            "org.hermeticfoundation.p2pvpn.SET_NETWORK_ENABLED";
     static final String ACTION_DEBUG_COMMAND = "org.hermeticfoundation.p2pvpn.debug.COMMAND";
+    static final String EXTRA_NETWORK_ID = "network_id";
+    static final String EXTRA_NETWORK_ENABLED = "network_enabled";
     static final String EXTRA_DEBUG_COMMAND = "command";
     static final String EXTRA_DEBUG_VALUE = "value";
     static final int DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH = 512;
@@ -158,6 +162,13 @@ public final class P2pVpnService extends VpnService {
             worker.execute(() -> connectRequested(false));
         } else if (ACTION_DISCONNECT.equals(action)) {
             worker.execute(() -> disconnectRequested(false));
+        } else if (ACTION_SET_NETWORK_ENABLED.equals(action) && intent != null) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(getString(R.string.notification_connecting)));
+            String networkId = intent.getStringExtra(EXTRA_NETWORK_ID);
+            boolean enabled = intent.getBooleanExtra(EXTRA_NETWORK_ENABLED, false);
+            worker.execute(() -> setNetworkEnabled(networkId, enabled));
         } else if (ACTION_DEBUG_COMMAND.equals(action) && isDebuggable()) {
             String command = intent.getStringExtra(EXTRA_DEBUG_COMMAND);
             String value = intent.getStringExtra(EXTRA_DEBUG_VALUE);
@@ -168,7 +179,7 @@ public final class P2pVpnService extends VpnService {
             startForeground(
                     NOTIFICATION_ID,
                     notification(getString(R.string.notification_connecting)));
-            worker.execute(() -> connectRequested(true));
+            worker.execute(this::restorePersistedActivation);
         }
         boolean managerAlwaysOn = managerEventMode != null && managerEventMode.alwaysOn;
         return shouldRestartAfterProcessDeath(
@@ -233,6 +244,23 @@ public final class P2pVpnService extends VpnService {
         startConnection(systemStart ? "Starting always-on VPN" : "Connecting");
     }
 
+    private void restorePersistedActivation() {
+        refreshVpnMode(true);
+        if (enabledNetworkCount(profileCollection) > 0) {
+            connectRequested(true);
+            return;
+        }
+        if (vpnMode.alwaysOn) {
+            desiredConnected = true;
+            connectionDetail = "No networks enabled";
+            peerDetail = "Overlay peers: unavailable";
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
+        disconnectRequested(true);
+    }
+
     private void vpnManagerModeChanged(VpnMode mode) {
         recordDiagnosticEvent("vpn_manager_mode_event");
         vpnModeObservationGap = false;
@@ -291,11 +319,7 @@ public final class P2pVpnService extends VpnService {
         peerDetail = "Overlay peers: unavailable";
         pairingDetail = "No pairing operation";
         publishSnapshot();
-        mainHandler.post(
-                () -> {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
-                    stopSelf();
-                });
+        stopManualService();
     }
 
     private void startConnection(String initialDetail) {
@@ -824,6 +848,19 @@ public final class P2pVpnService extends VpnService {
         return false;
     }
 
+    private static int enabledNetworkCount(ProfileCollection collection) {
+        if (collection == null) {
+            return 0;
+        }
+        int enabled = 0;
+        for (ProfileCollection.Entry network : collection.networks) {
+            if (network.enabled) {
+                enabled++;
+            }
+        }
+        return enabled;
+    }
+
     private static AndroidProfile requireSelectedProfile(
             ProfileCollection collection, Map<String, AndroidProfile> profiles)
             throws P2pVpnException {
@@ -1057,7 +1094,7 @@ public final class P2pVpnService extends VpnService {
         if (!beginNetworkMutation(enabled ? "Enabling network" : "Disabling network")) {
             return;
         }
-        boolean resumeConnection = false;
+        boolean mutationSucceeded = false;
         try {
             if (profileCollection == null) {
                 throw new P2pVpnException("No p2p-vpn network is available");
@@ -1072,20 +1109,58 @@ public final class P2pVpnService extends VpnService {
                         profileCollection.replace(network.withEnabled(enabled));
                 persistProfileCollection(updated, inspectedProfiles, runtimeFiles);
                 recordDiagnosticEvent(enabled ? "network_enabled" : "network_disabled");
-                resumeConnection = suspendConnectionForNetworkChange();
+                suspendConnectionForNetworkChange();
             }
             connectionDetail =
                     (enabled ? "Enabled " : "Disabled ")
                             + profileFor(normalized).networkName;
+            mutationSucceeded = true;
         } catch (P2pVpnException | RuntimeException | LinkageError error) {
             connectionDetail = failureMessage(error);
         } finally {
             operationInProgress = false;
             publishSnapshot();
-            if (resumeConnection && desiredConnected) {
-                startConnection("Applying network changes");
+            if (mutationSucceeded) {
+                reconcileEnabledNetworks();
+            } else if (!desiredConnected && !vpnMode.alwaysOn) {
+                stopManualService();
             }
         }
+    }
+
+    private void reconcileEnabledNetworks() {
+        refreshVpnMode(false);
+        NetworkActivationPolicy.Outcome outcome =
+                NetworkActivationPolicy.afterMutation(
+                        enabledNetworkCount(profileCollection), vpnMode.alwaysOn);
+        if (outcome == NetworkActivationPolicy.Outcome.CONNECT) {
+            connectRequested(false);
+            return;
+        }
+        if (outcome == NetworkActivationPolicy.Outcome.IDLE_ALWAYS_ON) {
+            desiredConnected = true;
+            cancel(reconnectFuture);
+            reconnectFuture = null;
+            cancel(underlayRecoveryFuture);
+            underlayRecoveryFuture = null;
+            if (connected) {
+                stopNativeRuntime();
+            }
+            connectionDetail = "No networks enabled";
+            peerDetail = "Overlay peers: unavailable";
+            updateForegroundNotification();
+            publishSnapshot();
+            return;
+        }
+        disconnectRequested(true);
+    }
+
+    private void stopManualService() {
+        mainHandler.post(
+                () -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    stopSelf();
+                });
     }
 
     private void removeNetwork(String networkId) {
@@ -2088,7 +2163,11 @@ public final class P2pVpnService extends VpnService {
         if (ACTION_DISCONNECT.equals(action)) {
             return false;
         }
-        return ACTION_CONNECT.equals(action) || systemStart || connectionRequested || alwaysOn;
+        return ACTION_CONNECT.equals(action)
+                || ACTION_SET_NETWORK_ENABLED.equals(action)
+                || systemStart
+                || connectionRequested
+                || alwaysOn;
     }
 
     private void refreshVpnMode(boolean systemStart) {
