@@ -54,7 +54,8 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
-                         pairing-traffic, underlay-recovery, or multi-network.
+                         pairing-traffic, underlay-recovery, network-workflow,
+                         or multi-network.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -128,7 +129,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on) ;;
-  pairing-traffic|underlay-recovery|multi-network) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|network-workflow|multi-network) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -152,6 +153,10 @@ if [[ "$scenario" == underlay-recovery && "$path_mode" != automatic ]]; then
 fi
 if [[ "$scenario" == multi-network && "$path_mode" != automatic ]]; then
   echo "multi-network requires --path-mode automatic" >&2
+  exit 2
+fi
+if [[ "$scenario" == network-workflow && "$path_mode" != automatic ]]; then
+  echo "network-workflow requires --path-mode automatic" >&2
   exit 2
 fi
 
@@ -1524,6 +1529,339 @@ run_multi_network_lifecycle() {
   run_multi_network_restoration_and_isolation
 }
 
+run_network_workflow_scenario() {
+  local add_xpath="//node[contains(@resource-id, ':id/add_network')]"
+  local show_create_xpath="//node[contains(@resource-id, ':id/show_create_network')]"
+  local show_join_xpath="//node[contains(@resource-id, ':id/show_join_network')]"
+  local back_xpath="//node[contains(@resource-id, ':id/navigate_back')]"
+  local code_xpath="//node[contains(@resource-id, ':id/join_code_input')]"
+  local hostname_xpath="//node[contains(@resource-id, ':id/join_hostname_input')]"
+  local join_xpath="//node[contains(@resource-id, ':id/join_network')]"
+  local cancel_xpath="//node[contains(@resource-id, ':id/cancel_join')]"
+  local detail_switch_xpath="//node[contains(@resource-id, ':id/detail_enabled')]"
+  local home_switch_xpath="//node[contains(@resource-id, ':id/network_enabled')]"
+  local pair_open="$state_dir/network-workflow-pair-open.json"
+  local inviter_status="$state_dir/network-workflow-inviter-status.json"
+  local pair_approved="$state_dir/network-workflow-pair-approved.json"
+  local joined_status="$state_dir/network-workflow-joined.json"
+  local running_status="$state_dir/network-workflow-running.json"
+  local disabled_status="$state_dir/network-workflow-disabled.json"
+  local reenabled_status="$state_dir/network-workflow-reenabled.json"
+  local ui_file pair_operation pair_code approval_id network_id night_status
+  local expected_hostname="managed-test-phone"
+  local actual_device_name
+
+  if ! adb_run shell 'settings put global device_name "Managed Test Phone"' >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not accept the managed device name"
+    record_step device_hostname failed "$outcome_detail"
+    return 1
+  fi
+  actual_device_name="$(adb_run shell settings get global device_name | tr -d '\r')"
+  if [[ "$actual_device_name" != "Managed Test Phone" ]]; then
+    outcome=failed
+    outcome_detail="Android did not retain the managed device name"
+    record_step device_hostname failed "$outcome_detail"
+    return 1
+  fi
+  if ! adb_run shell pm grant \
+    org.hermeticfoundation.p2pvpn.debug \
+    android.permission.POST_NOTIFICATIONS >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not grant the declared notification permission"
+    record_step network_home failed "$outcome_detail"
+    return 1
+  fi
+  adb_run shell am force-stop org.hermeticfoundation.p2pvpn.debug >/dev/null
+  start_main_activity
+  sleep 2
+  capture_android_screen network-home-probe || true
+  if ui_file="$(dump_android_settings_ui)"; then
+    cp "$ui_file" "$output_dir/network-home-probe.xml"
+  fi
+
+  if ! wait_for_android_ui_xpath "$add_xpath" 30 \
+    || ! wait_for_android_ui_xpath "//node[@text='No networks']" 5; then
+    outcome=failed
+    outcome_detail="The clean application did not open the network-list home screen"
+    record_step network_home failed "$outcome_detail"
+    return 1
+  fi
+  ui_file="$(dump_android_settings_ui)" || return 1
+  if [[ "$(xmllint --nonet --xpath \
+    "boolean(//node[@text='Connect' or @text='Disconnect'])" \
+    "$ui_file" 2>/dev/null)" == true ]] \
+    || ! capture_android_screen network-home-empty; then
+    outcome=failed
+    outcome_detail="The home screen still exposes a global connect or disconnect action"
+    record_step network_home failed "$outcome_detail"
+    return 1
+  fi
+  record_step network_home passed \
+    "The clean home screen lists networks and exposes one Add Network action"
+
+  if ! tap_android_ui_xpath "$add_xpath" \
+    || ! wait_for_android_ui_xpath "$show_create_xpath" \
+    || ! wait_for_android_ui_xpath "$show_join_xpath" \
+    || ! capture_android_screen network-add; then
+    outcome=failed
+    outcome_detail="Add Network did not expose separate create and join paths"
+    record_step add_navigation failed "$outcome_detail"
+    return 1
+  fi
+  if ! tap_android_ui_xpath "$show_create_xpath" \
+    || ! wait_for_android_ui_xpath \
+      "//node[contains(@resource-id, ':id/network_name_input')]" \
+    || ! wait_for_android_ui_xpath "//node[@text='Create network']" \
+    || ! capture_android_screen network-create; then
+    outcome=failed
+    outcome_detail="The create-network path did not open its nested form"
+    record_step create_navigation failed "$outcome_detail"
+    return 1
+  fi
+  record_step create_navigation passed "Create Network opens a dedicated nested form"
+
+  if ! tap_android_ui_xpath "$back_xpath" \
+    || ! wait_for_android_ui_xpath "$show_join_xpath" \
+    || ! tap_android_ui_xpath "$show_join_xpath" \
+    || ! wait_for_android_ui_xpath "$code_xpath" \
+    || ! wait_for_android_ui_xpath \
+      "${hostname_xpath}[@text='$expected_hostname']" \
+    || ! capture_android_screen network-join; then
+    outcome=failed
+    outcome_detail="The code-join form did not derive its hostname from the Android device name"
+    record_step join_navigation failed "$outcome_detail"
+    return 1
+  fi
+  record_step join_navigation passed \
+    "Join by Code opens a dedicated form with a device-derived hostname"
+  record_step device_hostname passed \
+    "Managed Test Phone normalized to the requested hostname managed-test-phone"
+
+  if ! "$p2p_vpn_command" pair open \
+    --socket "$fixture_control_socket" \
+    --expires-in-seconds 300 \
+    --format json > "$pair_open" \
+    || ! jq -e '
+      (.operation_id | type == "string" and length > 0 and length <= 128) and
+      (.code | type == "string" and length > 0 and length <= 64)
+    ' "$pair_open" >/dev/null; then
+    outcome=failed
+    outcome_detail="The Linux fixture could not open a bounded pairing operation"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  pair_operation="$(jq -r '.operation_id' "$pair_open")"
+  pair_code="$(jq -r '.code' "$pair_open")"
+
+  if ! input_android_ui_text "$code_xpath" "$pair_code" \
+    || ! tap_android_ui_xpath "$join_xpath" \
+    || ! wait_for_android_ui_xpath "$cancel_xpath" 30; then
+    outcome=failed
+    outcome_detail="The UI did not begin profile-free pairing from the supplied code"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_pair_status \
+    "$inviter_status" \
+    "$pair_operation" \
+    '.phase == "awaiting_approval" and (.candidate.approval_id | type == "string" and length > 0 and length <= 128)' \
+    180 \
+    "$fixture_control_socket"; then
+    outcome=failed
+    outcome_detail="Profile-free pairing did not reach inviter approval"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  if [[ "$(jq -r '.candidate.requested_hostname // empty' "$inviter_status")" \
+    != "$expected_hostname" ]]; then
+    outcome=failed
+    outcome_detail="Profile-free pairing did not send the device-derived hostname"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  approval_id="$(jq -r '.candidate.approval_id' "$inviter_status")"
+  if ! "$p2p_vpn_command" pair approve \
+    "$pair_operation" \
+    "$approval_id" \
+    --socket "$fixture_control_socket" \
+    --format json > "$pair_approved" \
+    || ! jq -e '.phase == "completed"' "$pair_approved" >/dev/null; then
+    outcome=failed
+    outcome_detail="The Linux fixture could not approve profile-free pairing"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_automation_status \
+    "$joined_status" \
+    ".value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 1) and ([.value.snapshot.networks[] | select(.name == \"$fixture_network\" and .hostname == \"$expected_hostname\" and .selected and (.enabled | not) and .phase == \"disabled\" and (.addresses | any(contains(\".\"))) and (.addresses | any(contains(\":\"))))] | length == 1)" \
+    180; then
+    outcome=failed
+    outcome_detail="Code-only pairing did not create a disabled persisted network profile"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  network_id="$(jq -r '.value.snapshot.networks[0].id' "$joined_status")"
+  if [[ ! "$network_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+    || ! wait_for_android_ui_xpath "//node[@text='$fixture_network']" 30 \
+    || ! wait_for_android_ui_checked "$detail_switch_xpath" false \
+    || ! capture_android_screen network-detail-disabled; then
+    outcome=failed
+    outcome_detail="The joined profile did not open as a disabled network detail page"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
+  record_step profile_free_join passed \
+    "The code alone created and persisted the signed network profile without a placeholder"
+
+  if ! adb_run shell appops set \
+    org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow >/dev/null \
+    || ! tap_android_ui_xpath "$detail_switch_xpath"; then
+    outcome=failed
+    outcome_detail="The detail-page network switch could not request activation"
+    record_step per_network_activation failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_automation_status \
+    "$running_status" \
+    ".value.snapshot.connected and .value.snapshot.connection_requested and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.id == \"$network_id\" and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 1)" \
+    180 \
+    || ! wait_for_android_ui_checked "$detail_switch_xpath" true \
+    || ! wait_for_android_ui_xpath "//node[@text='Connected']" 30; then
+    outcome=failed
+    outcome_detail="The detail switch did not converge from desired enabled to observed Connected"
+    record_step per_network_activation failed "$outcome_detail"
+    return 1
+  fi
+  android_ipv4="$(jq -r '
+    .value.snapshot.networks[0].addresses |
+    [.[] | select(contains("."))][0] | split("/")[0]
+  ' "$running_status")"
+  android_ipv6="$(jq -r '
+    .value.snapshot.networks[0].addresses |
+    [.[] | select(contains(":"))][0] | split("/")[0]
+  ' "$running_status")"
+  if [[ ! "$android_ipv4" =~ ^[0-9.]{7,15}$ \
+    || ! "$android_ipv6" =~ ^[0-9a-fA-F:]{2,45}$ ]]; then
+    outcome=failed
+    outcome_detail="The activated network did not expose dual-stack overlay addresses"
+    record_step per_network_activation failed "$outcome_detail"
+    return 1
+  fi
+  record_step per_network_activation passed \
+    "The detail switch alone activated the shared VPN and reported Connected"
+
+  if ! scroll_until_android_ui_xpath "//node[contains(@text, '$fixture_ipv4')]" 8; then
+    outcome=failed
+    outcome_detail="The detail page did not render the live fixture peer address"
+    record_step live_peer_display failed "$outcome_detail"
+    return 1
+  fi
+  ui_file="$(dump_android_settings_ui)" || return 1
+  if [[ "$(xmllint --nonet --xpath \
+    "boolean(//node[contains(@text, 'Connected |')] and //node[contains(@text, 'Membership:')])" \
+    "$ui_file" 2>/dev/null)" != true ]] \
+    || ! capture_android_screen network-live-peers; then
+    outcome=failed
+    outcome_detail="The live peer row omitted connection path or membership provenance"
+    record_step live_peer_display failed "$outcome_detail"
+    return 1
+  fi
+  record_step live_peer_display passed \
+    "The detail page rendered bounded peer identity, address, path, and provenance data"
+
+  if ! wait_for_transition_traffic_ready \
+    network-workflow \
+    "after UI activation" \
+    || ! measure_bidirectional_traffic \
+      network-workflow \
+      "after UI activation"; then
+    return 1
+  fi
+  if ! tap_android_ui_xpath "$back_xpath" \
+    || ! wait_for_android_ui_checked "$home_switch_xpath" true \
+    || ! tap_android_ui_xpath "$home_switch_xpath" \
+    || ! wait_for_automation_status \
+      "$disabled_status" \
+      ".value.snapshot.has_profile and (.value.snapshot.connected | not) and (.value.snapshot.connection_requested | not) and ([.value.snapshot.networks[] | select(.id == \"$network_id\" and (.enabled | not) and .phase == \"disabled\")] | length == 1)" \
+      90 \
+    || ! wait_for_android_ui_checked "$home_switch_xpath" false \
+    || ! wait_for_android_ui_xpath "//node[@text='Disabled']" 30 \
+    || ! capture_android_screen network-home-disabled; then
+    outcome=failed
+    outcome_detail="Disabling the final home-screen switch did not stop the shared VPN"
+    record_step final_network_disable failed "$outcome_detail"
+    return 1
+  fi
+  record_step final_network_disable passed \
+    "Disabling the final network stopped the VPN while preserving its profile"
+
+  if ! tap_android_ui_xpath "$home_switch_xpath" \
+    || ! wait_for_automation_status \
+      "$reenabled_status" \
+      ".value.snapshot.connected and .value.snapshot.connection_requested and ([.value.snapshot.networks[] | select(.id == \"$network_id\" and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 1)" \
+      180 \
+    || ! wait_for_android_ui_checked "$home_switch_xpath" true \
+    || ! wait_for_android_ui_xpath "//node[@text='Connected']" 30 \
+    || ! wait_for_transition_traffic_ready \
+      network-workflow-reenabled \
+      "after switch re-enablement"; then
+    outcome=failed
+    outcome_detail="The preserved network did not reconnect from its home-screen switch"
+    record_step network_reenable failed "$outcome_detail"
+    return 1
+  fi
+  record_step network_reenable passed \
+    "The same network profile reconnected without another pairing operation"
+
+  if ! adb_run shell cmd uimode night yes >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not enable the requested system dark theme"
+    record_step system_theme failed "$outcome_detail"
+    return 1
+  fi
+  sleep 2
+  night_status="$(adb_run shell cmd uimode night | tr -d '\r')"
+  if [[ "$night_status" != *yes* ]] \
+    || ! wait_for_android_ui_checked "$home_switch_xpath" true \
+    || ! wait_for_android_ui_xpath "//node[@text='Connected']" 30 \
+    || ! capture_android_screen network-home-dark; then
+    outcome=failed
+    outcome_detail="The running network did not survive the system dark-theme transition"
+    record_step system_theme failed "$outcome_detail"
+    return 1
+  fi
+  if ! adb_run shell cmd uimode night no >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not restore the managed emulator's light theme"
+    record_step system_theme failed "$outcome_detail"
+    return 1
+  fi
+  record_step system_theme passed \
+    "The network list followed the system theme without changing desired state"
+
+  jq \
+    --arg hostname "$expected_hostname" '
+    . + {
+      network_workflow: {
+        nested_navigation: true,
+        profile_free_join: true,
+        device_hostname: $hostname,
+        detail_switch_activation: true,
+        home_switch_disable: true,
+        home_switch_reenable: true,
+        system_theme: true,
+        live_peer_display: true,
+        bidirectional_dual_stack_traffic: true
+      }
+    }
+  ' "$device_file" > "$device_file.updated"
+  mv -f "$device_file.updated" "$device_file"
+
+  outcome=passed
+  outcome_detail="Nested UI, profile-free join, per-network controls, peers, and traffic passed"
+}
+
 run_multi_network_scenario() {
   local alpha_created="" alpha_migrated alpha_connected alpha_paired
   local beta_created="" beta_ready beta_paired both_running
@@ -2127,6 +2465,19 @@ dump_android_settings_ui() {
   printf '%s\n' "$ui_file"
 }
 
+capture_android_screen() {
+  local name="$1"
+  [[ "$name" =~ ^[a-z0-9-]{1,64}$ ]] || return 1
+  local destination="$output_dir/$name.png"
+  adb_run exec-out screencap -p > "$destination" || return 1
+  local signature
+  signature="$(head -c 8 "$destination" | od -An -tx1 | tr -d ' \n')"
+  [[ "$signature" == 89504e470d0a1a0a ]] || {
+    rm -f "$destination"
+    return 1
+  }
+}
+
 wait_for_android_ui_xpath() {
   local xpath="$1"
   local attempts="${2:-10}"
@@ -2154,6 +2505,55 @@ tap_android_ui_xpath() {
   local x=$(((BASH_REMATCH[1] + BASH_REMATCH[3]) / 2))
   local y=$(((BASH_REMATCH[2] + BASH_REMATCH[4]) / 2))
   adb_run shell input tap "$x" "$y" >/dev/null
+}
+
+android_ui_checked() {
+  local xpath="$1"
+  local ui_file
+  ui_file="$(dump_android_settings_ui)" || return 1
+  xmllint --nonet --xpath "string(($xpath)[1]/@checked)" "$ui_file" 2>/dev/null
+}
+
+wait_for_android_ui_checked() {
+  local xpath="$1"
+  local expected="$2"
+  local attempts="${3:-30}"
+  for _ in $(seq 1 "$attempts"); do
+    if [[ "$(android_ui_checked "$xpath" 2>/dev/null || true)" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+input_android_ui_text() {
+  local xpath="$1"
+  local value="$2"
+  [[ "$value" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || return 1
+  tap_android_ui_xpath "$xpath" || return 1
+  adb_run shell input text "$value" >/dev/null || return 1
+  adb_run shell input keyevent KEYCODE_BACK >/dev/null
+}
+
+scroll_until_android_ui_xpath() {
+  local xpath="$1"
+  local attempts="${2:-6}"
+  local size width height x start_y end_y
+  size="$(adb_run shell wm size | tr -d '\r' | sed -nE 's/.*: ([0-9]+)x([0-9]+)$/\1 \2/p' | tail -n 1)"
+  read -r width height <<< "$size"
+  [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || return 1
+  x=$((width / 2))
+  start_y=$((height * 4 / 5))
+  end_y=$((height / 5))
+  for _ in $(seq 1 "$attempts"); do
+    if wait_for_android_ui_xpath "$xpath" 1; then
+      return 0
+    fi
+    adb_run shell input swipe "$x" "$start_y" "$x" "$end_y" 350 >/dev/null || return 1
+    sleep 1
+  done
+  wait_for_android_ui_xpath "$xpath" 1
 }
 
 vpn_preference_xpath() {
@@ -2974,6 +3374,13 @@ if [[ "$scenario" == boot-smoke ]]; then
   outcome=passed
   outcome_detail="Clean emulator boot and application smoke test passed"
   exit 0
+fi
+
+if [[ "$scenario" == network-workflow ]]; then
+  if run_network_workflow_scenario; then
+    exit 0
+  fi
+  exit 1
 fi
 
 if [[ "$scenario" == multi-network ]]; then
