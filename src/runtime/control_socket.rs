@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    network_peer::{NETWORK_PEER_LIST_SCHEMA_VERSION, NetworkPeerList},
+    network_peer::{NETWORK_PEER_LIST_SCHEMA_VERSION, NetworkPeerList, NetworkPeerSnapshot},
     runtime::dns::{DnsLookupType, MAX_DNS_CONTROL_LIST_LIMIT},
 };
 
@@ -504,6 +504,9 @@ pub enum RuntimeControlRequest {
     NetworkPeers {
         respond_to: oneshot::Sender<Result<NetworkPeerList, String>>,
     },
+    PeerSnapshot {
+        respond_to: oneshot::Sender<Result<NetworkPeerSnapshot, String>>,
+    },
     Dns {
         request: DnsControlRequest,
         respond_to: oneshot::Sender<Vec<String>>,
@@ -595,6 +598,16 @@ impl RuntimeControlHandle {
     pub async fn network_peers(&self) -> io::Result<NetworkPeerList> {
         let (respond_to, response) = oneshot::channel();
         self.send(RuntimeControlRequest::NetworkPeers { respond_to })
+            .await?;
+        response
+            .await
+            .map_err(|_| runtime_response_dropped())?
+            .map_err(io::Error::other)
+    }
+
+    pub async fn peer_snapshot(&self) -> io::Result<NetworkPeerSnapshot> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::PeerSnapshot { respond_to })
             .await?;
         response
             .await

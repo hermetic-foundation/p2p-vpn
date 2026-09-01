@@ -51,7 +51,7 @@ use crate::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
         RuntimeMetrics, RuntimeSnapshot,
     },
-    network_peer::NetworkPeerList,
+    network_peer::{NetworkPeerList, NetworkPeerRuntimeState, NetworkPeerSnapshot},
     pairing::{
         MAX_PAIRING_MEMBERSHIP_RECORDS, PairingOffer, PairingRequest, PairingRequestOptions,
         PairingResponse, apply_pairing_response_to_config_at, build_named_pairing_request_at,
@@ -4395,6 +4395,21 @@ fn handle_runtime_control_request(
             }
             None
         }
+        RuntimeControlRequest::PeerSnapshot { respond_to } => {
+            let peers = runtime_peer_snapshot(
+                context.forwarder,
+                context.paths,
+                context.peer_capabilities,
+                &context.packet_plane,
+                &context.packet_plane_quic,
+                current_unix_seconds_lossy(),
+            )
+            .map_err(|error| format!("failed to build live peer snapshot: {error:?}"));
+            if respond_to.send(peers).is_err() {
+                eprintln!("control socket peer snapshot response receiver dropped");
+            }
+            None
+        }
         RuntimeControlRequest::Dns {
             request,
             respond_to,
@@ -4445,6 +4460,47 @@ fn handle_runtime_control_request(
             None
         }
     }
+}
+
+fn runtime_peer_snapshot(
+    forwarder: &Forwarder,
+    paths: &PathSet,
+    peer_capabilities: &PeerCapabilities,
+    packet_plane: &PacketPlaneSnapshot,
+    packet_plane_quic: &PacketPlaneQuicSnapshot,
+    now_unix_seconds: u64,
+) -> Result<NetworkPeerSnapshot, ConfigError> {
+    NetworkPeerSnapshot::from_config_at(
+        forwarder.config(),
+        forwarder.member_records(),
+        now_unix_seconds,
+        |peer, _| {
+            let datagram_backend =
+                local_packet_datagram_backend_from_snapshot(packet_plane, packet_plane_quic, peer);
+            let support =
+                packet_transport_support_for_backend(peer_capabilities, peer, datagram_backend);
+            if let Some(selected) = paths
+                .best_supported_for(peer, support)
+                .filter(|candidate| candidate.established_connections > 0)
+            {
+                return NetworkPeerRuntimeState::connected(selected.kind, selected.origin);
+            }
+
+            let candidates = paths.candidates_for(peer).collect::<Vec<_>>();
+            if peer_capabilities.contains(peer)
+                || candidates
+                    .iter()
+                    .any(|candidate| candidate.established_connections > 0)
+                || candidates.iter().any(|candidate| !candidate.healthy)
+            {
+                NetworkPeerRuntimeState::recovering()
+            } else if candidates.iter().any(|candidate| candidate.healthy) {
+                NetworkPeerRuntimeState::connecting()
+            } else {
+                NetworkPeerRuntimeState::disconnected()
+            }
+        },
+    )
 }
 
 fn runtime_peer_lines(
@@ -22811,6 +22867,87 @@ mod tests {
         assert!(peers.peers.iter().any(|peer| {
             peer.peer_id == remote.to_string() && peer.hostnames == ["remote-runner"] && !peer.local
         }));
+    }
+
+    #[test]
+    fn runtime_control_peer_snapshot_reports_live_path_without_topology() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let mut config = config_with_peer(&local_identity, remote);
+        config.network.dns.hostname = Some("local-runner".to_owned());
+        config.peers[0].name = Some("remote-runner".to_owned());
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let mut paths = PathSet::new();
+        paths.record_established_with_details(
+            remote_overlay,
+            PathKind::DirectQuicStream,
+            None,
+            Some(1_200),
+            PathOrigin::Mdns,
+            PathConnectionRole::Dialer,
+            false,
+            None,
+            Some(1_000),
+        );
+        let (respond_to, mut response) = tokio::sync::oneshot::channel();
+
+        let reason = handle_runtime_control_request(
+            RuntimeControlRequest::PeerSnapshot { respond_to },
+            &RuntimeControlContext {
+                forwarder: &forwarder,
+                paths: &paths,
+                peer_capabilities: &PeerCapabilities::default(),
+                local_capabilities: &ControlCapabilities::local("lab", None, 1280),
+                metrics: &RuntimeMetrics::default(),
+                queue: crate::queue::QueueStats::default(),
+                path_stats: crate::path::PathRuntimeStats::default(),
+                packet_in_flight: PacketInFlightStats::default(),
+                auto_relay: AutoRelaySnapshot::default(),
+                public_routing_peers: 0,
+                relay_infrastructure: RelayInfrastructureSnapshot::default(),
+                packet_plane: PacketPlaneSnapshot::default(),
+                packet_plane_quic: PacketPlaneQuicSnapshot::default(),
+                packet_plane_session_ttl: Duration::from_secs(42),
+                packet_plane_replay_windows_per_session: 512,
+                dns: None,
+            },
+        );
+
+        let snapshot = response
+            .try_recv()
+            .expect("peer snapshot response")
+            .expect("peer snapshot");
+        assert_eq!(reason, None);
+        assert_eq!(snapshot.total_peers, 2);
+        let remote = snapshot
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == remote.to_string())
+            .expect("remote peer");
+        assert_eq!(
+            remote.connection_state,
+            crate::network_peer::NetworkPeerConnectionState::Connected
+        );
+        assert_eq!(
+            remote.selected_path,
+            Some(crate::network_peer::NetworkPeerPathKind::DirectQuicStream)
+        );
+        assert_eq!(
+            remote.path_origin,
+            Some(crate::network_peer::NetworkPeerPathOrigin::Mdns)
+        );
+        let encoded = serde_json::to_string(&snapshot).expect("snapshot JSON");
+        for prohibited in [
+            "multiaddr",
+            "relay_peer",
+            "connection_id",
+            "private_key",
+            "membership_key",
+            "signature",
+        ] {
+            assert!(!encoded.contains(prohibited), "leaked {prohibited}");
+        }
     }
 
     #[test]
