@@ -16,7 +16,9 @@ final class AddNetworkScreen {
 
         void createNetwork(String networkName);
 
-        void joinNetwork(String pairingCode);
+        void joinNetwork(String pairingCode, String hostname);
+
+        void cancelJoin();
     }
 
     private final Activity activity;
@@ -27,8 +29,10 @@ final class AddNetworkScreen {
     private final View joinForm;
     private final EditText networkName;
     private final EditText joinCode;
+    private final EditText joinHostname;
     private final Button create;
     private final Button join;
+    private final Button cancelJoin;
     private final View showCreate;
     private final View showJoin;
     private final TextView status;
@@ -43,11 +47,16 @@ final class AddNetworkScreen {
         joinForm = root.findViewById(R.id.join_form);
         networkName = root.findViewById(R.id.network_name_input);
         joinCode = root.findViewById(R.id.join_code_input);
+        joinHostname = root.findViewById(R.id.join_hostname_input);
         create = root.findViewById(R.id.create_network);
         join = root.findViewById(R.id.join_network);
+        cancelJoin = root.findViewById(R.id.cancel_join);
         showCreate = root.findViewById(R.id.show_create_network);
         showJoin = root.findViewById(R.id.show_join_network);
         status = root.findViewById(R.id.add_status);
+        if (mode == AppNavigation.Screen.JOIN) {
+            joinHostname.setText(DeviceHostname.resolve(activity));
+        }
 
         root.findViewById(R.id.navigate_back).setOnClickListener(view -> listener.back());
         showCreate.setOnClickListener(view -> listener.showCreate());
@@ -76,8 +85,15 @@ final class AddNetworkScreen {
                         joinCode.setError(activity.getString(R.string.pairing_code_hint));
                         return;
                     }
-                    listener.joinNetwork(code);
+                    String hostname = joinHostname.getText().toString().trim();
+                    if (hostname.isEmpty()) {
+                        joinHostname.setError(
+                                activity.getString(R.string.pairing_hostname_hint));
+                        return;
+                    }
+                    listener.joinNetwork(code, hostname);
                 });
+        cancelJoin.setOnClickListener(view -> listener.cancelJoin());
         joinCode.setOnEditorActionListener(
                 (view, actionId, event) -> {
                     if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
@@ -88,7 +104,11 @@ final class AddNetworkScreen {
                 });
     }
 
-    void render(P2pVpnService.Snapshot snapshot, boolean bound, boolean creationPending, String statusText) {
+    void render(
+            P2pVpnService.Snapshot snapshot,
+            boolean bound,
+            boolean creationPending,
+            String statusText) {
         boolean choosing = mode == AppNavigation.Screen.ADD;
         boolean creating = mode == AppNavigation.Screen.CREATE;
         boolean joining = mode == AppNavigation.Screen.JOIN;
@@ -108,10 +128,16 @@ final class AddNetworkScreen {
                         && !snapshot.pairingActive;
         boolean hasCapacity =
                 snapshot != null && snapshot.networks.size() < ProfileCollection.MAX_NETWORKS;
+        boolean joiningProfile =
+                snapshot != null && snapshot.profileJoinActive;
         showCreate.setEnabled(available && hasCapacity);
-        showJoin.setEnabled(available);
+        showJoin.setEnabled(available && hasCapacity);
         create.setEnabled(available && hasCapacity && !creationPending);
-        join.setEnabled(available);
+        join.setEnabled(available && hasCapacity && !creationPending);
+        joinCode.setEnabled(!joiningProfile);
+        joinHostname.setEnabled(!joiningProfile);
+        cancelJoin.setVisibility(joiningProfile ? View.VISIBLE : View.GONE);
+        cancelJoin.setEnabled(joiningProfile);
         if (snapshot == null) {
             status.setText(R.string.loading);
         } else {

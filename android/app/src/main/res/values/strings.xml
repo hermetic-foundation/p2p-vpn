@@ -34,7 +34,9 @@
     <string name="open_pairing">Create code</string>
     <string name="copy_code">Copy code</string>
     <string name="pairing_code_hint">Pairing code</string>
+    <string name="pairing_hostname_hint">Device hostname</string>
     <string name="join_network">Join by code</string>
+    <string name="cancel_join">Cancel join</string>
     <string name="candidate_title">Pairing request</string>
     <string name="requested_ip">Requested IP: %1$s</string>
     <string name="hostname_hint">Assigned hostname (optional)</string>
@@ -54,5 +56,6 @@
     <string name="notification_channel">VPN connection</string>
     <string name="notification_channel_description">p2p-vpn connection status</string>
     <string name="notification_connecting">Connecting</string>
+    <string name="notification_pairing">Joining network</string>
     <string name="notification_connected">Connected to %1$s</string>
 </resources>

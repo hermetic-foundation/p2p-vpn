@@ -63,6 +63,8 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private boolean bound;
     private String pendingDiagnosticReport;
     private String pendingEnableNetworkId;
+    private String pendingJoinCode;
+    private String pendingJoinHostname;
     private String pendingMutationNetworkId;
     private Boolean pendingMutationEnabled;
     private boolean mutationObservedBusy;
@@ -207,6 +209,14 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     @Override
     public void onSnapshot(P2pVpnService.Snapshot snapshot) {
         latestSnapshot = snapshot;
+        if (navigation.screen == AppNavigation.Screen.JOIN
+                && snapshot.profileJoinActive
+                && !networkCreationPending) {
+            networkCreationPending = true;
+            networkCreationObservedBusy = true;
+            networksAtCreationRequest = snapshot.networks.size();
+            creationIdleObservations = 0;
+        }
         reconcilePendingMutation(snapshot);
         reconcilePendingCreation(snapshot);
 
@@ -393,8 +403,13 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             }
 
             @Override
-            public void joinNetwork(String pairingCode) {
-                MainActivity.this.joinNetwork(pairingCode);
+            public void joinNetwork(String pairingCode, String hostname) {
+                MainActivity.this.joinNetwork(pairingCode, hostname);
+            }
+
+            @Override
+            public void cancelJoin() {
+                MainActivity.this.cancelJoin();
             }
         };
     }
@@ -483,13 +498,41 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         renderCurrentScreen();
     }
 
-    private void joinNetwork(String pairingCode) {
-        if (binder == null) {
-            showLocalStatus("VPN service is not ready");
+    private void joinNetwork(String pairingCode, String hostname) {
+        if (pendingEnableNetworkId != null || pendingJoinCode != null) {
             return;
         }
         localStatus = null;
-        binder.joinPairing(pairingCode);
+        if (!LocalNetworkPermission.isGranted(this)) {
+            pendingJoinCode = pairingCode;
+            pendingJoinHostname = hostname;
+            requestPermissions(
+                    new String[] {LocalNetworkPermission.NAME},
+                    LOCAL_NETWORK_PERMISSION_REQUEST);
+            renderCurrentScreen();
+            return;
+        }
+        startProfileJoin(pairingCode, hostname);
+    }
+
+    private void startProfileJoin(String pairingCode, String hostname) {
+        networkCreationPending = true;
+        networkCreationObservedBusy = false;
+        creationIdleObservations = 0;
+        networksAtCreationRequest =
+                latestSnapshot == null ? 0 : latestSnapshot.networks.size();
+        Intent intent = new Intent(this, P2pVpnService.class);
+        intent.setAction(P2pVpnService.ACTION_JOIN_PROFILE);
+        intent.putExtra(P2pVpnService.EXTRA_PAIRING_CODE, pairingCode);
+        intent.putExtra(P2pVpnService.EXTRA_PAIRING_HOSTNAME, hostname);
+        startForegroundService(intent);
+        renderCurrentScreen();
+    }
+
+    private void cancelJoin() {
+        Intent intent = new Intent(this, P2pVpnService.class);
+        intent.setAction(P2pVpnService.ACTION_CANCEL_PROFILE_JOIN);
+        startService(intent);
     }
 
     private void selectDetailNetworkIfNeeded(P2pVpnService.Snapshot snapshot) {
@@ -620,15 +663,27 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             return;
         }
         if (LocalNetworkPermission.isGranted(this)) {
-            prepareVpnRequest();
+            if (pendingJoinCode != null && pendingJoinHostname != null) {
+                String code = pendingJoinCode;
+                String hostname = pendingJoinHostname;
+                pendingJoinCode = null;
+                pendingJoinHostname = null;
+                startProfileJoin(code, hostname);
+            } else {
+                prepareVpnRequest();
+            }
         } else {
             pendingEnableNetworkId = null;
+            pendingJoinCode = null;
+            pendingJoinHostname = null;
             showLocalStatus("Local network permission was not granted");
         }
     }
 
     private void requestNetworkEnabled(String networkId, boolean enabled) {
-        if (pendingEnableNetworkId != null || pendingMutationNetworkId != null) {
+        if (pendingEnableNetworkId != null
+                || pendingMutationNetworkId != null
+                || pendingJoinCode != null) {
             return;
         }
         localStatus = null;

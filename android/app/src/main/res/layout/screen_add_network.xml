@@ -119,6 +119,17 @@
                     android:maxLength="64"
                     android:singleLine="true" />
 
+                <EditText
+                    android:id="@+id/join_hostname_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints=""
+                    android:hint="@string/pairing_hostname_hint"
+                    android:imeOptions="actionDone"
+                    android:inputType="textNoSuggestions"
+                    android:maxLength="63"
+                    android:singleLine="true" />
+
                 <Button
                     android:id="@+id/join_network"
                     style="@style/CommandButton"
@@ -127,6 +138,14 @@
                     android:backgroundTint="@color/primary"
                     android:text="@string/join_network"
                     android:textColor="@color/on_primary" />
+
+                <Button
+                    android:id="@+id/cancel_join"
+                    style="@style/CommandButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/cancel_join"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <TextView

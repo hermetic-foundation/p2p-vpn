@@ -43,6 +43,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -56,9 +59,14 @@ public final class P2pVpnService extends VpnService {
     static final String ACTION_DISCONNECT = "org.hermeticfoundation.p2pvpn.DISCONNECT";
     static final String ACTION_SET_NETWORK_ENABLED =
             "org.hermeticfoundation.p2pvpn.SET_NETWORK_ENABLED";
+    static final String ACTION_JOIN_PROFILE = "org.hermeticfoundation.p2pvpn.JOIN_PROFILE";
+    static final String ACTION_CANCEL_PROFILE_JOIN =
+            "org.hermeticfoundation.p2pvpn.CANCEL_PROFILE_JOIN";
     static final String ACTION_DEBUG_COMMAND = "org.hermeticfoundation.p2pvpn.debug.COMMAND";
     static final String EXTRA_NETWORK_ID = "network_id";
     static final String EXTRA_NETWORK_ENABLED = "network_enabled";
+    static final String EXTRA_PAIRING_CODE = "pairing_code";
+    static final String EXTRA_PAIRING_HOSTNAME = "pairing_hostname";
     static final String EXTRA_DEBUG_COMMAND = "command";
     static final String EXTRA_DEBUG_VALUE = "value";
     static final int DEBUG_PACKET_QUIC_ENDPOINT_MAX_LENGTH = 512;
@@ -85,6 +93,7 @@ public final class P2pVpnService extends VpnService {
     private final DiagnosticEventBuffer diagnosticEvents = new DiagnosticEventBuffer();
 
     private ScheduledThreadPoolExecutor worker;
+    private ExecutorService profileJoinWorker;
     private ProfileStore profileStore;
     private File runtimeDirectory;
     private Map<String, RuntimeFiles> runtimeFiles = Collections.emptyMap();
@@ -92,6 +101,7 @@ public final class P2pVpnService extends VpnService {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private WifiManager.MulticastLock multicastLock;
+    private WifiManager.MulticastLock pairingMulticastLock;
     private ScheduledFuture<?> reconnectFuture;
     private ScheduledFuture<?> underlayRecoveryFuture;
     private ScheduledFuture<?> statusFuture;
@@ -106,6 +116,7 @@ public final class P2pVpnService extends VpnService {
     private boolean profilePresent;
     private boolean profileUnreadable;
     private ActivePairing activePairing;
+    private volatile ProfileJoinOperation profileJoinOperation;
     private boolean desiredConnected;
     private boolean connected;
     private boolean operationInProgress;
@@ -135,6 +146,13 @@ public final class P2pVpnService extends VpnService {
         debugInstance = this;
         worker = new ScheduledThreadPoolExecutor(1);
         worker.setRemoveOnCancelPolicy(true);
+        profileJoinWorker =
+                Executors.newSingleThreadExecutor(
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "p2p-vpn-profile-join");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
         profileStore = new ProfileStore(this);
         prepareRuntimeDirectory();
         createNotificationChannel();
@@ -169,6 +187,15 @@ public final class P2pVpnService extends VpnService {
             String networkId = intent.getStringExtra(EXTRA_NETWORK_ID);
             boolean enabled = intent.getBooleanExtra(EXTRA_NETWORK_ENABLED, false);
             worker.execute(() -> setNetworkEnabled(networkId, enabled));
+        } else if (ACTION_JOIN_PROFILE.equals(action) && intent != null) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(getString(R.string.notification_pairing)));
+            String code = intent.getStringExtra(EXTRA_PAIRING_CODE);
+            String hostname = intent.getStringExtra(EXTRA_PAIRING_HOSTNAME);
+            worker.execute(() -> joinProfileByCode(code, hostname));
+        } else if (ACTION_CANCEL_PROFILE_JOIN.equals(action)) {
+            worker.execute(this::cancelProfileJoin);
         } else if (ACTION_DEBUG_COMMAND.equals(action) && isDebuggable()) {
             String command = intent.getStringExtra(EXTRA_DEBUG_COMMAND);
             String value = intent.getStringExtra(EXTRA_DEBUG_VALUE);
@@ -217,6 +244,11 @@ public final class P2pVpnService extends VpnService {
         cancel(underlayRecoveryFuture);
         cancel(statusFuture);
         cancel(pairingFuture);
+        cancelProfileJoinBestEffort();
+        if (profileJoinWorker != null) {
+            profileJoinWorker.shutdownNow();
+        }
+        releasePairingMulticastLock();
         if (worker != null && !worker.isShutdown()) {
             try {
                 worker.submit(this::stopNativeRuntime).get(6, TimeUnit.SECONDS);
@@ -1084,6 +1116,184 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
+    private void joinProfileByCode(String pairingCode, String requestedHostname) {
+        if (operationInProgress || profileJoinOperation != null || activePairing != null) {
+            pairingDetail = "A pairing operation is already active";
+            publishSnapshot();
+            return;
+        }
+        if (profileUnreadable) {
+            pairingDetail = "Reset the unreadable profile before joining a network";
+            publishSnapshot();
+            finishPairingForegroundService();
+            return;
+        }
+        if (profileCollection != null
+                && profileCollection.networks.size() >= ProfileCollection.MAX_NETWORKS) {
+            pairingDetail = "This device already has the maximum number of networks";
+            publishSnapshot();
+            finishPairingForegroundService();
+            return;
+        }
+        ProfileJoinRequest request;
+        try {
+            request =
+                    ProfileJoinRequest.create(
+                            pairingCode, requestedHostname, existingNetworkNames());
+        } catch (P2pVpnException error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+            finishPairingForegroundService();
+            return;
+        }
+
+        ProfileJoinOperation operation =
+                new ProfileJoinOperation(PairingOperationId.generate());
+        profileJoinOperation = operation;
+        operationInProgress = true;
+        pairingDetail = "Searching on LAN, then through public libp2p discovery";
+        connectionDetail = "Joining a network";
+        acquirePairingMulticastLock();
+        publishSnapshot();
+        profileJoinWorker.submit(
+                () -> {
+                    ProfileJoinResult result;
+                    try {
+                        AndroidProfile joined =
+                                AndroidProfile.fromNative(
+                                        NativeResponse.objectValue(
+                                                NativeBridge.nativeJoinProfileByCode(
+                                                        operation.id,
+                                                        request.pairingCode,
+                                                        request.hostname,
+                                                        request.existingNetworkNamesJson)));
+                        result = ProfileJoinResult.success(joined);
+                    } catch (P2pVpnException | RuntimeException | LinkageError error) {
+                        result = ProfileJoinResult.failure(failureMessage(error));
+                    }
+                    ProfileJoinResult completed = result;
+                    try {
+                        worker.execute(() -> completeProfileJoin(operation.id, completed));
+                    } catch (RejectedExecutionException ignored) {
+                        // Service destruction already cancelled the native operation.
+                    }
+                });
+    }
+
+    private List<String> existingNetworkNames() {
+        List<String> names = new ArrayList<>(inspectedProfiles.size());
+        for (AndroidProfile existing : inspectedProfiles.values()) {
+            names.add(existing.networkName);
+        }
+        return names;
+    }
+
+    private void completeProfileJoin(String operationId, ProfileJoinResult result) {
+        ProfileJoinOperation operation = profileJoinOperation;
+        if (operation == null || !operation.id.equals(operationId)) {
+            return;
+        }
+        File uncommittedRuntimeDirectory = null;
+        boolean profileCommitted = false;
+        try {
+            if (result.error != null) {
+                throw new P2pVpnException(result.error);
+            }
+            AndroidProfile joined = result.profile;
+            if (joined == null) {
+                throw new P2pVpnException("Pairing did not return a network profile");
+            }
+            if (profileCollection != null
+                    && profileCollection.networks.size() >= ProfileCollection.MAX_NETWORKS) {
+                throw new P2pVpnException(
+                        "This device already has the maximum number of networks");
+            }
+            ProfileCollection.Entry network =
+                    new ProfileCollection.Entry(
+                            ProfileCollection.newNetworkId(), false, joined.configJson);
+            ProfileCollection collection =
+                    profileCollection == null
+                            ? ProfileCollection.single(
+                                    network,
+                                    ProfileCollection.PresentationAddresses.fromProfile(joined))
+                            : profileCollection.add(network, true);
+            Map<String, AndroidProfile> profiles = new LinkedHashMap<>(inspectedProfiles);
+            profiles.put(network.id, joined);
+            Map<String, RuntimeFiles> joinedRuntimeFiles = prepareRuntimeFiles(collection);
+            RuntimeFiles joinedFiles = joinedRuntimeFiles.get(network.id);
+            if (joinedFiles == null) {
+                throw new IOException("failed to prepare joined network runtime storage");
+            }
+            uncommittedRuntimeDirectory = joinedFiles.directory;
+            boolean firstNetwork = profileCollection == null;
+            persistProfileCollection(collection, profiles, joinedRuntimeFiles);
+            profileCommitted = true;
+            recordDiagnosticEvent(firstNetwork ? "profile_joined" : "network_joined");
+            connectionDetail = firstNetwork ? "Profile ready" : "Network added";
+            pairingDetail = "Joined " + joined.networkName;
+        } catch (P2pVpnException | IOException | RuntimeException | LinkageError error) {
+            if (!profileCommitted && uncommittedRuntimeDirectory != null) {
+                try {
+                    deleteRuntimeEntry(uncommittedRuntimeDirectory);
+                } catch (IOException cleanupError) {
+                    Log.w(LOG_TAG, "event=uncommitted_join_cleanup_failed");
+                }
+            }
+            pairingDetail = failureMessage(error);
+            connectionDetail = "Network join failed";
+            recordDiagnosticEvent("profile_join_failed");
+        } finally {
+            profileJoinOperation = null;
+            operationInProgress = false;
+            releasePairingMulticastLock();
+            publishSnapshot();
+            finishPairingForegroundService();
+        }
+    }
+
+    private void cancelProfileJoin() {
+        ProfileJoinOperation operation = profileJoinOperation;
+        if (operation == null) {
+            pairingDetail = "No profile join is active";
+            publishSnapshot();
+            finishPairingForegroundService();
+            return;
+        }
+        pairingDetail = "Cancelling network join";
+        publishSnapshot();
+        try {
+            NativeResponse.objectValue(NativeBridge.nativeCancelProfileJoin(operation.id));
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            pairingDetail = failureMessage(error);
+            publishSnapshot();
+        }
+    }
+
+    private void cancelProfileJoinBestEffort() {
+        ProfileJoinOperation operation = profileJoinOperation;
+        if (operation == null) {
+            return;
+        }
+        try {
+            NativeBridge.nativeCancelProfileJoin(operation.id);
+        } catch (RuntimeException | LinkageError ignored) {
+            // Process teardown will close the profile-free libp2p swarm.
+        }
+    }
+
+    private void finishPairingForegroundService() {
+        refreshVpnMode(false);
+        if (desiredConnected || vpnMode.alwaysOn) {
+            updateForegroundNotification();
+            return;
+        }
+        mainHandler.post(
+                () -> {
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    stopSelf();
+                });
+    }
+
     private void selectNetwork(String networkId) {
         if (!beginNetworkMutation("Selecting network")) {
             return;
@@ -1545,6 +1755,11 @@ public final class P2pVpnService extends VpnService {
             publishSnapshot();
             return false;
         }
+        if (profileJoinOperation != null) {
+            pairingDetail = "A profile-free pairing operation is already active";
+            publishSnapshot();
+            return false;
+        }
         if (selectedNetworkId == null || !activeNetworkIds.contains(selectedNetworkId)) {
             pairingDetail = "Enable the selected network before pairing";
             publishSnapshot();
@@ -1863,6 +2078,36 @@ public final class P2pVpnService extends VpnService {
         multicastLock = null;
     }
 
+    private void acquirePairingMulticastLock() {
+        try {
+            if (pairingMulticastLock != null && pairingMulticastLock.isHeld()) {
+                return;
+            }
+            WifiManager wifi =
+                    (WifiManager)
+                            getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi == null) {
+                return;
+            }
+            pairingMulticastLock = wifi.createMulticastLock("p2p-vpn-pairing-discovery");
+            pairingMulticastLock.setReferenceCounted(false);
+            pairingMulticastLock.acquire();
+        } catch (RuntimeException error) {
+            releasePairingMulticastLock();
+        }
+    }
+
+    private void releasePairingMulticastLock() {
+        try {
+            if (pairingMulticastLock != null && pairingMulticastLock.isHeld()) {
+                pairingMulticastLock.release();
+            }
+        } catch (RuntimeException ignored) {
+            // Public pairing discovery remains available without Wi-Fi multicast.
+        }
+        pairingMulticastLock = null;
+    }
+
     private void registerNetworkCallback() {
         connectivityManager =
                 (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -2011,7 +2256,8 @@ public final class P2pVpnService extends VpnService {
                         vpnModeDetail(),
                         connectionDetail,
                         peerDetail,
-                        activePairing != null,
+                        activePairing != null || profileJoinOperation != null,
+                        profileJoinOperation != null,
                         pairingDetail,
                         activePairing == null ? null : activePairing.displayCode(),
                         candidate == null ? null : candidate.peerId,
@@ -2416,6 +2662,10 @@ public final class P2pVpnService extends VpnService {
             worker.execute(() -> P2pVpnService.this.joinPairing(code));
         }
 
+        void cancelProfileJoin() {
+            worker.execute(P2pVpnService.this::cancelProfileJoin);
+        }
+
         void approvePairing(String hostname) {
             worker.execute(() -> P2pVpnService.this.approvePairing(hostname));
         }
@@ -2454,6 +2704,7 @@ public final class P2pVpnService extends VpnService {
         final String connectionDetail;
         final String peerDetail;
         final boolean pairingActive;
+        final boolean profileJoinActive;
         final String pairingDetail;
         final String pairingCode;
         final String candidatePeer;
@@ -2486,6 +2737,7 @@ public final class P2pVpnService extends VpnService {
                 String connectionDetail,
                 String peerDetail,
                 boolean pairingActive,
+                boolean profileJoinActive,
                 String pairingDetail,
                 String pairingCode,
                 String candidatePeer,
@@ -2516,6 +2768,7 @@ public final class P2pVpnService extends VpnService {
             this.connectionDetail = connectionDetail;
             this.peerDetail = peerDetail;
             this.pairingActive = pairingActive;
+            this.profileJoinActive = profileJoinActive;
             this.pairingDetail = pairingDetail;
             this.pairingCode = pairingCode;
             this.candidatePeer = candidatePeer;
@@ -2549,6 +2802,7 @@ public final class P2pVpnService extends VpnService {
                     "Manual connection",
                     "Loading",
                     "Overlay peers: unavailable",
+                    false,
                     false,
                     "No pairing operation",
                     null,
@@ -2736,6 +2990,32 @@ public final class P2pVpnService extends VpnService {
             return phase;
         }
         throw new P2pVpnException("Native runtime status contains an invalid phase");
+    }
+
+    private static final class ProfileJoinOperation {
+        final String id;
+
+        private ProfileJoinOperation(String id) {
+            this.id = id;
+        }
+    }
+
+    private static final class ProfileJoinResult {
+        final AndroidProfile profile;
+        final String error;
+
+        private ProfileJoinResult(AndroidProfile profile, String error) {
+            this.profile = profile;
+            this.error = error;
+        }
+
+        static ProfileJoinResult success(AndroidProfile profile) {
+            return new ProfileJoinResult(profile, null);
+        }
+
+        static ProfileJoinResult failure(String error) {
+            return new ProfileJoinResult(null, error);
+        }
     }
 
     static final class ActivePairing {
