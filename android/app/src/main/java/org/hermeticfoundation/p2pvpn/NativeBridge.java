@@ -27,6 +27,8 @@ final class NativeBridge {
             String pairingStatePath,
             String membershipStatePath);
 
+    static native String nativeStartNetworks(String requestJson, int tunFd);
+
     static native String nativeStop();
 
     static native String nativeStatus();
@@ -34,6 +36,8 @@ final class NativeBridge {
     static native String nativeNetworkChanged();
 
     static native String nativePairRpc(String requestJson);
+
+    static native String nativePairRpcForNetwork(String networkId, String requestJson);
 
     static native String nativeApplyPairingArtifacts(
             String configJson, String artifactsJson, String runtimeStateDirectory);

@@ -73,6 +73,7 @@ pub(crate) struct PacketSwitch {
 }
 
 impl PacketSwitch {
+    #[cfg(test)]
     pub(crate) fn new(
         networks: Vec<NetworkSpec>,
         limits: QueueLimits,

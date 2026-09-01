@@ -84,10 +84,12 @@ always-on service remains foreground and reports the missing permission.
 | `nativeCreateProfile` | Minimal validated config and derived routes |
 | `nativeInspectProfile` | Peer ID, MTU, addresses, and routes |
 | `nativeStart` | Starts one runtime over the supplied TUN descriptor |
-| `nativeStatus` | Runtime phase and control status lines |
+| `nativeStartNetworks` | Validates and starts an isolated runtime set over one TUN |
+| `nativeStatus` | Aggregate and per-network phase plus control status lines |
 | `nativeNetworkChanged` | Invalidates stale paths and rediscovers without stopping TUN |
 | `nativeStop` | Requests shutdown and joins the runtime thread |
 | `nativePairRpc` | Calls the existing daemon pairing state machine |
+| `nativePairRpcForNetwork` | Calls one selected network's pairing state machine |
 | `nativeApplyPairingArtifacts` | Applies signed artifacts to the profile |
 
 Every JNI response uses a bounded JSON envelope:
@@ -98,9 +100,18 @@ Every JNI response uses a bounded JSON envelope:
 
 Native panics are caught before crossing JNI.
 
-`nativeStart` remains a compatibility entry point for one network. It routes
-that network through the shared supervisor seam; concurrent service and UI
-activation is not implemented by this change.
+`nativeStart` remains a compatibility entry point for one network.
+
+Single-network status and `nativeNetworkChanged` retain their legacy aggregate
+detail, line, and direct change-object shapes. Multi-network change responses
+wrap successful per-network results in a `networks` array.
+
+`nativeStartNetworks` accepts schema version `1`, one stable presentation
+address pair, and 1 to 16 network records. Each record carries a canonical UUID,
+validated config JSON, and an isolated pairing and membership state directory.
+
+Unknown fields, future schemas, repeated identities, network names, DNS zones,
+UUIDs, or state directories are rejected before the TUN workers start.
 
 ## TUN Ownership
 
@@ -129,7 +140,10 @@ drops that packet and releases any network-removal gate.
 The supervisor separates physical TUN ownership from network runtimes.
 
 Each network receives an isolated `PacketIo` port and route controller. The
-current JNI compatibility path creates one port and starts one runtime.
+JNI supervisor creates one port and runtime task per validated network.
+
+The runtime tasks share one bounded Tokio worker pool. They do not share
+identity, control channels, state files, packet queues, or route ownership.
 
 ### Packet Flow
 
@@ -212,21 +226,25 @@ isolation, not an operating-system process sandbox.
 
 ### Counters
 
-Native status exposes aggregate supervisor counters without network IDs.
+Native status is an internal app contract. Per-network runtime lines can include
+peer IDs and path endpoints, while supervisor lines use stable network UUIDs.
+
+The exported Android diagnostic report does not serialize those raw lines. It
+parses only bounded aggregate counters and fixed event names.
 
 | Scope | Counters |
 | --- | --- |
 | Supervisor | Malformed and unroutable outbound packets |
 | Supervisor | Source-ownership mismatch drops |
-| Per network index | Outbound enqueued, queue drops, oversized drops |
-| Per network index | Outbound and inbound presentation-translation drops |
-| Per network index | Inbound malformed, ownership, queue, and oversized drops |
-| Per network index | Packets discarded during removal or shutdown |
-| Per network index | Inbound written, backpressure drops, and write failures |
-| Per network index | Rejected live route updates |
+| Per network UUID | Outbound enqueued, queue drops, oversized drops |
+| Per network UUID | Outbound and inbound presentation-translation drops |
+| Per network UUID | Inbound malformed, ownership, queue, and oversized drops |
+| Per network UUID | Packets discarded during removal or shutdown |
+| Per network UUID | Inbound written, backpressure drops, and write failures |
+| Per network UUID | Rejected live route updates |
 
-These counters distinguish route failures from queue pressure while preserving
-network identity privacy in status output.
+These counters distinguish route failures from queue pressure. Raw status must
+not be copied into an exported diagnostic artifact.
 
 ### Current Boundary
 
@@ -248,8 +266,9 @@ Fragment and quoted ICMP handling preserve checksums and presentation-side flow
 identity after reassembly. Queue or translation failure drops one packet without
 stopping another network.
 
-The Android service, JNI lifecycle, and UI still activate one selected network.
-Concurrent multi-network lifecycle support remains follow-up work.
+The native lifecycle can activate concurrent networks and isolate a failed
+runtime task. The Android service and UI still invoke the one-network
+compatibility entry point until the next lifecycle change.
 
 `VpnService.Builder` routes are fixed when the interface is established.
 Runtime-learned custom prefixes currently update native dispatch only. The
