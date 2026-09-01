@@ -97,8 +97,6 @@ final class ProfileStore {
     }
 
     synchronized void reset() throws P2pVpnException {
-        profileFile.delete();
-        pairingFile.delete();
         try {
             KeyStore keyStore = KeyStore.getInstance(KEYSTORE);
             keyStore.load(null);
@@ -108,6 +106,8 @@ final class ProfileStore {
         } catch (GeneralSecurityException | IOException error) {
             throw new P2pVpnException("Failed to remove the profile encryption key", error);
         }
+        profileFile.delete();
+        pairingFile.delete();
     }
 
     private static void saveEncrypted(

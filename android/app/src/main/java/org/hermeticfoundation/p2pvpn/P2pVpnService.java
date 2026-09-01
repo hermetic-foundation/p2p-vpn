@@ -938,7 +938,11 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void createProfile(String networkName) {
-        createProfile(networkName, null, null, null, null, null, null, null);
+        createProfile(networkName, true, null, null, null, null, null, null, null);
+    }
+
+    private void createUserProfile(String networkName) {
+        createProfile(networkName, false, null, null, null, null, null, null, null);
     }
 
     private void createE2eProfile(String encodedSettings) {
@@ -968,6 +972,7 @@ public final class P2pVpnService extends VpnService {
                     packetQuicListen, packetQuicExternalEndpoint, relayReservation);
             createProfile(
                     requiredDebugSetting(settings, "network", 128),
+                    true,
                     requiredDebugSetting(settings, "bootstrap_peer_id", 256),
                     requiredDebugSetting(settings, "bootstrap_address", 1_024),
                     requiredDebugSetting(settings, "kademlia_protocol", 128),
@@ -994,6 +999,7 @@ public final class P2pVpnService extends VpnService {
 
     private void createProfile(
             String networkName,
+            boolean enabledOnCreate,
             String bootstrapPeerId,
             String bootstrapAddress,
             String kademliaProtocol,
@@ -1030,7 +1036,7 @@ public final class P2pVpnService extends VpnService {
                                                     additionalRoute)));
             ProfileCollection.Entry network =
                     new ProfileCollection.Entry(
-                            ProfileCollection.newNetworkId(), true, created.configJson);
+                            ProfileCollection.newNetworkId(), enabledOnCreate, created.configJson);
             ProfileCollection collection =
                     profileCollection == null
                             ? ProfileCollection.single(
@@ -1049,7 +1055,9 @@ public final class P2pVpnService extends VpnService {
             persistProfileCollection(collection, profiles, createdRuntimeFiles);
             profileCommitted = true;
             recordDiagnosticEvent(firstNetwork ? "profile_created" : "network_added");
-            resumeConnection = suspendConnectionForNetworkChange();
+            if (enabledOnCreate) {
+                resumeConnection = suspendConnectionForNetworkChange();
+            }
             connectionDetail = firstNetwork ? "Profile ready" : "Network added";
         } catch (P2pVpnException | IOException | RuntimeException | LinkageError error) {
             if (!profileCommitted && uncommittedRuntimeDirectory != null) {
@@ -1168,15 +1176,39 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         boolean resumeConnection = false;
+        boolean removalSucceeded = false;
         try {
             if (profileCollection == null) {
                 throw new P2pVpnException("No p2p-vpn network is available");
             }
             String normalized = ProfileCollection.Entry.normalizeNetworkId(networkId);
+            ProfileCollection.Entry removedNetwork = profileCollection.find(normalized);
+            if (removedNetwork == null) {
+                throw new P2pVpnException("Cannot remove an unknown network");
+            }
             AndroidProfile removedProfile = profileFor(normalized);
             RuntimeFiles removedFiles = runtimeFiles.get(normalized);
             if (removedFiles == null) {
                 throw new P2pVpnException("Network runtime storage is unavailable");
+            }
+            if (profileCollection.networks.size() == 1) {
+                resumeConnection = suspendConnectionForNetworkChange();
+                deleteRuntimeState();
+                profileStore.reset();
+                profile = null;
+                profileCollection = null;
+                inspectedProfiles = Collections.emptyMap();
+                runtimeFiles = Collections.emptyMap();
+                selectedNetworkId = null;
+                activeNetworkIds = Collections.emptyList();
+                networkRuntimeStatuses = Collections.emptyMap();
+                profilePresent = false;
+                profileUnreadable = false;
+                pairingDetail = "No pairing operation";
+                recordDiagnosticEvent("last_network_removed");
+                connectionDetail = "Removed " + removedProfile.networkName;
+                removalSucceeded = true;
+                return;
             }
             ProfileCollection updated = profileCollection.remove(normalized);
             Map<String, AndroidProfile> updatedProfiles = new LinkedHashMap<>(inspectedProfiles);
@@ -1184,16 +1216,28 @@ public final class P2pVpnService extends VpnService {
             Map<String, RuntimeFiles> updatedFiles = new LinkedHashMap<>(runtimeFiles);
             updatedFiles.remove(normalized);
             persistProfileCollection(updated, updatedProfiles, updatedFiles);
-            resumeConnection = suspendConnectionForNetworkChange();
-            deleteRuntimeEntry(removedFiles.directory);
+            if (profileCollection.find(normalized) != null) {
+                throw new P2pVpnException("Removed network remained in the profile collection");
+            }
+            if (removedNetwork.enabled) {
+                resumeConnection = suspendConnectionForNetworkChange();
+            }
+            try {
+                deleteRuntimeEntry(removedFiles.directory);
+            } catch (IOException cleanupError) {
+                Log.w(LOG_TAG, "event=removed_network_cleanup_failed");
+            }
             recordDiagnosticEvent("network_removed");
             connectionDetail = "Removed " + removedProfile.networkName;
+            removalSucceeded = true;
         } catch (P2pVpnException | IOException | RuntimeException | LinkageError error) {
             connectionDetail = failureMessage(error);
         } finally {
             operationInProgress = false;
             publishSnapshot();
-            if (resumeConnection && desiredConnected) {
+            if (removalSucceeded) {
+                reconcileEnabledNetworks();
+            } else if (resumeConnection && desiredConnected) {
                 startConnection("Applying network changes");
             }
         }
@@ -2337,7 +2381,7 @@ public final class P2pVpnService extends VpnService {
         }
 
         void createProfile(String networkName) {
-            worker.execute(() -> P2pVpnService.this.createProfile(networkName));
+            worker.execute(() -> P2pVpnService.this.createUserProfile(networkName));
         }
 
         void selectNetwork(String networkId) {
