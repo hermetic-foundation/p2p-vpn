@@ -361,6 +361,7 @@ impl PacketSwitch {
         self.wake.wait_since(generation, timeout)
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_network(&self, network_id: &str) {
         if let Some(control) = self.controls.get(network_id) {
             control.deactivate_current();

@@ -24,6 +24,8 @@ use serde::Serialize;
 #[cfg(any(target_os = "android", test))]
 mod packet_translation;
 #[cfg(any(target_os = "android", test))]
+mod recovery;
+#[cfg(any(target_os = "android", test))]
 mod supervisor;
 
 const BUILTIN_IPV4_NETWORK: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 0);
@@ -779,7 +781,7 @@ mod android {
         ptr,
         sync::{
             Arc, Mutex, Once,
-            atomic::{AtomicBool, AtomicU8, Ordering},
+            atomic::{AtomicBool, Ordering},
         },
         thread,
         time::{Duration, Instant},
@@ -792,15 +794,16 @@ mod android {
     };
     use p2p_vpn::runtime::{
         control_socket::{
-            PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeControlReceiver,
-            RuntimeNetworkChange, runtime_control_channel,
+            PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeNetworkChange,
+            runtime_control_channel,
         },
         runner::{RuntimePlatform, ShutdownReason, run_config_until_with_runtime_platform},
         tun::{PacketRead, PacketWrite, TunRuntimeConfig},
     };
-    use tokio::sync::oneshot;
+    use tokio::sync::{oneshot, watch};
 
     use super::{
+        recovery::{HEALTHY_RESET_AFTER, RecoveryBackoff, wait_or_shutdown},
         supervisor::{NetworkLease, NetworkPort, NetworkSpec, PacketSwitch, QueueLimits},
         *,
     };
@@ -809,35 +812,179 @@ mod android {
     static RUNTIME: Mutex<Option<RuntimeInstance>> = Mutex::new(None);
     const CONTROL_FAILURE_LIMIT: u8 = 3;
     const TUN_WRITE_POLL_TIMEOUT: Duration = Duration::from_millis(250);
-    const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+    const RUNTIME_HEALTH_INITIAL_DELAY: Duration = Duration::from_millis(500);
+    const RUNTIME_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+    const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(4);
     const RUNTIME_ABORT_GRACE: Duration = Duration::from_secs(1);
 
     struct RuntimeInstance {
-        networks: BTreeMap<String, RuntimeNetworkInstance>,
-        shutdowns: BTreeMap<String, oneshot::Sender<ShutdownReason>>,
+        networks: BTreeMap<String, Arc<RuntimeNetworkSlot>>,
         tun_stop: Arc<AtomicBool>,
         tun_error: Arc<Mutex<Option<String>>>,
         packet_switch: Arc<PacketSwitch>,
-        supervisor_shutdown: Option<oneshot::Sender<()>>,
+        supervisor_shutdown: watch::Sender<bool>,
         thread: Option<thread::JoinHandle<()>>,
         tun_threads: Vec<thread::JoinHandle<()>>,
     }
 
-    struct RuntimeNetworkInstance {
-        control: RuntimeControlHandle,
-        control_failures: Arc<AtomicU8>,
-        status: Arc<Mutex<AndroidNetworkRuntimeStatus>>,
+    struct RuntimeNetworkSlot {
+        state: Mutex<RuntimeNetworkSlotState>,
+    }
+
+    struct RuntimeNetworkSlotState {
+        generation: u64,
+        consecutive_failures: u32,
+        restarts: u64,
+        control: Option<RuntimeControlHandle>,
+        status: AndroidNetworkRuntimeStatus,
     }
 
     struct RuntimeLaunch {
+        id: String,
         config: Config,
-        port: NetworkPort,
-        lease: NetworkLease,
-        control: RuntimeControlReceiver,
+        initial_activation: Option<(NetworkPort, NetworkLease)>,
         pairing_state_path: PathBuf,
         membership_state_path: PathBuf,
-        shutdown: oneshot::Receiver<ShutdownReason>,
-        status: Arc<Mutex<AndroidNetworkRuntimeStatus>>,
+        slot: Arc<RuntimeNetworkSlot>,
+    }
+
+    impl RuntimeNetworkSlot {
+        fn new(id: String) -> Self {
+            Self {
+                state: Mutex::new(RuntimeNetworkSlotState {
+                    generation: 0,
+                    consecutive_failures: 0,
+                    restarts: 0,
+                    control: None,
+                    status: AndroidNetworkRuntimeStatus {
+                        id,
+                        phase: AndroidRuntimePhase::Starting,
+                        detail: None,
+                        lines: Vec::new(),
+                    },
+                }),
+            }
+        }
+
+        fn publish_attempt(
+            &self,
+            generation: u64,
+            consecutive_failures: u32,
+            control: RuntimeControlHandle,
+        ) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.generation != 0 && state.generation != generation {
+                state.restarts = state.restarts.saturating_add(1);
+            }
+            state.generation = generation;
+            state.consecutive_failures = consecutive_failures;
+            state.control = Some(control);
+            state.status.phase = AndroidRuntimePhase::Starting;
+            state.status.detail = Some(format!("Starting runtime generation {generation}"));
+            state.status.lines.clear();
+        }
+
+        fn record_running(&self, generation: u64, lines: Vec<String>) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.generation != generation || state.control.is_none() {
+                return;
+            }
+            state.status.phase = AndroidRuntimePhase::Running;
+            state.status.detail = None;
+            state.status.lines = lines;
+        }
+
+        fn record_health_failure(&self, generation: u64, failures: u8, error: &str) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.generation != generation || state.control.is_none() {
+                return;
+            }
+            state.status.detail = Some(format!(
+                "Runtime health check {failures} of {CONTROL_FAILURE_LIMIT} failed: {error}"
+            ));
+        }
+
+        fn record_recovery(
+            &self,
+            generation: u64,
+            consecutive_failures: u32,
+            delay: Duration,
+            error: String,
+        ) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.generation != generation {
+                return;
+            }
+            state.consecutive_failures = consecutive_failures;
+            state.control = None;
+            state.status.phase = AndroidRuntimePhase::Starting;
+            state.status.detail = Some(format!(
+                "Recovering after {error}; attempt {consecutive_failures} in {} ms",
+                delay.as_millis()
+            ));
+            state.status.lines.clear();
+        }
+
+        fn record_activation_failure(
+            &self,
+            consecutive_failures: u32,
+            delay: Duration,
+            error: String,
+        ) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.consecutive_failures = consecutive_failures;
+            state.control = None;
+            state.status.phase = AndroidRuntimePhase::Starting;
+            state.status.detail = Some(format!(
+                "Recovering after {error}; attempt {consecutive_failures} in {} ms",
+                delay.as_millis()
+            ));
+            state.status.lines.clear();
+        }
+
+        fn record_stopped(&self, generation: Option<u64>) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if generation.is_some_and(|generation| state.generation != generation) {
+                return;
+            }
+            state.control = None;
+            state.status.phase = AndroidRuntimePhase::Stopped;
+            state.status.detail = None;
+            state.status.lines.clear();
+        }
+
+        fn record_supervisor_failure(&self, detail: String) {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.control = None;
+            state.status.phase = AndroidRuntimePhase::Failed;
+            state.status.detail = Some(detail);
+            state.status.lines.clear();
+        }
+
+        fn snapshot(&self) -> AndroidNetworkRuntimeStatus {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut status = state.status.clone();
+            status
+                .lines
+                .retain(|line| !line.starts_with("android_runtime_supervisor "));
+            status.lines.push(format!(
+                "android_runtime_supervisor id={} generation={} consecutive_failures={} restarts={} control_available={}",
+                status.id,
+                state.generation,
+                state.consecutive_failures,
+                state.restarts,
+                state.control.is_some(),
+            ));
+            status
+        }
+
+        fn control(&self) -> Option<RuntimeControlHandle> {
+            self.state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .control
+                .clone()
+        }
     }
 
     #[derive(Serialize)]
@@ -1238,7 +1385,6 @@ mod android {
             .collect::<BTreeMap<_, _>>();
         let tun_mtu = prepared.tun_mtu;
         let mut networks = BTreeMap::new();
-        let mut shutdowns = BTreeMap::new();
         let mut launches = Vec::with_capacity(prepared.networks.len());
         for network in prepared.networks {
             let port = ports.remove(&network.id).ok_or_else(|| {
@@ -1250,32 +1396,15 @@ mod android {
             let lease = packet_switch
                 .network_lease(&network.id)
                 .map_err(|error| error.to_string())?;
-            let (control, control_receiver) = runtime_control_channel();
-            let (shutdown, shutdown_receiver) = oneshot::channel();
-            let status = Arc::new(Mutex::new(AndroidNetworkRuntimeStatus {
-                id: network.id.clone(),
-                phase: AndroidRuntimePhase::Starting,
-                detail: None,
-                lines: Vec::new(),
-            }));
-            networks.insert(
-                network.id.clone(),
-                RuntimeNetworkInstance {
-                    control,
-                    control_failures: Arc::new(AtomicU8::new(0)),
-                    status: Arc::clone(&status),
-                },
-            );
-            shutdowns.insert(network.id.clone(), shutdown);
+            let slot = Arc::new(RuntimeNetworkSlot::new(network.id.clone()));
+            networks.insert(network.id.clone(), Arc::clone(&slot));
             launches.push(RuntimeLaunch {
+                id: network.id,
                 config: network.config,
-                port,
-                lease,
-                control: control_receiver,
+                initial_activation: Some((port, lease)),
                 pairing_state_path: network.pairing_state_path,
                 membership_state_path: network.membership_state_path,
-                shutdown: shutdown_receiver,
-                status,
+                slot,
             });
         }
         if !ports.is_empty() {
@@ -1295,10 +1424,12 @@ mod android {
         set_nonblocking(&writer_file)?;
         let tun_stop = Arc::new(AtomicBool::new(false));
         let tun_error = Arc::new(Mutex::new(None));
+        let (supervisor_shutdown, supervisor_shutdown_receiver) = watch::channel(false);
 
         let reader_switch = Arc::clone(&packet_switch);
         let reader_stop = Arc::clone(&tun_stop);
         let reader_error = Arc::clone(&tun_error);
+        let reader_shutdown = supervisor_shutdown.clone();
         let reader_thread = thread::Builder::new()
             .name("p2p-vpn-tun-reader".to_owned())
             .spawn(move || {
@@ -1320,6 +1451,7 @@ mod android {
                             }
                             reader_stop.store(true, Ordering::Release);
                             reader_switch.close();
+                            let _ = reader_shutdown.send(true);
                             return;
                         }
                     }
@@ -1330,6 +1462,7 @@ mod android {
         let writer_switch = Arc::clone(&packet_switch);
         let writer_stop = Arc::clone(&tun_stop);
         let writer_error = Arc::clone(&tun_error);
+        let writer_shutdown = supervisor_shutdown.clone();
         let writer_thread = match thread::Builder::new()
             .name("p2p-vpn-tun-writer".to_owned())
             .spawn(move || {
@@ -1351,6 +1484,7 @@ mod android {
                             }
                             writer_stop.store(true, Ordering::Release);
                             writer_switch.close();
+                            let _ = writer_shutdown.send(true);
                             return;
                         }
                     }
@@ -1368,7 +1502,6 @@ mod android {
         let runtime_worker_count = launches.len().clamp(2, 4);
         let runtime_stop = Arc::clone(&tun_stop);
         let runtime_switch = Arc::clone(&packet_switch);
-        let (supervisor_shutdown, supervisor_shutdown_receiver) = oneshot::channel();
         let thread = match thread::Builder::new()
             .name("p2p-vpn-runtime-supervisor".to_owned())
             .spawn(move || {
@@ -1381,92 +1514,29 @@ mod android {
                     Err(error) => {
                         let error = format!("failed to create shared async runtime: {error}");
                         for launch in launches {
-                            let mut status = launch
-                                .status
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner());
-                            status.phase = AndroidRuntimePhase::Failed;
-                            status.detail = Some(error.clone());
+                            launch.slot.record_supervisor_failure(error.clone());
                         }
                         runtime_stop.store(true, Ordering::Release);
                         runtime_switch.close();
                         return;
                     }
                 };
+                let supervisor_switch = Arc::clone(&runtime_switch);
                 runtime.block_on(async move {
                     let mut tasks = tokio::task::JoinSet::new();
-                    let mut task_statuses = BTreeMap::new();
+                    let mut task_slots = BTreeMap::new();
                     for launch in launches {
-                        let status = Arc::clone(&launch.status);
-                        let task_status = Arc::clone(&launch.status);
-                        let abort = tasks.spawn(async move {
-                            let RuntimeLaunch {
-                                config,
-                                port,
-                                lease,
-                                control,
-                                pairing_state_path,
-                                membership_state_path,
-                                shutdown,
-                                status: _,
-                            } = launch;
-                            let _network_lease = lease;
-                            let result = run_config_until_with_runtime_platform(
-                                config,
-                                RuntimePlatform::new(port.packet_io, port.route_controller)
-                                    .with_control(control),
-                                None,
-                                None,
-                                Some(pairing_state_path),
-                                Some(membership_state_path),
-                                async move { shutdown.await.unwrap_or(ShutdownReason::Terminate) },
-                            )
-                            .await
-                            .map_err(|error| format!("runtime failed: {error:?}"));
-                            let mut status = task_status
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner());
-                            match result {
-                                Ok(()) => {
-                                    status.phase = AndroidRuntimePhase::Stopped;
-                                    status.detail = None;
-                                }
-                                Err(error) => {
-                                    status.phase = AndroidRuntimePhase::Failed;
-                                    status.detail = Some(error);
-                                }
-                            }
-                        });
-                        task_statuses.insert(abort.id(), status);
+                        let slot = Arc::clone(&launch.slot);
+                        let task = tasks.spawn(supervise_network(
+                            launch,
+                            Arc::clone(&supervisor_switch),
+                            supervisor_shutdown_receiver.clone(),
+                        ));
+                        task_slots.insert(task.id(), slot);
                     }
-                    tokio::pin!(supervisor_shutdown_receiver);
                     while !tasks.is_empty() {
-                        tokio::select! {
-                            result = tasks.join_next_with_id() => {
-                                if let Some(result) = result {
-                                    record_runtime_task_result(result, &task_statuses);
-                                }
-                            }
-                            _ = &mut supervisor_shutdown_receiver => {
-                                let graceful = async {
-                                    while let Some(result) = tasks.join_next_with_id().await {
-                                        record_runtime_task_result(result, &task_statuses);
-                                    }
-                                };
-                                if tokio::time::timeout(RUNTIME_SHUTDOWN_GRACE, graceful)
-                                    .await
-                                    .is_err()
-                                {
-                                    tasks.abort_all();
-                                    let aborted = async {
-                                        while let Some(result) = tasks.join_next_with_id().await {
-                                            record_runtime_task_result(result, &task_statuses);
-                                        }
-                                    };
-                                    let _ = tokio::time::timeout(RUNTIME_ABORT_GRACE, aborted).await;
-                                }
-                                break;
-                            }
+                        if let Some(result) = tasks.join_next_with_id().await {
+                            record_runtime_task_result(result, &task_slots);
                         }
                     }
                 });
@@ -1487,16 +1557,227 @@ mod android {
         let initial_status = aggregate_runtime_status(&networks, None, &packet_switch);
         let instance = RuntimeInstance {
             networks,
-            shutdowns,
             tun_stop,
             tun_error,
             packet_switch,
-            supervisor_shutdown: Some(supervisor_shutdown),
+            supervisor_shutdown,
             thread: Some(thread),
             tun_threads: vec![reader_thread, writer_thread],
         };
         *RUNTIME.lock().unwrap_or_else(|error| error.into_inner()) = Some(instance);
         Ok(initial_status)
+    }
+
+    async fn supervise_network(
+        mut launch: RuntimeLaunch,
+        packet_switch: Arc<PacketSwitch>,
+        mut supervisor_shutdown: watch::Receiver<bool>,
+    ) {
+        let mut backoff = RecoveryBackoff::default();
+        loop {
+            if *supervisor_shutdown.borrow() {
+                launch.slot.record_stopped(None);
+                return;
+            }
+            let activation = match launch.initial_activation.take() {
+                Some(activation) => Ok(activation),
+                None => packet_switch.activate_network(&launch.id),
+            };
+            let (port, lease) = match activation {
+                Ok(activation) => activation,
+                Err(error) => {
+                    let delay = backoff.record_failure(&launch.id, Duration::ZERO);
+                    log::warn!(
+                        "event=android_network_activation_failed network_id={} attempt={} retry_ms={} error={}",
+                        launch.id,
+                        backoff.consecutive_failures(),
+                        delay.as_millis(),
+                        error,
+                    );
+                    launch.slot.record_activation_failure(
+                        backoff.consecutive_failures(),
+                        delay,
+                        format!("packet supervisor activation failed: {error}"),
+                    );
+                    if !wait_or_shutdown(delay, &mut supervisor_shutdown).await {
+                        launch.slot.record_stopped(None);
+                        return;
+                    }
+                    continue;
+                }
+            };
+            let generation = port.generation;
+            let (control, control_receiver) = runtime_control_channel();
+            launch.slot.publish_attempt(
+                generation,
+                backoff.consecutive_failures(),
+                control.clone(),
+            );
+            log::info!(
+                "event=android_network_runtime_started network_id={} generation={} prior_failures={}",
+                launch.id,
+                generation,
+                backoff.consecutive_failures(),
+            );
+            let (shutdown, shutdown_receiver) = oneshot::channel();
+            let config = launch.config.clone();
+            let pairing_state_path = launch.pairing_state_path.clone();
+            let membership_state_path = launch.membership_state_path.clone();
+            let mut runtime = tokio::spawn(async move {
+                let _network_lease = lease;
+                run_config_until_with_runtime_platform(
+                    config,
+                    RuntimePlatform::new(port.packet_io, port.route_controller)
+                        .with_control(control_receiver),
+                    None,
+                    None,
+                    Some(pairing_state_path),
+                    Some(membership_state_path),
+                    async move { shutdown_receiver.await.unwrap_or(ShutdownReason::Terminate) },
+                )
+                .await
+                .map_err(|error| format!("runtime failed: {error:?}"))
+            });
+            let mut shutdown = Some(shutdown);
+            let mut probe = Box::pin(runtime_health_probe(
+                control.clone(),
+                RUNTIME_HEALTH_INITIAL_DELAY,
+            ));
+            let mut health_failures = 0_u8;
+            let mut running_since = None;
+            let mut reset_backoff = false;
+
+            let exit = loop {
+                tokio::select! {
+                    result = &mut runtime => break RuntimeAttemptExit::Runtime(result),
+                    result = &mut probe => {
+                        match result {
+                            Ok(lines) => {
+                                health_failures = 0;
+                                running_since.get_or_insert_with(Instant::now);
+                                reset_backoff |= running_since
+                                    .is_some_and(|since| since.elapsed() >= HEALTHY_RESET_AFTER);
+                                launch.slot.record_running(generation, lines);
+                            }
+                            Err(error) => {
+                                health_failures = health_failures.saturating_add(1);
+                                reset_backoff |= running_since
+                                    .is_some_and(|since| since.elapsed() >= HEALTHY_RESET_AFTER);
+                                running_since = None;
+                                log::warn!(
+                                    "event=android_network_health_failed network_id={} generation={} failures={} error={}",
+                                    launch.id,
+                                    generation,
+                                    health_failures,
+                                    error,
+                                );
+                                launch.slot.record_health_failure(
+                                    generation,
+                                    health_failures,
+                                    &error,
+                                );
+                                if health_failures >= CONTROL_FAILURE_LIMIT {
+                                    break RuntimeAttemptExit::Unhealthy(error);
+                                }
+                            }
+                        }
+                        probe = Box::pin(runtime_health_probe(
+                            control.clone(),
+                            RUNTIME_HEALTH_INTERVAL,
+                        ));
+                    }
+                    changed = supervisor_shutdown.changed() => {
+                        if changed.is_err() || *supervisor_shutdown.borrow() {
+                            break RuntimeAttemptExit::Shutdown;
+                        }
+                    }
+                }
+            };
+
+            let healthy_for = if reset_backoff {
+                HEALTHY_RESET_AFTER
+            } else {
+                running_since.map_or(Duration::ZERO, |since| since.elapsed())
+            };
+            let failure = match exit {
+                RuntimeAttemptExit::Shutdown => {
+                    stop_runtime_attempt(&mut runtime, shutdown.take()).await;
+                    launch.slot.record_stopped(Some(generation));
+                    log::info!(
+                        "event=android_network_runtime_stopped network_id={} generation={}",
+                        launch.id,
+                        generation,
+                    );
+                    return;
+                }
+                RuntimeAttemptExit::Runtime(result) => runtime_exit_error(result),
+                RuntimeAttemptExit::Unhealthy(error) => {
+                    stop_runtime_attempt(&mut runtime, shutdown.take()).await;
+                    format!(
+                        "runtime became unhealthy after {CONTROL_FAILURE_LIMIT} control failures: {error}"
+                    )
+                }
+            };
+            let delay = backoff.record_failure(&launch.id, healthy_for);
+            log::warn!(
+                "event=android_network_recovery_scheduled network_id={} generation={} attempt={} retry_ms={} error={}",
+                launch.id,
+                generation,
+                backoff.consecutive_failures(),
+                delay.as_millis(),
+                failure,
+            );
+            launch
+                .slot
+                .record_recovery(generation, backoff.consecutive_failures(), delay, failure);
+            if !wait_or_shutdown(delay, &mut supervisor_shutdown).await {
+                launch.slot.record_stopped(Some(generation));
+                return;
+            }
+        }
+    }
+
+    enum RuntimeAttemptExit {
+        Shutdown,
+        Runtime(Result<Result<(), String>, tokio::task::JoinError>),
+        Unhealthy(String),
+    }
+
+    async fn runtime_health_probe(
+        control: RuntimeControlHandle,
+        delay: Duration,
+    ) -> Result<Vec<String>, String> {
+        tokio::time::sleep(delay).await;
+        tokio::time::timeout(CONTROL_TIMEOUT, control.status())
+            .await
+            .map_err(|_| "runtime control request timed out".to_owned())?
+            .map_err(|error| format!("runtime control request failed: {error}"))
+    }
+
+    async fn stop_runtime_attempt(
+        runtime: &mut tokio::task::JoinHandle<Result<(), String>>,
+        shutdown: Option<oneshot::Sender<ShutdownReason>>,
+    ) {
+        if let Some(shutdown) = shutdown {
+            let _ = shutdown.send(ShutdownReason::Terminate);
+        }
+        if tokio::time::timeout(RUNTIME_SHUTDOWN_GRACE, &mut *runtime)
+            .await
+            .is_ok()
+        {
+            return;
+        }
+        runtime.abort();
+        let _ = tokio::time::timeout(RUNTIME_ABORT_GRACE, &mut *runtime).await;
+    }
+
+    fn runtime_exit_error(result: Result<Result<(), String>, tokio::task::JoinError>) -> String {
+        match result {
+            Ok(Ok(())) => "runtime stopped unexpectedly".to_owned(),
+            Ok(Err(error)) => error,
+            Err(error) if error.is_panic() => "network runtime task panicked".to_owned(),
+            Err(_) => "network runtime task was cancelled".to_owned(),
+        }
     }
 
     fn record_tun_error(target: &Mutex<Option<String>>, operation: &str, error: &io::Error) {
@@ -1508,17 +1789,15 @@ mod android {
 
     fn record_runtime_task_result(
         result: Result<(tokio::task::Id, ()), tokio::task::JoinError>,
-        statuses: &BTreeMap<tokio::task::Id, Arc<Mutex<AndroidNetworkRuntimeStatus>>>,
+        slots: &BTreeMap<tokio::task::Id, Arc<RuntimeNetworkSlot>>,
     ) {
         let Err(error) = result else {
             return;
         };
-        let Some(status) = statuses.get(&error.id()) else {
+        let Some(slot) = slots.get(&error.id()) else {
             return;
         };
-        let mut status = status.lock().unwrap_or_else(|error| error.into_inner());
-        status.phase = AndroidRuntimePhase::Failed;
-        status.detail = Some(if error.is_panic() {
+        slot.record_supervisor_failure(if error.is_panic() {
             "network runtime task panicked".to_owned()
         } else {
             "network runtime task was cancelled".to_owned()
@@ -1534,18 +1813,7 @@ mod android {
             return Ok(stopped_runtime_status());
         };
 
-        let controls = instance
-            .networks
-            .iter()
-            .map(|(id, network)| (id.clone(), network.control.clone()))
-            .collect();
-        let _ = request_network_shutdowns(controls);
-        for (_, shutdown) in std::mem::take(&mut instance.shutdowns) {
-            let _ = shutdown.send(ShutdownReason::Terminate);
-        }
-        if let Some(shutdown) = instance.supervisor_shutdown.take() {
-            let _ = shutdown.send(());
-        }
+        let _ = instance.supervisor_shutdown.send(true);
         instance.tun_stop.store(true, Ordering::Release);
         instance.packet_switch.close();
         let mut join_error = None;
@@ -1575,7 +1843,7 @@ mod android {
     }
 
     fn runtime_status() -> Result<AndroidRuntimeStatus, String> {
-        let (networks, tun_error, packet_switch) = {
+        let (snapshots, tun_error, packet_switch) = {
             let runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
             let Some(instance) = runtime.as_ref() else {
                 return Ok(stopped_runtime_status());
@@ -1583,105 +1851,17 @@ mod android {
             (
                 instance
                     .networks
-                    .iter()
-                    .map(|(id, network)| {
-                        (
-                            id.clone(),
-                            network.control.clone(),
-                            Arc::clone(&network.control_failures),
-                            Arc::clone(&network.status),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
+                    .values()
+                    .map(|network| network.snapshot())
+                    .collect(),
                 Arc::clone(&instance.tun_error),
                 Arc::clone(&instance.packet_switch),
             )
         };
-
-        let active_controls = networks
-            .iter()
-            .filter_map(|(id, control, _, status)| {
-                let phase = status
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .phase;
-                matches!(
-                    phase,
-                    AndroidRuntimePhase::Starting | AndroidRuntimePhase::Running
-                )
-                .then(|| (id.clone(), control.clone()))
-            })
-            .collect();
-        let probe_results = request_network_statuses(active_controls)?;
-        let mut failed_network_ids = Vec::new();
-        for (id, _, control_failures, status) in &networks {
-            let Some(result) = probe_results.get(id) else {
-                continue;
-            };
-            let mut snapshot = status.lock().unwrap_or_else(|error| error.into_inner());
-            if matches!(
-                snapshot.phase,
-                AndroidRuntimePhase::Stopped | AndroidRuntimePhase::Failed
-            ) {
-                continue;
-            }
-            match result {
-                Ok(lines) => {
-                    control_failures.store(0, Ordering::Release);
-                    snapshot.phase = AndroidRuntimePhase::Running;
-                    snapshot.detail = None;
-                    snapshot.lines.clone_from(lines);
-                }
-                Err(error) => {
-                    let previous = control_failures
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                            Some(value.saturating_add(1))
-                        })
-                        .unwrap_or_else(|value| value);
-                    let failures = previous.saturating_add(1);
-                    snapshot.detail = Some(format!(
-                        "runtime health check {failures} of {CONTROL_FAILURE_LIMIT} failed: {error}"
-                    ));
-                    if failures >= CONTROL_FAILURE_LIMIT {
-                        snapshot.phase = AndroidRuntimePhase::Failed;
-                        packet_switch.remove_network(id);
-                        failed_network_ids.push(id.clone());
-                    }
-                }
-            }
-        }
-        if !failed_network_ids.is_empty() {
-            let shutdowns = {
-                let mut runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
-                runtime
-                    .as_mut()
-                    .filter(|instance| Arc::ptr_eq(&instance.packet_switch, &packet_switch))
-                    .map(|instance| {
-                        failed_network_ids
-                            .iter()
-                            .filter_map(|id| instance.shutdowns.remove(id))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            };
-            for shutdown in shutdowns {
-                let _ = shutdown.send(ShutdownReason::Terminate);
-            }
-        }
-
         let tun_failure = tun_error
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
-        let snapshots = networks
-            .into_iter()
-            .map(|(_, _, _, status)| {
-                status
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .clone()
-            })
-            .collect();
         Ok(aggregate_runtime_snapshots(
             snapshots,
             tun_failure,
@@ -1699,19 +1879,13 @@ mod android {
     }
 
     fn aggregate_runtime_status(
-        networks: &BTreeMap<String, RuntimeNetworkInstance>,
+        networks: &BTreeMap<String, Arc<RuntimeNetworkSlot>>,
         tun_failure: Option<String>,
         packet_switch: &PacketSwitch,
     ) -> AndroidRuntimeStatus {
         let snapshots = networks
             .values()
-            .map(|network| {
-                network
-                    .status
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .clone()
-            })
+            .map(|network| network.snapshot())
             .collect();
         aggregate_runtime_snapshots(snapshots, tun_failure, packet_switch)
     }
@@ -1754,14 +1928,20 @@ mod android {
             }),
             [] => None,
         });
+        let lines = if networks.len() == 1 {
+            networks[0].lines.clone()
+        } else {
+            networks
+                .iter()
+                .flat_map(|network| network.lines.iter())
+                .filter(|line| line.starts_with("android_runtime_supervisor "))
+                .cloned()
+                .collect()
+        };
         let mut status = AndroidRuntimeStatus {
             phase,
             detail,
-            lines: if networks.len() == 1 {
-                networks[0].lines.clone()
-            } else {
-                Vec::new()
-            },
+            lines,
             networks,
         };
         append_switch_status(&mut status, packet_switch);
@@ -1834,13 +2014,15 @@ mod android {
                 );
             }
         };
-        let control = network.control.clone();
+        let control = network.control().ok_or_else(|| {
+            "requested p2p-vpn network is temporarily unavailable while recovering".to_owned()
+        })?;
         drop(runtime);
         block_on_control(control.pair_rpc(request))
     }
 
     fn network_changed() -> Result<AndroidRuntimeNetworkChange, String> {
-        let controls = RUNTIME
+        let networks = RUNTIME
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
@@ -1848,79 +2030,44 @@ mod android {
                 instance
                     .networks
                     .iter()
-                    .map(|(id, network)| (id.clone(), network.control.clone()))
-                    .collect()
+                    .map(|(id, network)| (id.clone(), network.control()))
+                    .collect::<Vec<_>>()
             })
             .ok_or_else(|| "p2p-vpn is not connected".to_owned())?;
-        let results = request_network_changes(controls)?;
-        if results.iter().any(|result| result.change.is_none()) {
-            return Err(
-                "network recovery signal failed for one or more active networks".to_owned(),
-            );
+        let controls = networks
+            .iter()
+            .filter_map(|(id, control)| control.clone().map(|control| (id.clone(), control)))
+            .collect::<Vec<_>>();
+        let active_controls = controls.len();
+        let mut results = request_network_changes(controls)?;
+        for result in &results {
+            if let Some(error) = &result.error {
+                log::warn!(
+                    "event=android_network_change_signal_failed network_id={} error={}",
+                    result.id,
+                    error,
+                );
+            }
         }
-        if results.len() == 1 {
-            let change = results[0].change.ok_or_else(|| {
-                "network recovery signal returned no result for the active network".to_owned()
-            })?;
+        if active_controls > 0 && results.iter().all(|result| result.change.is_none()) {
+            return Err("network recovery signal failed for every running network".to_owned());
+        }
+        results.extend(networks.into_iter().filter_map(|(id, control)| {
+            control
+                .is_none()
+                .then_some(AndroidRuntimeNetworkChangeResult {
+                    id,
+                    change: None,
+                    error: Some("network runtime is recovering".to_owned()),
+                })
+        }));
+        results.sort_by(|left, right| left.id.cmp(&right.id));
+        if let [result] = results.as_slice()
+            && let Some(change) = result.change
+        {
             return Ok(AndroidRuntimeNetworkChange::Single(change));
         }
         Ok(AndroidRuntimeNetworkChange::Multiple { networks: results })
-    }
-
-    fn request_network_statuses(
-        controls: Vec<(String, RuntimeControlHandle)>,
-    ) -> Result<BTreeMap<String, Result<Vec<String>, String>>, String> {
-        let runtime = control_runtime()?;
-        runtime.block_on(async move {
-            let mut tasks = tokio::task::JoinSet::new();
-            let mut task_ids = Vec::with_capacity(controls.len());
-            for (id, control) in controls {
-                let task_id = id.clone();
-                let task = tasks.spawn(async move {
-                    let result = tokio::time::timeout(CONTROL_TIMEOUT, control.status())
-                        .await
-                        .map_err(|_| "runtime control request timed out".to_owned())
-                        .and_then(|result| {
-                            result
-                                .map_err(|error| format!("runtime control request failed: {error}"))
-                        });
-                    (task_id, result)
-                });
-                task_ids.push((task.id(), id));
-            }
-            let mut results = BTreeMap::new();
-            while let Some(result) = tasks.join_next_with_id().await {
-                match result {
-                    Ok((_, (id, result))) => {
-                        results.insert(id, result);
-                    }
-                    Err(error) => {
-                        let id = task_ids
-                            .iter()
-                            .find_map(|(task, id)| (*task == error.id()).then(|| id.clone()))
-                            .unwrap_or_else(|| "unknown".to_owned());
-                        results.insert(id, Err("runtime control probe task failed".to_owned()));
-                    }
-                }
-            }
-            Ok(results)
-        })
-    }
-
-    fn request_network_shutdowns(
-        controls: Vec<(String, RuntimeControlHandle)>,
-    ) -> Result<(), String> {
-        let runtime = control_runtime()?;
-        runtime.block_on(async move {
-            let mut tasks = tokio::task::JoinSet::new();
-            for (_, control) in controls {
-                tasks.spawn(async move {
-                    let _ = tokio::time::timeout(CONTROL_TIMEOUT, control.shutdown()).await;
-                });
-            }
-            while tasks.join_next().await.is_some() {}
-            Ok(())
-        })
     }
 
     fn request_network_changes(

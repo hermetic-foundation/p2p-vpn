@@ -55,6 +55,27 @@ public final class RuntimeStatusSnapshotTest {
     }
 
     @Test
+    public void retryingNetworkDoesNotRestartHealthySiblings() throws Exception {
+        JSONObject value =
+                new JSONObject(
+                        "{\"phase\":\"running\","
+                                + "\"detail\":\"1 running, 1 starting, 0 failed of 2 networks\","
+                                + "\"lines\":[],\"networks\":["
+                                + network(ALPHA, "running", null, 1)
+                                + ","
+                                + network(BETA, "starting", "Recovering in 750 ms", 0)
+                                + "]}");
+
+        P2pVpnService.RuntimeStatusSnapshot status =
+                P2pVpnService.RuntimeStatusSnapshot.from(value, Arrays.asList(ALPHA, BETA));
+
+        assertFalse(status.requiresWholeRuntimeRestart());
+        assertTrue(status.networks.get(ALPHA).isAvailable());
+        assertFalse(status.networks.get(BETA).isAvailable());
+        assertEquals("Connecting: 1 running, 1 starting", status.describeConnection());
+    }
+
+    @Test
     public void rejectsMissingOrUnexpectedNetworks() throws Exception {
         JSONObject value =
                 new JSONObject(
