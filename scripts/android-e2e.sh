@@ -25,6 +25,7 @@ outcome_detail="E2E harness exited before recording a result"
 evidence_finalized=0
 emulator_pid=""
 fixture_pid=""
+fixture_secondary_pid=""
 runtime_storage_watchdog_pid=""
 emulator_serial=""
 state_dir=""
@@ -53,7 +54,7 @@ Usage: p2p-vpn-android-e2e [OPTIONS]
 
 Options:
   --scenario NAME        Select boot-smoke, profile-persistence, always-on,
-                         pairing-traffic, or underlay-recovery.
+                         pairing-traffic, underlay-recovery, or multi-network.
   --path-mode MODE       Select automatic, quic-stream, tcp-stream, owned-quic, relay-only,
                          or relay-to-direct.
   --preflight            Check requirements without starting an emulator.
@@ -127,7 +128,7 @@ done
 pairing_scenario=0
 case "$scenario" in
   boot-smoke|profile-persistence|always-on) ;;
-  pairing-traffic|underlay-recovery) pairing_scenario=1 ;;
+  pairing-traffic|underlay-recovery|multi-network) pairing_scenario=1 ;;
   *)
     echo "unsupported Android E2E scenario: $scenario" >&2
     exit 2
@@ -147,6 +148,10 @@ if [[ "$pairing_scenario" -eq 0 && "$path_mode" != automatic ]]; then
 fi
 if [[ "$scenario" == underlay-recovery && "$path_mode" != automatic ]]; then
   echo "underlay-recovery requires --path-mode automatic" >&2
+  exit 2
+fi
+if [[ "$scenario" == multi-network && "$path_mode" != automatic ]]; then
+  echo "multi-network requires --path-mode automatic" >&2
   exit 2
 fi
 
@@ -194,12 +199,14 @@ readonly device_file="$output_dir/.device.json"
 readonly evidence_file="$output_dir/evidence.json"
 readonly emulator_log="$output_dir/emulator.log"
 readonly fixture_log="$output_dir/fixture.log"
+readonly fixture_secondary_log="$output_dir/fixture-secondary.log"
 readonly android_log="$output_dir/android.log"
 
 : > "$checks_file"
 : > "$steps_file"
 : > "$emulator_log"
 : > "$fixture_log"
+: > "$fixture_secondary_log"
 : > "$android_log"
 printf '{}\n' > "$device_file"
 
@@ -341,9 +348,10 @@ wait_for_pair_status() {
   local operation_id="$2"
   local predicate="$3"
   local attempts="${4:-120}"
+  local control_socket="${5:-$fixture_control_socket}"
   for _ in $(seq 1 "$attempts"); do
     if "$p2p_vpn_command" pair status "$operation_id" \
-      --socket "$fixture_control_socket" \
+      --socket "$control_socket" \
       --format json > "$path" 2>/dev/null \
       && jq -e "$predicate" "$path" >/dev/null 2>&1; then
       return 0
@@ -359,10 +367,11 @@ wait_for_fixture_probe_ready() {
   local family="$3"
   local path="$4"
   local attempts_variable="$5"
+  local packet_socket="${6:-$fixture_packet_socket}"
   local attempt
   for attempt in $(seq 1 30); do
     if "$fixture_command" probe \
-      --socket "$fixture_packet_socket" \
+      --socket "$packet_socket" \
       --source "$source" \
       --destination "$destination" \
       --count 1 \
@@ -408,30 +417,37 @@ wait_for_android_ping_ready() {
 wait_for_transition_traffic_ready() {
   local prefix="$1"
   local context="$2"
+  local packet_socket="${3:-$fixture_packet_socket}"
+  local linux_ipv4="${4:-$fixture_ipv4}"
+  local linux_ipv6="${5:-$fixture_ipv6}"
+  local device_ipv4="${6:-$android_ipv4}"
+  local device_ipv6="${7:-$android_ipv6}"
   local fixture_ipv4_attempts=0
   local fixture_ipv6_attempts=0
   local android_ipv4_attempts=0
   local android_ipv6_attempts=0
   if ! wait_for_fixture_probe_ready \
-    "$fixture_ipv4" \
-    "$android_ipv4" \
+    "$linux_ipv4" \
+    "$device_ipv4" \
     ipv4 \
     "$state_dir/${prefix}-linux-ipv4-readiness.json" \
     fixture_ipv4_attempts \
+    "$packet_socket" \
     || ! wait_for_fixture_probe_ready \
-      "$fixture_ipv6" \
-      "$android_ipv6" \
+      "$linux_ipv6" \
+      "$device_ipv6" \
       ipv6 \
       "$state_dir/${prefix}-linux-ipv6-readiness.json" \
       fixture_ipv6_attempts \
+      "$packet_socket" \
     || ! wait_for_android_ping_ready \
       ipv4 \
-      "$fixture_ipv4" \
+      "$linux_ipv4" \
       "$state_dir/${prefix}-android-ipv4-readiness.txt" \
       android_ipv4_attempts \
     || ! wait_for_android_ping_ready \
       ipv6 \
-      "$fixture_ipv6" \
+      "$linux_ipv6" \
       "$state_dir/${prefix}-android-ipv6-readiness.txt" \
       android_ipv6_attempts; then
     outcome=failed
@@ -443,9 +459,35 @@ wait_for_transition_traffic_ready() {
     "Bidirectional dual-stack forwarding converged $context after $fixture_ipv4_attempts/$fixture_ipv6_attempts Linux and $android_ipv4_attempts/$android_ipv6_attempts Android attempts"
 }
 
+wait_for_multi_network_transition_traffic_ready() {
+  local prefix="$1"
+  local context="$2"
+  wait_for_transition_traffic_ready \
+    "${prefix}_alpha" \
+    "$context on alpha" \
+    "$fixture_packet_socket" \
+    "$fixture_ipv4" \
+    "$fixture_ipv6" \
+    "$android_primary_ipv4" \
+    "$android_primary_ipv6" \
+    && wait_for_transition_traffic_ready \
+      "${prefix}_beta" \
+      "$context on beta" \
+      "$fixture_secondary_packet_socket" \
+      "$fixture_secondary_ipv4" \
+      "$fixture_secondary_ipv6" \
+      "$android_secondary_ipv4" \
+      "$android_secondary_ipv6"
+}
+
 measure_bidirectional_traffic() {
   local prefix="$1"
   local context="$2"
+  local packet_socket="${3:-$fixture_packet_socket}"
+  local linux_ipv4="${4:-$fixture_ipv4}"
+  local linux_ipv6="${5:-$fixture_ipv6}"
+  local device_ipv4="${6:-$android_ipv4}"
+  local device_ipv6="${7:-$android_ipv6}"
   local step_prefix=""
   local detail_suffix=""
   local file_prefix="$state_dir/baseline"
@@ -458,9 +500,9 @@ measure_bidirectional_traffic() {
   fi
 
   if ! "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv4" \
-    --destination "$android_ipv4" \
+    --socket "$packet_socket" \
+    --source "$linux_ipv4" \
+    --destination "$device_ipv4" \
     --count 5 > "${file_prefix}-linux-ipv4.json" \
     || ! jq -e \
       '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
@@ -474,9 +516,9 @@ measure_bidirectional_traffic() {
     "Linux received 5 of 5 IPv4 replies$detail_suffix"
 
   if ! "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv6" \
-    --destination "$android_ipv6" \
+    --socket "$packet_socket" \
+    --source "$linux_ipv6" \
+    --destination "$device_ipv6" \
     --count 5 > "${file_prefix}-linux-ipv6.json" \
     || ! jq -e \
       '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
@@ -489,7 +531,7 @@ measure_bidirectional_traffic() {
   record_step "${step_prefix}linux_to_android_ipv6" passed \
     "Linux received 5 of 5 IPv6 replies$detail_suffix"
 
-  if ! adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
+  if ! adb_run shell ping -c 5 -W 5 "$linux_ipv4" \
     > "${file_prefix}-android-ipv4.txt" 2>&1 \
     || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
       "${file_prefix}-android-ipv4.txt"; then
@@ -503,7 +545,7 @@ measure_bidirectional_traffic() {
   record_step "${step_prefix}android_to_linux_ipv4" passed \
     "Android received 5 of 5 IPv4 replies$detail_suffix"
 
-  if ! adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+  if ! adb_run shell ping6 -c 5 -W 5 "$linux_ipv6" \
     > "${file_prefix}-android-ipv6.txt" 2>&1 \
     || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
       "${file_prefix}-android-ipv6.txt"; then
@@ -516,6 +558,1313 @@ measure_bidirectional_traffic() {
   fi
   record_step "${step_prefix}android_to_linux_ipv6" passed \
     "Android received 5 of 5 IPv6 replies$detail_suffix"
+}
+
+pair_selected_network() {
+  local prefix="$1"
+  local network_id="$2"
+  local expected_peer_id="$3"
+  local expected_hostname="$4"
+  local control_socket="$5"
+  local minimum_connected_peers="$6"
+  local status_variable="$7"
+  local pair_open="$state_dir/$prefix-pair-open.json"
+  local inviter_status="$state_dir/$prefix-inviter-status.json"
+  local pair_approved="$state_dir/$prefix-pair-approved.json"
+  local command_response="$state_dir/$prefix-pair-command.json"
+  local paired_status="$state_dir/$prefix-status-paired.json"
+  local pair_operation pair_code approval_id
+
+  if ! "$p2p_vpn_command" pair open \
+    --socket "$control_socket" \
+    --expires-in-seconds 300 \
+    --format json > "$pair_open" \
+    || ! jq -e '
+      (.operation_id | type == "string" and length > 0 and length <= 128) and
+      (.code | type == "string" and length > 0 and length <= 64)
+    ' "$pair_open" >/dev/null; then
+    outcome=failed
+    outcome_detail="The $prefix fixture could not open a bounded pairing operation"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+  pair_operation="$(jq -r '.operation_id' "$pair_open")"
+  pair_code="$(jq -r '.code' "$pair_open")"
+
+  if ! android_automation join-pairing --es code "$pair_code" > "$command_response" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .value.accepted and .value.command == "join-pairing"' \
+      "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Android did not accept the $prefix pairing code"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+
+  if ! wait_for_pair_status \
+    "$inviter_status" \
+    "$pair_operation" \
+    '.phase == "awaiting_approval" and (.candidate.approval_id | type == "string" and length > 0 and length <= 128)' \
+    180 \
+    "$control_socket"; then
+    outcome=failed
+    outcome_detail="$prefix pairing did not discover the Android candidate"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+  if [[ "$(jq -r '.candidate.peer_id' "$inviter_status")" != "$expected_peer_id" \
+    || "$(jq -r '.candidate.requested_hostname // empty' "$inviter_status")" \
+      != "$expected_hostname" ]]; then
+    outcome=failed
+    outcome_detail="$prefix pairing candidate metadata did not match the selected network"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+
+  approval_id="$(jq -r '.candidate.approval_id' "$inviter_status")"
+  if ! "$p2p_vpn_command" pair approve \
+    "$pair_operation" \
+    "$approval_id" \
+    --socket "$control_socket" \
+    --format json > "$pair_approved" \
+    || ! jq -e '.phase == "completed"' "$pair_approved" >/dev/null; then
+    outcome=failed
+    outcome_detail="The $prefix fixture could not approve the Android candidate"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+
+  if ! wait_for_automation_status \
+    "$paired_status" \
+    ".value.snapshot.connected and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.id == \"$network_id\" and .selected and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= $minimum_connected_peers)" \
+    180; then
+    outcome=failed
+    outcome_detail="Android did not apply the $prefix pairing artifacts"
+    record_step "${prefix}_pairing" failed "$outcome_detail"
+    return 1
+  fi
+
+  printf -v "$status_variable" '%s' "$paired_status"
+  record_step "${prefix}_pairing" passed \
+    "Android paired the selected $prefix network without a configured overlay address"
+}
+
+create_isolated_android_profile() {
+  local prefix="$1"
+  local network="$2"
+  local bootstrap_peer="$3"
+  local bootstrap_address="$4"
+  local kademlia_protocol="$5"
+  local expected_networks="$6"
+  local status_variable="$7"
+  local command_response="$state_dir/$prefix-create-command.json"
+  local created_status="$state_dir/$prefix-status-created.json"
+
+  if ! android_automation create-profile \
+    --es network "$network" \
+    --es bootstrap_peer_id "$bootstrap_peer" \
+    --es bootstrap_address "$bootstrap_address" \
+    --es kademlia_protocol "$kademlia_protocol" > "$command_response" \
+    || ! jq -e \
+      '.schema_version == 1 and .ok and .value.accepted and .value.command == "create-profile"' \
+      "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept $prefix profile creation"
+    record_step "${prefix}_profile_creation" failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_automation_status \
+    "$created_status" \
+    ".value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == $expected_networks) and ([.value.snapshot.networks[] | select(.name == \"$network\" and .selected and .enabled)] | length == 1)" \
+    120; then
+    outcome=failed
+    outcome_detail="$prefix encrypted profile creation did not complete"
+    record_step "${prefix}_profile_creation" failed "$outcome_detail"
+    return 1
+  fi
+
+  printf -v "$status_variable" '%s' "$created_status"
+  record_step "${prefix}_profile_creation" passed \
+    "$prefix was added with isolated discovery bootstrap configuration"
+}
+
+measure_concurrent_multi_network_traffic() {
+  local prefix="$1"
+  local context="$2"
+  local started_variable="$3"
+  local duration_variable="$4"
+  local file_prefix="$state_dir/$prefix"
+  local batch_started batch_completed process received failed_summary
+  local failed_processes=0
+  local -a failed_legs=()
+  local -a processes=()
+
+  batch_started="$(monotonic_millis)"
+  "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv4" \
+    --destination "$android_primary_ipv4" \
+    --count 5 > "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null &
+  processes+=("$!")
+  "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv6" \
+    --destination "$android_primary_ipv6" \
+    --count 5 > "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null &
+  processes+=("$!")
+  "$fixture_command" probe \
+    --socket "$fixture_secondary_packet_socket" \
+    --source "$fixture_secondary_ipv4" \
+    --destination "$android_secondary_ipv4" \
+    --count 5 > "$file_prefix-beta-linux-ipv4.json" 2>/dev/null &
+  processes+=("$!")
+  "$fixture_command" probe \
+    --socket "$fixture_secondary_packet_socket" \
+    --source "$fixture_secondary_ipv6" \
+    --destination "$android_secondary_ipv6" \
+    --count 5 > "$file_prefix-beta-linux-ipv6.json" 2>/dev/null &
+  processes+=("$!")
+  adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
+    > "$file_prefix-alpha-android-ipv4.txt" 2>&1 &
+  processes+=("$!")
+  adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+    > "$file_prefix-alpha-android-ipv6.txt" 2>&1 &
+  processes+=("$!")
+  adb_run shell ping -c 5 -W 5 "$fixture_secondary_ipv4" \
+    > "$file_prefix-beta-android-ipv4.txt" 2>&1 &
+  processes+=("$!")
+  adb_run shell ping6 -c 5 -W 5 "$fixture_secondary_ipv6" \
+    > "$file_prefix-beta-android-ipv6.txt" 2>&1 &
+  processes+=("$!")
+
+  for process in "${processes[@]}"; do
+    if ! wait "$process"; then
+      failed_processes=$((failed_processes + 1))
+    fi
+  done
+  batch_completed="$(monotonic_millis)"
+
+  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+    "$file_prefix-alpha-linux-ipv4.json" >/dev/null 2>&1; then
+    received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null || printf '0')"
+    failed_legs+=("alpha/Linux-to-Android/IPv4=$received/5")
+  fi
+  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+    "$file_prefix-alpha-linux-ipv6.json" >/dev/null 2>&1; then
+    received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null || printf '0')"
+    failed_legs+=("alpha/Linux-to-Android/IPv6=$received/5")
+  fi
+  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+    "$file_prefix-beta-linux-ipv4.json" >/dev/null 2>&1; then
+    received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv4.json" 2>/dev/null || printf '0')"
+    failed_legs+=("beta/Linux-to-Android/IPv4=$received/5")
+  fi
+  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+    "$file_prefix-beta-linux-ipv6.json" >/dev/null 2>&1; then
+    received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv6.json" 2>/dev/null || printf '0')"
+    failed_legs+=("beta/Linux-to-Android/IPv6=$received/5")
+  fi
+  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+    "$file_prefix-alpha-android-ipv4.txt"; then
+    received="$(ping_received_count "$file_prefix-alpha-android-ipv4.txt")"
+    failed_legs+=("alpha/Android-to-Linux/IPv4=$received/5")
+  fi
+  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+    "$file_prefix-alpha-android-ipv6.txt"; then
+    received="$(ping_received_count "$file_prefix-alpha-android-ipv6.txt")"
+    failed_legs+=("alpha/Android-to-Linux/IPv6=$received/5")
+  fi
+  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+    "$file_prefix-beta-android-ipv4.txt"; then
+    received="$(ping_received_count "$file_prefix-beta-android-ipv4.txt")"
+    failed_legs+=("beta/Android-to-Linux/IPv4=$received/5")
+  fi
+  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+    "$file_prefix-beta-android-ipv6.txt"; then
+    received="$(ping_received_count "$file_prefix-beta-android-ipv6.txt")"
+    failed_legs+=("beta/Android-to-Linux/IPv6=$received/5")
+  fi
+
+  if [[ "$failed_processes" -ne 0 || "${#failed_legs[@]}" -ne 0 ]]; then
+    if [[ "${#failed_legs[@]}" -eq 0 ]]; then
+      failed_legs+=("$failed_processes subprocesses exited nonzero")
+    fi
+    failed_summary="$(printf '%s, ' "${failed_legs[@]}")"
+    failed_summary="${failed_summary%, }"
+    outcome=failed
+    outcome_detail="Concurrent dual-stack traffic failed $context: $failed_summary"
+    record_step "${prefix}_concurrent_traffic" failed "$outcome_detail"
+    return 1
+  fi
+
+  printf -v "$started_variable" '%s' "$batch_started"
+  printf -v "$duration_variable" '%s' "$((batch_completed - batch_started))"
+  record_step "${prefix}_concurrent_traffic" passed \
+    "Both networks carried 5 of 5 packets in every direction and address family $context"
+}
+
+wait_for_new_android_process() {
+  local previous_pid="$1"
+  local process_variable="$2"
+  local current_pid=""
+  for _ in $(seq 1 90); do
+    current_pid="$(
+      adb_run shell pidof org.hermeticfoundation.p2pvpn.debug 2>/dev/null | tr -d '\r'
+    )"
+    if [[ "$current_pid" =~ ^[0-9]+$ && "$current_pid" != "$previous_pid" ]]; then
+      printf -v "$process_variable" '%s' "$current_pid"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_android_boot() {
+  local adb_timeout_seconds=5
+  for _ in $(seq 1 240); do
+    if [[ "$(adb_run get-state 2>/dev/null || true)" == device \
+      && "$(adb_run shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_android_process() {
+  local process_variable="$1"
+  local adb_timeout_seconds=5
+  local current_pid=""
+  for _ in $(seq 1 90); do
+    current_pid="$(
+      adb_run shell pidof org.hermeticfoundation.p2pvpn.debug 2>/dev/null | tr -d '\r'
+    )"
+    if [[ "$current_pid" =~ ^[0-9]+$ ]]; then
+      printf -v "$process_variable" '%s' "$current_pid"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+network_identity_signature_matches() {
+  local status_path="$1"
+  jq -e -s '
+    .[0] == (.[1].value.snapshot.networks |
+      map({id, name, hostname, peer_id, addresses}) | sort_by(.id))
+  ' "$state_dir/multi-network-identity-signature.json" "$status_path" >/dev/null
+}
+
+run_multi_network_restoration_and_isolation() {
+  local outage_status connected_peers_after
+
+  process_before="$(
+    adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+  )"
+  if [[ ! "$process_before" =~ ^[0-9]+$ ]] \
+    || ! android_automation terminate-process > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "terminate-process"
+    ' "$command_response" >/dev/null \
+    || ! wait_for_new_android_process "$process_before" process_after; then
+    outcome=failed
+    outcome_detail="Android always-on did not autonomously restart after process death"
+    record_step multi_network_process_restore failed "$outcome_detail"
+    return 1
+  fi
+  process_status="$state_dir/status-after-process-death.json"
+  if ! wait_for_automation_status \
+    "$process_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and .value.snapshot.selected_network_id == \"$alpha_id\" and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180 \
+    || ! network_identity_signature_matches "$process_status"; then
+    outcome=failed
+    outcome_detail="Process-death restoration did not recover both enabled networks"
+    record_step multi_network_process_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    process-restored \
+    "after autonomous process-death restoration" \
+    || ! measure_concurrent_multi_network_traffic \
+    process-restored \
+    "after autonomous process-death restoration" \
+    process_traffic_started \
+    process_traffic_duration; then
+    return 1
+  fi
+  record_step multi_network_process_restore passed \
+    "A fresh always-on process restored both identities and traffic"
+
+  process_before="$process_after"
+  if ! adb_run install -r "$android_apk" >/dev/null \
+    || ! wait_for_new_android_process "$process_before" process_after; then
+    outcome=failed
+    outcome_detail="APK replacement did not restart the complete enabled set"
+    record_step multi_network_update_restore failed "$outcome_detail"
+    return 1
+  fi
+  update_status="$state_dir/status-both-after-update.json"
+  if ! wait_for_automation_status \
+    "$update_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and .value.snapshot.selected_network_id == \"$alpha_id\" and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180 \
+    || ! network_identity_signature_matches "$update_status"; then
+    outcome=failed
+    outcome_detail="APK replacement did not restore both enabled network identities"
+    record_step multi_network_update_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    update-restored \
+    "after restoring both networks through an APK update" \
+    || ! measure_concurrent_multi_network_traffic \
+    update-restored \
+    "after restoring both networks through an APK update" \
+    update_traffic_started \
+    update_traffic_duration; then
+    return 1
+  fi
+  record_step multi_network_update_restore passed \
+    "APK replacement restored both enabled network runtimes and traffic"
+
+  if ! set_android_vpn_mode true true; then
+    outcome=failed
+    outcome_detail="Android did not enable the temporary lockdown rejection state"
+    record_step multi_network_lockdown_restore failed "$outcome_detail"
+    return 1
+  fi
+  lockdown_status="$state_dir/status-multi-network-lockdown.json"
+  if ! wait_for_automation_status \
+    "$lockdown_status" \
+    '.value.snapshot.always_on and .value.snapshot.lockdown and (.value.snapshot.connected | not) and .value.snapshot.connection_requested and (.value.snapshot.networks | length == 2) and ([.value.snapshot.networks[] | select(.enabled)] | length == 2) and (.value.snapshot.connection_detail | contains("Block connections without VPN"))' \
+    45 \
+    || ! network_identity_signature_matches "$lockdown_status"; then
+    outcome=failed
+    outcome_detail="Lockdown rejection did not retain the complete stored network set"
+    record_step multi_network_lockdown_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! set_android_vpn_mode true false; then
+    outcome=failed
+    outcome_detail="Android did not leave the temporary lockdown state"
+    record_step multi_network_lockdown_restore failed "$outcome_detail"
+    return 1
+  fi
+  restored_status="$state_dir/status-multi-network-lockdown-restored.json"
+  if ! wait_for_automation_status \
+    "$restored_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180 \
+    || ! network_identity_signature_matches "$restored_status"; then
+    outcome=failed
+    outcome_detail="Both networks did not recover after lockdown rejection ended"
+    record_step multi_network_lockdown_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    lockdown-restored \
+    "after temporary lockdown rejection" \
+    || ! measure_concurrent_multi_network_traffic \
+    lockdown-restored \
+    "after temporary lockdown rejection" \
+    lockdown_traffic_started \
+    lockdown_traffic_duration; then
+    return 1
+  fi
+  record_step multi_network_lockdown_restore passed \
+    "Both networks recovered automatically after temporary lockdown rejection"
+
+  boot_id_before="$(
+    adb_run shell cat /proc/sys/kernel/random/boot_id | tr -d '\r'
+  )"
+  if [[ ! "$boot_id_before" =~ ^[0-9a-f-]{36}$ ]] \
+    || ! adb_run reboot >/dev/null \
+    || ! wait_for_android_boot; then
+    outcome=failed
+    outcome_detail="The managed emulator did not complete the reboot probe"
+    record_step multi_network_reboot_restore failed "$outcome_detail"
+    return 1
+  fi
+  adb_run shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  adb_run shell input keyevent 82 >/dev/null 2>&1 || true
+  boot_id_after="$(
+    adb_run shell cat /proc/sys/kernel/random/boot_id | tr -d '\r'
+  )"
+  if [[ ! "$boot_id_after" =~ ^[0-9a-f-]{36}$ \
+    || "$boot_id_after" == "$boot_id_before" ]] \
+    || ! wait_for_android_process process_after; then
+    outcome=failed
+    outcome_detail="Android did not autonomously launch the always-on app after reboot"
+    record_step multi_network_reboot_restore failed "$outcome_detail"
+    return 1
+  fi
+  reboot_status="$state_dir/status-multi-network-after-reboot.json"
+  if ! wait_for_automation_status \
+    "$reboot_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and .value.snapshot.selected_network_id == \"$alpha_id\" and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    240 \
+    || ! network_identity_signature_matches "$reboot_status"; then
+    outcome=failed
+    outcome_detail="Reboot restoration did not recover both enabled network identities"
+    record_step multi_network_reboot_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    reboot-restored \
+    "after a full managed-emulator reboot" \
+    || ! measure_concurrent_multi_network_traffic \
+    reboot-restored \
+    "after a full managed-emulator reboot" \
+    reboot_traffic_started \
+    reboot_traffic_duration; then
+    return 1
+  fi
+  record_step multi_network_reboot_restore passed \
+    "Android rebooted and restored both always-on network runtimes and traffic"
+
+  if ! android_automation diagnostics > "$diagnostic_response" \
+    || ! jq -c '.value.report' "$diagnostic_response" > "$diagnostic_report" \
+    || ! diagnostic_report_is_valid "$diagnostic_report" \
+    || ! jq -e '
+      .resources.active_threads <= 128 and
+      .resources.total_pss_kib <= 524288 and
+      .queue.queued_packets <= 512 and
+      .queue.queued_bytes <= 2097152
+    ' "$diagnostic_report" >/dev/null; then
+    outcome=failed
+    outcome_detail="Concurrent runtime resources exceeded the bounded E2E contract"
+    record_step multi_network_resource_bounds failed "$outcome_detail"
+    return 1
+  fi
+  active_threads="$(jq -r '.resources.active_threads' "$diagnostic_report")"
+  total_pss_kib="$(jq -r '.resources.total_pss_kib' "$diagnostic_report")"
+  queued_packets="$(jq -r '.queue.queued_packets' "$diagnostic_report")"
+  queued_bytes="$(jq -r '.queue.queued_bytes' "$diagnostic_report")"
+  record_step multi_network_resource_bounds passed \
+    "Two active networks remained within thread, memory, packet, and byte limits"
+
+  isolation_generation="$(jq -r '.value.snapshot.runtime_generation' "$reboot_status")"
+  connected_peers_before="$(jq -r '.value.snapshot.paths.connected_peers' "$reboot_status")"
+  isolation_process_before="$(
+    adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+  )"
+  if [[ ! "$isolation_process_before" =~ ^[0-9]+$ \
+    || "$connected_peers_before" -lt 2 ]] \
+    || ! stop_fixture_process "$fixture_pid"; then
+    outcome=failed
+    outcome_detail="The alpha fixture could not be stopped for failure isolation"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  outage_status="$state_dir/status-alpha-fixture-unavailable.json"
+  if ! wait_for_automation_status \
+    "$outage_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.busy | not) and (.value.snapshot.runtime_generation == $isolation_generation) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .enabled and .phase == \"running\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 1) and (.value.snapshot.paths.connected_peers < $connected_peers_before)" \
+    180; then
+    outcome=failed
+    outcome_detail="The shared runtime did not isolate the unavailable alpha path"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  if timeout 5s "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv4" \
+    --destination "$android_primary_ipv4" \
+    --count 1 > "$state_dir/unavailable-alpha-linux-ipv4.json" 2>/dev/null; then
+    outcome=failed
+    outcome_detail="The terminated alpha fixture remained unexpectedly reachable"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  if adb_run shell ping -c 1 -W 2 "$fixture_ipv4" \
+    > "$unavailable_ping" 2>&1 \
+    || [[ "$(ping_received_count "$unavailable_ping")" -ne 0 ]]; then
+    outcome=failed
+    outcome_detail="Alpha traffic did not fail closed after its fixture terminated"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  if ! measure_bidirectional_traffic \
+    isolated-beta \
+    "after the alpha fixture terminated" \
+    "$fixture_secondary_packet_socket" \
+    "$fixture_secondary_ipv4" \
+    "$fixture_secondary_ipv6" \
+    "$android_secondary_ipv4" \
+    "$android_secondary_ipv6"; then
+    return 1
+  fi
+  isolation_process_after="$(
+    adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+  )"
+  connected_peers_after="$(jq -r '.value.snapshot.paths.connected_peers' "$outage_status")"
+  if [[ "$isolation_process_after" != "$isolation_process_before" ]] \
+    || ! kill -0 "$fixture_secondary_pid" 2>/dev/null; then
+    outcome=failed
+    outcome_detail="A sibling endpoint restarted during alpha path failure"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  if ! android_automation diagnostics > "$outage_diagnostic_response" \
+    || ! jq -c '.value.report' "$outage_diagnostic_response" > "$outage_diagnostic_report" \
+    || ! diagnostic_report_is_valid "$outage_diagnostic_report" \
+    || ! jq -e '
+      .queue.queued_packets <= 512 and .queue.queued_bytes <= 2097152
+    ' "$outage_diagnostic_report" >/dev/null; then
+    outcome=failed
+    outcome_detail="Alpha path failure exceeded the bounded queue contract"
+    record_step per_network_failure_isolation failed "$outcome_detail"
+    return 1
+  fi
+  outage_queued_packets="$(jq -r '.queue.queued_packets' "$outage_diagnostic_report")"
+  outage_queued_bytes="$(jq -r '.queue.queued_bytes' "$outage_diagnostic_report")"
+  record_step per_network_failure_isolation passed \
+    "Alpha became unreachable while beta traffic, process identity, and queue bounds remained stable"
+
+  jq \
+    --argjson primary_ipv4_attempts "$primary_ipv4_attempts" \
+    --argjson primary_ipv6_attempts "$primary_ipv6_attempts" \
+    --argjson secondary_ipv4_attempts "$secondary_ipv4_attempts" \
+    --argjson secondary_ipv6_attempts "$secondary_ipv6_attempts" \
+    --argjson android_primary_ipv4_attempts "$android_primary_ipv4_attempts" \
+    --argjson android_primary_ipv6_attempts "$android_primary_ipv6_attempts" \
+    --argjson android_secondary_ipv4_attempts "$android_secondary_ipv4_attempts" \
+    --argjson android_secondary_ipv6_attempts "$android_secondary_ipv6_attempts" \
+    --argjson initial_traffic_started "$initial_traffic_started" \
+    --argjson overlap_traffic_started "$overlap_traffic_started" \
+    --argjson reenabled_traffic_started "$reenabled_traffic_started" \
+    --argjson cellular_traffic_started "$cellular_traffic_started" \
+    --argjson wifi_traffic_started "$wifi_traffic_started" \
+    --argjson process_traffic_started "$process_traffic_started" \
+    --argjson update_traffic_started "$update_traffic_started" \
+    --argjson reboot_traffic_started "$reboot_traffic_started" \
+    --argjson lockdown_traffic_started "$lockdown_traffic_started" \
+    --argjson initial_traffic_duration "$initial_traffic_duration" \
+    --argjson overlap_traffic_duration "$overlap_traffic_duration" \
+    --argjson reenabled_traffic_duration "$reenabled_traffic_duration" \
+    --argjson cellular_traffic_duration "$cellular_traffic_duration" \
+    --argjson wifi_traffic_duration "$wifi_traffic_duration" \
+    --argjson process_traffic_duration "$process_traffic_duration" \
+    --argjson update_traffic_duration "$update_traffic_duration" \
+    --argjson reboot_traffic_duration "$reboot_traffic_duration" \
+    --argjson lockdown_traffic_duration "$lockdown_traffic_duration" \
+    --argjson active_threads "$active_threads" \
+    --argjson total_pss_kib "$total_pss_kib" \
+    --argjson queued_packets "$queued_packets" \
+    --argjson queued_bytes "$queued_bytes" \
+    --argjson outage_queued_packets "$outage_queued_packets" \
+    --argjson outage_queued_bytes "$outage_queued_bytes" \
+    --argjson connected_peers_before "$connected_peers_before" \
+    --argjson connected_peers_after "$connected_peers_after" '
+    . + {
+      multi_network: {
+        migration: {
+          legacy_profile_migrated: true,
+          identity_preserved: true,
+          encrypted_storage: true
+        },
+        activation: {
+          network_count: 2,
+          independently_paired: true,
+          isolated_identities: true,
+          shared_tun: true
+        },
+        readiness_attempts: {
+          alpha_linux_ipv4: $primary_ipv4_attempts,
+          alpha_linux_ipv6: $primary_ipv6_attempts,
+          beta_linux_ipv4: $secondary_ipv4_attempts,
+          beta_linux_ipv6: $secondary_ipv6_attempts,
+          alpha_android_ipv4: $android_primary_ipv4_attempts,
+          alpha_android_ipv6: $android_primary_ipv6_attempts,
+          beta_android_ipv4: $android_secondary_ipv4_attempts,
+          beta_android_ipv6: $android_secondary_ipv6_attempts
+        },
+        traffic: {
+          packets_per_direction_and_family: 5,
+          started_monotonic_millis: {
+            initial: $initial_traffic_started,
+            after_overlap: $overlap_traffic_started,
+            after_reenable: $reenabled_traffic_started,
+            cellular_underlay: $cellular_traffic_started,
+            wifi_underlay_restored: $wifi_traffic_started,
+            process_restore: $process_traffic_started,
+            update_restore: $update_traffic_started,
+            reboot_restore: $reboot_traffic_started,
+            lockdown_restore: $lockdown_traffic_started
+          },
+          initial_concurrent_millis: $initial_traffic_duration,
+          after_overlap_millis: $overlap_traffic_duration,
+          after_reenable_millis: $reenabled_traffic_duration,
+          cellular_underlay_millis: $cellular_traffic_duration,
+          wifi_underlay_restored_millis: $wifi_traffic_duration,
+          process_restore_millis: $process_traffic_duration,
+          update_restore_millis: $update_traffic_duration,
+          reboot_restore_millis: $reboot_traffic_duration,
+          lockdown_restore_millis: $lockdown_traffic_duration
+        },
+        overlap_rejection: {
+          rejected_before_activation: true,
+          collection_unchanged: true,
+          runtime_generation_unchanged: true,
+          runtime_directories: 2,
+          live_traffic_preserved: true
+        },
+        lifecycle: {
+          disabled_route_removed: true,
+          sibling_remained_reachable: true,
+          disabled_set_restored_after_update: true,
+          reenabled_set_restored: true,
+          underlay_changed_without_runtime_restart: true,
+          process_death_restored: true,
+          update_restored: true,
+          reboot_restored: true,
+          lockdown_restored: true,
+          identities_preserved: true
+        },
+        failure_isolation: {
+          failed_network_unreachable: true,
+          sibling_traffic_preserved: true,
+          android_process_continuous: true,
+          runtime_generation_continuous: true,
+          connected_peers_before: $connected_peers_before,
+          connected_peers_after: $connected_peers_after,
+          queued_packets: $outage_queued_packets,
+          queued_bytes: $outage_queued_bytes
+        },
+        resources: {
+          active_threads: $active_threads,
+          maximum_active_threads: 128,
+          total_pss_kib: $total_pss_kib,
+          maximum_total_pss_kib: 524288,
+          queued_packets: $queued_packets,
+          maximum_queued_packets: 512,
+          queued_bytes: $queued_bytes,
+          maximum_queued_bytes: 2097152
+        }
+      }
+    }
+  ' "$device_file" > "$device_file.updated"
+  mv -f "$device_file.updated" "$device_file"
+
+  outcome=passed
+  outcome_detail="Concurrent multi-network traffic, isolation, and lifecycle restoration passed"
+}
+
+run_multi_network_lifecycle() {
+  local command_response="$state_dir/multi-network-lifecycle-command.json"
+  local always_on_status selected_alpha_status disabled_status
+  local disabled_update_status reenabled_status cellular_status wifi_status
+  local process_status update_status reboot_status lockdown_status restored_status
+  local process_before process_after boot_id_before boot_id_after
+  local underlay_generation isolation_generation
+  local connected_peers_before isolation_process_before isolation_process_after
+  local disabled_probe="$state_dir/disabled-alpha-linux-ipv4.json"
+  local disabled_ping="$state_dir/disabled-alpha-android-ipv4.txt"
+  local unavailable_ping="$state_dir/unavailable-alpha-android-ipv4.txt"
+  local diagnostic_response="$state_dir/multi-network-diagnostics.json"
+  local diagnostic_report="$state_dir/multi-network-diagnostic-report.json"
+  local outage_diagnostic_response="$state_dir/multi-network-outage-diagnostics.json"
+  local outage_diagnostic_report="$state_dir/multi-network-outage-report.json"
+  local reenabled_traffic_started=0 reenabled_traffic_duration=0
+  local cellular_traffic_started=0 cellular_traffic_duration=0
+  local wifi_traffic_started=0 wifi_traffic_duration=0
+  local process_traffic_started=0 process_traffic_duration=0
+  local update_traffic_started=0 update_traffic_duration=0
+  local reboot_traffic_started=0 reboot_traffic_duration=0
+  local lockdown_traffic_started=0 lockdown_traffic_duration=0
+  local active_threads total_pss_kib queued_packets queued_bytes
+  local outage_queued_packets outage_queued_bytes
+
+  if ! set_android_vpn_mode true false; then
+    outcome=failed
+    outcome_detail="Android did not enable always-on mode for the network collection"
+    record_step multi_network_always_on failed "$outcome_detail"
+    return 1
+  fi
+  always_on_status="$state_dir/status-multi-network-always-on.json"
+  if ! wait_for_automation_status \
+    "$always_on_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .enabled and .phase == \"running\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .enabled and .phase == \"running\")] | length == 1)" \
+    45; then
+    outcome=failed
+    outcome_detail="The service did not retain both networks when always-on became authoritative"
+    record_step multi_network_always_on failed "$outcome_detail"
+    return 1
+  fi
+  record_step multi_network_always_on passed \
+    "Android always-on ownership retained both enabled networks"
+
+  if ! android_automation select-network --es network_id "$alpha_id" \
+    > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "select-network"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not select alpha"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+  selected_alpha_status="$state_dir/status-alpha-selected.json"
+  if ! wait_for_automation_status \
+    "$selected_alpha_status" \
+    ".value.snapshot.selected_network_id == \"$alpha_id\" and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .selected)] | length == 1)"; then
+    outcome=failed
+    outcome_detail="Alpha did not become the selected management network"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+
+  if ! android_automation set-network-enabled \
+    --es network_id "$alpha_id" \
+    --ez enabled false > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "set-network-enabled"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept disabling alpha"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+  disabled_status="$state_dir/status-alpha-disabled.json"
+  if ! wait_for_automation_status \
+    "$disabled_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 2) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .selected and (.enabled | not) and .phase == \"disabled\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 1)" \
+    120 \
+    || ! network_identity_signature_matches "$disabled_status"; then
+    outcome=failed
+    outcome_detail="Disabling alpha did not leave beta independently active"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_transition_traffic_ready \
+    disabled-beta \
+    "while alpha was disabled" \
+    "$fixture_secondary_packet_socket" \
+    "$fixture_secondary_ipv4" \
+    "$fixture_secondary_ipv6" \
+    "$android_secondary_ipv4" \
+    "$android_secondary_ipv6" \
+    || ! measure_bidirectional_traffic \
+    disabled-beta \
+    "while alpha was disabled" \
+    "$fixture_secondary_packet_socket" \
+    "$fixture_secondary_ipv4" \
+    "$fixture_secondary_ipv6" \
+    "$android_secondary_ipv4" \
+    "$android_secondary_ipv6"; then
+    return 1
+  fi
+  if "$fixture_command" probe \
+    --socket "$fixture_packet_socket" \
+    --source "$fixture_ipv4" \
+    --destination "$android_primary_ipv4" \
+    --count 1 \
+    --timeout-millis 2000 > "$disabled_probe" 2>/dev/null \
+    || ! jq -e '
+      .schema_version == 1 and (.ok | not) and .family == "ipv4" and
+      .sent == 1 and .received == 0
+    ' "$disabled_probe" >/dev/null 2>&1; then
+    outcome=failed
+    outcome_detail="Disabled alpha still accepted inbound overlay traffic"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+  if adb_run shell ping -c 1 -W 2 "$fixture_ipv4" \
+    > "$disabled_ping" 2>&1 \
+    || [[ "$(ping_received_count "$disabled_ping")" -ne 0 ]]; then
+    outcome=failed
+    outcome_detail="Disabled alpha left a stale outbound route"
+    record_step independent_disable failed "$outcome_detail"
+    return 1
+  fi
+  record_step independent_disable passed \
+    "Disabling selected alpha removed its routes while beta remained dual-stack reachable"
+
+  process_before="$(
+    adb_run shell pidof org.hermeticfoundation.p2pvpn.debug | tr -d '\r'
+  )"
+  if [[ ! "$process_before" =~ ^[0-9]+$ ]] \
+    || ! adb_run install -r "$android_apk" >/dev/null \
+    || ! wait_for_new_android_process "$process_before" process_after; then
+    outcome=failed
+    outcome_detail="APK replacement did not autonomously start a fresh always-on process"
+    record_step disabled_set_update_restore failed "$outcome_detail"
+    return 1
+  fi
+  disabled_update_status="$state_dir/status-disabled-set-after-update.json"
+  if ! wait_for_automation_status \
+    "$disabled_update_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.lockdown | not) and (.value.snapshot.busy | not) and .value.snapshot.selected_network_id == \"$alpha_id\" and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .selected and (.enabled | not) and .phase == \"disabled\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .enabled and .phase == \"running\")] | length == 1)" \
+    120 \
+    || ! network_identity_signature_matches "$disabled_update_status"; then
+    outcome=failed
+    outcome_detail="The app update did not restore the exact enabled and selected network set"
+    record_step disabled_set_update_restore failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_transition_traffic_ready \
+    updated-disabled-beta \
+    "after restoring the disabled set through an app update" \
+    "$fixture_secondary_packet_socket" \
+    "$fixture_secondary_ipv4" \
+    "$fixture_secondary_ipv6" \
+    "$android_secondary_ipv4" \
+    "$android_secondary_ipv6" \
+    || ! measure_bidirectional_traffic \
+    updated-disabled-beta \
+    "after restoring the disabled set through an app update" \
+    "$fixture_secondary_packet_socket" \
+    "$fixture_secondary_ipv4" \
+    "$fixture_secondary_ipv6" \
+    "$android_secondary_ipv4" \
+    "$android_secondary_ipv6"; then
+    return 1
+  fi
+  record_step disabled_set_update_restore passed \
+    "A fresh app process restored selected-disabled alpha and active beta"
+
+  if ! android_automation set-network-enabled \
+    --es network_id "$alpha_id" \
+    --ez enabled true > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "set-network-enabled"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept re-enabling alpha"
+    record_step independent_reenable failed "$outcome_detail"
+    return 1
+  fi
+  reenabled_status="$state_dir/status-alpha-reenabled.json"
+  if ! wait_for_automation_status \
+    "$reenabled_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .selected and .enabled and .phase == \"running\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180 \
+    || ! network_identity_signature_matches "$reenabled_status"; then
+    outcome=failed
+    outcome_detail="Re-enabling alpha did not restore both isolated runtimes"
+    record_step independent_reenable failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    reenabled \
+    "after independently re-enabling alpha" \
+    || ! measure_concurrent_multi_network_traffic \
+    reenabled \
+    "after independently re-enabling alpha" \
+    reenabled_traffic_started \
+    reenabled_traffic_duration; then
+    return 1
+  fi
+  record_step independent_reenable passed \
+    "Re-enabling alpha restored concurrent dual-stack traffic"
+
+  underlay_generation="$(jq -r '.value.snapshot.runtime_generation' "$reenabled_status")"
+  if ! adb_run shell svc wifi disable >/dev/null; then
+    outcome=failed
+    outcome_detail="Emulator Wi-Fi underlay could not be disabled"
+    record_step multi_network_underlay_change failed "$outcome_detail"
+    return 1
+  fi
+  cellular_status="$state_dir/status-multi-network-cellular.json"
+  if ! wait_for_automation_status \
+    "$cellular_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.runtime_generation == $underlay_generation) and (.value.snapshot.underlay.kind == \"cellular\") and .value.snapshot.underlay.validated and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180; then
+    outcome=failed
+    outcome_detail="Both networks did not recover on the cellular underlay"
+    record_step multi_network_underlay_change failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    cellular \
+    "after a Wi-Fi-to-cellular underlay transition" \
+    || ! measure_concurrent_multi_network_traffic \
+    cellular \
+    "after a Wi-Fi-to-cellular underlay transition" \
+    cellular_traffic_started \
+    cellular_traffic_duration; then
+    return 1
+  fi
+  if ! adb_run shell svc wifi enable >/dev/null; then
+    outcome=failed
+    outcome_detail="Emulator Wi-Fi underlay could not be restored"
+    record_step multi_network_underlay_change failed "$outcome_detail"
+    return 1
+  fi
+  wifi_status="$state_dir/status-multi-network-wifi-restored.json"
+  if ! wait_for_automation_status \
+    "$wifi_status" \
+    ".value.snapshot.connected and .value.snapshot.always_on and (.value.snapshot.runtime_generation == $underlay_generation) and (.value.snapshot.underlay.kind == \"wifi\") and .value.snapshot.underlay.validated and ([.value.snapshot.networks[] | select(.enabled and .phase == \"running\")] | length == 2) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180; then
+    outcome=failed
+    outcome_detail="Both networks did not return to the preferred Wi-Fi underlay"
+    record_step multi_network_underlay_change failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_multi_network_transition_traffic_ready \
+    wifi-restored \
+    "after returning to the preferred Wi-Fi underlay" \
+    || ! measure_concurrent_multi_network_traffic \
+      wifi-restored \
+      "after returning to the preferred Wi-Fi underlay" \
+      wifi_traffic_started \
+      wifi_traffic_duration; then
+    return 1
+  fi
+  record_step multi_network_underlay_change passed \
+    "Both runtimes changed underlay twice without a shared-runtime restart"
+
+  run_multi_network_restoration_and_isolation
+}
+
+run_multi_network_scenario() {
+  local alpha_created="" alpha_migrated alpha_connected alpha_paired
+  local beta_created="" beta_ready beta_paired both_running
+  local alpha_id alpha_peer_id alpha_hostname
+  local beta_id beta_peer_id beta_hostname
+  local command_response="$state_dir/multi-network-command.json"
+  local primary_ipv4_attempts=0 primary_ipv6_attempts=0
+  local secondary_ipv4_attempts=0 secondary_ipv6_attempts=0
+  local android_primary_ipv4_attempts=0 android_primary_ipv6_attempts=0
+  local android_secondary_ipv4_attempts=0 android_secondary_ipv6_attempts=0
+  local initial_traffic_started=0 initial_traffic_duration=0
+  local overlap_traffic_started=0 overlap_traffic_duration=0
+  local overlap_status overlap_generation_before runtime_entries
+
+  if ! create_isolated_android_profile \
+    alpha \
+    android-e2e-alpha \
+    "$fixture_bootstrap_peer" \
+    "$fixture_bootstrap_address" \
+    "$fixture_kademlia_protocol" \
+    1 \
+    alpha_created; then
+    return 1
+  fi
+  if ! jq -e '
+    (.value.snapshot.networks[0].peer_id | type == "string" and length > 0 and length <= 256) and
+    (.value.snapshot.networks[0].hostname | test("^android-[0-9a-f]{16}$")) and
+    (.value.snapshot.networks[0].addresses | any(contains("."))) and
+    (.value.snapshot.networks[0].addresses | any(contains(":")))
+  ' "$alpha_created" >/dev/null; then
+    outcome=failed
+    outcome_detail="The alpha profile does not expose valid dual-stack identity metadata"
+    record_step legacy_collection_migration failed "$outcome_detail"
+    return 1
+  fi
+
+  if ! android_automation stage-legacy-profile > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "stage-legacy-profile"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation could not stage the encrypted legacy profile"
+    record_step legacy_collection_migration failed "$outcome_detail"
+    return 1
+  fi
+  if ! wait_for_automation_status \
+    "$state_dir/status-legacy-staged.json" \
+    '(.value.snapshot.busy | not) and (.value.snapshot.connection_detail | contains("Legacy profile staged"))'; then
+    outcome=failed
+    outcome_detail="The encrypted profile was not staged in the legacy format"
+    record_step legacy_collection_migration failed "$outcome_detail"
+    return 1
+  fi
+
+  adb_run shell am force-stop org.hermeticfoundation.p2pvpn.debug >/dev/null
+  start_main_activity
+  alpha_migrated="$state_dir/status-alpha-migrated.json"
+  if ! wait_for_automation_status \
+    "$alpha_migrated" \
+    '.value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.profile_unreadable | not) and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 1) and .value.snapshot.networks[0].selected and .value.snapshot.networks[0].enabled' \
+    60 \
+    || ! jq -e -s '
+      .[0].value.snapshot.networks[0].name == .[1].value.snapshot.networks[0].name and
+      .[0].value.snapshot.networks[0].peer_id == .[1].value.snapshot.networks[0].peer_id and
+      .[0].value.snapshot.networks[0].hostname == .[1].value.snapshot.networks[0].hostname and
+      .[0].value.snapshot.networks[0].addresses == .[1].value.snapshot.networks[0].addresses
+    ' "$alpha_created" "$alpha_migrated" >/dev/null; then
+    outcome=failed
+    outcome_detail="Legacy profile migration did not preserve the alpha identity"
+    record_step legacy_collection_migration failed "$outcome_detail"
+    return 1
+  fi
+  alpha_id="$(jq -r '.value.snapshot.networks[0].id' "$alpha_migrated")"
+  alpha_peer_id="$(jq -r '.value.snapshot.networks[0].peer_id' "$alpha_migrated")"
+  alpha_hostname="$(jq -r '.value.snapshot.networks[0].hostname' "$alpha_migrated")"
+  if [[ ! "$alpha_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+    outcome=failed
+    outcome_detail="Legacy profile migration produced an invalid network identifier"
+    record_step legacy_collection_migration failed "$outcome_detail"
+    return 1
+  fi
+  record_step legacy_collection_migration passed \
+    "Encrypted legacy storage migrated in place without changing identity or addresses"
+
+  if ! adb_run shell appops set \
+    org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow >/dev/null; then
+    outcome=failed
+    outcome_detail="ADB could not grant emulator VPN consent"
+    record_step vpn_consent failed "$outcome_detail"
+    return 1
+  fi
+  if ! android_automation connect > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and .value.command == "connect"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not start the shared VPN"
+    record_step vpn_connect failed "$outcome_detail"
+    return 1
+  fi
+  alpha_connected="$state_dir/status-alpha-connected.json"
+  if ! wait_for_automation_status \
+    "$alpha_connected" \
+    ".value.snapshot.connected and (.value.snapshot.busy | not) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .phase == \"running\")] | length == 1)" \
+    90; then
+    outcome=failed
+    outcome_detail="The shared Android VPN did not start alpha"
+    record_step vpn_connect failed "$outcome_detail"
+    return 1
+  fi
+  record_step vpn_consent passed "ADB authorized the normal VpnService consent gate"
+  record_step vpn_connect passed "The shared Android VPN started alpha"
+
+  if ! pair_selected_network \
+    alpha \
+    "$alpha_id" \
+    "$alpha_peer_id" \
+    "$alpha_hostname" \
+    "$fixture_control_socket" \
+    1 \
+    alpha_paired; then
+    return 1
+  fi
+  : "$alpha_paired"
+
+  if ! create_isolated_android_profile \
+    beta \
+    android-e2e-beta \
+    "$fixture_secondary_bootstrap_peer" \
+    "$fixture_secondary_bootstrap_address" \
+    "$fixture_secondary_kademlia_protocol" \
+    2 \
+    beta_created; then
+    return 1
+  fi
+  : "$beta_created"
+  beta_ready="$state_dir/status-beta-ready.json"
+  if ! wait_for_automation_status \
+    "$beta_ready" \
+    '.value.snapshot.connected and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 2) and ([.value.snapshot.networks[] | select(.name == "android-e2e-alpha" and .enabled and .phase == "running")] | length == 1) and ([.value.snapshot.networks[] | select(.name == "android-e2e-beta" and .selected and .enabled and .phase == "running")] | length == 1)' \
+    120; then
+    outcome=failed
+    outcome_detail="The shared VPN did not activate alpha and beta together"
+    record_step beta_activation failed "$outcome_detail"
+    return 1
+  fi
+  alpha_id="$(
+    jq -r '.value.snapshot.networks[] | select(.name == "android-e2e-alpha") | .id' \
+      "$beta_ready"
+  )"
+  beta_id="$(
+    jq -r '.value.snapshot.networks[] | select(.name == "android-e2e-beta") | .id' \
+      "$beta_ready"
+  )"
+  beta_peer_id="$(
+    jq -r --arg id "$beta_id" \
+      '.value.snapshot.networks[] | select(.id == $id) | .peer_id' \
+      "$beta_ready"
+  )"
+  beta_hostname="$(
+    jq -r --arg id "$beta_id" \
+      '.value.snapshot.networks[] | select(.id == $id) | .hostname' \
+      "$beta_ready"
+  )"
+  if [[ "$alpha_id" == "$beta_id" || "$alpha_peer_id" == "$beta_peer_id" \
+    || ! "$beta_hostname" =~ ^android-[0-9a-f]{16}$ ]]; then
+    outcome=failed
+    outcome_detail="The two Android networks did not retain isolated identities"
+    record_step beta_activation failed "$outcome_detail"
+    return 1
+  fi
+  record_step beta_activation passed \
+    "The shared TUN activated two independently identified network runtimes"
+
+  if ! pair_selected_network \
+    beta \
+    "$beta_id" \
+    "$beta_peer_id" \
+    "$beta_hostname" \
+    "$fixture_secondary_control_socket" \
+    2 \
+    beta_paired; then
+    return 1
+  fi
+  : "$beta_paired"
+
+  both_running="$state_dir/status-both-running.json"
+  if ! wait_for_automation_status \
+    "$both_running" \
+    ".value.snapshot.connected and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 2) and ([.value.snapshot.networks[] | select(.id == \"$alpha_id\" and .enabled and .phase == \"running\")] | length == 1) and ([.value.snapshot.networks[] | select(.id == \"$beta_id\" and .selected and .enabled and .phase == \"running\")] | length == 1) and (.value.snapshot.paths.connected_peers >= 2)" \
+    180; then
+    outcome=failed
+    outcome_detail="Both independently paired networks did not remain active"
+    record_step concurrent_activation failed "$outcome_detail"
+    return 1
+  fi
+
+  android_primary_ipv4="$(
+    jq -r --arg id "$alpha_id" '
+      .value.snapshot.networks[] | select(.id == $id) |
+      [.addresses[] | select(contains("."))][0] | split("/")[0]
+    ' "$both_running"
+  )"
+  android_primary_ipv6="$(
+    jq -r --arg id "$alpha_id" '
+      .value.snapshot.networks[] | select(.id == $id) |
+      [.addresses[] | select(contains(":"))][0] | split("/")[0]
+    ' "$both_running"
+  )"
+  android_secondary_ipv4="$(
+    jq -r --arg id "$beta_id" '
+      .value.snapshot.networks[] | select(.id == $id) |
+      [.addresses[] | select(contains("."))][0] | split("/")[0]
+    ' "$both_running"
+  )"
+  android_secondary_ipv6="$(
+    jq -r --arg id "$beta_id" '
+      .value.snapshot.networks[] | select(.id == $id) |
+      [.addresses[] | select(contains(":"))][0] | split("/")[0]
+    ' "$both_running"
+  )"
+  if [[ ! "$android_primary_ipv4" =~ ^[0-9.]{7,15}$ \
+    || ! "$android_primary_ipv6" =~ ^[0-9a-fA-F:]{2,45}$ \
+    || ! "$android_secondary_ipv4" =~ ^[0-9.]{7,15}$ \
+    || ! "$android_secondary_ipv6" =~ ^[0-9a-fA-F:]{2,45}$ \
+    || "$android_primary_ipv4" == "$android_secondary_ipv4" \
+    || "$android_primary_ipv6" == "$android_secondary_ipv6" ]]; then
+    outcome=failed
+    outcome_detail="Concurrent networks do not expose distinct valid overlay addresses"
+    record_step concurrent_activation failed "$outcome_detail"
+    return 1
+  fi
+  record_step concurrent_activation passed \
+    "Both isolated runtimes are running behind one shared TUN"
+
+  if ! wait_for_fixture_probe_ready \
+    "$fixture_ipv4" "$android_primary_ipv4" ipv4 \
+    "$state_dir/alpha-linux-ipv4-readiness.json" primary_ipv4_attempts \
+    "$fixture_packet_socket" \
+    || ! wait_for_fixture_probe_ready \
+      "$fixture_ipv6" "$android_primary_ipv6" ipv6 \
+      "$state_dir/alpha-linux-ipv6-readiness.json" primary_ipv6_attempts \
+      "$fixture_packet_socket" \
+    || ! wait_for_fixture_probe_ready \
+      "$fixture_secondary_ipv4" "$android_secondary_ipv4" ipv4 \
+      "$state_dir/beta-linux-ipv4-readiness.json" secondary_ipv4_attempts \
+      "$fixture_secondary_packet_socket" \
+    || ! wait_for_fixture_probe_ready \
+      "$fixture_secondary_ipv6" "$android_secondary_ipv6" ipv6 \
+      "$state_dir/beta-linux-ipv6-readiness.json" secondary_ipv6_attempts \
+      "$fixture_secondary_packet_socket" \
+    || ! wait_for_android_ping_ready \
+      ipv4 "$fixture_ipv4" "$state_dir/alpha-android-ipv4-readiness.txt" \
+      android_primary_ipv4_attempts \
+    || ! wait_for_android_ping_ready \
+      ipv6 "$fixture_ipv6" "$state_dir/alpha-android-ipv6-readiness.txt" \
+      android_primary_ipv6_attempts \
+    || ! wait_for_android_ping_ready \
+      ipv4 "$fixture_secondary_ipv4" "$state_dir/beta-android-ipv4-readiness.txt" \
+      android_secondary_ipv4_attempts \
+    || ! wait_for_android_ping_ready \
+      ipv6 "$fixture_secondary_ipv6" "$state_dir/beta-android-ipv6-readiness.txt" \
+      android_secondary_ipv6_attempts; then
+    outcome=failed
+    outcome_detail="Concurrent bidirectional dual-stack forwarding did not converge"
+    record_step concurrent_traffic_readiness failed "$outcome_detail"
+    return 1
+  fi
+  record_step concurrent_traffic_readiness passed \
+    "Both networks converged independently in both directions and address families"
+
+  if ! measure_concurrent_multi_network_traffic \
+    initial \
+    "during the initial shared-TUN measurement" \
+    initial_traffic_started \
+    initial_traffic_duration; then
+    return 1
+  fi
+
+  jq '
+    .value.snapshot.networks |
+    map({id, name, hostname, peer_id, addresses, enabled, selected})
+  ' "$both_running" > "$state_dir/multi-network-signature.json"
+  jq '
+    .value.snapshot.networks |
+    map({id, name, hostname, peer_id, addresses}) | sort_by(.id)
+  ' "$both_running" > "$state_dir/multi-network-identity-signature.json"
+  overlap_generation_before="$(jq -r '.value.snapshot.runtime_generation' "$both_running")"
+
+  if ! android_automation create-profile \
+    --es network android-e2e-overlap \
+    --es bootstrap_peer_id "$fixture_secondary_bootstrap_peer" \
+    --es bootstrap_address "$fixture_secondary_bootstrap_address" \
+    --es kademlia_protocol "$fixture_secondary_kademlia_protocol" \
+    --es additional_route "$fixture_secondary_ipv4/32" > "$command_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and .value.command == "create-profile"
+    ' "$command_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Debug automation did not accept the overlap rejection probe"
+    record_step overlap_rejection failed "$outcome_detail"
+    return 1
+  fi
+  overlap_status="$state_dir/status-overlap-rejected.json"
+  if ! wait_for_automation_status \
+    "$overlap_status" \
+    ".value.snapshot.connected and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 2) and (.value.snapshot.runtime_generation == $overlap_generation_before) and (.value.snapshot.connection_detail | ascii_downcase | contains(\"overlap\"))" \
+    60 \
+    || ! jq -e -s '
+      .[0] == (.[1].value.snapshot.networks |
+        map({id, name, hostname, peer_id, addresses, enabled, selected}))
+    ' "$state_dir/multi-network-signature.json" "$overlap_status" >/dev/null; then
+    outcome=failed
+    outcome_detail="An overlapping third network changed the live collection or runtime"
+    record_step overlap_rejection failed "$outcome_detail"
+    return 1
+  fi
+
+  runtime_entries="$state_dir/runtime-entries.txt"
+  if ! adb_run exec-out run-as org.hermeticfoundation.p2pvpn.debug \
+    ls -1 no_backup/runtime > "$runtime_entries" \
+    || [[ "$(grep -Ec '^[0-9a-f-]{36}$' "$runtime_entries")" -ne 2 ]] \
+    || ! grep -Fxq "$alpha_id" "$runtime_entries" \
+    || ! grep -Fxq "$beta_id" "$runtime_entries"; then
+    outcome=failed
+    outcome_detail="Rejected profile runtime storage was not cleaned up"
+    record_step overlap_rejection failed "$outcome_detail"
+    return 1
+  fi
+  if ! measure_concurrent_multi_network_traffic \
+    after-overlap \
+    "after rejecting an overlapping network" \
+    overlap_traffic_started \
+    overlap_traffic_duration; then
+    return 1
+  fi
+  record_step overlap_rejection passed \
+    "Overlapping routes were rejected before persistence or live-runtime mutation"
+
+  run_multi_network_lifecycle
 }
 
 ping_received_count() {
@@ -580,6 +1929,7 @@ sanitize_runtime_log() {
 
 sanitize_fixture_log() {
   sanitize_runtime_log "$fixture_log"
+  sanitize_runtime_log "$fixture_secondary_log"
 }
 
 sanitize_android_log() {
@@ -594,7 +1944,7 @@ sanitize_logs() {
 
 logs_are_redacted() {
   local log_file
-  for log_file in "$fixture_log" "$android_log"; do
+  for log_file in "$fixture_log" "$fixture_secondary_log" "$android_log"; do
     if grep -Eq \
       '12D3KooW[A-Za-z0-9]+|(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)|[A-Z2-9]{4}(-[A-Z2-9]{4}){3}|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:|([0-9]{1,3}\.){3}[0-9]{1,3}|/ip6/[^I]|/dns(4|6)?/[^U]|/members/[^M]|\[[[:xdigit:]]*:[[:xdigit:]:]*\]' \
       "$log_file"; then
@@ -911,6 +2261,99 @@ clear_always_on_mode() {
   fi
 }
 
+start_fixture_instance() {
+  local step_name="$1"
+  local label="$2"
+  local network="$3"
+  local fixture_state="$4"
+  local log_file="$5"
+  local pid_variable="$6"
+  local metadata_variable="$7"
+  local metadata="$fixture_state/fixture.json"
+  local control_socket packet_socket fixture_process
+
+  mkdir -p "$fixture_state"
+  "$fixture_command" run \
+    --state-dir "$fixture_state" \
+    --network "$network" \
+    --path-mode "$path_mode" > "$log_file" 2>&1 &
+  fixture_process=$!
+  printf -v "$pid_variable" '%s' "$fixture_process"
+  record_step "$step_name" started "Waiting for $label"
+
+  for _ in $(seq 1 60); do
+    if [[ -s "$metadata" ]]; then
+      break
+    fi
+    if ! kill -0 "$fixture_process" 2>/dev/null; then
+      outcome=failed
+      outcome_detail="$label exited before readiness"
+      record_step "$step_name" failed "$outcome_detail"
+      return 1
+    fi
+    sleep 1
+  done
+
+  if [[ ! -s "$metadata" ]] || ! jq -e \
+    --arg network "$network" \
+    --arg path_mode "$path_mode" '
+      .schema_version == 1 and
+      .network == $network and
+      .path_mode == $path_mode and
+      (.bootstrap.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
+      (.bootstrap.android_address | type == "string" and test("^/[^[:space:]]+$") and length <= 1024) and
+      (.bootstrap.kademlia_protocol | type == "string" and test("^/[^[:space:]]+$") and length <= 128) and
+      (.peer.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
+      (.peer.ipv4 | type == "string" and test("^[0-9.]+$") and length <= 15) and
+      (.peer.ipv6 | type == "string" and test("^[0-9a-fA-F:]+$") and length <= 45) and
+      (.peer.control_socket | type == "string" and length > 0 and length <= 4096) and
+      (.packet_control_socket | type == "string" and length > 0 and length <= 4096) and
+      (if $path_mode == "owned-quic" then
+        (.owned_quic.android_listen | type == "string") and
+        (.owned_quic.android_external_endpoint | type == "string") and
+        (.owned_quic.host_forward_port | type == "number" and . >= 1 and . <= 65535) and
+        (.owned_quic.guest_listen_port | type == "number" and . >= 1 and . <= 65535) and
+        .owned_quic.android_listen ==
+          ("0.0.0.0:" + (.owned_quic.guest_listen_port | tostring)) and
+        .owned_quic.android_external_endpoint ==
+          ("127.0.0.1:" + (.owned_quic.host_forward_port | tostring))
+      else
+        (.owned_quic // null) == null
+      end) and
+      (if ($path_mode == "relay-only" or $path_mode == "relay-to-direct") then
+        (.relay.android_reservation | type == "string" and
+          test("^/[^[:space:]]+/p2p-circuit$") and length <= 1024)
+      else
+        (.relay // null) == null
+      end) and
+      (if $path_mode == "relay-to-direct" then
+        .promotion.direct_path == "tcp_stream"
+      else
+        (.promotion // null) == null
+      end)
+    ' "$metadata" >/dev/null 2>&1; then
+    outcome=failed
+    outcome_detail="$label metadata is unavailable or invalid"
+    record_step "$step_name" failed "$outcome_detail"
+    return 1
+  fi
+
+  control_socket="$(jq -r '.peer.control_socket' "$metadata")"
+  packet_socket="$(jq -r '.packet_control_socket' "$metadata")"
+  case "$control_socket:$packet_socket" in
+    "$fixture_state"/*:"$fixture_state"/*) ;;
+    *)
+      outcome=failed
+      outcome_detail="$label returned sockets outside private state"
+      record_step "$step_name" failed "$outcome_detail"
+      return 1
+      ;;
+  esac
+
+  printf -v "$metadata_variable" '%s' "$metadata"
+  record_step "$step_name" passed "$label is ready"
+}
+
 stop_emulator() {
   if [[ -z "$emulator_pid" ]]; then
     cleanup_emulator_stopped=true
@@ -936,28 +2379,34 @@ stop_emulator() {
   fi
 }
 
-stop_fixture() {
-  if [[ -z "$fixture_pid" ]]; then
-    cleanup_fixture_stopped=true
+stop_fixture_process() {
+  local pid="$1"
+  if [[ -z "$pid" ]]; then
     return 0
   fi
-  if kill -0 "$fixture_pid" 2>/dev/null; then
-    kill -INT "$fixture_pid" 2>/dev/null || true
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -INT "$pid" 2>/dev/null || true
     for _ in $(seq 1 15); do
-      if ! kill -0 "$fixture_pid" 2>/dev/null; then
+      if ! kill -0 "$pid" 2>/dev/null; then
         break
       fi
       sleep 1
     done
   fi
-  if kill -0 "$fixture_pid" 2>/dev/null; then
-    kill -KILL "$fixture_pid" 2>/dev/null || true
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
   fi
-  wait "$fixture_pid" 2>/dev/null || true
-  if kill -0 "$fixture_pid" 2>/dev/null; then
+  wait "$pid" 2>/dev/null || true
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+stop_fixture() {
+  cleanup_fixture_stopped=true
+  if ! stop_fixture_process "$fixture_pid"; then
     cleanup_fixture_stopped=false
-  else
-    cleanup_fixture_stopped=true
+  fi
+  if ! stop_fixture_process "$fixture_secondary_pid"; then
+    cleanup_fixture_stopped=false
   fi
 }
 
@@ -991,6 +2440,7 @@ finalize_evidence() {
   sanitize_logs
   bound_file "$emulator_log"
   bound_file "$fixture_log"
+  bound_file "$fixture_secondary_log"
   bound_file "$android_log"
   jq -n \
     --argjson schema_version "$evidence_schema_version" \
@@ -1031,7 +2481,8 @@ finalize_evidence() {
       artifacts: {
         android_log: "android.log",
         emulator_log: "emulator.log",
-        fixture_log: "fixture.log"
+        fixture_log: "fixture.log",
+        fixture_secondary_log: "fixture-secondary.log"
       }
     }' > "$evidence_file"
   rm -f "$checks_file" "$steps_file" "$device_file"
@@ -1040,6 +2491,7 @@ finalize_evidence() {
 exit_handler() {
   local status="$1"
   local storage_failure=""
+  local primary_failure=false
   trap - EXIT INT TERM
   set +e
   if [[ "$status" -eq 0 && -n "$runtime_storage_watchdog_pid" ]] \
@@ -1053,6 +2505,9 @@ exit_handler() {
     outcome=failed
     outcome_detail="E2E harness terminated unexpectedly"
   fi
+  if [[ "$outcome" == failed ]]; then
+    primary_failure=true
+  fi
   collect_android_diagnostics
   clear_always_on_mode
   stop_emulator
@@ -1065,18 +2520,27 @@ exit_handler() {
     cleanup_logs_redacted=false
     status=1
     outcome=failed
-    outcome_detail="E2E diagnostic redaction validation failed"
+    if [[ "$primary_failure" != true ]]; then
+      outcome_detail="E2E diagnostic redaction validation failed"
+      primary_failure=true
+    fi
   fi
   if [[ "$diagnostic_report_required" == true \
     && "$cleanup_diagnostic_report_redacted" != true ]]; then
     status=1
     outcome=failed
-    outcome_detail="Android diagnostic report validation failed"
+    if [[ "$primary_failure" != true ]]; then
+      outcome_detail="Android diagnostic report validation failed"
+      primary_failure=true
+    fi
   fi
   if [[ "$cleanup_always_on_cleared" != true ]]; then
     status=1
     outcome=failed
-    outcome_detail="Android always-on settings cleanup failed"
+    if [[ "$primary_failure" != true ]]; then
+      outcome_detail="Android always-on settings cleanup failed"
+      primary_failure=true
+    fi
   fi
   finalize_evidence
   printf 'Android E2E evidence: %s\n' "$evidence_file" >&2
@@ -1235,6 +2699,7 @@ runtime_output_baseline_available_bytes="$output_available_bytes"
 start_runtime_storage_watchdog
 
 fixture_metadata=""
+fixture_network="android-e2e"
 fixture_bootstrap_peer=""
 fixture_bootstrap_address=""
 fixture_kademlia_protocol=""
@@ -1248,6 +2713,18 @@ fixture_owned_quic_host_port=""
 fixture_owned_quic_guest_port=""
 fixture_relay_reservation=""
 fixture_promotion_path=""
+fixture_secondary_metadata=""
+fixture_secondary_bootstrap_peer=""
+fixture_secondary_bootstrap_address=""
+fixture_secondary_kademlia_protocol=""
+fixture_secondary_ipv4=""
+fixture_secondary_ipv6=""
+fixture_secondary_control_socket=""
+fixture_secondary_packet_socket=""
+
+if [[ "$scenario" == multi-network ]]; then
+  fixture_network="android-e2e-alpha"
+fi
 
 if [[ "$pairing_scenario" -eq 1 ]]; then
   fixture_state_dir="$state_dir/fixture"
@@ -1255,6 +2732,7 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
   fixture_metadata="$fixture_state_dir/fixture.json"
   "$fixture_command" run \
     --state-dir "$fixture_state_dir" \
+    --network "$fixture_network" \
     --path-mode "$path_mode" > "$fixture_log" 2>&1 &
   fixture_pid=$!
   record_step fixture_start started "Waiting for private discovery and rootless Linux peer"
@@ -1270,9 +2748,11 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
     fi
     sleep 1
   done
-  if [[ ! -s "$fixture_metadata" ]] || ! jq -e --arg path_mode "$path_mode" '
+  if [[ ! -s "$fixture_metadata" ]] || ! jq -e \
+    --arg network "$fixture_network" \
+    --arg path_mode "$path_mode" '
     .schema_version == 1 and
-    (.network | type == "string" and length > 0 and length <= 128) and
+    .network == $network and
     .path_mode == $path_mode and
     (.bootstrap.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
     (.bootstrap.android_address | type == "string" and test("^/[^[:space:]]+$") and length <= 1024) and
@@ -1340,6 +2820,37 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
       ;;
   esac
   record_step fixture_start passed "Private discovery and rootless Linux peer are ready"
+fi
+
+if [[ "$scenario" == multi-network ]]; then
+  fixture_secondary_state_dir="$state_dir/fixture-secondary"
+  if ! start_fixture_instance \
+    secondary_fixture_start \
+    "secondary private discovery and rootless Linux peer" \
+    android-e2e-beta \
+    "$fixture_secondary_state_dir" \
+    "$fixture_secondary_log" \
+    fixture_secondary_pid \
+    fixture_secondary_metadata; then
+    exit 1
+  fi
+  fixture_secondary_bootstrap_peer="$(
+    jq -r '.bootstrap.peer_id' "$fixture_secondary_metadata"
+  )"
+  fixture_secondary_bootstrap_address="$(
+    jq -r '.bootstrap.android_address' "$fixture_secondary_metadata"
+  )"
+  fixture_secondary_kademlia_protocol="$(
+    jq -r '.bootstrap.kademlia_protocol' "$fixture_secondary_metadata"
+  )"
+  fixture_secondary_ipv4="$(jq -r '.peer.ipv4' "$fixture_secondary_metadata")"
+  fixture_secondary_ipv6="$(jq -r '.peer.ipv6' "$fixture_secondary_metadata")"
+  fixture_secondary_control_socket="$(
+    jq -r '.peer.control_socket' "$fixture_secondary_metadata"
+  )"
+  fixture_secondary_packet_socket="$(
+    jq -r '.packet_control_socket' "$fixture_secondary_metadata"
+  )"
 fi
 
 P2P_VPN_ANDROID_EMULATOR_READY_FILE="$ready_file" \
@@ -1463,6 +2974,13 @@ if [[ "$scenario" == boot-smoke ]]; then
   outcome=passed
   outcome_detail="Clean emulator boot and application smoke test passed"
   exit 0
+fi
+
+if [[ "$scenario" == multi-network ]]; then
+  if run_multi_network_scenario; then
+    exit 0
+  fi
+  exit 1
 fi
 
 if [[ "$pairing_scenario" -eq 1 ]]; then

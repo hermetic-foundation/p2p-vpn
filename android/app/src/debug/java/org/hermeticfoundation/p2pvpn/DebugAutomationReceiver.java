@@ -5,6 +5,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 
 import org.json.JSONArray;
@@ -53,7 +55,11 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                     return;
                 case "open-pairing":
                 case "reject-pairing":
+                case "stage-legacy-profile":
                     enqueue(context, command, null);
+                    return;
+                case "terminate-process":
+                    terminateProcess();
                     return;
                 case "connect":
                     connect(context);
@@ -180,6 +186,13 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         settings.put("network_id", requiredExtra(intent, "network_id", 36));
         settings.put("enabled", intent.getBooleanExtra("enabled", false));
         enqueue(context, "set-network-enabled", settings.toString());
+    }
+
+    private void terminateProcess() throws JSONException {
+        accepted("terminate-process");
+        new Handler(Looper.getMainLooper())
+                .postDelayed(
+                        () -> android.os.Process.killProcess(android.os.Process.myPid()), 250);
     }
 
     private void enqueue(Context context, String command, String value) throws JSONException {

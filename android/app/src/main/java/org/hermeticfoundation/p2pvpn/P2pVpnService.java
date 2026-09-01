@@ -1150,6 +1150,9 @@ public final class P2pVpnService extends VpnService {
             case "remove-network":
                 removeNetwork(value);
                 break;
+            case "stage-legacy-profile":
+                stageLegacyProfileForDebug();
+                break;
             case "open-pairing":
                 openPairing();
                 break;
@@ -1164,6 +1167,33 @@ public final class P2pVpnService extends VpnService {
                 break;
             default:
                 break;
+        }
+    }
+
+    private void stageLegacyProfileForDebug() {
+        if (!beginNetworkMutation("Staging legacy profile")) {
+            return;
+        }
+        try {
+            if (profileCollection == null || profileCollection.networks.size() != 1) {
+                throw new P2pVpnException("Legacy migration requires exactly one network");
+            }
+            if (desiredConnected) {
+                throw new P2pVpnException("Disconnect before staging a legacy profile");
+            }
+            RuntimeFiles currentFiles = runtimeFiles.get(selectedNetworkId);
+            if (currentFiles == null) {
+                throw new IOException("Legacy migration runtime storage is unavailable");
+            }
+            deleteRuntimeEntry(currentFiles.directory);
+            profileStore.save(profile.configJson);
+            recordDiagnosticEvent("legacy_profile_staged");
+            connectionDetail = "Legacy profile staged for migration";
+        } catch (P2pVpnException | IOException | RuntimeException error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
         }
     }
 

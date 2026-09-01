@@ -459,9 +459,10 @@ let
 
           printf 'Emulator ready: %s\n' "$ANDROID_SERIAL" >&2
           printf 'Press Ctrl-C to stop it and remove temporary state.\n' >&2
-          while "$ANDROID_HOME/platform-tools/adb" -s "$ANDROID_SERIAL" get-state >/dev/null 2>&1; do
+          while kill -0 "$emulator_pid" 2>/dev/null; do
             sleep 2
           done
+          wait "$emulator_pid"
         '';
       }
     else
@@ -497,6 +498,14 @@ let
       }
       ''
         test -e ${androidRustTests}
+
+        emulator_script=${androidEmulator}/bin/run-test-emulator
+        if ! grep -F 'while kill -0 "$emulator_pid"' "$emulator_script" >/dev/null \
+          || grep -F 'while "$ANDROID_HOME/platform-tools/adb"' "$emulator_script" >/dev/null
+        then
+          echo "Android emulator ownership must survive transient ADB disconnects" >&2
+          exit 1
+        fi
 
         check_load_alignment() {
           local native="$1"
@@ -630,6 +639,36 @@ let
           fi
 
           ${androidSdk}/bin/apkanalyzer manifest print "$apk" > apk-manifest.xml
+          awk '
+            /<service/ {
+              service = $0 ORS
+              in_service = 1
+              next
+            }
+            in_service { service = service $0 ORS }
+            in_service && /<\/service>/ {
+              if (service ~ /android:name="org\.hermeticfoundation\.p2pvpn\.P2pVpnService"/) {
+                printf "%s", service
+              }
+              service = ""
+              in_service = 0
+            }
+          ' apk-manifest.xml > apk-vpn-service.xml
+          if [[ ! -s apk-vpn-service.xml ]] \
+            || ! grep -F 'android:exported="true"' apk-vpn-service.xml >/dev/null \
+            || ! grep -F 'android:permission="android.permission.BIND_VPN_SERVICE"' \
+              apk-vpn-service.xml >/dev/null \
+            || ! grep -F 'android:name="android.net.VpnService"' \
+              apk-vpn-service.xml >/dev/null \
+            || ! grep -F 'android:name="android.net.action.VPN_MANAGER_EVENT"' \
+              apk-vpn-service.xml >/dev/null \
+            || ! grep -F 'android:name="android.net.category.EVENT_ALWAYS_ON_STATE_CHANGED"' \
+              apk-vpn-service.xml >/dev/null
+          then
+            echo "APK VPN service is missing its protected lifecycle-event contract" >&2
+            exit 1
+          fi
+
           if ! grep -F 'android.permission.ACCESS_LOCAL_NETWORK' \
             apk-manifest.xml >/dev/null
           then

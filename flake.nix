@@ -717,10 +717,12 @@
                   run)
                     shift
                     state_dir=""
+                    network=android-e2e
                     path_mode=automatic
                     while [[ $# -gt 0 ]]; do
                       case "$1" in
                         --state-dir) state_dir="$2"; shift 2 ;;
+                        --network) network="$2"; shift 2 ;;
                         --path-mode) path_mode="$2"; shift 2 ;;
                         *) shift ;;
                       esac
@@ -731,10 +733,11 @@
                     jq -n \
                       --arg control "$state_dir/peer-control.sock" \
                       --arg packet "$state_dir/packet-control.sock" \
+                      --arg network "$network" \
                       --arg path_mode "$path_mode" \
                       '{
                         schema_version: 1,
-                        network: "android-e2e",
+                        network: $network,
                         path_mode: $path_mode,
                         bootstrap: {
                           peer_id: "12D3KooWFakeBootstrapPeer",
@@ -1846,6 +1849,27 @@
                   assert_diagnostic_evidence "$path_evidence/evidence.json" true
                   test -z "$(find "$test_root/tmp" -maxdepth 1 -name 'p2p-vpn-android-e2e-state.*' -print -quit)"
                 done
+
+                TMPDIR="$test_root/tmp" \
+                  P2P_VPN_ANDROID_E2E_TEST_MODE=1 \
+                  P2P_VPN_ANDROID_EMULATOR="$test_root/bin/fake-emulator" \
+                  P2P_VPN_ADB="$test_root/bin/fake-adb" \
+                  P2P_VPN_ANDROID_APK="$test_root/fake.apk" \
+                  P2P_VPN_ANDROID_E2E_FIXTURE="$test_root/bin/fake-fixture" \
+                  P2P_VPN_BIN="$test_root/bin/fake-p2p-vpn" \
+                  bash ${./scripts/android-e2e.sh} \
+                    --scenario multi-network \
+                    --preflight \
+                    --output "$test_root/multi-network-preflight"
+                jq -e '
+                  .scenario == "multi-network" and
+                  .status == "passed" and
+                  (.preflight[] | select(.name == "fixture_command") | .available) and
+                  (.preflight[] | select(.name == "p2p_vpn_command") | .available) and
+                  .cleanup.fixture_stopped and
+                  .cleanup.logs_redacted and
+                  .artifacts.fixture_secondary_log == "fixture-secondary.log"
+                ' "$test_root/multi-network-preflight/evidence.json" >/dev/null
 
                 set +e
                 TMPDIR="$test_root/tmp" \
