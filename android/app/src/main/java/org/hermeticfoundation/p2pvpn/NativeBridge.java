@@ -44,4 +44,12 @@ final class NativeBridge {
 
     static native String nativeApplyPairingArtifacts(
             String configJson, String artifactsJson, String runtimeStateDirectory);
+
+    static native String nativeJoinProfileByCode(
+            String operationId,
+            String pairingCode,
+            String hostname,
+            String existingNetworkNamesJson);
+
+    static native String nativeCancelProfileJoin(String operationId);
 }

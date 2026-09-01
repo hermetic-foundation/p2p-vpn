@@ -18,6 +18,11 @@ use p2p_vpn::{
     runtime::{control_socket::PairRpcCompletionArtifacts, tun::TunRuntimeConfig},
 };
 #[cfg(any(target_os = "android", test))]
+use p2p_vpn::{
+    pairing::{PairingConfigOptions, import_pairing_response_config_at},
+    runtime::pairing_bootstrap::PairingBootstrapEnrollment,
+};
+#[cfg(any(target_os = "android", test))]
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -706,6 +711,63 @@ fn apply_pairing_artifacts_inner(
     inspect_profile(&updated)
 }
 
+#[cfg(any(target_os = "android", test))]
+fn profile_from_bootstrap_enrollment(
+    identity: NodeIdentity,
+    enrollment: &PairingBootstrapEnrollment,
+    now_unix_seconds: u64,
+) -> Result<AndroidProfile, String> {
+    let defaults: Config = serde_json::from_value(serde_json::json!({
+        "network": {
+            "name": enrollment.response.payload.network_name,
+            "private_key": identity.private_key.clone(),
+        }
+    }))
+    .map_err(|error| format!("failed to prepare paired profile defaults: {error}"))?;
+    let mut config = import_pairing_response_config_at(
+        &enrollment.offer,
+        &enrollment.response,
+        PairingConfigOptions {
+            identity: identity.clone(),
+            interface_name: defaults.interface.name,
+            mtu: defaults.interface.mtu,
+            local_routes: Vec::new(),
+            peer_name: None,
+        },
+        now_unix_seconds,
+    )
+    .map_err(|error| format!("invalid signed pairing enrollment: {error:?}"))?;
+    config.network.dns.hostname = Some(
+        signed_joiner_hostname(&enrollment.response, &identity.peer_id)?
+            .ok_or_else(|| "pairing response did not assign a signed hostname".to_owned())?,
+    );
+    let encoded = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode paired profile: {error}"))?;
+    inspect_profile(&encoded)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn signed_joiner_hostname(
+    response: &p2p_vpn::pairing::PairingResponse,
+    local_peer: &str,
+) -> Result<Option<String>, String> {
+    let record = response
+        .payload
+        .member_records
+        .iter()
+        .filter(|record| {
+            record.payload.issuer_peer == response.payload.inviter_peer
+                && record.payload.member_peer == local_peer
+                && !record.payload.revoked
+        })
+        .max_by_key(|record| (record.payload.membership_epoch, record.payload.sequence));
+    record
+        .and_then(|record| record.payload.hostname.as_deref())
+        .map(canonical_dns_label)
+        .transpose()
+        .map_err(|_| "pairing response assigned an invalid hostname".to_owned())
+}
+
 fn consume_managed_membership_key(
     path: &str,
     runtime_state_directory: &Path,
@@ -844,11 +906,13 @@ mod android {
         objects::{JClass, JString},
         sys::{jint, jstring},
     };
+    use p2p_vpn::pairing_code::PairingCode;
     use p2p_vpn::runtime::{
         control_socket::{
             PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeNetworkChange,
             runtime_control_channel,
         },
+        pairing_bootstrap::{PairingBootstrapOptions, join_by_code_v2},
         runner::{RuntimePlatform, ShutdownReason, run_config_until_with_runtime_platform},
         tun::{PacketRead, PacketWrite, TunRuntimeConfig},
     };
@@ -862,12 +926,73 @@ mod android {
 
     static LOG_INIT: Once = Once::new();
     static RUNTIME: Mutex<Option<RuntimeInstance>> = Mutex::new(None);
+    static PROFILE_JOIN: Mutex<Option<ProfileJoinOperation>> = Mutex::new(None);
+    static PENDING_PROFILE_JOIN_CANCELLATION: Mutex<Option<String>> = Mutex::new(None);
     const CONTROL_FAILURE_LIMIT: u8 = 3;
     const TUN_WRITE_POLL_TIMEOUT: Duration = Duration::from_millis(250);
     const RUNTIME_HEALTH_INITIAL_DELAY: Duration = Duration::from_millis(500);
     const RUNTIME_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
     const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(4);
     const RUNTIME_ABORT_GRACE: Duration = Duration::from_secs(1);
+
+    struct ProfileJoinOperation {
+        id: String,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    struct ProfileJoinLease {
+        id: String,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    impl ProfileJoinLease {
+        fn acquire(id: String) -> Result<Self, String> {
+            validate_profile_join_operation_id(&id)?;
+            let mut operation = PROFILE_JOIN
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if operation.is_some() {
+                return Err("another profile-free pairing operation is active".to_owned());
+            }
+            let cancellation_requested = PENDING_PROFILE_JOIN_CANCELLATION
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+                .is_some_and(|pending| pending == id);
+            let cancelled = Arc::new(AtomicBool::new(cancellation_requested));
+            *operation = Some(ProfileJoinOperation {
+                id: id.clone(),
+                cancelled: Arc::clone(&cancelled),
+            });
+            Ok(Self { id, cancelled })
+        }
+    }
+
+    impl Drop for ProfileJoinLease {
+        fn drop(&mut self) {
+            let mut operation = PROFILE_JOIN
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if operation
+                .as_ref()
+                .is_some_and(|operation| operation.id == self.id)
+            {
+                *operation = None;
+            }
+        }
+    }
+
+    fn validate_profile_join_operation_id(id: &str) -> Result<(), String> {
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err("pairing operation ID is invalid".to_owned());
+        }
+        Ok(())
+    }
 
     struct RuntimeInstance {
         networks: BTreeMap<String, Arc<RuntimeNetworkSlot>>,
@@ -1384,6 +1509,112 @@ mod android {
                 Path::new(&runtime_state_directory),
             )
         })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeJoinProfileByCode(
+        mut env: JNIEnv,
+        _class: JClass,
+        operation_id: JString,
+        pairing_code: JString,
+        hostname: JString,
+        existing_network_names_json: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let operation_id = read_string(env, &operation_id)?;
+            let pairing_code = read_string(env, &pairing_code)?;
+            let hostname = read_string(env, &hostname)?;
+            let existing_network_names_json = read_string(env, &existing_network_names_json)?;
+            join_profile_by_code(
+                &operation_id,
+                &pairing_code,
+                &hostname,
+                &existing_network_names_json,
+            )
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeCancelProfileJoin(
+        mut env: JNIEnv,
+        _class: JClass,
+        operation_id: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let operation_id = read_string(env, &operation_id)?;
+            validate_profile_join_operation_id(&operation_id)?;
+            let operation = PROFILE_JOIN
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let cancelled = if let Some(operation) = operation
+                .as_ref()
+                .filter(|operation| operation.id == operation_id)
+            {
+                operation.cancelled.store(true, Ordering::Release);
+                true
+            } else if operation.is_none() {
+                *PENDING_PROFILE_JOIN_CANCELLATION
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(operation_id);
+                true
+            } else {
+                false
+            };
+            Ok(serde_json::json!({ "cancelled": cancelled }))
+        })
+    }
+
+    fn join_profile_by_code(
+        operation_id: &str,
+        pairing_code: &str,
+        hostname: &str,
+        existing_network_names_json: &str,
+    ) -> Result<AndroidProfile, String> {
+        let lease = ProfileJoinLease::acquire(operation_id.to_owned())?;
+        if lease.cancelled.load(Ordering::Acquire) {
+            return Err("pairing discovery was cancelled".to_owned());
+        }
+        let code = pairing_code
+            .parse::<PairingCode>()
+            .map_err(|_| "pairing code is invalid".to_owned())?;
+        let hostname = canonical_dns_label(hostname)
+            .map_err(|_| "pairing hostname is not a valid DNS label".to_owned())?;
+        let existing_network_names: Vec<String> = serde_json::from_str(existing_network_names_json)
+            .map_err(|_| "existing network list is invalid".to_owned())?;
+        if existing_network_names.len() > 16 {
+            return Err("existing network list is invalid".to_owned());
+        }
+        let identity = NodeIdentity::generate_ed25519()
+            .map_err(|error| format!("failed to generate pairing identity: {error:?}"))?;
+        let options = PairingBootstrapOptions {
+            existing_network_names,
+            requested_hostname: Some(hostname),
+            ..PairingBootstrapOptions::default()
+        };
+        let runtime = control_runtime()?;
+        let cancellation = Arc::clone(&lease.cancelled);
+        let enrollment = runtime.block_on(async move {
+            tokio::select! {
+                result = join_by_code_v2(identity.clone(), code, options) => {
+                    result.map(|enrollment| (identity, enrollment))
+                        .map_err(|error| error.to_string())
+                }
+                () = wait_for_profile_join_cancellation(cancellation) => {
+                    Err("pairing discovery was cancelled".to_owned())
+                }
+            }
+        })?;
+        let now_unix_seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "system clock is before the Unix epoch".to_owned())?
+            .as_secs();
+        profile_from_bootstrap_enrollment(enrollment.0, &enrollment.1, now_unix_seconds)
+    }
+
+    async fn wait_for_profile_join_cancellation(cancelled: Arc<AtomicBool>) {
+        while !cancelled.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     fn single_runtime_start_request(
@@ -2254,8 +2485,22 @@ mod android {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use p2p_vpn::runtime::control_socket::{
-        PairRpcCompletionArtifacts, PairRpcNixPlan, PairRpcPeer, PairRpcReceipt, PairRpcRole,
+    use p2p_vpn::{
+        membership::{
+            MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
+            issue_named_membership_record_for_subject_at,
+        },
+        pairing::{
+            PairingOfferOptions, PairingResponseOptions, build_pairing_response_at,
+            export_code_pairing_offer_at,
+        },
+        runtime::{
+            control_socket::{
+                PairRpcCompletionArtifacts, PairRpcNixPlan, PairRpcPeer, PairRpcReceipt,
+                PairRpcRole,
+            },
+            pairing_bootstrap::PairingBootstrapEnrollment,
+        },
     };
 
     use super::*;
@@ -2269,6 +2514,75 @@ mod tests {
             block_on_control(async { Ok::<_, std::io::Error>("ready") }).expect("control response");
 
         assert_eq!(response, "ready");
+    }
+
+    #[test]
+    fn profile_free_enrollment_uses_signed_assigned_hostname() {
+        let inviter_profile = create_profile("personal").expect("inviter profile");
+        let inviter_config: Config =
+            serde_json::from_str(&inviter_profile.config_json).expect("inviter config");
+        let inviter = inviter_config.identity().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let offer =
+            export_code_pairing_offer_at(&inviter_config, PairingOfferOptions::default(), 1_000)
+                .expect("pairing offer");
+        let response = build_pairing_response_at(
+            &inviter_config,
+            &offer,
+            PairingResponseOptions {
+                joiner_peer: joiner.peer_id.clone(),
+                assigned_vpn_ip: None,
+                membership_key: None,
+                member_records: vec![
+                    named_member_record(&inviter, &inviter, "inviter", 1_010),
+                    named_member_record(&inviter, &joiner, "assigned-phone", 1_010),
+                ],
+                expires_in_seconds: 300,
+            },
+            1_010,
+        )
+        .expect("pairing response");
+        let profile = profile_from_bootstrap_enrollment(
+            joiner.clone(),
+            &PairingBootstrapEnrollment { offer, response },
+            1_011,
+        )
+        .expect("paired profile");
+        let config: Config = serde_json::from_str(&profile.config_json).expect("paired config");
+
+        assert_eq!(profile.network_name, "personal");
+        assert_eq!(profile.hostname, "assigned-phone");
+        assert_eq!(profile.peer_id, joiner.peer_id);
+        assert_eq!(
+            config.network.dns.hostname.as_deref(),
+            Some("assigned-phone")
+        );
+        assert_eq!(config.network.member_records.len(), 2);
+        config.validate_runtime().expect("valid paired profile");
+    }
+
+    fn named_member_record(
+        issuer: &NodeIdentity,
+        member: &NodeIdentity,
+        hostname: &str,
+        issued_at_unix_seconds: u64,
+    ) -> SignedMembershipRecord {
+        issue_named_membership_record_for_subject_at(
+            issuer,
+            MembershipRecordIssueOptions {
+                network_name: "personal".to_owned(),
+                member: MembershipRecordSubject::from_identity(member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: issued_at_unix_seconds,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            Some(hostname),
+            issued_at_unix_seconds,
+        )
+        .expect("named membership record")
     }
 
     #[test]
