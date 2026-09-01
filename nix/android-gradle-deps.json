@@ -643,6 +643,10 @@
    "module": "sha256-rVNANKlTtOEsvuuHTGat+LHKFN8V/g0uZUeqNOht/so=",
    "pom": "sha256-dw8nk9BeKwJ7nHmZOOwdLU7xQc5YGceAwyw5lcrbCkc="
   },
+  "org/json#json/20250517": {
+   "jar": "sha256-PqYbKgbjHt8ckRNP6RBrDrsWYovhafPbdbx6Kwa0V5Y=",
+   "pom": "sha256-caH7hqKwVTejz8HIfbQtA279u/x+nDSbY10hrB+odqc="
+  },
   "org/junit#junit-bom/5.10.2": {
    "module": "sha256-3iOxFLPkEZqP5usXvtWjhSgWaYus5nBxV51tkn67CAo=",
    "pom": "sha256-Fp3ZBKSw9lIM/+ZYzGIpK/6fPBSpifqSEgckzeQ6mWg="
@@ -694,6 +698,15 @@
   "org/tensorflow#tensorflow-lite-metadata/0.2.0": {
    "jar": "sha256-6fGLikHwF+kDPLDthciiuiMHKSzf4l6uNlkj56MdKnA=",
    "pom": "sha256-D+MTJug7diLLzZx11GeykfAf/jzG4+dmUawFocHHo2A="
+  }
+ },
+ "https://repo1.maven.org": {
+  "maven2/org/json/json/maven-metadata": {
+   "xml": {
+    "groupId": "org.json",
+    "lastUpdated": "20260814162921",
+    "release": "20260814"
+   }
   }
  }
 }

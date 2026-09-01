@@ -21,7 +21,7 @@ final class ProfileStore {
     private static final int PROFILE_MAGIC = 0x50325650;
     private static final int PAIRING_MAGIC = 0x50325041;
     private static final int VERSION = 1;
-    private static final int MAX_PROFILE_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_COLLECTION_BYTES = ProfileCollection.MAX_COLLECTION_BYTES;
     private static final int MAX_PAIRING_BYTES = 16 * 1024;
     private static final String KEYSTORE = "AndroidKeyStore";
     private static final String KEY_ALIAS = "org.hermeticfoundation.p2pvpn.profile.v1";
@@ -50,7 +50,7 @@ final class ProfileStore {
                 PROFILE_MAGIC,
                 PROFILE_AAD,
                 configJson,
-                MAX_PROFILE_BYTES,
+                MAX_COLLECTION_BYTES,
                 "profile");
     }
 
@@ -62,7 +62,7 @@ final class ProfileStore {
                 profileFile,
                 PROFILE_MAGIC,
                 PROFILE_AAD,
-                MAX_PROFILE_BYTES,
+                MAX_COLLECTION_BYTES,
                 "stored profile");
     }
 

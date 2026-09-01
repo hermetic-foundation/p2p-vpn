@@ -188,7 +188,7 @@ The user must disable **Block connections without VPN**.
 
 | File | Maximum plaintext | Purpose |
 | --- | ---: | --- |
-| `profile.enc` | 2 MiB | Identity and runtime config |
+| `profile.enc` | 8 MiB | Legacy config or versioned profile collection |
 | `pairing-operation.enc` | 16 KiB | Active operation metadata |
 
 Both files use `AtomicFile` and AES-GCM.
