@@ -2,8 +2,8 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:fitsSystemWindows="true">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -22,11 +22,26 @@
             android:textSize="28sp"
             android:textStyle="bold" />
 
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/profile_title"
-            style="@style/SectionTitle" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/networks_title" />
+
+            <Button
+                android:id="@+id/add_network"
+                style="@style/CompactCommandButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/add_network" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/profile_setup"
@@ -40,17 +55,46 @@
                 android:layout_height="wrap_content"
                 android:autofillHints=""
                 android:hint="@string/network_name_hint"
+                android:imeOptions="actionDone"
                 android:inputType="textNoSuggestions"
                 android:maxLength="128"
                 android:singleLine="true" />
 
-            <Button
-                android:id="@+id/create_profile"
-                style="@style/CommandButton"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/create_profile" />
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/cancel_add_network"
+                    style="@style/CommandButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@android:string/cancel" />
+
+                <Space
+                    android:id="@+id/cancel_add_network_space"
+                    android:layout_width="8dp"
+                    android:layout_height="1dp" />
+
+                <Button
+                    android:id="@+id/create_profile"
+                    style="@style/CommandButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/primary"
+                    android:text="@string/create_network"
+                    android:textColor="@color/on_primary" />
+            </LinearLayout>
         </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/networks"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
 
         <LinearLayout
             android:id="@+id/profile_recovery"
@@ -75,13 +119,26 @@
                 android:textColor="@color/on_danger" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/identity"
-            style="@style/BodyText"
+        <LinearLayout
+            android:id="@+id/selected_network"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/identity_unavailable"
-            android:textIsSelectable="true" />
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/selected_network_title" />
+
+            <TextView
+                android:id="@+id/identity"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/identity_unavailable"
+                android:textIsSelectable="true" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -96,8 +153,8 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:backgroundTint="@color/primary"
-                android:textColor="@color/on_primary"
-                android:text="@string/connect" />
+                android:text="@string/connect"
+                android:textColor="@color/on_primary" />
 
             <Space
                 android:layout_width="8dp"
@@ -112,136 +169,145 @@
                 android:text="@string/disconnect" />
         </LinearLayout>
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/pair_title"
-            style="@style/SectionTitle" />
-
-        <Button
-            android:id="@+id/open_pairing"
-            style="@style/CommandButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/open_pairing" />
-
         <LinearLayout
-            android:id="@+id/generated_code_group"
+            android:id="@+id/pairing_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingTop="8dp"
-            android:visibility="gone">
+            android:orientation="vertical">
 
             <TextView
-                android:id="@+id/generated_code"
-                android:layout_width="0dp"
+                android:id="@+id/pair_title"
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:fontFamily="monospace"
-                android:textColor="@color/on_surface"
-                android:textIsSelectable="true"
-                android:textSize="17sp" />
+                android:text="@string/pair_title" />
 
             <Button
-                android:id="@+id/copy_code"
+                android:id="@+id/open_pairing"
                 style="@style/CommandButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:backgroundTint="@color/secondary"
-                android:textColor="@color/on_secondary"
-                android:text="@string/copy_code" />
-        </LinearLayout>
-
-        <EditText
-            android:id="@+id/join_code"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:autofillHints=""
-            android:fontFamily="monospace"
-            android:hint="@string/pairing_code_hint"
-            android:inputType="textCapCharacters|textNoSuggestions"
-            android:maxLength="64"
-            android:singleLine="true" />
-
-        <Button
-            android:id="@+id/join_pairing"
-            style="@style/CommandButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/join_network" />
-
-        <LinearLayout
-            android:id="@+id/candidate_group"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:paddingTop="12dp"
-            android:visibility="gone">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/candidate_title"
-                android:textColor="@color/on_surface"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/candidate_details"
-                style="@style/BodyText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingTop="4dp"
-                android:textIsSelectable="true" />
+                android:text="@string/open_pairing" />
+
+            <LinearLayout
+                android:id="@+id/generated_code_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingTop="8dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/generated_code"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/on_surface"
+                    android:textIsSelectable="true"
+                    android:textSize="17sp" />
+
+                <Button
+                    android:id="@+id/copy_code"
+                    style="@style/CompactCommandButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:backgroundTint="@color/secondary"
+                    android:text="@string/copy_code"
+                    android:textColor="@color/on_secondary" />
+            </LinearLayout>
 
             <EditText
-                android:id="@+id/assigned_hostname"
+                android:id="@+id/join_code"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:autofillHints=""
-                android:hint="@string/hostname_hint"
-                android:inputType="textNoSuggestions"
-                android:maxLength="63"
+                android:fontFamily="monospace"
+                android:hint="@string/pairing_code_hint"
+                android:imeOptions="actionDone"
+                android:inputType="textCapCharacters|textNoSuggestions"
+                android:maxLength="64"
                 android:singleLine="true" />
 
-            <LinearLayout
+            <Button
+                android:id="@+id/join_pairing"
+                style="@style/CommandButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:text="@string/join_network" />
 
-                <Button
-                    android:id="@+id/approve_pairing"
-                    style="@style/CommandButton"
-                    android:layout_width="0dp"
+            <LinearLayout
+                android:id="@+id/candidate_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingTop="12dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:backgroundTint="@color/primary"
-                    android:textColor="@color/on_primary"
-                    android:text="@string/approve" />
+                    android:text="@string/candidate_title"
+                    android:textColor="@color/on_surface"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
 
-                <Space
-                    android:layout_width="8dp"
-                    android:layout_height="1dp" />
-
-                <Button
-                    android:id="@+id/reject_pairing"
-                    style="@style/CommandButton"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/candidate_details"
+                    style="@style/BodyText"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:backgroundTint="@color/danger"
-                    android:textColor="@color/on_danger"
-                    android:text="@string/reject" />
+                    android:paddingTop="4dp"
+                    android:textIsSelectable="true" />
+
+                <EditText
+                    android:id="@+id/assigned_hostname"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints=""
+                    android:hint="@string/hostname_hint"
+                    android:inputType="textNoSuggestions"
+                    android:maxLength="63"
+                    android:singleLine="true" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/approve_pairing"
+                        style="@style/CommandButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:backgroundTint="@color/primary"
+                        android:text="@string/approve"
+                        android:textColor="@color/on_primary" />
+
+                    <Space
+                        android:layout_width="8dp"
+                        android:layout_height="1dp" />
+
+                    <Button
+                        android:id="@+id/reject_pairing"
+                        style="@style/CommandButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:backgroundTint="@color/danger"
+                        android:text="@string/reject"
+                        android:textColor="@color/on_danger" />
+                </LinearLayout>
             </LinearLayout>
         </LinearLayout>
 
         <TextView
+            style="@style/SectionTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/status_title"
-            style="@style/SectionTitle" />
+            android:text="@string/status_title" />
 
         <TextView
             android:id="@+id/status"

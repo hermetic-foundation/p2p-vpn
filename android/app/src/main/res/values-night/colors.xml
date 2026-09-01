@@ -3,6 +3,7 @@
     <color name="surface">#121412</color>
     <color name="on_surface">#E7ECE8</color>
     <color name="muted">#B6BDB8</color>
+    <color name="outline">#424943</color>
     <color name="primary">#6BD7C9</color>
     <color name="on_primary">#00201D</color>
     <color name="secondary">#ABC7FF</color>

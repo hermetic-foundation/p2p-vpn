@@ -195,6 +195,7 @@ public final class ProfileCollectionTest {
                 () -> collection.add(entry(FIRST_ID, false, "duplicate"), false));
         assertThrows(P2pVpnException.class, () -> collection.select(SECOND_ID));
         assertThrows(P2pVpnException.class, () -> collection.replace(entry(SECOND_ID, true, "x")));
+        assertThrows(P2pVpnException.class, () -> collection.remove(FIRST_ID));
     }
 
     @Test

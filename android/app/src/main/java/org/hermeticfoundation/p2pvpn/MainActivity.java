@@ -17,10 +17,14 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.PersistableBundle;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.io.IOException;
@@ -33,9 +37,13 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private static final int DIAGNOSTIC_EXPORT_REQUEST = 102;
     private static final int LOCAL_NETWORK_PERMISSION_REQUEST = 103;
     private static final String STATE_DIAGNOSTIC_REPORT = "pending_diagnostic_report";
+    private static final String STATE_ADD_NETWORK = "add_network_visible";
 
     private LinearLayout profileSetup;
     private LinearLayout profileRecovery;
+    private LinearLayout networks;
+    private LinearLayout selectedNetwork;
+    private LinearLayout pairingSection;
     private LinearLayout generatedCodeGroup;
     private LinearLayout candidateGroup;
     private EditText networkName;
@@ -44,8 +52,12 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private TextView identity;
     private TextView generatedCode;
     private TextView candidateDetails;
+    private TextView pairTitle;
     private TextView status;
     private Button createProfile;
+    private Button addNetwork;
+    private Button cancelAddNetwork;
+    private View cancelAddNetworkSpace;
     private Button resetProfile;
     private Button connect;
     private Button disconnect;
@@ -59,6 +71,10 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private P2pVpnService.Snapshot latestSnapshot;
     private String displayedCandidatePeer;
     private String pendingDiagnosticReport;
+    private boolean addNetworkVisible;
+    private boolean networkCreationPending;
+    private boolean networkCreationObservedBusy;
+    private int networksAtCreationRequest;
     private boolean bound;
 
     private final ServiceConnection serviceConnection =
@@ -77,7 +93,11 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                     }
                     binder = null;
                     bound = false;
+                    addNetwork.setEnabled(false);
                     exportDiagnostics.setEnabled(false);
+                    if (latestSnapshot != null) {
+                        onSnapshot(latestSnapshot);
+                    }
                     showLocalStatus("VPN service stopped");
                 }
             };
@@ -91,6 +111,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         if (savedInstanceState != null) {
             pendingDiagnosticReport =
                     savedInstanceState.getString(STATE_DIAGNOSTIC_REPORT);
+            addNetworkVisible = savedInstanceState.getBoolean(STATE_ADD_NETWORK, false);
         }
         requestNotificationPermission();
     }
@@ -119,13 +140,46 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         if (pendingDiagnosticReport != null) {
             state.putString(STATE_DIAGNOSTIC_REPORT, pendingDiagnosticReport);
         }
+        state.putBoolean(STATE_ADD_NETWORK, addNetworkVisible);
     }
 
     @Override
     public void onSnapshot(P2pVpnService.Snapshot snapshot) {
         latestSnapshot = snapshot;
-        profileSetup.setVisibility(snapshot.profileStored ? View.GONE : View.VISIBLE);
+        if (networkCreationPending) {
+            if (snapshot.busy) {
+                networkCreationObservedBusy = true;
+            } else if (networkCreationObservedBusy) {
+                if (snapshot.networks.size() > networksAtCreationRequest) {
+                    addNetworkVisible = false;
+                    networkName.setText("");
+                }
+                networkCreationPending = false;
+                networkCreationObservedBusy = false;
+            }
+        }
+
+        boolean hasNetworks = !snapshot.networks.isEmpty();
+        boolean showNetworkEditor =
+                !snapshot.profileUnreadable
+                        && (!snapshot.profileStored || (addNetworkVisible && hasNetworks));
+        profileSetup.setVisibility(showNetworkEditor ? View.VISIBLE : View.GONE);
         profileRecovery.setVisibility(snapshot.profileUnreadable ? View.VISIBLE : View.GONE);
+        networks.setVisibility(hasNetworks ? View.VISIBLE : View.GONE);
+        selectedNetwork.setVisibility(snapshot.hasProfile ? View.VISIBLE : View.GONE);
+        pairingSection.setVisibility(snapshot.hasProfile ? View.VISIBLE : View.GONE);
+        addNetwork.setVisibility(
+                snapshot.hasProfile && !showNetworkEditor ? View.VISIBLE : View.GONE);
+        addNetwork.setEnabled(
+                bound
+                        && !snapshot.busy
+                        && !snapshot.pairingActive
+                        && snapshot.networks.size() < ProfileCollection.MAX_NETWORKS);
+        boolean canCancelAdd = snapshot.profileStored;
+        cancelAddNetwork.setVisibility(canCancelAdd ? View.VISIBLE : View.GONE);
+        cancelAddNetworkSpace.setVisibility(canCancelAdd ? View.VISIBLE : View.GONE);
+
+        renderNetworks(snapshot);
         if (snapshot.hasProfile) {
             identity.setText(
                     getString(
@@ -139,19 +193,36 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             identity.setText(R.string.identity_unavailable);
         }
 
-        createProfile.setEnabled(!snapshot.profileStored && !snapshot.busy);
+        P2pVpnService.NetworkSnapshot selected = selectedNetwork(snapshot);
+        pairTitle.setText(
+                selected == null
+                        ? getString(R.string.pair_title)
+                        : getString(R.string.pair_network_title, selected.name));
+
+        createProfile.setEnabled(
+                bound
+                        && showNetworkEditor
+                        && !snapshot.busy
+                        && !snapshot.pairingActive
+                        && snapshot.networks.size() < ProfileCollection.MAX_NETWORKS);
         resetProfile.setEnabled(
-                snapshot.profileUnreadable
+                bound
+                        && snapshot.profileUnreadable
                         && !snapshot.connectionRequested
                         && !snapshot.busy);
         connect.setEnabled(
                 snapshot.hasProfile
+                        && hasEnabledNetwork(snapshot)
                         && (!snapshot.connectionRequested || !snapshot.connected)
                         && !snapshot.busy
                         && !snapshot.lockdown);
         disconnect.setEnabled(snapshot.connectionRequested && !snapshot.alwaysOn);
-        openPairing.setEnabled(snapshot.connected && !snapshot.busy);
-        joinPairing.setEnabled(snapshot.connected && !snapshot.busy);
+        boolean selectedAvailable =
+                selected != null && selected.enabled && "running".equals(selected.phase);
+        openPairing.setEnabled(
+                bound && snapshot.connected && selectedAvailable && !snapshot.busy);
+        joinPairing.setEnabled(
+                bound && snapshot.connected && selectedAvailable && !snapshot.busy);
 
         boolean hasCode = snapshot.pairingCode != null && !snapshot.pairingCode.isEmpty();
         generatedCodeGroup.setVisibility(hasCode ? View.VISIBLE : View.GONE);
@@ -159,9 +230,9 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
 
         boolean hasCandidate = snapshot.candidatePeer != null;
         candidateGroup.setVisibility(hasCandidate ? View.VISIBLE : View.GONE);
-        approvePairing.setEnabled(hasCandidate && snapshot.connected);
-        rejectPairing.setEnabled(hasCandidate && snapshot.connected);
-        exportDiagnostics.setEnabled(true);
+        approvePairing.setEnabled(bound && hasCandidate && snapshot.connected);
+        rejectPairing.setEnabled(bound && hasCandidate && snapshot.connected);
+        exportDiagnostics.setEnabled(bound);
         if (hasCandidate) {
             StringBuilder details = new StringBuilder(snapshot.candidatePeer);
             if (snapshot.candidateFingerprint != null) {
@@ -188,6 +259,106 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                         snapshot.connectionDetail,
                         snapshot.peerDetail,
                         snapshot.pairingDetail));
+    }
+
+    private void renderNetworks(P2pVpnService.Snapshot snapshot) {
+        networks.removeAllViews();
+        LayoutInflater inflater = LayoutInflater.from(this);
+        boolean managementEnabled = bound && !snapshot.busy && !snapshot.pairingActive;
+        boolean removable = snapshot.networks.size() > 1;
+        for (P2pVpnService.NetworkSnapshot network : snapshot.networks) {
+            View row = inflater.inflate(R.layout.network_row, networks, false);
+            RadioButton selector = row.findViewById(R.id.network_select);
+            Switch enabled = row.findViewById(R.id.network_enabled);
+            ImageButton remove = row.findViewById(R.id.remove_network);
+            TextView networkIdentity = row.findViewById(R.id.network_identity);
+            TextView networkState = row.findViewById(R.id.network_state);
+
+            selector.setText(network.name);
+            selector.setChecked(network.selected);
+            selector.setEnabled(managementEnabled);
+            selector.setOnClickListener(
+                    view -> {
+                        if (binder != null && !network.selected) {
+                            binder.selectNetwork(network.id);
+                        }
+                    });
+
+            enabled.setChecked(network.enabled);
+            enabled.setEnabled(managementEnabled);
+            enabled.setContentDescription(
+                    getString(
+                            network.enabled
+                                    ? R.string.disable_network_named
+                                    : R.string.enable_network_named,
+                            network.name));
+            enabled.setOnCheckedChangeListener(
+                    (button, checked) -> {
+                        if (binder != null && checked != network.enabled) {
+                            binder.setNetworkEnabled(network.id, checked);
+                        }
+                    });
+
+            remove.setVisibility(removable ? View.VISIBLE : View.INVISIBLE);
+            remove.setEnabled(managementEnabled && removable);
+            remove.setContentDescription(
+                    getString(R.string.remove_network_named, network.name));
+            remove.setTooltipText(getString(R.string.remove_network_named, network.name));
+            remove.setOnClickListener(view -> confirmRemoveNetwork(network));
+
+            networkIdentity.setText(network.hostname);
+            String phase = displayPhase(network.phase);
+            String phaseDetail =
+                    network.detail == null || network.detail.isEmpty()
+                            ? phase
+                            : getString(R.string.network_state_detail, phase, network.detail);
+            networkState.setText(
+                    network.enabled
+                            ? getString(R.string.network_enabled_state, phaseDetail)
+                            : phaseDetail);
+            networks.addView(row);
+        }
+    }
+
+    private void confirmRemoveNetwork(P2pVpnService.NetworkSnapshot network) {
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.remove_network_title, network.name))
+                .setMessage(R.string.remove_network_warning)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.remove_network,
+                        (dialog, which) -> {
+                            if (binder != null) {
+                                binder.removeNetwork(network.id);
+                            }
+                        })
+                .show();
+    }
+
+    private static P2pVpnService.NetworkSnapshot selectedNetwork(
+            P2pVpnService.Snapshot snapshot) {
+        for (P2pVpnService.NetworkSnapshot network : snapshot.networks) {
+            if (network.selected) {
+                return network;
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasEnabledNetwork(P2pVpnService.Snapshot snapshot) {
+        for (P2pVpnService.NetworkSnapshot network : snapshot.networks) {
+            if (network.enabled) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String displayPhase(String phase) {
+        if (phase == null || phase.isEmpty()) {
+            return "Unavailable";
+        }
+        return Character.toUpperCase(phase.charAt(0)) + phase.substring(1).replace('_', ' ');
     }
 
     @Override
@@ -226,6 +397,9 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     private void bindViews() {
         profileSetup = findViewById(R.id.profile_setup);
         profileRecovery = findViewById(R.id.profile_recovery);
+        networks = findViewById(R.id.networks);
+        selectedNetwork = findViewById(R.id.selected_network);
+        pairingSection = findViewById(R.id.pairing_section);
         generatedCodeGroup = findViewById(R.id.generated_code_group);
         candidateGroup = findViewById(R.id.candidate_group);
         networkName = findViewById(R.id.network_name);
@@ -234,8 +408,12 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
         identity = findViewById(R.id.identity);
         generatedCode = findViewById(R.id.generated_code);
         candidateDetails = findViewById(R.id.candidate_details);
+        pairTitle = findViewById(R.id.pair_title);
         status = findViewById(R.id.status);
         createProfile = findViewById(R.id.create_profile);
+        addNetwork = findViewById(R.id.add_network);
+        cancelAddNetwork = findViewById(R.id.cancel_add_network);
+        cancelAddNetworkSpace = findViewById(R.id.cancel_add_network_space);
         resetProfile = findViewById(R.id.reset_profile);
         connect = findViewById(R.id.connect);
         disconnect = findViewById(R.id.disconnect);
@@ -248,6 +426,24 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
     }
 
     private void bindActions() {
+        addNetwork.setOnClickListener(
+                view -> {
+                    addNetworkVisible = true;
+                    if (latestSnapshot != null) {
+                        onSnapshot(latestSnapshot);
+                    }
+                    networkName.requestFocus();
+                });
+        cancelAddNetwork.setOnClickListener(
+                view -> {
+                    addNetworkVisible = false;
+                    networkCreationPending = false;
+                    networkCreationObservedBusy = false;
+                    networkName.setText("");
+                    if (latestSnapshot != null) {
+                        onSnapshot(latestSnapshot);
+                    }
+                });
         createProfile.setOnClickListener(
                 view -> {
                     if (binder == null) {
@@ -259,7 +455,20 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                         networkName.setError(getString(R.string.network_name_hint));
                         return;
                     }
+                    networkCreationPending = true;
+                    networkCreationObservedBusy = false;
+                    networksAtCreationRequest =
+                            latestSnapshot == null ? 0 : latestSnapshot.networks.size();
+                    createProfile.setEnabled(false);
                     binder.createProfile(name);
+                });
+        networkName.setOnEditorActionListener(
+                (view, actionId, event) -> {
+                    if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                        createProfile.performClick();
+                        return true;
+                    }
+                    return false;
                 });
         resetProfile.setOnClickListener(
                 view ->

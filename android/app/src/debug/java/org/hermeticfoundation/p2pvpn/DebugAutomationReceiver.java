@@ -5,7 +5,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
-import android.os.Build;
 import android.util.Base64;
 
 import org.json.JSONArray;
@@ -35,6 +34,16 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                     return;
                 case "create-profile":
                     createProfile(context, intent);
+                    return;
+                case "select-network":
+                case "remove-network":
+                    enqueue(
+                            context,
+                            command,
+                            requiredExtra(intent, "network_id", 36));
+                    return;
+                case "set-network-enabled":
+                    setNetworkEnabled(context, intent);
                     return;
                 case "join-pairing":
                     enqueue(context, command, requiredExtra(intent, "code", 64));
@@ -152,6 +161,16 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         accepted("create-profile");
     }
 
+    private void setNetworkEnabled(Context context, Intent intent) throws JSONException {
+        if (!intent.hasExtra("enabled")) {
+            throw new IllegalArgumentException("invalid_enabled");
+        }
+        JSONObject settings = new JSONObject();
+        settings.put("network_id", requiredExtra(intent, "network_id", 36));
+        settings.put("enabled", intent.getBooleanExtra("enabled", false));
+        enqueue(context, "set-network-enabled", settings.toString());
+    }
+
     private void enqueue(Context context, String command, String value) throws JSONException {
         enqueueService(context, command, value);
         accepted(command);
@@ -177,7 +196,7 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
     private static void startService(Context context, String action) {
         Intent service = new Intent(context, P2pVpnService.class);
         service.setAction(action);
-        if (Build.VERSION.SDK_INT >= 26 && P2pVpnService.ACTION_CONNECT.equals(action)) {
+        if (P2pVpnService.ACTION_CONNECT.equals(action)) {
             context.startForegroundService(service);
         } else {
             context.startService(service);
@@ -198,6 +217,22 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         value.put("hostname", nullable(snapshot.hostname));
         value.put("peer_id", nullable(snapshot.peerId));
         value.put("addresses", new JSONArray(snapshot.addresses));
+        value.put("selected_network_id", nullable(snapshot.selectedNetworkId));
+        JSONArray networks = new JSONArray();
+        for (P2pVpnService.NetworkSnapshot network : snapshot.networks) {
+            JSONObject encodedNetwork = new JSONObject();
+            encodedNetwork.put("id", network.id);
+            encodedNetwork.put("name", network.name);
+            encodedNetwork.put("hostname", network.hostname);
+            encodedNetwork.put("peer_id", network.peerId);
+            encodedNetwork.put("addresses", new JSONArray(network.addresses));
+            encodedNetwork.put("enabled", network.enabled);
+            encodedNetwork.put("selected", network.selected);
+            encodedNetwork.put("phase", network.phase);
+            encodedNetwork.put("detail", network.detail);
+            networks.put(encodedNetwork);
+        }
+        value.put("networks", networks);
         value.put("connection_detail", snapshot.connectionDetail);
         value.put("peer_detail", snapshot.peerDetail);
         value.put("pairing_detail", snapshot.pairingDetail);
