@@ -59,10 +59,15 @@ final class RuntimeDiagnostics {
             }
             int index = metricIndex(line.substring(0, separator));
             if (index >= 0) {
-                values[index] = value;
+                values[index] =
+                        index == 3 ? Math.max(values[index], value) : saturatingAdd(values[index], value);
             }
         }
         return new RuntimeDiagnostics(values);
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        return Long.MAX_VALUE - left < right ? Long.MAX_VALUE : left + right;
     }
 
     private static int metricIndex(String name) {

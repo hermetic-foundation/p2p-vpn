@@ -148,6 +148,13 @@ struct PreparedAndroidRuntimeNetwork {
 }
 
 #[cfg(any(target_os = "android", test))]
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct AndroidRuntimeValidation {
+    networks: usize,
+    mtu: u16,
+}
+
+#[cfg(any(target_os = "android", test))]
 fn prepare_android_runtime_start(
     request_json: &str,
 ) -> Result<PreparedAndroidRuntimeStart, String> {
@@ -261,6 +268,31 @@ fn prepare_android_runtime_start(
         presentation,
         networks,
         tun_mtu,
+    })
+}
+
+#[cfg(any(target_os = "android", test))]
+fn validate_android_runtime_start(request_json: &str) -> Result<AndroidRuntimeValidation, String> {
+    let prepared = prepare_android_runtime_start(request_json)?;
+    let network_count = prepared.networks.len();
+    let network_specs = prepared
+        .networks
+        .into_iter()
+        .map(|network| supervisor::NetworkSpec {
+            id: network.id,
+            tun: network.tun,
+        })
+        .collect();
+    let (packet_switch, _ports) = supervisor::PacketSwitch::new_with_presentation(
+        network_specs,
+        prepared.presentation,
+        supervisor::QueueLimits::DEFAULT,
+    )
+    .map_err(|error| error.to_string())?;
+    packet_switch.close();
+    Ok(AndroidRuntimeValidation {
+        networks: network_count,
+        mtu: prepared.tun_mtu,
     })
 }
 
@@ -1061,6 +1093,18 @@ mod android {
             let tun_file = unsafe { File::from_raw_fd(tun_fd) };
             let request_json = read_string(env, &request_json)?;
             start_runtime(&request_json, tun_file)
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeValidateStartNetworks(
+        mut env: JNIEnv,
+        _class: JClass,
+        request_json: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let request_json = read_string(env, &request_json)?;
+            validate_android_runtime_start(&request_json)
         })
     }
 
@@ -2037,8 +2081,17 @@ mod tests {
         ]);
 
         let prepared = prepare_android_runtime_start(&request.to_string()).expect("start request");
+        let validation =
+            validate_android_runtime_start(&request.to_string()).expect("runtime preflight");
 
         assert_eq!(prepared.networks.len(), 2);
+        assert_eq!(
+            validation,
+            AndroidRuntimeValidation {
+                networks: 2,
+                mtu: 1_200,
+            }
+        );
         assert_eq!(prepared.networks[0].id, ALPHA_NETWORK_ID);
         assert_eq!(prepared.networks[0].config.network.name, "alpha");
         assert_eq!(prepared.networks[1].id, BETA_NETWORK_ID);
@@ -2063,6 +2116,35 @@ mod tests {
                 .parse::<Ipv6Addr>()
                 .expect("presentation IPv6")
         );
+    }
+
+    #[test]
+    fn runtime_preflight_rejects_overlapping_network_routes() {
+        let alpha = create_profile("alpha").expect("alpha profile");
+        let beta = create_profile("beta").expect("beta profile");
+        let mut alpha_config: Config =
+            serde_json::from_str(&alpha.config_json).expect("alpha configuration");
+        let mut beta_config: Config =
+            serde_json::from_str(&beta.config_json).expect("beta configuration");
+        alpha_config.peers.push(route_peer("192.0.2.0/24"));
+        beta_config.peers.push(route_peer("192.0.2.0/24"));
+        let request = runtime_start_request(vec![
+            runtime_network(
+                ALPHA_NETWORK_ID,
+                &serde_json::to_string(&alpha_config).expect("alpha JSON"),
+                ALPHA_NETWORK_ID,
+            ),
+            runtime_network(
+                BETA_NETWORK_ID,
+                &serde_json::to_string(&beta_config).expect("beta JSON"),
+                BETA_NETWORK_ID,
+            ),
+        ]);
+
+        let error = validate_android_runtime_start(&request.to_string())
+            .expect_err("overlapping routes must fail preflight");
+
+        assert!(error.contains("overlap"), "unexpected error: {error}");
     }
 
     #[test]
@@ -2555,6 +2637,22 @@ mod tests {
         );
         assert!(!membership_key_file.exists());
         fs::remove_dir_all(state_directory).expect("remove state directory");
+    }
+
+    fn route_peer(prefix: &str) -> PeerConfig {
+        PeerConfig {
+            id: NodeIdentity::generate_ed25519()
+                .expect("route peer identity")
+                .peer_id,
+            name: None,
+            ip: None,
+            vpn_ip: None,
+            addresses: Vec::new(),
+            routes: vec![RouteConfig {
+                prefix: prefix.to_owned(),
+                metric: 0,
+            }],
+        }
     }
 
     fn runtime_start_request(networks: Vec<serde_json::Value>) -> serde_json::Value {

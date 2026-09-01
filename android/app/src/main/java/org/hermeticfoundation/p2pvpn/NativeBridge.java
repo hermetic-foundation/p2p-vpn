@@ -29,6 +29,8 @@ final class NativeBridge {
 
     static native String nativeStartNetworks(String requestJson, int tunFd);
 
+    static native String nativeValidateStartNetworks(String requestJson);
+
     static native String nativeStop();
 
     static native String nativeStatus();

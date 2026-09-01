@@ -81,8 +81,11 @@ final class PairRpc {
                         + "}");
     }
 
-    static Result call(String request) throws P2pVpnException {
-        JSONObject envelope = NativeResponse.objectValue(NativeBridge.nativePairRpc(request));
+    static Result call(String networkId, String request) throws P2pVpnException {
+        String normalizedNetworkId = ProfileCollection.Entry.normalizeNetworkId(networkId);
+        JSONObject envelope =
+                NativeResponse.objectValue(
+                        NativeBridge.nativePairRpcForNetwork(normalizedNetworkId, request));
         try {
             if (envelope.getInt("version") != VERSION) {
                 throw new P2pVpnException("Unsupported pairing RPC response version");

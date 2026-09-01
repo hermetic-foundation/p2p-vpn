@@ -63,4 +63,21 @@ public final class RuntimeDiagnosticsTest {
         assertEquals(0, diagnostics.outboundDroppedPackets);
         assertEquals(0, diagnostics.inboundDroppedPackets);
     }
+
+    @Test
+    public void aggregatesIndependentNetworksAndKeepsOldestQueueAge() {
+        RuntimeDiagnostics diagnostics =
+                RuntimeDiagnostics.fromLines(
+                        Arrays.asList(
+                                "queue_queued_packets 2",
+                                "queue_queued_packets 3",
+                                "queue_oldest_packet_age_millis 8",
+                                "queue_oldest_packet_age_millis 5",
+                                "outbound_dropped_packets 4",
+                                "outbound_dropped_packets 6"));
+
+        assertEquals(5, diagnostics.queueQueuedPackets);
+        assertEquals(8, diagnostics.queueOldestPacketAgeMillis);
+        assertEquals(10, diagnostics.outboundDroppedPackets);
+    }
 }

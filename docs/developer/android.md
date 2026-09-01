@@ -84,6 +84,7 @@ always-on service remains foreground and reports the missing permission.
 | `nativeCreateProfile` | Minimal validated config and derived routes |
 | `nativeInspectProfile` | Peer ID, MTU, addresses, and routes |
 | `nativeStart` | Starts one runtime over the supplied TUN descriptor |
+| `nativeValidateStartNetworks` | Preflights an enabled runtime set without a TUN |
 | `nativeStartNetworks` | Validates and starts an isolated runtime set over one TUN |
 | `nativeStatus` | Aggregate and per-network phase plus control status lines |
 | `nativeNetworkChanged` | Invalidates stale paths and rediscovers without stopping TUN |
@@ -112,6 +113,10 @@ validated config JSON, and an isolated pairing and membership state directory.
 
 Unknown fields, future schemas, repeated identities, network names, DNS zones,
 UUIDs, or state directories are rejected before the TUN workers start.
+
+The service calls `nativeValidateStartNetworks` before establishing Android's
+TUN. The preflight also builds the dispatch registry, so overlapping addresses
+or routes fail before Android replaces the active VPN interface.
 
 ## TUN Ownership
 
@@ -267,8 +272,16 @@ identity after reassembly. Queue or translation failure drops one packet without
 stopping another network.
 
 The native lifecycle can activate concurrent networks and isolate a failed
-runtime task. The Android service and UI still invoke the one-network
-compatibility entry point until the next lifecycle change.
+runtime task. The Android service launches every enabled collection entry with
+`nativeStartNetworks`; `nativeStart` remains a compatibility entry point.
+
+The shared Android TUN uses the collection's stable presentation IPv4 and IPv6
+addresses. It adds each enabled network's extra local addresses, deduplicates
+their Android routes, and uses the smallest enabled MTU.
+
+Disabled entries remain encrypted and inspected but receive no runtime, packet
+queues, discovery work, or TUN routes. A collection with no enabled entries
+stays disconnected without entering the reconnect backoff loop.
 
 `VpnService.Builder` routes are fixed when the interface is established.
 Runtime-learned custom prefixes currently update native dispatch only. The

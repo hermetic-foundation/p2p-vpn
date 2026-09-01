@@ -92,7 +92,7 @@ final class RuntimeSummary {
             }
             switch (line.substring(0, separator)) {
                 case "path_peers_with_supported_path":
-                    connectedPeers = value;
+                    connectedPeers = saturatingAdd(connectedPeers, value);
                     break;
                 case "path_healthy_direct_udp_datagram_paths":
                     directUdpDatagramPaths = saturatingAdd(directUdpDatagramPaths, value);
@@ -107,22 +107,24 @@ final class RuntimeSummary {
                     directTcpStreamPaths = saturatingAdd(directTcpStreamPaths, value);
                     break;
                 case "path_healthy_relay_paths":
-                    relayPaths = value;
+                    relayPaths = saturatingAdd(relayPaths, value);
                     break;
                 case "public_routing_peers":
-                    publicRoutingPeers = value;
+                    publicRoutingPeers = saturatingAdd(publicRoutingPeers, value);
                     break;
                 case "packet_plane_quic_sessions":
-                    packetPlaneQuicSessions = value;
+                    packetPlaneQuicSessions = saturatingAdd(packetPlaneQuicSessions, value);
                     break;
                 case "outbound_quic_datagram_packets":
-                    outboundQuicDatagramPackets = value;
+                    outboundQuicDatagramPackets =
+                            saturatingAdd(outboundQuicDatagramPackets, value);
                     break;
                 case "outbound_direct_tcp_stream_fallback_packets":
-                    outboundDirectTcpStreamPackets = value;
+                    outboundDirectTcpStreamPackets =
+                            saturatingAdd(outboundDirectTcpStreamPackets, value);
                     break;
                 case "path_promotions_to_direct":
-                    pathPromotionsToDirect = value;
+                    pathPromotionsToDirect = saturatingAdd(pathPromotionsToDirect, value);
                     break;
                 default:
                     break;

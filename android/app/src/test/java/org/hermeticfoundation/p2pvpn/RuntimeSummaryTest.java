@@ -83,4 +83,24 @@ public final class RuntimeSummaryTest {
                 "Overlay peers: 1 connected; paths: 1 direct, 0 relay; public routers: 7",
                 summary.describe());
     }
+
+    @Test
+    public void aggregatesRepeatedMetricsFromIndependentNetworks() {
+        RuntimeSummary summary =
+                RuntimeSummary.fromLines(
+                        Arrays.asList(
+                                "path_peers_with_supported_path 2",
+                                "path_peers_with_supported_path 3",
+                                "path_healthy_relay_paths 1",
+                                "path_healthy_relay_paths 2",
+                                "public_routing_peers 4",
+                                "public_routing_peers 5",
+                                "outbound_quic_datagram_packets 6",
+                                "outbound_quic_datagram_packets 7"));
+
+        assertEquals(5, summary.connectedPeers);
+        assertEquals(3, summary.relayPaths);
+        assertEquals(9, summary.publicRoutingPeers);
+        assertEquals(13, summary.outboundQuicDatagramPackets);
+    }
 }

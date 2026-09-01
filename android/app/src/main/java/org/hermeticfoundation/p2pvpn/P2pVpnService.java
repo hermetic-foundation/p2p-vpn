@@ -80,9 +80,7 @@ public final class P2pVpnService extends VpnService {
     private ScheduledThreadPoolExecutor worker;
     private ProfileStore profileStore;
     private File runtimeDirectory;
-    private File activeRuntimeDirectory;
-    private File pairingStateFile;
-    private File membershipStateFile;
+    private Map<String, RuntimeFiles> runtimeFiles = Collections.emptyMap();
     private boolean runtimeStorageReady;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -95,6 +93,8 @@ public final class P2pVpnService extends VpnService {
     private AndroidProfile profile;
     private ProfileCollection profileCollection;
     private Map<String, AndroidProfile> inspectedProfiles = Collections.emptyMap();
+    private List<String> activeNetworkIds = Collections.emptyList();
+    private Map<String, NetworkRuntimeStatus> networkRuntimeStatuses = Collections.emptyMap();
     private String selectedNetworkId;
     private boolean profilePresent;
     private boolean profileUnreadable;
@@ -287,10 +287,21 @@ public final class P2pVpnService extends VpnService {
                 throw new P2pVpnException("Private runtime storage is unavailable");
             }
             loadProfile();
+            if (!hasEnabledNetwork(profileCollection)) {
+                connectionDetail = "Enable at least one network to connect";
+                peerDetail = "Overlay peers: unavailable";
+                updateForegroundNotification();
+                return;
+            }
+            AndroidRuntimePlan runtimePlan =
+                    AndroidRuntimePlan.create(
+                            profileCollection, inspectedProfiles, runtimeStatePaths());
+            NativeResponse.objectValue(
+                    NativeBridge.nativeValidateStartNetworks(runtimePlan.requestJson));
             acquireMulticastLock();
             Builder builder = new Builder();
-            builder.setSession(profile.networkName);
-            builder.setMtu(profile.mtu);
+            builder.setSession(runtimePlan.sessionName);
+            builder.setMtu(runtimePlan.mtu);
             builder.setBlocking(true);
             try {
                 // Every socket created by this process is VPN underlay traffic.
@@ -298,10 +309,10 @@ public final class P2pVpnService extends VpnService {
             } catch (PackageManager.NameNotFoundException error) {
                 throw new P2pVpnException("Failed to isolate VPN transport sockets", error);
             }
-            for (AndroidProfile.Cidr address : profile.addresses) {
+            for (AndroidProfile.Cidr address : runtimePlan.addresses) {
                 builder.addAddress(address.inetAddress, address.prefixLength);
             }
-            for (AndroidProfile.Cidr route : profile.routes) {
+            for (AndroidProfile.Cidr route : runtimePlan.routes) {
                 builder.addRoute(route.inetAddress, route.prefixLength);
             }
             Intent configureIntent = new Intent(this, MainActivity.class);
@@ -327,13 +338,18 @@ public final class P2pVpnService extends VpnService {
                     // detachFd transferred ownership of the descriptor to the native runtime.
                 }
             }
-            NativeResponse.objectValue(
-                    NativeBridge.nativeStart(
-                            selectedNetworkId,
-                            profile.configJson,
-                            tunFd,
-                            pairingStateFile.getAbsolutePath(),
-                            membershipStateFile.getAbsolutePath()));
+            JSONObject initialStatus =
+                    NativeResponse.objectValue(
+                            NativeBridge.nativeStartNetworks(runtimePlan.requestJson, tunFd));
+            RuntimeStatusSnapshot started =
+                    RuntimeStatusSnapshot.from(initialStatus, runtimePlan.networkIds);
+            activeNetworkIds = runtimePlan.networkIds;
+            networkRuntimeStatuses = started.networks;
+            latestRuntimeSummary =
+                    runtimeSummaryAccumulator.observe(
+                            RuntimeSummary.fromLines(started.metrics));
+            latestRuntimeDiagnostics = RuntimeDiagnostics.fromLines(started.metrics);
+            peerDetail = latestRuntimeSummary.describe();
             if (runtimeGeneration < Long.MAX_VALUE) {
                 runtimeGeneration++;
             }
@@ -342,7 +358,7 @@ public final class P2pVpnService extends VpnService {
             reconnectAttempts = 0;
             cancel(reconnectFuture);
             reconnectFuture = null;
-            connectionDetail = "Connected";
+            connectionDetail = started.describeConnection();
             scheduleStatusPoll();
             if (activePairing != null) {
                 schedulePairingResume(0);
@@ -376,6 +392,8 @@ public final class P2pVpnService extends VpnService {
             connectionDetail = failureMessage(error);
         }
         connected = false;
+        activeNetworkIds = Collections.emptyList();
+        networkRuntimeStatuses = Collections.emptyMap();
         latestRuntimeDiagnostics = RuntimeDiagnostics.empty();
         if (wasConnected) {
             recordDiagnosticEvent("runtime_stopped");
@@ -543,17 +561,19 @@ public final class P2pVpnService extends VpnService {
         String failure = null;
         try {
             JSONObject status = NativeResponse.objectValue(NativeBridge.nativeStatus());
-            String phase = status.optString("phase", "running");
-            String detail = status.isNull("detail") ? "" : status.optString("detail", "");
-            if ("failed".equals(phase) || "stopped".equals(phase)) {
+            RuntimeStatusSnapshot runtimeStatus =
+                    RuntimeStatusSnapshot.from(status, activeNetworkIds);
+            networkRuntimeStatuses = runtimeStatus.networks;
+            if (runtimeStatus.requiresWholeRuntimeRestart()) {
                 runtimeFailed = true;
-                failure = detail.isEmpty() ? "Native runtime stopped" : detail;
-            } else if (!detail.isEmpty()) {
-                connectionDetail = capitalize(phase) + ": " + detail;
+                failure =
+                        runtimeStatus.detail.isEmpty()
+                                ? "Native runtime stopped"
+                                : runtimeStatus.detail;
             } else {
-                connectionDetail = capitalize(phase);
+                connectionDetail = runtimeStatus.describeConnection();
             }
-            List<String> metrics = runtimeMetrics(status);
+            List<String> metrics = runtimeStatus.metrics;
             latestRuntimeSummary =
                     runtimeSummaryAccumulator.observe(RuntimeSummary.fromLines(metrics));
             latestRuntimeDiagnostics = RuntimeDiagnostics.fromLines(metrics);
@@ -638,11 +658,13 @@ public final class P2pVpnService extends VpnService {
                 activePairing =
                         ActivePairing.fromJson(
                                 profileStore.loadPairing(), legacyNetworkId);
-                if (profileCollection == null
-                        || profileCollection.find(activePairing.networkId) == null
-                        || !activePairing.networkId.equals(selectedNetworkId)) {
+                ProfileCollection.Entry pairingNetwork =
+                        profileCollection == null
+                                ? null
+                                : profileCollection.find(activePairing.networkId);
+                if (pairingNetwork == null || !pairingNetwork.enabled) {
                     throw new P2pVpnException(
-                            "Saved pairing operation belongs to an unavailable network");
+                            "Saved pairing operation belongs to an inactive network");
                 }
                 if (activePairing.needsMigration) {
                     persistActivePairing();
@@ -700,12 +722,18 @@ public final class P2pVpnService extends VpnService {
                 throw new P2pVpnException("Stored profile collection has an unsupported schema");
         }
         validateProfileCollection(loadedCollection, loadedProfiles);
-        AndroidProfile selected = prepareLoadedProfile(loadedCollection, loadedProfiles);
+        AndroidProfile selected = requireSelectedProfile(loadedCollection, loadedProfiles);
+        Map<String, RuntimeFiles> loadedRuntimeFiles;
+        try {
+            loadedRuntimeFiles = prepareRuntimeFiles(loadedCollection);
+        } catch (IOException error) {
+            throw new P2pVpnException("Failed to prepare network runtime storage", error);
+        }
         if (migrated) {
             profileStore.save(loadedCollection.toJson());
             recordDiagnosticEvent("profile_collection_migrated");
         }
-        assignLoadedProfile(loadedCollection, loadedProfiles, selected);
+        assignLoadedProfile(loadedCollection, loadedProfiles, loadedRuntimeFiles, selected);
     }
 
     private static AndroidProfile inspectProfile(String configJson) throws P2pVpnException {
@@ -735,17 +763,24 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
-    private AndroidProfile prepareLoadedProfile(
+    private static boolean hasEnabledNetwork(ProfileCollection collection) {
+        if (collection == null) {
+            return false;
+        }
+        for (ProfileCollection.Entry network : collection.networks) {
+            if (network.enabled) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static AndroidProfile requireSelectedProfile(
             ProfileCollection collection, Map<String, AndroidProfile> profiles)
             throws P2pVpnException {
         AndroidProfile selected = profiles.get(collection.selectedNetworkId);
         if (selected == null) {
             throw new P2pVpnException("Selected network profile is unavailable");
-        }
-        try {
-            selectRuntimeDirectory(collection.selectedNetworkId);
-        } catch (IOException error) {
-            throw new P2pVpnException("Failed to prepare network runtime storage", error);
         }
         return selected;
     }
@@ -753,9 +788,11 @@ public final class P2pVpnService extends VpnService {
     private void assignLoadedProfile(
             ProfileCollection collection,
             Map<String, AndroidProfile> profiles,
+            Map<String, RuntimeFiles> loadedRuntimeFiles,
             AndroidProfile selected) {
         profileCollection = collection;
         inspectedProfiles = Collections.unmodifiableMap(new LinkedHashMap<>(profiles));
+        runtimeFiles = Collections.unmodifiableMap(new LinkedHashMap<>(loadedRuntimeFiles));
         selectedNetworkId = collection.selectedNetworkId;
         profile = selected;
     }
@@ -839,9 +876,9 @@ public final class P2pVpnService extends VpnService {
             Map<String, AndroidProfile> profiles = new LinkedHashMap<>();
             profiles.put(network.id, created);
             validateProfileCollection(collection, profiles);
-            selectRuntimeDirectory(network.id);
+            Map<String, RuntimeFiles> createdRuntimeFiles = prepareRuntimeFiles(collection);
             profileStore.save(collection.toJson());
-            assignLoadedProfile(collection, profiles, created);
+            assignLoadedProfile(collection, profiles, createdRuntimeFiles, created);
             profilePresent = true;
             profileUnreadable = false;
             recordDiagnosticEvent("profile_created");
@@ -900,8 +937,10 @@ public final class P2pVpnService extends VpnService {
             profile = null;
             profileCollection = null;
             inspectedProfiles = Collections.emptyMap();
+            runtimeFiles = Collections.emptyMap();
             selectedNetworkId = null;
-            activeRuntimeDirectory = null;
+            activeNetworkIds = Collections.emptyList();
+            networkRuntimeStatuses = Collections.emptyMap();
             profilePresent = false;
             profileUnreadable = false;
             activePairing = null;
@@ -927,9 +966,7 @@ public final class P2pVpnService extends VpnService {
         for (File entry : entries) {
             deleteRuntimeEntry(entry);
         }
-        activeRuntimeDirectory = null;
-        pairingStateFile = null;
-        membershipStateFile = null;
+        runtimeFiles = Collections.emptyMap();
     }
 
     private static void deleteRuntimeEntry(File entry) throws IOException {
@@ -1004,10 +1041,12 @@ public final class P2pVpnService extends VpnService {
                 PairRpc.Result result =
                         activePairing.role == ActivePairing.Role.INVITER
                                 ? PairRpc.call(
+                                        activePairing.networkId,
                                         PairRpc.open(
                                                 activePairing.operationId,
                                                 PAIRING_TIMEOUT_SECONDS))
                                 : PairRpc.call(
+                                        activePairing.networkId,
                                         PairRpc.join(
                                                 activePairing.operationId,
                                                 activePairing.code,
@@ -1051,6 +1090,7 @@ public final class P2pVpnService extends VpnService {
         try {
             PairRpc.Result result =
                     PairRpc.call(
+                            activePairing.networkId,
                             PairRpc.approve(
                                     activePairing.operationId,
                                     activePairing.candidate.approvalId,
@@ -1075,6 +1115,7 @@ public final class P2pVpnService extends VpnService {
         try {
             PairRpc.Result result =
                     PairRpc.call(
+                            activePairing.networkId,
                             PairRpc.reject(
                                     activePairing.operationId,
                                     activePairing.candidate.approvalId));
@@ -1098,6 +1139,17 @@ public final class P2pVpnService extends VpnService {
         }
         if (activePairing != null) {
             pairingDetail = "A pairing operation is already active";
+            publishSnapshot();
+            return false;
+        }
+        if (selectedNetworkId == null || !activeNetworkIds.contains(selectedNetworkId)) {
+            pairingDetail = "Enable the selected network before pairing";
+            publishSnapshot();
+            return false;
+        }
+        NetworkRuntimeStatus selectedStatus = networkRuntimeStatuses.get(selectedNetworkId);
+        if (selectedStatus != null && !selectedStatus.isAvailable()) {
+            pairingDetail = "The selected network is not running";
             publishSnapshot();
             return false;
         }
@@ -1128,7 +1180,9 @@ public final class P2pVpnService extends VpnService {
         try {
             PairRpc.OperationStatus status =
                     PairRpc.operationStatus(
-                            PairRpc.call(PairRpc.status(activePairing.operationId)));
+                            PairRpc.call(
+                                    activePairing.networkId,
+                                    PairRpc.status(activePairing.operationId)));
             if (!activePairing.operationId.equals(status.operationId)) {
                 throw new P2pVpnException("Pairing status belongs to another operation");
             }
@@ -1170,7 +1224,9 @@ public final class P2pVpnService extends VpnService {
         }
         try {
             PairRpc.Result result =
-                    PairRpc.call(PairRpc.artifacts(activePairing.operationId));
+                    PairRpc.call(
+                            activePairing.networkId,
+                            PairRpc.artifacts(activePairing.operationId));
             if (!"artifacts".equals(result.kind)) {
                 throw new P2pVpnException("Pairing RPC did not return enrollment artifacts");
             }
@@ -1179,34 +1235,34 @@ public final class P2pVpnService extends VpnService {
             String transcript = receipt.getString("transcript_sha256");
             String remotePeer = receipt.getString("remote_peer");
 
-            if (profileCollection == null || selectedNetworkId == null) {
-                throw new P2pVpnException("Selected network profile is unavailable");
+            if (profileCollection == null) {
+                throw new P2pVpnException("Pairing network profile is unavailable");
             }
-            if (!selectedNetworkId.equals(activePairing.networkId)) {
-                throw new P2pVpnException(
-                        "Pairing operation belongs to a different network");
-            }
-            ProfileCollection.Entry selected = profileCollection.find(selectedNetworkId);
-            if (selected == null) {
-                throw new P2pVpnException("Selected network profile is unavailable");
+            ProfileCollection.Entry pairingNetwork =
+                    profileCollection.find(activePairing.networkId);
+            RuntimeFiles pairingRuntimeFiles = runtimeFiles.get(activePairing.networkId);
+            if (pairingNetwork == null || pairingRuntimeFiles == null) {
+                throw new P2pVpnException("Pairing network profile is unavailable");
             }
             AndroidProfile updated =
                     AndroidProfile.fromNative(
                             NativeResponse.objectValue(
                                     NativeBridge.nativeApplyPairingArtifacts(
-                                            selected.configJson,
+                                            pairingNetwork.configJson,
                                             artifacts.toString(),
-                                            activeRuntimeDirectory.getAbsolutePath())));
+                                            pairingRuntimeFiles.directory.getAbsolutePath())));
 
             // Durably save the new identity bindings before compacting native enrollment state.
             ProfileCollection updatedCollection =
-                    profileCollection.replace(selected.withConfig(updated.configJson));
+                    profileCollection.replace(pairingNetwork.withConfig(updated.configJson));
             profileStore.save(updatedCollection.toJson());
             Map<String, AndroidProfile> updatedProfiles = new LinkedHashMap<>(inspectedProfiles);
-            updatedProfiles.put(selectedNetworkId, updated);
+            updatedProfiles.put(activePairing.networkId, updated);
             profileCollection = updatedCollection;
             inspectedProfiles = Collections.unmodifiableMap(updatedProfiles);
-            profile = updated;
+            if (activePairing.networkId.equals(selectedNetworkId)) {
+                profile = updated;
+            }
             activePairing.transcriptSha256 = transcript;
             activePairing.remotePeer = remotePeer;
             persistActivePairing();
@@ -1227,6 +1283,7 @@ public final class P2pVpnService extends VpnService {
         }
         PairRpc.Result acknowledged =
                 PairRpc.call(
+                        activePairing.networkId,
                         PairRpc.acknowledge(
                                 activePairing.operationId, activePairing.transcriptSha256));
         if (!"acknowledged".equals(acknowledged.kind)) {
@@ -1261,7 +1318,8 @@ public final class P2pVpnService extends VpnService {
             return;
         }
         try {
-            PairRpc.call(PairRpc.cancel(activePairing.operationId));
+            PairRpc.call(
+                    activePairing.networkId, PairRpc.cancel(activePairing.operationId));
         } catch (P2pVpnException | RuntimeException | LinkageError ignored) {
             // The runtime is stopping and durable pairing state expires independently.
         }
@@ -1286,20 +1344,51 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
-    private void selectRuntimeDirectory(String networkId) throws IOException {
-        File selectedDirectory = new File(runtimeDirectory, networkId);
-        if (!preparePrivateDirectory(selectedDirectory)) {
-            throw new IOException("failed to create private network runtime directory");
+    private Map<String, RuntimeFiles> prepareRuntimeFiles(ProfileCollection collection)
+            throws IOException {
+        Map<String, RuntimeFiles> prepared = new LinkedHashMap<>();
+        for (ProfileCollection.Entry network : collection.networks) {
+            File networkDirectory = new File(runtimeDirectory, network.id);
+            if (!preparePrivateDirectory(networkDirectory)) {
+                throw new IOException("failed to create private network runtime directory");
+            }
+            File pairingState = new File(networkDirectory, "pairing-state.json");
+            File membershipState = new File(networkDirectory, "membership-state.json");
+            validateRuntimeStateFile(pairingState);
+            validateRuntimeStateFile(membershipState);
+            if (network.id.equals(collection.selectedNetworkId)) {
+                migrateRuntimeFile(new File(runtimeDirectory, "pairing-state.json"), pairingState);
+                migrateRuntimeFile(
+                        new File(runtimeDirectory, "membership-state.json"), membershipState);
+            }
+            Files.deleteIfExists(new File(networkDirectory, "membership.key").toPath());
+            prepared.put(
+                    network.id,
+                    new RuntimeFiles(networkDirectory, pairingState, membershipState));
         }
-        File selectedPairingState = new File(selectedDirectory, "pairing-state.json");
-        File selectedMembershipState = new File(selectedDirectory, "membership-state.json");
-        migrateRuntimeFile(new File(runtimeDirectory, "pairing-state.json"), selectedPairingState);
-        migrateRuntimeFile(
-                new File(runtimeDirectory, "membership-state.json"), selectedMembershipState);
-        Files.deleteIfExists(new File(selectedDirectory, "membership.key").toPath());
-        activeRuntimeDirectory = selectedDirectory;
-        pairingStateFile = selectedPairingState;
-        membershipStateFile = selectedMembershipState;
+        return prepared;
+    }
+
+    private Map<String, AndroidRuntimePlan.StatePaths> runtimeStatePaths()
+            throws P2pVpnException {
+        Map<String, AndroidRuntimePlan.StatePaths> paths = new LinkedHashMap<>();
+        for (Map.Entry<String, RuntimeFiles> entry : runtimeFiles.entrySet()) {
+            RuntimeFiles files = entry.getValue();
+            paths.put(
+                    entry.getKey(),
+                    new AndroidRuntimePlan.StatePaths(
+                            files.directory.getAbsolutePath(),
+                            files.pairingState.getAbsolutePath(),
+                            files.membershipState.getAbsolutePath()));
+        }
+        return paths;
+    }
+
+    private static void validateRuntimeStateFile(File stateFile) throws IOException {
+        if (Files.exists(stateFile.toPath(), LinkOption.NOFOLLOW_LINKS)
+                && !Files.isRegularFile(stateFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("network runtime state is not a regular file");
+        }
     }
 
     private static boolean preparePrivateDirectory(File directory) {
@@ -1469,10 +1558,20 @@ public final class P2pVpnService extends VpnService {
     private void updateForegroundNotification() {
         NotificationManager manager = getSystemService(NotificationManager.class);
         String message =
-                connected && profile != null
-                        ? getString(R.string.notification_connected, profile.networkName)
+                connected && !activeNetworkIds.isEmpty()
+                        ? getString(R.string.notification_connected, activeNetworkLabel())
                         : connectionDetail;
         manager.notify(NOTIFICATION_ID, notification(message));
+    }
+
+    private String activeNetworkLabel() {
+        if (activeNetworkIds.size() == 1) {
+            AndroidProfile active = inspectedProfiles.get(activeNetworkIds.get(0));
+            if (active != null) {
+                return active.networkName;
+            }
+        }
+        return activeNetworkIds.size() + " networks";
     }
 
     private void publishSnapshot() {
@@ -1920,6 +2019,152 @@ public final class P2pVpnService extends VpnService {
                     null,
                     null);
         }
+    }
+
+    private static final class RuntimeFiles {
+        final File directory;
+        final File pairingState;
+        final File membershipState;
+
+        RuntimeFiles(File directory, File pairingState, File membershipState) {
+            this.directory = directory;
+            this.pairingState = pairingState;
+            this.membershipState = membershipState;
+        }
+    }
+
+    static final class NetworkRuntimeStatus {
+        final String id;
+        final String phase;
+        final String detail;
+        final List<String> metrics;
+
+        private NetworkRuntimeStatus(
+                String id, String phase, String detail, List<String> metrics) {
+            this.id = id;
+            this.phase = phase;
+            this.detail = detail;
+            this.metrics = Collections.unmodifiableList(new ArrayList<>(metrics));
+        }
+
+        private static NetworkRuntimeStatus from(JSONObject value) throws P2pVpnException {
+            try {
+                String id =
+                        ProfileCollection.Entry.normalizeNetworkId(value.getString("id"));
+                String phase = requireRuntimePhase(value.getString("phase"));
+                String detail =
+                        value.isNull("detail") ? "" : value.optString("detail", "");
+                return new NetworkRuntimeStatus(id, phase, detail, runtimeMetrics(value));
+            } catch (JSONException error) {
+                throw new P2pVpnException("Native network runtime status is malformed", error);
+            }
+        }
+
+        boolean isAvailable() {
+            return "running".equals(phase);
+        }
+    }
+
+    static final class RuntimeStatusSnapshot {
+        final String phase;
+        final String detail;
+        final Map<String, NetworkRuntimeStatus> networks;
+        final List<String> metrics;
+
+        private RuntimeStatusSnapshot(
+                String phase,
+                String detail,
+                Map<String, NetworkRuntimeStatus> networks,
+                List<String> metrics) {
+            this.phase = phase;
+            this.detail = detail;
+            this.networks = Collections.unmodifiableMap(new LinkedHashMap<>(networks));
+            this.metrics = Collections.unmodifiableList(new ArrayList<>(metrics));
+        }
+
+        static RuntimeStatusSnapshot from(JSONObject value, List<String> expectedNetworkIds)
+                throws P2pVpnException {
+            if (expectedNetworkIds == null || expectedNetworkIds.isEmpty()) {
+                throw new P2pVpnException("Native runtime has no expected networks");
+            }
+            try {
+                String phase = requireRuntimePhase(value.getString("phase"));
+                String detail =
+                        value.isNull("detail") ? "" : value.optString("detail", "");
+                JSONArray encodedNetworks = value.getJSONArray("networks");
+                Map<String, NetworkRuntimeStatus> networks = new LinkedHashMap<>();
+                for (int index = 0; index < encodedNetworks.length(); index++) {
+                    NetworkRuntimeStatus network =
+                            NetworkRuntimeStatus.from(encodedNetworks.getJSONObject(index));
+                    if (networks.put(network.id, network) != null) {
+                        throw new P2pVpnException(
+                                "Native runtime status contains a duplicate network");
+                    }
+                }
+                if (networks.size() != expectedNetworkIds.size()
+                        || !networks.keySet().containsAll(expectedNetworkIds)) {
+                    throw new P2pVpnException(
+                            "Native runtime status does not match the enabled networks");
+                }
+                List<String> metrics = new ArrayList<>(runtimeMetrics(value));
+                if (networks.size() > 1) {
+                    for (String networkId : expectedNetworkIds) {
+                        metrics.addAll(networks.get(networkId).metrics);
+                    }
+                }
+                return new RuntimeStatusSnapshot(phase, detail, networks, metrics);
+            } catch (JSONException error) {
+                throw new P2pVpnException("Native runtime status is malformed", error);
+            }
+        }
+
+        boolean requiresWholeRuntimeRestart() {
+            return "failed".equals(phase) || "stopped".equals(phase);
+        }
+
+        String describeConnection() {
+            if (networks.size() == 1) {
+                if (!detail.isEmpty()) {
+                    return capitalize(phase) + ": " + detail;
+                }
+                return capitalize(phase);
+            }
+            int running = 0;
+            int starting = 0;
+            int unavailable = 0;
+            for (NetworkRuntimeStatus network : networks.values()) {
+                if ("running".equals(network.phase)) {
+                    running++;
+                } else if ("starting".equals(network.phase)) {
+                    starting++;
+                } else {
+                    unavailable++;
+                }
+            }
+            if (unavailable > 0) {
+                return "Connected: "
+                        + running
+                        + " running, "
+                        + starting
+                        + " starting, "
+                        + unavailable
+                        + " unavailable";
+            }
+            if (starting > 0) {
+                return "Connecting: " + running + " running, " + starting + " starting";
+            }
+            return "Connected: " + running + " networks";
+        }
+    }
+
+    private static String requireRuntimePhase(String phase) throws P2pVpnException {
+        if ("starting".equals(phase)
+                || "running".equals(phase)
+                || "stopped".equals(phase)
+                || "failed".equals(phase)) {
+            return phase;
+        }
+        throw new P2pVpnException("Native runtime status contains an invalid phase");
     }
 
     static final class ActivePairing {
