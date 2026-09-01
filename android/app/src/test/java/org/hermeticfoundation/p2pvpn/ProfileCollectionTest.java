@@ -38,13 +38,13 @@ public final class ProfileCollectionTest {
 
         assertEquals(1, migrated.networks.size());
         assertEquals(migrated.selectedNetworkId, migrated.selected().id);
-        assertTrue(migrated.selected().enabled);
+        assertFalse(migrated.selected().enabled);
         assertEquals(legacy, migrated.selected().configJson);
         assertPresentation(migrated, IPV4, IPV6);
     }
 
     @Test
-    public void schemaV1MigrationPreservesNetworksExactly() throws Exception {
+    public void schemaV1MigrationPreservesNetworksButDisablesLegacyActivation() throws Exception {
         String firstConfig = " {\n  \"network\": {\"name\": \"alpha\"}\n} ";
         String secondConfig = "{\"network\":{\"name\":\"beta\"}}";
         ProfileCollection.Decoded decoded =
@@ -60,7 +60,7 @@ public final class ProfileCollectionTest {
         assertEquals(SECOND_ID, migrated.selectedNetworkId);
         assertEquals(2, migrated.networks.size());
         assertEquals(FIRST_ID, migrated.networks.get(0).id);
-        assertTrue(migrated.networks.get(0).enabled);
+        assertFalse(migrated.networks.get(0).enabled);
         assertEquals(firstConfig, migrated.networks.get(0).configJson);
         assertEquals(SECOND_ID, migrated.networks.get(1).id);
         assertFalse(migrated.networks.get(1).enabled);
@@ -79,7 +79,7 @@ public final class ProfileCollectionTest {
     }
 
     @Test
-    public void schemaV2RoundTripsPresentationSelectionOrderAndEnabledState() throws Exception {
+    public void schemaV3RoundTripsPresentationSelectionOrderAndDesiredState() throws Exception {
         ProfileCollection collection = collectionWithTwoNetworks();
 
         ProfileCollection.Decoded decoded = ProfileCollection.decode(collection.toJson());
@@ -104,6 +104,29 @@ public final class ProfileCollectionTest {
         assertEquals(
                 ProfileCollection.PresentationAddresses.IPV6_PREFIX_LENGTH,
                 addresses.getJSONObject("ipv6").getInt("prefix_length"));
+    }
+
+    @Test
+    public void schemaV2MigrationPreservesIdentityDataButDisablesLegacyActivation()
+            throws Exception {
+        JSONObject legacy = new JSONObject(collectionWithTwoNetworks().toJson());
+        legacy.put("schema_version", 2);
+
+        ProfileCollection.Decoded decoded = ProfileCollection.decode(legacy.toString());
+        ProfileCollection migrated = decoded.schemaV2Collection().migrate();
+
+        assertEquals(ProfileCollection.Decoded.State.SCHEMA_V2, decoded.state);
+        assertTrue(decoded.needsMigration());
+        assertEquals(SECOND_ID, migrated.selectedNetworkId);
+        assertEquals(2, migrated.networks.size());
+        assertEquals(FIRST_ID, migrated.networks.get(0).id);
+        assertFalse(migrated.networks.get(0).enabled);
+        assertEquals(config("alpha"), migrated.networks.get(0).configJson);
+        assertEquals(SECOND_ID, migrated.networks.get(1).id);
+        assertFalse(migrated.networks.get(1).enabled);
+        assertEquals(config("beta"), migrated.networks.get(1).configJson);
+        assertPresentation(migrated, IPV4, IPV6);
+        assertEquals(ProfileCollection.SCHEMA_VERSION, new JSONObject(migrated.toJson()).getInt("schema_version"));
     }
 
     @Test
@@ -139,12 +162,12 @@ public final class ProfileCollectionTest {
     }
 
     @Test
-    public void malformedMissingAndWrongPrefixV2AddressesFailClosed() throws Exception {
-        JSONObject missing = validV2Json();
+    public void malformedMissingAndWrongPrefixCurrentAddressesFailClosed() throws Exception {
+        JSONObject missing = validCurrentJson();
         missing.getJSONObject("presentation_addresses").remove("ipv6");
-        JSONObject malformed = validV2Json();
+        JSONObject malformed = validCurrentJson();
         malformed.getJSONObject("presentation_addresses").put("ipv4", "10.42.0.9");
-        JSONObject wrongPrefix = validV2Json();
+        JSONObject wrongPrefix = validCurrentJson();
         wrongPrefix
                 .getJSONObject("presentation_addresses")
                 .getJSONObject("ipv4")
@@ -157,11 +180,11 @@ public final class ProfileCollectionTest {
 
     @Test
     public void wrongFamilyAndHostnamesFailClosed() throws Exception {
-        JSONObject wrongIpv4 = validV2Json();
+        JSONObject wrongIpv4 = validCurrentJson();
         setAddress(wrongIpv4, "ipv4", "fd42::9");
-        JSONObject wrongIpv6 = validV2Json();
+        JSONObject wrongIpv6 = validCurrentJson();
         setAddress(wrongIpv6, "ipv6", "10.42.0.9");
-        JSONObject hostname = validV2Json();
+        JSONObject hostname = validCurrentJson();
         setAddress(hostname, "ipv4", "localhost");
 
         assertThrows(P2pVpnException.class, () -> ProfileCollection.decode(wrongIpv4.toString()));
@@ -171,11 +194,11 @@ public final class ProfileCollectionTest {
 
     @Test
     public void noncanonicalAddressesFailClosed() throws Exception {
-        JSONObject ipv4 = validV2Json();
+        JSONObject ipv4 = validCurrentJson();
         setAddress(ipv4, "ipv4", "10.042.0.9");
-        JSONObject uppercaseIpv6 = validV2Json();
+        JSONObject uppercaseIpv6 = validCurrentJson();
         setAddress(uppercaseIpv6, "ipv6", "FD42::9");
-        JSONObject expandedIpv6 = validV2Json();
+        JSONObject expandedIpv6 = validCurrentJson();
         setAddress(expandedIpv6, "ipv6", "fd42:0:0:0:0:0:0:9");
 
         assertThrows(P2pVpnException.class, () -> ProfileCollection.decode(ipv4.toString()));
@@ -225,7 +248,7 @@ public final class ProfileCollectionTest {
 
     @Test
     public void unsupportedFutureSchemaDoesNotFallBackToLegacy() throws Exception {
-        JSONObject future = validV2Json();
+        JSONObject future = validCurrentJson();
         future.put("schema_version", ProfileCollection.SCHEMA_VERSION + 1);
 
         assertThrows(P2pVpnException.class, () -> ProfileCollection.decode(future.toString()));
@@ -246,7 +269,7 @@ public final class ProfileCollectionTest {
         assertEquals(ipv6, collection.presentationAddresses.ipv6Address);
     }
 
-    private static JSONObject validV2Json() throws Exception {
+    private static JSONObject validCurrentJson() throws Exception {
         return new JSONObject(collectionWithTwoNetworks().toJson());
     }
 

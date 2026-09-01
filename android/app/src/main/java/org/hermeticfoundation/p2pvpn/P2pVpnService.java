@@ -785,6 +785,13 @@ public final class P2pVpnService extends VpnService {
                         schemaV1.migrate(
                                 ProfileCollection.PresentationAddresses.fromProfile(selectedV1));
                 break;
+            case SCHEMA_V2:
+                ProfileCollection.SchemaV2Collection schemaV2 = decoded.schemaV2Collection();
+                for (ProfileCollection.Entry network : schemaV2.networks) {
+                    loadedProfiles.put(network.id, inspectProfile(network.configJson));
+                }
+                loadedCollection = schemaV2.migrate();
+                break;
             case CURRENT:
                 loadedCollection = decoded.currentCollection();
                 for (ProfileCollection.Entry network : loadedCollection.networks) {

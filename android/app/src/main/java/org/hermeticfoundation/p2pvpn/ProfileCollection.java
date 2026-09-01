@@ -18,7 +18,8 @@ import org.json.JSONObject;
 
 final class ProfileCollection {
     static final String KIND = "p2p-vpn-android-profile-collection";
-    static final int SCHEMA_VERSION = 2;
+    static final int SCHEMA_VERSION = 3;
+    private static final int LEGACY_ACTIVATION_SCHEMA_VERSION = 2;
     static final int MAX_NETWORKS = 16;
     static final int MAX_CONFIG_BYTES = 2 * 1024 * 1024;
     static final int MAX_COLLECTION_BYTES = 8 * 1024 * 1024;
@@ -48,7 +49,9 @@ final class ProfileCollection {
                 return Decoded.legacy(stored);
             }
             int schemaVersion = value.getInt("schema_version");
-            if (schemaVersion != 1 && schemaVersion != SCHEMA_VERSION) {
+            if (schemaVersion != 1
+                    && schemaVersion != LEGACY_ACTIVATION_SCHEMA_VERSION
+                    && schemaVersion != SCHEMA_VERSION) {
                 throw new P2pVpnException("Stored profile collection has an unsupported schema");
             }
             List<Entry> networks = decodeNetworks(value.getJSONArray("networks"));
@@ -58,6 +61,11 @@ final class ProfileCollection {
             }
             PresentationAddresses presentationAddresses =
                     PresentationAddresses.fromJson(value.getJSONObject("presentation_addresses"));
+            if (schemaVersion == LEGACY_ACTIVATION_SCHEMA_VERSION) {
+                return Decoded.schemaV2(
+                        new SchemaV2Collection(
+                                networks, selectedNetworkId, presentationAddresses));
+            }
             return Decoded.current(
                     new ProfileCollection(networks, selectedNetworkId, presentationAddresses));
         } catch (JSONException error) {
@@ -73,7 +81,7 @@ final class ProfileCollection {
             throws P2pVpnException {
         String id = migratedNetworkId(networkName, peerId);
         return new ProfileCollection(
-                Collections.singletonList(new Entry(id, true, configJson)),
+                Collections.singletonList(new Entry(id, false, configJson)),
                 id,
                 presentationAddresses);
     }
@@ -205,6 +213,14 @@ final class ProfileCollection {
             throw new P2pVpnException("Profile collection selects an unknown network");
         }
         return Collections.unmodifiableList(copy);
+    }
+
+    private static List<Entry> disabledNetworks(List<Entry> networks) throws P2pVpnException {
+        List<Entry> disabled = new ArrayList<>(networks.size());
+        for (Entry network : networks) {
+            disabled.add(network.withEnabled(false));
+        }
+        return disabled;
     }
 
     private Entry require(String networkId) {
@@ -455,13 +471,36 @@ final class ProfileCollection {
 
         ProfileCollection migrate(PresentationAddresses presentationAddresses)
                 throws P2pVpnException {
-            return new ProfileCollection(networks, selectedNetworkId, presentationAddresses);
+            return new ProfileCollection(
+                    disabledNetworks(networks), selectedNetworkId, presentationAddresses);
+        }
+    }
+
+    static final class SchemaV2Collection {
+        final List<Entry> networks;
+        final String selectedNetworkId;
+        final PresentationAddresses presentationAddresses;
+
+        private SchemaV2Collection(
+                List<Entry> networks,
+                String selectedNetworkId,
+                PresentationAddresses presentationAddresses)
+                throws P2pVpnException {
+            this.networks = validateNetworks(networks, selectedNetworkId);
+            this.selectedNetworkId = selectedNetworkId;
+            this.presentationAddresses = presentationAddresses;
+        }
+
+        ProfileCollection migrate() throws P2pVpnException {
+            return new ProfileCollection(
+                    disabledNetworks(networks), selectedNetworkId, presentationAddresses);
         }
     }
 
     abstract static class Decoded {
         enum State {
             CURRENT,
+            SCHEMA_V2,
             SCHEMA_V1,
             LEGACY_PROFILE
         }
@@ -480,6 +519,10 @@ final class ProfileCollection {
             return new SchemaV1Decoded(collection);
         }
 
+        static Decoded schemaV2(SchemaV2Collection collection) {
+            return new SchemaV2Decoded(collection);
+        }
+
         static Decoded legacy(String configJson) {
             return new LegacyDecoded(configJson);
         }
@@ -490,6 +533,10 @@ final class ProfileCollection {
 
         SchemaV1Collection schemaV1Collection() {
             throw new IllegalStateException("Decoded profile collection is not schema v1");
+        }
+
+        SchemaV2Collection schemaV2Collection() {
+            throw new IllegalStateException("Decoded profile collection is not schema v2");
         }
 
         String legacyConfigJson() {
@@ -524,6 +571,20 @@ final class ProfileCollection {
 
             @Override
             SchemaV1Collection schemaV1Collection() {
+                return collection;
+            }
+        }
+
+        private static final class SchemaV2Decoded extends Decoded {
+            private final SchemaV2Collection collection;
+
+            private SchemaV2Decoded(SchemaV2Collection collection) {
+                super(State.SCHEMA_V2);
+                this.collection = collection;
+            }
+
+            @Override
+            SchemaV2Collection schemaV2Collection() {
                 return collection;
             }
         }
