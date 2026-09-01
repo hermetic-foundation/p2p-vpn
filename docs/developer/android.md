@@ -11,6 +11,7 @@ MainActivity
   -> P2pVpnService
      -> Android VpnService.Builder
      -> encrypted ProfileStore
+        -> versioned ProfileCollection
      -> JNI NativeBridge
         -> p2p-vpn-android
            -> shared p2p-vpn runtime
@@ -28,6 +29,7 @@ MainActivity
 | `android/app/src/main/java/.../UnderlayTracker.java` | Deterministic physical-network selection |
 | `android/app/src/main/java/.../DiagnosticReport.java` | Bounded aggregate-only support report |
 | `android/app/src/main/java/.../ProfileStore.java` | Keystore-backed persistence |
+| `android/app/src/main/java/.../ProfileCollection.java` | Versioned network collection and legacy migration |
 | `android/app/src/main/java/.../PairRpc.java` | Existing pairing RPC shapes |
 | `android/app/src/debug/java/.../DebugAutomationReceiver.java` | ADB-only E2E control |
 | `android/app/src/main/res/values[-night]/` | System-selected light and dark themes |
@@ -109,14 +111,21 @@ Shutdown signals the reader and closes both owners through Rust RAII.
 ```text
 no profile
   -> create minimal Rust config and stable identity-derived hostname
-  -> encrypt profile atomically
-  -> restore and inspect on startup
+  -> wrap it in a versioned network collection
+  -> encrypt the collection atomically
+  -> restore and inspect every entry on startup
   -> connect through VpnService
 ```
 
 The profile contains the private libp2p identity and learned membership.
 
 It never enters the Android resources or APK.
+
+An existing raw JSON profile migrates without re-encoding its config. Its
+network UUID is derived from the existing network name and peer ID.
+
+The deterministic UUID makes migration restart-safe if Android terminates the
+process between moving runtime state and writing the collection.
 
 The profile stores `network.dns.hostname` while leaving the Android DNS
 listener disabled. Pairing authenticates that label independently of serving DNS.
@@ -196,6 +205,21 @@ Both files use `AtomicFile` and AES-GCM.
 The AES key is non-exportable in `AndroidKeyStore`.
 
 Files are under `noBackupFilesDir`, and application backup is disabled.
+
+### Runtime State
+
+Runtime state is isolated by the stable network UUID.
+
+| Path | Purpose |
+| --- | --- |
+| `runtime/<network-id>/pairing-state.json` | Native pairing state machine |
+| `runtime/<network-id>/membership-state.json` | Learned membership state |
+| `runtime/<network-id>/membership.key` | Transient enrollment secret; removed on load |
+
+Legacy state files at `runtime/` move into the migrated network directory.
+
+Pairing recovery metadata uses schema version 2 and records the network UUID.
+Version 1 metadata binds to the sole migrated profile and is rewritten.
 
 ## Pairing Transaction
 

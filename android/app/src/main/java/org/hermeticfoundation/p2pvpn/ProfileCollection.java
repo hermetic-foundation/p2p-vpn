@@ -213,7 +213,7 @@ final class ProfileCollection {
             return new Entry(id, enabled, configJson);
         }
 
-        private static String normalizeNetworkId(String value) throws P2pVpnException {
+        static String normalizeNetworkId(String value) throws P2pVpnException {
             if (value == null) {
                 throw new P2pVpnException("Network ID is missing");
             }
