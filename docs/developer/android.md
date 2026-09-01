@@ -210,6 +210,15 @@ The supervisor validates the complete candidate route map before activation.
 
 Live updates replace the dispatch map atomically only after validation.
 
+Route preparation records the target network generation and installed routes.
+The commit checks those network-local values again under the write lock.
+
+An unrelated network update can advance the global dispatch generation first.
+The pending update then rebases onto the latest map and validates all overlaps
+again before commit.
+
+A stale update for the same network still fails closed.
+
 Removing a network removes its routes and closes only its packet queues.
 Rejected reconciliation also closes only that network, even if the core
 membership source had already committed its candidate records.
@@ -291,23 +300,37 @@ those prefixes as active Android routes.
 ## Profile Lifecycle
 
 ```text
-no profile
-  -> create minimal Rust config and stable identity-derived hostname
-  -> wrap it in a versioned network collection
-  -> encrypt the collection atomically
-  -> restore and inspect every entry on startup
-  -> connect through VpnService
+no collection
+  -> create one minimal Rust config and identity-derived hostname
+  -> allocate stable presentation addresses
+  -> store a versioned network collection
+  -> add up to 15 more isolated networks
+  -> enable any non-overlapping subset
+  -> connect the enabled set through one VpnService
 ```
 
-The profile contains the private libp2p identity and learned membership.
+Each entry contains its private libp2p identity and learned membership config.
 
-It never enters the Android resources or APK.
+Private state never enters Android resources or the APK.
 
-An existing raw JSON profile migrates without re-encoding its config. Its
-network UUID is derived from the existing network name and peer ID.
+| Stored form | Load action |
+| --- | --- |
+| Legacy raw JSON profile | Wrap unchanged config in one enabled entry. |
+| Collection schema 1 | Preserve entries and add stable presentation addresses. |
+| Collection schema 2 | Validate and load directly. |
+
+A legacy network UUID derives from its existing network name and peer ID.
 
 The deterministic UUID makes migration restart-safe if Android terminates the
 process between moving runtime state and writing the collection.
+
+Every new entry receives a random canonical UUID. The collection stores one
+selected UUID and an independent enabled flag per entry.
+
+Selection scopes identity display and pairing. It does not change activation.
+
+Protocol network names are immutable in the UI. Renaming changes the overlay
+and DNS namespace, so users create and pair a replacement network.
 
 The profile stores `network.dns.hostname` while leaving the Android DNS
 listener disabled. Pairing authenticates that label independently of serving DNS.
@@ -315,6 +338,9 @@ listener disabled. Pairing authenticates that label independently of serving DNS
 ## Always-On Lifecycle
 
 The manifest explicitly advertises always-on support.
+
+`P2pVpnService` is exported only through the signature-protected
+`android.permission.BIND_VPN_SERVICE` boundary.
 
 Android starts `P2pVpnService` without the app's connect action. The service
 enters the foreground immediately, then queues profile restoration.
@@ -335,14 +361,23 @@ system start
 | Local-network permission absent | Stay foreground and expose permission state |
 | Always-on disconnect request | Ignore it; Android owns lifecycle |
 | Android VPN permission revoked | Stop the runtime and service |
+| Process killed with connection requested | Return `START_STICKY` and restore enabled set |
+| App update or reboot | Load the same collection and enabled flags |
+| API 33+ mode event | Apply authoritative always-on and lockdown state |
 
 Android API 29 exposes `isAlwaysOn()` and `isLockdownEnabled()`.
 
 System starts recognize both actionless intents and `VpnService.SERVICE_INTERFACE`.
 The latter is used when Android restarts the VPN after an app update.
 
-Mode reporting on Android 10 and newer is authoritative. Older system starts
-retain always-on ownership from the start intent.
+API 33 and newer also deliver `VPN_MANAGER_EVENT` with
+`EVENT_ALWAYS_ON_STATE_CHANGED` and `VpnProfileState`.
+
+Polling can briefly report manual mode while Android replaces the service.
+While a connection is requested, `VpnMode.stabilize` retains the last positive
+API 33+ ownership observation until the manager event resolves the transition.
+
+Older system starts retain always-on ownership from the start intent.
 
 ### Transport Isolation
 
@@ -684,6 +719,32 @@ nix run .#android-e2e -- \
 | Cellular return | Discovery and traffic recover without intervention |
 | Wi-Fi return | Preferred underlay and traffic restore automatically |
 
+Run concurrent multi-network coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario multi-network \
+  --output ./android-multi-network-evidence
+```
+
+The scenario runs two independent rootless Linux fixtures against one Android
+VPN service.
+
+| Area | Assertion |
+| --- | --- |
+| Migration | Legacy raw profile becomes schema 2 without identity change. |
+| Pairing | Two networks pair independently through separate discovery routers. |
+| TUN | Both active runtimes share one physical descriptor pair. |
+| Traffic | Eight concurrent IPv4/IPv6 directions pass 5/5. |
+| Overlap | Conflicting network is rejected before activation. |
+| Enable state | Disable, update, re-enable, and restore preserve the intended set. |
+| Underlay | Wi-Fi/cellular round trip does not restart the runtime. |
+| Lifecycle | Process death, APK update, lockdown release, and reboot restore traffic. |
+| Isolation | One failed runtime becomes unreachable while its sibling keeps traffic. |
+| Bounds | Threads, PSS, queue packets, and queue bytes remain below fixed limits. |
+| Privacy | Evidence and diagnostics contain no identities, addresses, or secrets. |
+| Cleanup | Always-on state, fixtures, emulator, and private state are removed. |
+
 Run capability checks without starting Android:
 
 ```sh
@@ -938,8 +999,13 @@ holds. It is absent from non-debug source sets.
 | `status` | None | Structured profile, VPN mode, connection, pairing, and path state |
 | `diagnostics` | None | Production aggregate-only diagnostic report |
 | `create-profile` | `network` | Queues normal encrypted profile creation |
+| `select-network` | Network UUID | Selects the identity used by pairing controls |
+| `set-network-enabled` | UUID and Boolean | Changes one collection entry's enabled flag |
+| `remove-network` | Network UUID | Removes one non-final network entry |
 | `connect` | None | Starts the normal VPN flow after user consent |
 | `disconnect` | None | Stops the normal VPN flow |
+| `stage-legacy-profile` | None | Rewrites one test profile into the real legacy format |
+| `terminate-process` | None | Terminates the debug process after acknowledging the command |
 | `open-pairing` | None | Opens the existing pairing protocol |
 | `join-pairing` | `code` | Joins through the existing pairing protocol |
 | `approve-pairing` | Optional `hostname` | Approves the visible candidate |
@@ -974,7 +1040,7 @@ The gate covers:
 | Java unit tests | RPC JSON, approval, status, underlay selection, diagnostics |
 | Android lint | Debug variant static analysis |
 | APK | Dual ABI, 16 KiB alignment, debug ID, signing, min/target SDK |
-| Manifest | LAN permission; always-on enabled; automation protected by `DUMP` |
+| Manifest | Protected VPN service events, LAN permission, always-on, and `DUMP` automation |
 
 ## Device E2E
 
@@ -992,7 +1058,7 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The recorded runs through 2026-08-31 used a clean API 35 x86_64 emulator.
+The recorded runs through 2026-09-01 used a clean API 35 x86_64 emulator.
 
 ### Profile Lifecycle
 
@@ -1096,9 +1162,29 @@ The recovery run used the automatic path policy and one continuous runtime.
 | Process use | 2.333 CPU seconds, 51,933 KiB PSS, 12 threads |
 | Run storage | 956 MB net growth; temporary source and evidence removed |
 
-This proves always-on lifecycle recovery, isolated emulator pairing,
+### Multi-Network Lifecycle
+
+The 2026-09-01 run used two isolated Linux fixtures and one Android TUN.
+
+| Check | Result |
+| --- | --- |
+| Legacy migration | Identity preserved in encrypted schema 2 collection |
+| Concurrent activation | Two independently paired identities and runtimes |
+| Initial readiness | All eight probes passed on attempt 1 |
+| Traffic | Every stage passed 5/5 in eight directions and address families |
+| Overlap rejection | Candidate, collection, runtime generation, and traffic stayed unchanged |
+| Enable state | Disabled sibling route disappeared and restored after re-enable |
+| Underlay change | Wi-Fi/cellular/Wi-Fi passed without runtime restart |
+| Lifecycle | Process death, update, lockdown release, and reboot restored both networks |
+| Failure isolation | One runtime failed; sibling traffic and process generation continued |
+| Resource bound | 6 threads, 41,444 KiB PSS, and empty final queues |
+| Cleanup | Always-on, emulator, fixtures, logs, and private state passed cleanup |
+
+The machine-readable result contains 67 passed steps and no failed steps.
+
+This proves always-on lifecycle recovery, concurrent isolated networks,
 bidirectional dual-stack traffic, owned QUIC, compatibility streams, relay
-behavior, and underlay recovery.
+behavior, and underlay recovery in the managed emulator.
 
 It does not prove public NAT traversal or physical-device behavior.
 
@@ -1106,7 +1192,9 @@ It does not prove public NAT traversal or physical-device behavior.
 
 | Area | State |
 | --- | --- |
-| Multiple simultaneous profiles | Excluded |
+| Multiple simultaneous networks | Included; 1 to 16 entries share one TUN |
+| Cross-network forwarding | Excluded by route and packet ownership checks |
+| In-place protocol network rename | Excluded; replace and pair a new network |
 | Android system overlay DNS | Excluded |
 | Always-on split tunnel | Included; API 29+ mode detection |
 | Lockdown / blocked connections | Excluded |

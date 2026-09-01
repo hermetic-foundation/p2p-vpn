@@ -124,7 +124,7 @@ Coverage:
 | Java | Pairing, approval, VPN mode, status, and recovery tests pass. |
 | Lint | Android debug lint has no errors. |
 | APK | Both JNI ABIs, signature, debug ID, and SDK levels match. |
-| Manifest | Always-on support and debug automation permissions match policy. |
+| Manifest | Protected VPN lifecycle events, always-on, and debug automation match policy. |
 
 Run the physical-device audit preflight without changing the device:
 
@@ -172,6 +172,27 @@ nix run .#android-e2e -- \
 
 The gate covers Android ownership, update restart, disconnect protection,
 lockdown refusal, automatic recovery, and settings cleanup.
+
+Run concurrent network and lifecycle coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario multi-network \
+  --output ./android-multi-network-evidence
+```
+
+| Proof | Required Result |
+| --- | --- |
+| Migration | Legacy identity moves into encrypted collection schema 2. |
+| Activation | Two independently paired networks run through one TUN. |
+| Traffic | Eight concurrent IPv4/IPv6 directions pass 5/5. |
+| Validation | Overlap is rejected without changing the active collection. |
+| Isolation | One failed network does not stop its sibling. |
+| Enable state | Disable and re-enable update only the intended routes. |
+| Recovery | Underlay, process, update, lockdown, and reboot restore traffic. |
+| Bounds | Threads, PSS, queues, logs, evidence, and store growth remain capped. |
+
+The API 35 proof passed on 2026-09-01 with 67 passed evidence steps.
 
 Run code pairing and bidirectional packet coverage:
 
@@ -236,7 +257,7 @@ It rejects third-party source builds, disables fallback, prefetches fixed inputs
 sequentially, and cancels realization when its storage budget is exceeded.
 
 See [Android Architecture](android.md) for the E2E procedure and recorded
-2026-08-31 Linux/emulator evidence.
+2026-09-01 Linux/emulator evidence.
 
 ## NixOS Module Check
 

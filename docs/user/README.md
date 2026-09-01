@@ -7,7 +7,7 @@ Use these docs when you want to run `p2p-vpn`.
 | Document | Use It For |
 | --- | --- |
 | [Quick Start](quick-start.md) | Start and code-pair a minimal NixOS overlay. |
-| [Android](android.md) | Build, install, pair, connect, and recover the Android app. |
+| [Android](android.md) | Build, manage networks, pair, connect, and recover the Android app. |
 | [Configuration](configuration.md) | Understand required config fields and common options. |
 | [NixOS Module](nixos.md) | Start from one native Nix option and run managed instances. |
 | [Pairing](pairing.md) | Pair by code, approve a peer, and install native Nix grants. |

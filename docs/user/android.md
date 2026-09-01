@@ -1,7 +1,9 @@
 # Android
 
-The Android app creates one p2p-vpn identity, pairs by code, and connects one
-saved overlay through Android's VPN interface.
+The Android app stores up to 16 p2p-vpn networks.
+
+Each network has its own identity and membership. Enabled networks connect
+concurrently through one Android VPN interface.
 
 The current artifact is a debug build for test environments.
 
@@ -63,41 +65,90 @@ Select one device when several are connected:
 ANDROID_SERIAL=DEVICE_SERIAL nix run .#android-install
 ```
 
-## Create a Profile
+## Create the First Network
 
 1. Open `p2p-vpn`.
 2. Enter the exact overlay network name.
-3. Select **Create profile**.
+3. Select **Create network**.
 
 The network name must match the Linux or NixOS member.
 
 For a NixOS instance named `runners`, the default network name is `runners`.
 
-The app creates and displays a new libp2p peer ID and p2p-vpn hostname.
+The app creates a separate libp2p peer ID and p2p-vpn hostname for the network.
 
 The default hostname is `android-` plus 16 identity-derived hexadecimal
-characters. It remains stable while the profile identity is preserved.
+characters. It remains stable while the network identity is preserved.
 
-It restores the same encrypted profile on later launches.
+The new network is selected and enabled.
+
+The app restores the encrypted network collection on later launches.
+
+## Manage Networks
+
+### Add
+
+1. Select **Add network**.
+2. Enter the exact overlay network name.
+3. Select **Create network**.
+
+The app creates a new identity. It does not reuse another network's peer ID,
+membership, routes, hostname, or pairing state.
+
+### Select
+
+Select a network name in the **Networks** list.
+
+Selection changes the identity and pairing controls shown below the list. It
+does not enable, disable, or disconnect a network.
+
+### Enable or Disable
+
+Use the switch beside a network name.
+
+| State | Behavior |
+| --- | --- |
+| Enabled | Joins the shared VPN when the service connects. |
+| Disabled | Remains encrypted on disk without discovery, routes, or packet queues. |
+
+Changing the enabled set while connected briefly rebuilds the shared VPN.
+Always-on mode restores the complete enabled set afterward.
+
+### Remove
+
+Use the remove icon beside a network and confirm the warning.
+
+Removal permanently deletes that network's identity, membership, and runtime
+state. The app does not allow removal of the final stored network.
+
+### Rename
+
+Protocol network names cannot be renamed in place.
+
+The name identifies the overlay and DNS namespace. Create and pair a replacement
+network before removing the old one.
 
 ## Connect
 
-1. Select **Connect**.
-2. Allow local-network access when Android requests permission.
-3. Approve the Android VPN prompt.
-4. Allow connection notifications when Android requests permission.
+1. Enable every network that should run.
+2. Select **Connect**.
+3. Allow local-network access when Android requests permission.
+4. Approve the Android VPN prompt.
+5. Allow connection notifications when Android requests permission.
 
 Local-network access is required for LAN discovery and direct peer paths on
-Android API 37 and newer. Denying it leaves the profile disconnected.
+Android API 37 and newer. Denying it leaves the enabled set disconnected.
 
-The app installs only the overlay IPv4 and IPv6 routes.
+The app starts every enabled network behind one Android VPN interface.
+
+It installs only their non-overlapping overlay IPv4 and IPv6 routes.
 
 It does not replace the device's default internet route.
 
 ## Always-On VPN
 
 Connect once before enabling always-on mode. This grants VPN consent and
-confirms the saved profile is readable.
+confirms the saved network collection is readable.
 
 ### Enable
 
@@ -108,7 +159,7 @@ confirms the saved profile is readable.
 5. Leave **Block connections without VPN** disabled.
 
 Android starts the foreground service after reboot, process death, and app
-updates. The app restores the encrypted profile without another prompt.
+updates. The app restores every enabled network without another prompt.
 
 ### Split-Tunnel Behavior
 
@@ -146,9 +197,10 @@ Keep the displayed operation ID and pairing code.
 
 ### 2. Join on Android
 
-1. Connect the Android profile.
-2. Enter the code under **Pair**.
-3. Select **Join by code**.
+1. Select the target network in the **Networks** list.
+2. Ensure that network is enabled and connected.
+3. Enter the code under **Pair**.
+4. Select **Join by code**.
 
 ### 3. Verify on Linux
 
@@ -185,7 +237,7 @@ Follow [Pairing](pairing.md) to render permanent native Nix artifacts on Linux.
 
 ### 1. Create a Code on Android
 
-Connect the profile and select **Create code**.
+Select the target network, connect it, and select **Create code**.
 
 ### 2. Join on Linux
 
@@ -357,8 +409,9 @@ The status view reports:
 
 | Field | Meaning |
 | --- | --- |
-| Identity | Network, stable hostname, and peer ID |
-| Connection | Starting, connected, recovering, or failed |
+| Network row | Enabled state, hostname, and per-network runtime phase |
+| Selected identity | Network name, stable hostname, and peer ID used by pairing controls |
+| Connection | Aggregate starting, connected, recovering, or failed state |
 | Overlay peers | Members with a supported active path |
 | Direct paths | Healthy direct stream or datagram paths |
 | Relay paths | Healthy circuit-relay paths |
@@ -374,7 +427,7 @@ It prefers validated Ethernet, then Wi-Fi, cellular, and Bluetooth.
 The app's own UID is excluded from the TUN. Internal QUIC, TCP, relay, DNS,
 and discovery sockets therefore remain underlay traffic.
 
-The TUN interface and native runtime stay active when the selected network
+The TUN interface and native runtime stay active when the selected underlay
 changes or disappears.
 
 Existing transports migrate when possible. Failed transports are rediscovered
@@ -425,7 +478,7 @@ Review the file before sharing it outside your organization.
 
 | Data | Storage |
 | --- | --- |
-| Identity and network profile | AES-GCM encrypted with Android Keystore |
+| Identities and network collection | AES-GCM encrypted with Android Keystore |
 | Pending pairing operation | Separately encrypted atomic file |
 | Runtime pairing state | Private app storage |
 | Runtime membership state | Private app storage |
@@ -441,7 +494,11 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 
 | Limit | Current Behavior |
 | --- | --- |
-| Simultaneous networks | One saved profile |
+| Stored networks | 1 to 16 isolated identities |
+| Simultaneous networks | Up to 16 enabled networks through one TUN |
+| Route overlap | Rejected before activation; the previous active set remains intact |
+| Inter-network forwarding | Never performed; networks are isolated |
+| Network rename | Not supported; create and pair a replacement network |
 | Android system DNS | Not integrated; Linux members still resolve Android hostnames |
 | Always-on VPN | Supported as a split tunnel; Android 10+ reports mode state |
 | Lockdown / blocked connections | Unsupported; normal internet must remain outside the overlay |
