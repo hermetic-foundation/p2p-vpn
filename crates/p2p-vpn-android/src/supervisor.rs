@@ -58,6 +58,7 @@ pub(crate) struct NetworkSpec {
 
 pub(crate) struct NetworkPort {
     pub id: String,
+    pub generation: u64,
     pub packet_io: PacketIo,
     pub route_controller: SupervisorTunRoutes,
 }
@@ -105,29 +106,25 @@ impl PacketSwitch {
         let mut outbound = BTreeMap::new();
         let mut inbound = Vec::with_capacity(networks.len());
         let mut controls = BTreeMap::new();
-        let mut ports = Vec::with_capacity(networks.len());
 
         for network in networks {
             let translator = PacketTranslator::new(presentation, primary_addresses(&network.tun));
             let network_metrics = Arc::new(NetworkMetrics::default());
             metrics.insert_network(&network.id, Arc::clone(&network_metrics));
 
-            let (outbound_sender, outbound_receiver) = packet_queue(limits);
-            let (inbound_sender, inbound_receiver) = packet_queue(limits);
-            let inbound_active = Arc::new(Mutex::new(true));
             let control = NetworkControl {
                 id: network.id.clone(),
                 routes: routes.clone(),
-                outbound: outbound_sender.clone(),
-                inbound: inbound_receiver.clone(),
-                active: Arc::clone(&inbound_active),
+                state: Arc::new(Mutex::new(NetworkPortState::default())),
+                limits,
+                mtu: usize::from(network.tun.mtu),
                 metrics: Arc::clone(&network_metrics),
                 wake: Arc::clone(&wake),
             };
             outbound.insert(
                 network.id.clone(),
                 OutboundPort {
-                    sender: outbound_sender,
+                    control: control.clone(),
                     mtu: usize::from(network.tun.mtu),
                     metrics: Arc::clone(&network_metrics),
                     translator,
@@ -136,45 +133,30 @@ impl PacketSwitch {
             );
             inbound.push(InboundPort {
                 id: network.id.clone(),
-                receiver: inbound_receiver,
+                control: control.clone(),
                 metrics: Arc::clone(&network_metrics),
-                active: inbound_active,
                 routes: routes.clone(),
                 translator,
                 translation_policy,
             });
             controls.insert(network.id.clone(), control.clone());
-            ports.push(NetworkPort {
-                id: network.id.clone(),
-                packet_io: PacketIo::new(
-                    PortReader {
-                        receiver: outbound_receiver,
-                    },
-                    PortWriter {
-                        sender: inbound_sender,
-                        wake: Arc::clone(&wake),
-                        metrics: network_metrics,
-                        mtu: usize::from(network.tun.mtu),
-                        network_id: network.id.clone(),
-                        routes: routes.clone(),
-                    },
-                ),
-                route_controller: SupervisorTunRoutes { control },
-            });
         }
 
-        Ok((
-            Self {
-                routes,
-                outbound,
-                inbound,
-                controls,
-                next_inbound: Mutex::new(0),
-                wake,
-                metrics,
-            },
-            ports,
-        ))
+        let packet_switch = Self {
+            routes,
+            outbound,
+            inbound,
+            controls,
+            next_inbound: Mutex::new(0),
+            wake,
+            metrics,
+        };
+        let ports = packet_switch
+            .controls
+            .values()
+            .map(NetworkControl::activate)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((packet_switch, ports))
     }
 
     pub(crate) fn dispatch_packet(&self, packet: &[u8]) -> DispatchOutcome {
@@ -187,9 +169,12 @@ impl PacketSwitch {
                 return DispatchOutcome::Malformed;
             }
         };
-        let network_id = match self.routes.resolve(source, destination) {
-            RouteResolution::Routed(network_id) => network_id,
-            RouteResolution::SourceMismatch(network_id) => {
+        let (network_id, generation) = match self.routes.resolve(source, destination) {
+            RouteResolution::Routed {
+                network_id,
+                generation,
+            } => (network_id, generation),
+            RouteResolution::SourceMismatch { network_id, .. } => {
                 self.metrics
                     .source_mismatch_outbound_packets
                     .fetch_add(1, Ordering::Relaxed);
@@ -220,8 +205,24 @@ impl PacketSwitch {
             return DispatchOutcome::Oversized { network_id };
         }
 
+        let state = port
+            .control
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(active) = state
+            .active
+            .as_ref()
+            .filter(|active| active.generation == generation)
+        else {
+            port.metrics
+                .outbound_removed_drops
+                .fetch_add(1, Ordering::Relaxed);
+            return DispatchOutcome::Closed { network_id };
+        };
+
         let queue_result = if port.translator.outbound_requires_translation(source) {
-            match port.sender.reserve(packet.len()) {
+            match active.outbound.reserve(packet.len()) {
                 Ok(reservation) => {
                     let mut translated = packet.to_vec();
                     if port.translator.translate_outbound(&mut translated).is_err() {
@@ -241,9 +242,9 @@ impl PacketSwitch {
                     .fetch_add(1, Ordering::Relaxed);
                 return DispatchOutcome::TranslationFailed { network_id };
             }
-            port.sender.push(packet)
+            active.outbound.push(packet)
         } else {
-            port.sender.push(packet)
+            active.outbound.push(packet)
         };
 
         match queue_result {
@@ -291,19 +292,22 @@ impl PacketSwitch {
         for offset in 0..self.inbound.len() {
             let index = (*next_inbound + offset) % self.inbound.len();
             let port = &self.inbound[index];
-            let active = port
-                .active
+            let state = port
+                .control
+                .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if !*active {
+            let Some(active) = state.active.as_ref() else {
                 continue;
-            }
-            let Some(mut packet) = port.receiver.try_pop() else {
+            };
+            let Some(mut packet) = active.inbound.try_pop() else {
                 continue;
             };
             *next_inbound = (index + 1) % self.inbound.len();
             drop(next_inbound);
-            let validation = port.routes.validate_inbound(&port.id, &packet);
+            let validation = port
+                .routes
+                .validate_inbound(&port.id, active.generation, &packet);
             if validation != InboundValidation::Valid {
                 record_inbound_validation_drop(&port.metrics, validation);
                 return Ok(Some(port.id.clone()));
@@ -359,27 +363,39 @@ impl PacketSwitch {
 
     pub(crate) fn remove_network(&self, network_id: &str) {
         if let Some(control) = self.controls.get(network_id) {
-            control.deactivate();
+            control.deactivate_current();
         }
     }
 
     pub(crate) fn close(&self) {
         for control in self.controls.values() {
-            control.deactivate();
+            control.deactivate_current();
         }
+    }
+
+    pub(crate) fn activate_network(
+        &self,
+        network_id: &str,
+    ) -> Result<(NetworkPort, NetworkLease), SupervisorError> {
+        let control = self
+            .controls
+            .get(network_id)
+            .ok_or_else(|| SupervisorError::UnknownNetwork(network_id.to_owned()))?;
+        let port = control.activate()?;
+        let lease = NetworkLease::new(control.clone(), port.generation);
+        Ok((port, lease))
     }
 
     pub(crate) fn network_lease(
         self: &Arc<Self>,
         network_id: &str,
     ) -> Result<NetworkLease, SupervisorError> {
-        if !self.outbound.contains_key(network_id) {
-            return Err(SupervisorError::UnknownNetwork(network_id.to_owned()));
-        }
-        Ok(NetworkLease {
-            packet_switch: Arc::clone(self),
-            network_id: Some(network_id.to_owned()),
-        })
+        let control = self
+            .controls
+            .get(network_id)
+            .ok_or_else(|| SupervisorError::UnknownNetwork(network_id.to_owned()))?;
+        let generation = control.current_generation()?;
+        Ok(NetworkLease::new(control.clone(), generation))
     }
 
     pub(crate) fn snapshot(&self) -> SwitchSnapshot {
@@ -431,14 +447,23 @@ pub(crate) struct NetworkSnapshot {
 }
 
 pub(crate) struct NetworkLease {
-    packet_switch: Arc<PacketSwitch>,
-    network_id: Option<String>,
+    control: Option<NetworkControl>,
+    generation: u64,
+}
+
+impl NetworkLease {
+    fn new(control: NetworkControl, generation: u64) -> Self {
+        Self {
+            control: Some(control),
+            generation,
+        }
+    }
 }
 
 impl Drop for NetworkLease {
     fn drop(&mut self) {
-        if let Some(network_id) = self.network_id.take() {
-            self.packet_switch.remove_network(&network_id);
+        if let Some(control) = self.control.take() {
+            control.deactivate(self.generation);
         }
     }
 }
@@ -446,6 +471,7 @@ impl Drop for NetworkLease {
 #[derive(Clone)]
 pub(crate) struct SupervisorTunRoutes {
     control: NetworkControl,
+    generation: u64,
 }
 
 impl TunRouteController for SupervisorTunRoutes {
@@ -455,7 +481,11 @@ impl TunRouteController for SupervisorTunRoutes {
         next: &TunRuntimeConfig,
         _update: &TunRouteUpdate,
     ) -> Result<(), RunnerError> {
-        if self.control.replace_routes(installed, next).is_ok() {
+        if self
+            .control
+            .replace_routes(self.generation, installed, next)
+            .is_ok()
+        {
             return Ok(());
         }
 
@@ -482,10 +512,15 @@ impl DispatchRegistry {
         let mut configured = BTreeMap::new();
         for network in networks {
             validate_network_id(&network.id)?;
+            let routes = NetworkRoutes::try_from_tun(&network.id, &network.tun)?;
             if configured
                 .insert(
                     network.id.clone(),
-                    NetworkRoutes::try_from_tun(&network.id, &network.tun)?,
+                    NetworkRouteEntry {
+                        reserved: routes.clone(),
+                        current: routes,
+                        active_generation: None,
+                    },
                 )
                 .is_some()
             {
@@ -512,28 +547,51 @@ impl DispatchRegistry {
         let Some(network) = state.networks.get(&route.network_id) else {
             return RouteResolution::NoRoute;
         };
-        if network.local.iter().any(|prefix| prefix.contains(source))
+        if network
+            .current
+            .local
+            .iter()
+            .any(|prefix| prefix.contains(source))
             || state.presentation.contains(source)
         {
-            RouteResolution::Routed(route.network_id.clone())
+            RouteResolution::Routed {
+                network_id: route.network_id.clone(),
+                generation: route.generation,
+            }
         } else {
-            RouteResolution::SourceMismatch(route.network_id.clone())
+            RouteResolution::SourceMismatch {
+                network_id: route.network_id.clone(),
+            }
         }
     }
 
-    fn validate_inbound(&self, network_id: &str, packet: &[u8]) -> InboundValidation {
+    fn validate_inbound(
+        &self,
+        network_id: &str,
+        generation: u64,
+        packet: &[u8],
+    ) -> InboundValidation {
         let state = self.state.read().unwrap_or_else(|error| error.into_inner());
         let Some(network) = state.networks.get(network_id) else {
             return InboundValidation::Removed;
         };
+        if network.active_generation != Some(generation) {
+            return InboundValidation::Removed;
+        }
         let (source, destination) = match packet_addresses(packet) {
             Ok(addresses) => addresses,
             Err(_) => return InboundValidation::Malformed,
         };
-        if !network.remote.iter().any(|prefix| prefix.contains(source)) {
+        if !network
+            .current
+            .remote
+            .iter()
+            .any(|prefix| prefix.contains(source))
+        {
             return InboundValidation::SourceMismatch;
         }
         if !network
+            .current
             .local
             .iter()
             .any(|prefix| prefix.contains(destination))
@@ -546,6 +604,7 @@ impl DispatchRegistry {
     fn replace(
         &self,
         network_id: &str,
+        network_generation: u64,
         installed: &TunRuntimeConfig,
         next: &TunRuntimeConfig,
     ) -> Result<(), SupervisorError> {
@@ -563,7 +622,9 @@ impl DispatchRegistry {
             let Some(expected) = current.networks.get(network_id) else {
                 return Err(SupervisorError::UnknownNetwork(network_id.to_owned()));
             };
-            if expected != &installed_routes {
+            if expected.active_generation != Some(network_generation)
+                || expected.current != installed_routes
+            {
                 return Err(SupervisorError::StaleRouteUpdate(network_id.to_owned()));
             }
             (
@@ -572,7 +633,10 @@ impl DispatchRegistry {
                 current.networks.clone(),
             )
         };
-        candidate.insert(network_id.to_owned(), next_routes);
+        let candidate_entry = candidate
+            .get_mut(network_id)
+            .ok_or_else(|| SupervisorError::UnknownNetwork(network_id.to_owned()))?;
+        candidate_entry.current = next_routes;
         let mut candidate = DispatchState::validated(candidate, presentation)?;
 
         let mut current = self
@@ -580,7 +644,10 @@ impl DispatchRegistry {
             .write()
             .unwrap_or_else(|error| error.into_inner());
         if current.generation != generation
-            || current.networks.get(network_id) != Some(&installed_routes)
+            || current.networks.get(network_id).map_or(true, |entry| {
+                entry.active_generation != Some(network_generation)
+                    || entry.current != installed_routes
+            })
         {
             return Err(SupervisorError::StaleRouteUpdate(network_id.to_owned()));
         }
@@ -589,21 +656,46 @@ impl DispatchRegistry {
         Ok(())
     }
 
-    fn remove(&self, network_id: &str) {
+    fn activate(&self, network_id: &str, generation: u64) -> Result<(), SupervisorError> {
         let mut current = self
             .state
             .write()
             .unwrap_or_else(|error| error.into_inner());
-        if current.networks.remove(network_id).is_some() {
-            current.generation = current.generation.wrapping_add(1);
-            current.rebuild_dispatch();
+        let network = current
+            .networks
+            .get_mut(network_id)
+            .ok_or_else(|| SupervisorError::UnknownNetwork(network_id.to_owned()))?;
+        if network.active_generation.is_some() {
+            return Err(SupervisorError::NetworkAlreadyActive(network_id.to_owned()));
         }
+        network.current = network.reserved.clone();
+        network.active_generation = Some(generation);
+        current.generation = current.generation.wrapping_add(1);
+        current.rebuild_dispatch();
+        Ok(())
+    }
+
+    fn deactivate(&self, network_id: &str, generation: u64) {
+        let mut current = self
+            .state
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(network) = current.networks.get_mut(network_id) else {
+            return;
+        };
+        if network.active_generation != Some(generation) {
+            return;
+        }
+        network.current = network.reserved.clone();
+        network.active_generation = None;
+        current.generation = current.generation.wrapping_add(1);
+        current.rebuild_dispatch();
     }
 }
 
 enum RouteResolution {
-    Routed(String),
-    SourceMismatch(String),
+    Routed { network_id: String, generation: u64 },
+    SourceMismatch { network_id: String },
     NoRoute,
 }
 
@@ -633,6 +725,35 @@ struct NetworkRoutes {
     remote: Vec<IpCidr>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NetworkRouteEntry {
+    reserved: NetworkRoutes,
+    current: NetworkRoutes,
+    active_generation: Option<u64>,
+}
+
+impl NetworkRouteEntry {
+    fn ownership_prefixes(&self) -> Vec<IpCidr> {
+        let mut prefixes = self.reserved.all().collect::<Vec<_>>();
+        for prefix in self.current.all() {
+            if !prefixes.contains(&prefix) {
+                prefixes.push(prefix);
+            }
+        }
+        prefixes
+    }
+
+    fn remote_ownership_prefixes(&self) -> Vec<IpCidr> {
+        let mut prefixes = self.reserved.remote.clone();
+        for prefix in &self.current.remote {
+            if !prefixes.contains(prefix) {
+                prefixes.push(*prefix);
+            }
+        }
+        prefixes
+    }
+}
+
 impl NetworkRoutes {
     fn try_from_tun(network_id: &str, tun: &TunRuntimeConfig) -> Result<Self, SupervisorError> {
         let mut local = vec![
@@ -657,45 +778,61 @@ impl NetworkRoutes {
 struct DispatchState {
     generation: u64,
     presentation: PrimaryAddresses,
-    networks: BTreeMap<String, NetworkRoutes>,
+    networks: BTreeMap<String, NetworkRouteEntry>,
     dispatch: Vec<DispatchRoute>,
 }
 
 impl DispatchState {
     fn validated(
-        networks: BTreeMap<String, NetworkRoutes>,
+        networks: BTreeMap<String, NetworkRouteEntry>,
         presentation: PrimaryAddresses,
     ) -> Result<Self, SupervisorError> {
-        let total_prefixes = networks
-            .values()
-            .map(|routes| routes.local.len().saturating_add(routes.remote.len()))
+        let ownership = networks
+            .iter()
+            .map(|(network_id, routes)| (network_id, routes.ownership_prefixes()))
+            .collect::<Vec<_>>();
+        for (network_id, prefixes) in &ownership {
+            if prefixes.len() > MAX_PREFIXES_PER_NETWORK {
+                return Err(SupervisorError::TooManyNetworkPrefixes {
+                    network_id: (*network_id).clone(),
+                    actual: prefixes.len(),
+                });
+            }
+        }
+        let total_prefixes = ownership
+            .iter()
+            .map(|(_, prefixes)| prefixes.len())
             .sum::<usize>();
         if total_prefixes > MAX_TOTAL_PREFIXES {
             return Err(SupervisorError::TooManyTotalPrefixes {
                 actual: total_prefixes,
             });
         }
-        let entries = networks.iter().collect::<Vec<_>>();
-        for (index, (left_id, left)) in entries.iter().enumerate() {
-            for (right_id, right) in entries.iter().skip(index + 1) {
-                for left_prefix in left.all() {
+        for (index, (left_id, left)) in ownership.iter().enumerate() {
+            for (right_id, right) in ownership.iter().skip(index + 1) {
+                for left_prefix in left {
                     if let Some(right_prefix) = right
-                        .all()
-                        .find(|right_prefix| left_prefix.overlaps(*right_prefix))
+                        .iter()
+                        .find(|right_prefix| left_prefix.overlaps(**right_prefix))
                     {
                         return Err(SupervisorError::OverlappingNetworks {
                             first_network: (*left_id).clone(),
-                            first_prefix: left_prefix,
+                            first_prefix: *left_prefix,
                             second_network: (*right_id).clone(),
-                            second_prefix: right_prefix,
+                            second_prefix: *right_prefix,
                         });
                     }
                 }
             }
         }
         for (network_id, routes) in &networks {
-            for local in &routes.local {
-                if let Some(remote) = routes.remote.iter().find(|remote| local.overlaps(**remote)) {
+            for local in &routes.current.local {
+                if let Some(remote) = routes
+                    .current
+                    .remote
+                    .iter()
+                    .find(|remote| local.overlaps(**remote))
+                {
                     return Err(SupervisorError::LocalRouteOverlap {
                         network_id: network_id.clone(),
                         local: *local,
@@ -704,11 +841,15 @@ impl DispatchState {
                 }
             }
             for address in [IpAddr::V4(presentation.ipv4), IpAddr::V6(presentation.ipv6)] {
-                if let Some(remote) = routes.remote.iter().find(|remote| remote.contains(address)) {
+                if let Some(remote) = routes
+                    .remote_ownership_prefixes()
+                    .into_iter()
+                    .find(|remote| remote.contains(address))
+                {
                     return Err(SupervisorError::PresentationRouteOverlap {
                         network_id: network_id.clone(),
                         presentation: address,
-                        remote: *remote,
+                        remote,
                     });
                 }
             }
@@ -729,10 +870,21 @@ impl DispatchState {
             .networks
             .iter()
             .flat_map(|(network_id, routes)| {
-                routes.remote.iter().copied().map(|prefix| DispatchRoute {
-                    network_id: network_id.clone(),
-                    prefix,
-                })
+                routes
+                    .active_generation
+                    .into_iter()
+                    .flat_map(move |generation| {
+                        routes
+                            .current
+                            .remote
+                            .iter()
+                            .copied()
+                            .map(move |prefix| DispatchRoute {
+                                network_id: network_id.clone(),
+                                generation,
+                                prefix,
+                            })
+                    })
             })
             .collect();
         self.dispatch.sort_by(|left, right| {
@@ -747,6 +899,7 @@ impl DispatchState {
 
 struct DispatchRoute {
     network_id: String,
+    generation: u64,
     prefix: IpCidr,
 }
 
@@ -760,6 +913,8 @@ pub(crate) enum SupervisorError {
     InvalidQueueLimits,
     InvalidPresentationAddresses,
     UnknownNetwork(String),
+    NetworkAlreadyActive(String),
+    NetworkInactive(String),
     NetworkAddressChanged(String),
     StaleRouteUpdate(String),
     TooManyNetworkPrefixes {
@@ -814,6 +969,15 @@ impl fmt::Display for SupervisorError {
             }
             Self::UnknownNetwork(id) => {
                 write!(formatter, "Android supervisor network is unknown: {id}")
+            }
+            Self::NetworkAlreadyActive(id) => {
+                write!(
+                    formatter,
+                    "Android supervisor network is already active: {id}"
+                )
+            }
+            Self::NetworkInactive(id) => {
+                write!(formatter, "Android supervisor network is inactive: {id}")
             }
             Self::NetworkAddressChanged(id) => write!(
                 formatter,
@@ -1016,6 +1180,7 @@ impl PacketRead for PortReader {
 
 struct PortWriter {
     sender: QueueSender,
+    generation: u64,
     wake: Arc<WriterWake>,
     metrics: Arc<NetworkMetrics>,
     mtu: usize,
@@ -1031,7 +1196,9 @@ impl PacketWrite for PortWriter {
                 .fetch_add(1, Ordering::Relaxed);
             return Ok(packet.len());
         }
-        let validation = self.routes.validate_inbound(&self.network_id, packet);
+        let validation = self
+            .routes
+            .validate_inbound(&self.network_id, self.generation, packet);
         if validation != InboundValidation::Valid {
             record_inbound_validation_drop(&self.metrics, validation);
             if validation == InboundValidation::Removed {
@@ -1081,7 +1248,7 @@ impl PacketWrite for PortWriter {
 }
 
 struct OutboundPort {
-    sender: QueueSender,
+    control: NetworkControl,
     mtu: usize,
     metrics: Arc<NetworkMetrics>,
     translator: PacketTranslator,
@@ -1090,9 +1257,8 @@ struct OutboundPort {
 
 struct InboundPort {
     id: String,
-    receiver: QueueReceiver,
+    control: NetworkControl,
     metrics: Arc<NetworkMetrics>,
-    active: Arc<Mutex<bool>>,
     routes: DispatchRegistry,
     translator: PacketTranslator,
     translation_policy: TranslationPolicy,
@@ -1102,55 +1268,129 @@ struct InboundPort {
 struct NetworkControl {
     id: String,
     routes: DispatchRegistry,
-    outbound: QueueSender,
-    inbound: QueueReceiver,
-    active: Arc<Mutex<bool>>,
+    state: Arc<Mutex<NetworkPortState>>,
+    limits: QueueLimits,
+    mtu: usize,
     metrics: Arc<NetworkMetrics>,
     wake: Arc<WriterWake>,
 }
 
+#[derive(Default)]
+struct NetworkPortState {
+    next_generation: u64,
+    active: Option<NetworkPortGeneration>,
+}
+
+struct NetworkPortGeneration {
+    generation: u64,
+    outbound: QueueSender,
+    inbound: QueueReceiver,
+}
+
 impl NetworkControl {
-    fn deactivate(&self) {
-        let active = self
-            .active
+    fn activate(&self) -> Result<NetworkPort, SupervisorError> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.active.is_some() {
+            return Err(SupervisorError::NetworkAlreadyActive(self.id.clone()));
+        }
+        let generation = state.next_generation.wrapping_add(1).max(1);
+        state.next_generation = generation;
+        let (outbound_sender, outbound_receiver) = packet_queue(self.limits);
+        let (inbound_sender, inbound_receiver) = packet_queue(self.limits);
+        state.active = Some(NetworkPortGeneration {
+            generation,
+            outbound: outbound_sender,
+            inbound: inbound_receiver,
+        });
+        if let Err(error) = self.routes.activate(&self.id, generation) {
+            if let Some(active) = state.active.take() {
+                active.outbound.close_and_discard();
+                active.inbound.close_and_discard();
+            }
+            return Err(error);
+        }
+        Ok(NetworkPort {
+            id: self.id.clone(),
+            generation,
+            packet_io: PacketIo::new(
+                PortReader {
+                    receiver: outbound_receiver,
+                },
+                PortWriter {
+                    sender: inbound_sender,
+                    generation,
+                    wake: Arc::clone(&self.wake),
+                    metrics: Arc::clone(&self.metrics),
+                    mtu: self.mtu,
+                    network_id: self.id.clone(),
+                    routes: self.routes.clone(),
+                },
+            ),
+            route_controller: SupervisorTunRoutes {
+                control: self.clone(),
+                generation,
+            },
+        })
+    }
+
+    fn current_generation(&self) -> Result<u64, SupervisorError> {
+        self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        self.deactivate_locked(active);
+            .unwrap_or_else(|error| error.into_inner())
+            .active
+            .as_ref()
+            .map(|active| active.generation)
+            .ok_or_else(|| SupervisorError::NetworkInactive(self.id.clone()))
+    }
+
+    fn deactivate_current(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(generation) = state.active.as_ref().map(|active| active.generation) else {
+            return;
+        };
+        self.deactivate_locked(&mut state, generation);
+    }
+
+    fn deactivate(&self, generation: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.deactivate_locked(&mut state, generation);
     }
 
     fn replace_routes(
         &self,
+        generation: u64,
         installed: &TunRuntimeConfig,
         next: &TunRuntimeConfig,
     ) -> Result<(), SupervisorError> {
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if !*active {
-            return Err(SupervisorError::UnknownNetwork(self.id.clone()));
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.active.as_ref().map(|active| active.generation) != Some(generation) {
+            return Err(SupervisorError::StaleRouteUpdate(self.id.clone()));
         }
-        match self.routes.replace(&self.id, installed, next) {
+        match self.routes.replace(&self.id, generation, installed, next) {
             Ok(()) => Ok(()),
             Err(error) => {
-                self.deactivate_locked(active);
+                self.deactivate_locked(&mut state, generation);
                 Err(error)
             }
         }
     }
 
-    fn deactivate_locked(&self, mut active: std::sync::MutexGuard<'_, bool>) {
-        *active = false;
-        self.routes.remove(&self.id);
-        let outbound_dropped = self.outbound.close_and_discard();
+    fn deactivate_locked(&self, state: &mut NetworkPortState, generation: u64) {
+        let Some(active) = state
+            .active
+            .take_if(|active| active.generation == generation)
+        else {
+            return;
+        };
+        self.routes.deactivate(&self.id, generation);
+        let outbound_dropped = active.outbound.close_and_discard();
         self.metrics
             .outbound_removed_drops
             .fetch_add(outbound_dropped, Ordering::Relaxed);
-        let inbound_dropped = self.inbound.close_and_discard();
+        let inbound_dropped = active.inbound.close_and_discard();
         self.metrics
             .inbound_removed_drops
             .fetch_add(inbound_dropped, Ordering::Relaxed);
-        drop(active);
         self.wake.notify();
     }
 }
@@ -2008,6 +2248,59 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_route_update_exceeding_the_reserved_prefix_budget() {
+        let route_count = MAX_PREFIXES_PER_NETWORK / 2;
+        let routes = |first_octet: u8| {
+            (0..route_count)
+                .map(|index| Route {
+                    owner: peer(99),
+                    prefix: cidr(
+                        &format!(
+                            "{first_octet}.{}.{}.{}",
+                            (index >> 16) & 0xff,
+                            (index >> 8) & 0xff,
+                            index & 0xff
+                        ),
+                        32,
+                    ),
+                    metric: 0,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut current = tun(1, &[]);
+        current.routes = routes(10);
+        let (switch, mut ports) = PacketSwitch::new(
+            vec![NetworkSpec {
+                id: "alpha".to_owned(),
+                tun: current.clone(),
+            }],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let mut next = current.clone();
+        next.routes = routes(11);
+        let update = next
+            .route_reconciliation_from(&current)
+            .expect("route update");
+        let result = ports
+            .pop()
+            .expect("alpha port")
+            .route_controller
+            .reconcile(&current, &next, &update);
+
+        assert!(matches!(
+            result,
+            Err(RunnerError::Tun(TunRuntimeError::NonAdditiveUpdate(
+                ROUTE_UPDATE_REJECTED
+            )))
+        ));
+        assert_eq!(
+            switch.dispatch_packet(&packet(local(1), [10, 0, 0, 1])),
+            DispatchOutcome::NoRoute
+        );
+    }
+
+    #[test]
     fn rejects_a_route_overlapping_another_network_local_address() {
         let beta = tun(2, &[]);
         let beta_local = beta.addresses.ipv4.to_string();
@@ -2740,6 +3033,148 @@ mod tests {
         assert!(matches!(
             switch.dispatch_packet(&packet(local(2), [10, 20, 1, 1])),
             DispatchOutcome::Queued { .. }
+        ));
+    }
+
+    #[test]
+    fn reactivation_uses_fresh_queues_and_rejects_stale_generation_handles() {
+        let current = tun(1, &[("10.10.0.0", 16)]);
+        let (switch, mut ports) = PacketSwitch::new(
+            vec![NetworkSpec {
+                id: "alpha".to_owned(),
+                tun: current.clone(),
+            }],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let switch = Arc::new(switch);
+        let old_port = ports.pop().expect("old port");
+        let old_generation = old_port.generation;
+        let mut old_routes = old_port.route_controller;
+        let (mut old_reader, mut old_writer) = old_port.packet_io.split();
+        let old_lease = switch.network_lease("alpha").expect("old lease");
+        let stale_outbound = packet(local(1), [10, 10, 1, 1]);
+        let stale_inbound = packet([10, 10, 1, 1], local(1));
+
+        assert!(matches!(
+            switch.dispatch_packet(&stale_outbound),
+            DispatchOutcome::Queued { .. }
+        ));
+        old_writer
+            .write_packet(&stale_inbound)
+            .expect("stale inbound packet");
+        switch.remove_network("alpha");
+
+        let (new_port, new_lease) = switch.activate_network("alpha").expect("new activation");
+        assert!(new_port.generation > old_generation);
+        let (mut new_reader, mut new_writer) = new_port.packet_io.split();
+        drop(old_lease);
+
+        let mut buffer = [0_u8; 1280];
+        assert!(matches!(
+            old_reader
+                .read_packet(&mut buffer)
+                .expect_err("old outbound queue is closed"),
+            TunRuntimeError::Io(error) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(matches!(
+            old_writer
+                .write_packet(&stale_inbound)
+                .expect_err("old inbound writer is rejected"),
+            TunRuntimeError::Io(error) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+
+        let next = TunRuntimeConfig {
+            routes: vec![Route {
+                owner: peer(42),
+                prefix: cidr("10.11.0.0", 16),
+                metric: 0,
+            }],
+            ..current.clone()
+        };
+        let update = next
+            .route_reconciliation_from(&current)
+            .expect("route update");
+        assert!(old_routes.reconcile(&current, &next, &update).is_err());
+
+        let written = Arc::new(Mutex::new(Vec::new()));
+        assert_eq!(
+            switch
+                .write_next(&mut RecordingWriter(Arc::clone(&written)))
+                .expect("new inbound queue is empty"),
+            None
+        );
+        let current_outbound = packet(local(1), [10, 10, 1, 2]);
+        assert!(matches!(
+            switch.dispatch_packet(&current_outbound),
+            DispatchOutcome::Queued { .. }
+        ));
+        let length = new_reader
+            .read_packet(&mut buffer)
+            .expect("new outbound packet");
+        assert_eq!(&buffer[..length], current_outbound);
+
+        let current_inbound = packet([10, 10, 1, 2], local(1));
+        new_writer
+            .write_packet(&current_inbound)
+            .expect("new inbound packet");
+        assert_eq!(
+            switch
+                .write_next(&mut RecordingWriter(Arc::clone(&written)))
+                .expect("new inbound write"),
+            Some("alpha".to_owned())
+        );
+        assert_eq!(
+            *written.lock().expect("written packets"),
+            vec![current_inbound]
+        );
+        drop(new_lease);
+    }
+
+    #[test]
+    fn inactive_network_routes_remain_reserved_during_recovery() {
+        let alpha = tun(1, &[("10.10.0.0", 16)]);
+        let beta = tun(2, &[("10.20.0.0", 16)]);
+        let (switch, mut ports) = PacketSwitch::new(
+            vec![
+                NetworkSpec {
+                    id: "alpha".to_owned(),
+                    tun: alpha,
+                },
+                NetworkSpec {
+                    id: "beta".to_owned(),
+                    tun: beta.clone(),
+                },
+            ],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        switch.remove_network("alpha");
+        let mut beta_routes = ports
+            .drain(..)
+            .find(|port| port.id == "beta")
+            .expect("beta port")
+            .route_controller;
+        let conflicting = TunRuntimeConfig {
+            routes: vec![Route {
+                owner: peer(42),
+                prefix: cidr("10.10.8.0", 24),
+                metric: 0,
+            }],
+            ..beta.clone()
+        };
+        let update = conflicting
+            .route_reconciliation_from(&beta)
+            .expect("route update");
+
+        assert!(beta_routes.reconcile(&beta, &conflicting, &update).is_err());
+        let (alpha_port, _alpha_lease) = switch
+            .activate_network("alpha")
+            .expect("reserved network reactivation");
+        assert!(alpha_port.generation > 1);
+        assert!(matches!(
+            switch.dispatch_packet(&packet(local(1), [10, 10, 1, 1])),
+            DispatchOutcome::Queued { network_id } if network_id == "alpha"
         ));
     }
 
