@@ -2749,26 +2749,80 @@ async fn send_path_probes(
                 }
             }
             PacketTransportDecision::StreamFallback { path } => {
-                match forwarder.send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD)
-                {
-                    Ok(request_id) => {
-                        packet_in_flight.record_path_probe(
-                            peer,
-                            request_id,
-                            path.kind,
-                            path.relay_peer,
-                        );
+                match send_stream_path_probe(swarm, forwarder, peer, peer_mtu, path) {
+                    Ok(dispatch) => {
+                        packet_in_flight.record_path_probe(peer, dispatch.in_flight_id(), path);
                         metrics.record_outbound_path_probe_sent();
                     }
                     Err(error) => {
                         metrics.record_outbound_path_probe_failure();
-                        eprintln!("path probe to {peer} failed: {error:?}");
+                        eprintln!("path probe to {peer} failed: {error}");
                     }
                 }
             }
             PacketTransportDecision::Blocked { .. } => {}
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StreamPathProbeDispatch {
+    RequestResponse(request_response::OutboundRequestId),
+    Pinned(pinned_packet_stream::RequestId),
+}
+
+impl StreamPathProbeDispatch {
+    const fn in_flight_id(self) -> PacketInFlightId {
+        match self {
+            Self::RequestResponse(request_id) => PacketInFlightId::RequestResponse(request_id),
+            Self::Pinned(request_id) => PacketInFlightId::PinnedPacketStream(request_id),
+        }
+    }
+}
+
+fn pinned_stream_path_probe_connection(
+    peer: PeerId,
+    path: crate::path::PathCandidate,
+) -> Result<ConnectionId, String> {
+    path.latest_connection_id.ok_or_else(|| {
+        format!(
+            "selected {} path for {peer} has no connection id",
+            path.kind.wire_name()
+        )
+    })
+}
+
+fn send_stream_path_probe(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &mut Forwarder,
+    peer: PeerId,
+    peer_mtu: u16,
+    path: crate::path::PathCandidate,
+) -> Result<StreamPathProbeDispatch, String> {
+    if !matches!(
+        path.kind,
+        PathKind::DirectQuicStream | PathKind::CircuitRelay
+    ) {
+        return forwarder
+            .send_path_probe_with_mtu(swarm, peer, peer_mtu, PATH_PROBE_PAYLOAD)
+            .map(StreamPathProbeDispatch::RequestResponse)
+            .map_err(|error| format!("{error:?}"));
+    }
+
+    let connection_id = pinned_stream_path_probe_connection(peer, path)?;
+    let transport_peer = forwarder
+        .transport_peer_for_overlay(peer)
+        .ok_or(ForwardError::NoTransportPeer(peer))
+        .map_err(|error| format!("{error:?}"))?;
+    let frame = forwarder
+        .path_probe_frame_with_mtu(peer_mtu, PATH_PROBE_PAYLOAD)
+        .map_err(|error| format!("{error:?}"))?;
+    let request_id = swarm
+        .behaviour_mut()
+        .pinned_packet_stream
+        .send_request_on_connection(transport_peer, connection_id, frame);
+
+    Ok(StreamPathProbeDispatch::Pinned(request_id))
 }
 
 fn has_established_packet_plane_candidate(
@@ -9247,17 +9301,16 @@ impl PacketInFlight {
     fn record_path_probe(
         &mut self,
         peer: PeerId,
-        request_id: request_response::OutboundRequestId,
-        path: PathKind,
-        relay_peer: Option<PeerId>,
+        request_id: PacketInFlightId,
+        path: crate::path::PathCandidate,
     ) {
         self.requests.insert(
-            PacketInFlightId::RequestResponse(request_id),
+            request_id,
             PacketInFlightRequest {
                 peer,
                 shard: 0,
-                path,
-                relay_peer,
+                path: path.kind,
+                relay_peer: path.relay_peer,
                 sent_at: Instant::now(),
             },
         );
@@ -28360,6 +28413,46 @@ mod tests {
         assert_eq!(snapshot.stream_fallback_path_demotions, 1);
     }
 
+    #[test]
+    fn pinned_stream_failure_keeps_a_replacement_quic_connection_healthy() {
+        let peer = PeerId::from_bytes([15; 32]);
+        let failed_connection = ConnectionId::new_unchecked(7);
+        let replacement_connection = ConnectionId::new_unchecked(8);
+        let mut paths = PathSet::new();
+        let metrics = RuntimeMetrics::default();
+
+        for connection_id in [failed_connection, replacement_connection] {
+            paths.record_established_with_details(
+                peer,
+                PathKind::DirectQuicStream,
+                None,
+                Some(1280),
+                PathOrigin::Dcutr,
+                PathConnectionRole::Dialer,
+                false,
+                Some(connection_id),
+                Some(1),
+            );
+        }
+
+        assert!(!maybe_demote_pinned_stream_fallback_path(
+            &mut paths,
+            &metrics,
+            peer,
+            PathKind::DirectQuicStream,
+            None,
+            failed_connection,
+            &pinned_packet_stream::Failure::StreamUpgrade("timeout".to_owned()),
+        ));
+        let selected = paths.best_for(peer).expect("replacement QUIC connection");
+        assert!(selected.healthy);
+        assert_eq!(selected.latest_connection_id, Some(replacement_connection));
+        assert_eq!(selected.established_connections, 1);
+
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.stream_fallback_path_demotions, 0);
+    }
+
     #[tokio::test]
     async fn packet_plane_session_expiry_marks_datagram_path_unhealthy() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
@@ -34445,6 +34538,68 @@ mod tests {
         assert_eq!(snapshot.outbound_path_probes_sent, 1);
         assert_eq!(snapshot.outbound_path_probe_failures, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
+    }
+
+    #[tokio::test]
+    async fn quic_stream_path_probe_is_pinned_to_the_latest_connection() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let remote = peer_id();
+        let remote_overlay = PeerId::from_libp2p(remote);
+        let config = config_with_peer(&local_identity, remote);
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let first_connection = ConnectionId::new_unchecked(41);
+        let latest_connection = ConnectionId::new_unchecked(42);
+        let mut paths = PathSet::new();
+        for connection_id in [first_connection, latest_connection] {
+            paths.record_established_with_details(
+                remote_overlay,
+                PathKind::DirectQuicStream,
+                None,
+                Some(1280),
+                PathOrigin::Dcutr,
+                PathConnectionRole::Dialer,
+                false,
+                Some(connection_id),
+                Some(1),
+            );
+        }
+
+        let selected = paths.best_for(remote_overlay).expect("selected QUIC path");
+        assert_eq!(
+            pinned_stream_path_probe_connection(remote_overlay, selected)
+                .expect("selected connection"),
+            latest_connection
+        );
+        let dispatch = send_stream_path_probe(
+            &mut node.swarm,
+            &mut forwarder,
+            remote_overlay,
+            1280,
+            selected,
+        )
+        .expect("path probe");
+
+        let StreamPathProbeDispatch::Pinned(_) = dispatch else {
+            panic!("QUIC path probe used generic request-response");
+        };
     }
 
     #[tokio::test]

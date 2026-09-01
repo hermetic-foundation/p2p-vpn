@@ -194,6 +194,9 @@ The path manager scores available paths.
 Direct datagram paths are preferred when a compatible packet-plane session
 exists.
 
+QUIC and relay stream packets and health probes are pinned to the selected
+connection. A stale connection failure cannot demote a healthy replacement.
+
 | Path Kind | Relative Preference |
 | --- | --- |
 | Direct QUIC datagram | highest when negotiated and healthy |
