@@ -505,6 +505,15 @@ struct DispatchRegistry {
     state: Arc<RwLock<DispatchState>>,
 }
 
+struct PreparedRouteReplacement {
+    network_id: String,
+    network_generation: u64,
+    observed_generation: u64,
+    installed: NetworkRoutes,
+    next: NetworkRoutes,
+    candidate: DispatchState,
+}
+
 impl DispatchRegistry {
     fn new(
         networks: &[NetworkSpec],
@@ -609,6 +618,17 @@ impl DispatchRegistry {
         installed: &TunRuntimeConfig,
         next: &TunRuntimeConfig,
     ) -> Result<(), SupervisorError> {
+        let replacement = self.prepare_replace(network_id, network_generation, installed, next)?;
+        self.commit_replace(replacement)
+    }
+
+    fn prepare_replace(
+        &self,
+        network_id: &str,
+        network_generation: u64,
+        installed: &TunRuntimeConfig,
+        next: &TunRuntimeConfig,
+    ) -> Result<PreparedRouteReplacement, SupervisorError> {
         if primary_addresses(installed) != primary_addresses(next)
             || installed.additional_addresses != next.additional_addresses
         {
@@ -637,22 +657,46 @@ impl DispatchRegistry {
         let candidate_entry = candidate
             .get_mut(network_id)
             .ok_or_else(|| SupervisorError::UnknownNetwork(network_id.to_owned()))?;
-        candidate_entry.current = next_routes;
-        let mut candidate = DispatchState::validated(candidate, presentation)?;
+        candidate_entry.current = next_routes.clone();
+        let candidate = DispatchState::validated(candidate, presentation)?;
 
+        Ok(PreparedRouteReplacement {
+            network_id: network_id.to_owned(),
+            network_generation,
+            observed_generation: generation,
+            installed: installed_routes,
+            next: next_routes,
+            candidate,
+        })
+    }
+
+    fn commit_replace(&self, replacement: PreparedRouteReplacement) -> Result<(), SupervisorError> {
         let mut current = self
             .state
             .write()
             .unwrap_or_else(|error| error.into_inner());
-        if current.generation != generation
-            || current.networks.get(network_id).map_or(true, |entry| {
-                entry.active_generation != Some(network_generation)
-                    || entry.current != installed_routes
+        if current
+            .networks
+            .get(&replacement.network_id)
+            .map_or(true, |entry| {
+                entry.active_generation != Some(replacement.network_generation)
+                    || entry.current != replacement.installed
             })
         {
-            return Err(SupervisorError::StaleRouteUpdate(network_id.to_owned()));
+            return Err(SupervisorError::StaleRouteUpdate(replacement.network_id));
         }
-        candidate.generation = generation.wrapping_add(1);
+
+        let mut candidate = if current.generation == replacement.observed_generation {
+            replacement.candidate
+        } else {
+            let mut rebased = current.networks.clone();
+            let candidate_entry = rebased
+                .get_mut(&replacement.network_id)
+                .ok_or_else(|| SupervisorError::UnknownNetwork(replacement.network_id.clone()))?;
+            candidate_entry.current = replacement.next;
+            DispatchState::validated(rebased, current.presentation)?
+        };
+        candidate.generation = current.generation.wrapping_add(1);
         *current = candidate;
         Ok(())
     }
@@ -2343,10 +2387,11 @@ mod tests {
             QueueLimits::DEFAULT,
         )
         .expect("switch");
-        let mut beta_port = ports
-            .drain(..)
-            .find(|port| port.id == "beta")
+        let beta_index = ports
+            .iter()
+            .position(|port| port.id == "beta")
             .expect("beta port");
+        let mut beta_port = ports.remove(beta_index);
         let (mut beta_reader, mut beta_writer) = beta_port.packet_io.split();
         let next = TunRuntimeConfig {
             routes: vec![Route {
@@ -2400,6 +2445,77 @@ mod tests {
             .find(|network| network.id == "beta")
             .expect("beta metrics");
         assert_eq!(beta.route_update_rejections, 1);
+    }
+
+    #[test]
+    fn concurrent_non_overlapping_route_updates_rebase_on_the_latest_dispatch_state() {
+        let alpha = tun(1, &[]);
+        let beta = tun(2, &[]);
+        let (switch, mut ports) = PacketSwitch::new(
+            vec![
+                NetworkSpec {
+                    id: "alpha".to_owned(),
+                    tun: alpha.clone(),
+                },
+                NetworkSpec {
+                    id: "beta".to_owned(),
+                    tun: beta.clone(),
+                },
+            ],
+            QueueLimits::DEFAULT,
+        )
+        .expect("switch");
+        let alpha_generation = ports
+            .iter()
+            .find(|port| port.id == "alpha")
+            .expect("alpha port")
+            .generation;
+        let mut beta_port = ports
+            .drain(..)
+            .find(|port| port.id == "beta")
+            .expect("beta port");
+        let alpha_next = TunRuntimeConfig {
+            routes: vec![Route {
+                owner: peer(41),
+                prefix: cidr("10.11.0.0", 16),
+                metric: 0,
+            }],
+            ..alpha.clone()
+        };
+        let beta_next = TunRuntimeConfig {
+            routes: vec![Route {
+                owner: peer(42),
+                prefix: cidr("10.21.0.0", 16),
+                metric: 0,
+            }],
+            ..beta.clone()
+        };
+
+        let prepared_alpha = switch
+            .routes
+            .prepare_replace("alpha", alpha_generation, &alpha, &alpha_next)
+            .expect("alpha route update snapshot");
+        let beta_update = beta_next
+            .route_reconciliation_from(&beta)
+            .expect("beta route update");
+        beta_port
+            .route_controller
+            .reconcile(&beta, &beta_next, &beta_update)
+            .expect("beta route update commits first");
+
+        switch
+            .routes
+            .commit_replace(prepared_alpha)
+            .expect("alpha route update rebases");
+
+        assert!(matches!(
+            switch.dispatch_packet(&packet(local(1), [10, 11, 1, 1])),
+            DispatchOutcome::Queued { network_id } if network_id == "alpha"
+        ));
+        assert!(matches!(
+            switch.dispatch_packet(&packet(local(2), [10, 21, 1, 1])),
+            DispatchOutcome::Queued { network_id } if network_id == "beta"
+        ));
     }
 
     #[test]
