@@ -7,14 +7,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     pairing::{PairingRequest, PairingResponse},
-    pairing_code::{PairingCodeChallenge, PairingCodeHello},
+    pairing_code::{
+        PairingCodeChallenge, PairingCodeChallengeV2, PairingCodeHello, PairingCodeHelloV2,
+    },
 };
 
 pub const PAIRING_CODE_PROTOCOL: &str = "/p2p-vpn/pairing-code/1";
+pub const PAIRING_CODE_V2_PROTOCOL: &str = "/p2p-vpn/pairing-code/2";
 const MAX_PAIRING_CODE_MESSAGE_LEN: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub struct PairingCodeCodec;
+
+#[derive(Clone, Debug, Default)]
+pub struct PairingCodeV2Codec;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -40,6 +46,32 @@ pub enum PairingCodeRejectionReason {
 pub enum PairingCodeResponse {
     Challenge {
         challenge: Box<PairingCodeChallenge>,
+    },
+    Accepted {
+        response: Box<PairingResponse>,
+    },
+    Pending {
+        ticket: String,
+        expires_at_unix_seconds: u64,
+    },
+    Rejected {
+        reason: PairingCodeRejectionReason,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PairingCodeV2Request {
+    Hello { hello: Box<PairingCodeHelloV2> },
+    Submit { request: Box<PairingRequest> },
+    Poll { ticket: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PairingCodeV2Response {
+    Challenge {
+        challenge: Box<PairingCodeChallengeV2>,
     },
     Accepted {
         response: Box<PairingResponse>,
@@ -106,6 +138,59 @@ impl request_response::Codec for PairingCodeCodec {
     }
 }
 
+#[async_trait]
+impl request_response::Codec for PairingCodeV2Codec {
+    type Protocol = StreamProtocol;
+    type Request = PairingCodeV2Request;
+    type Response = PairingCodeV2Response;
+
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        read_json_message(io).await
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        read_json_message(io).await
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        request: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        write_json_message(io, &request).await
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        response: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        write_json_message(io, &response).await
+    }
+}
+
 #[must_use]
 pub fn behaviour(max_concurrent_streams: usize) -> request_response::Behaviour<PairingCodeCodec> {
     let protocols = [(
@@ -116,6 +201,23 @@ pub fn behaviour(max_concurrent_streams: usize) -> request_response::Behaviour<P
 
     request_response::Behaviour::with_codec(
         PairingCodeCodec,
+        protocols,
+        config.with_max_concurrent_streams(max_concurrent_streams.max(1)),
+    )
+}
+
+#[must_use]
+pub fn behaviour_v2(
+    max_concurrent_streams: usize,
+) -> request_response::Behaviour<PairingCodeV2Codec> {
+    let protocols = [(
+        StreamProtocol::new(PAIRING_CODE_V2_PROTOCOL),
+        request_response::ProtocolSupport::Full,
+    )];
+    let config = request_response::Config::default().with_request_timeout(Duration::from_secs(10));
+
+    request_response::Behaviour::with_codec(
+        PairingCodeV2Codec,
         protocols,
         config.with_max_concurrent_streams(max_concurrent_streams.max(1)),
     )
@@ -175,7 +277,10 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
 mod tests {
     use futures::io::Cursor;
 
-    use crate::pairing_code::{PairingCodeChallengePayload, PairingCodeHelloPayload};
+    use crate::pairing_code::{
+        PairingCodeChallengePayload, PairingCodeChallengeV2Payload, PairingCodeHelloPayload,
+        PairingCodeHelloV2Payload,
+    };
 
     use super::*;
 
@@ -201,6 +306,39 @@ mod tests {
                 version: 1,
                 network_name: "runners".to_owned(),
                 locator: "locator".to_owned(),
+                inviter_peer: "inviter".to_owned(),
+                inviter_public_key: "public-key".to_owned(),
+                joiner_peer: "joiner".to_owned(),
+                issued_at_unix_seconds: 1_001,
+                expires_at_unix_seconds: 1_601,
+                spake_message: "spake-b".to_owned(),
+                nonce: "nonce".to_owned(),
+                encrypted_offer: "ciphertext".to_owned(),
+            },
+            signature: "signature-b".to_owned(),
+        }
+    }
+
+    fn hello_v2() -> PairingCodeHelloV2 {
+        PairingCodeHelloV2 {
+            payload: PairingCodeHelloV2Payload {
+                version: 2,
+                locator: "locator-v2".to_owned(),
+                inviter_peer: "inviter".to_owned(),
+                joiner_peer: "joiner".to_owned(),
+                joiner_public_key: "public-key".to_owned(),
+                issued_at_unix_seconds: 1_000,
+                spake_message: "spake-a".to_owned(),
+            },
+            signature: "signature-a".to_owned(),
+        }
+    }
+
+    fn challenge_v2() -> PairingCodeChallengeV2 {
+        PairingCodeChallengeV2 {
+            payload: PairingCodeChallengeV2Payload {
+                version: 2,
+                locator: "locator-v2".to_owned(),
                 inviter_peer: "inviter".to_owned(),
                 inviter_public_key: "public-key".to_owned(),
                 joiner_peer: "joiner".to_owned(),
@@ -272,5 +410,76 @@ mod tests {
             .expect_err("oversized request");
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn pairing_code_v2_codec_round_trips_profile_free_messages() {
+        let protocol = StreamProtocol::new(PAIRING_CODE_V2_PROTOCOL);
+        let request = PairingCodeV2Request::Hello {
+            hello: Box::new(hello_v2()),
+        };
+        let response = PairingCodeV2Response::Challenge {
+            challenge: Box::new(challenge_v2()),
+        };
+        let mut codec = PairingCodeV2Codec;
+        let mut request_io = Cursor::new(Vec::new());
+        let mut response_io = Cursor::new(Vec::new());
+
+        request_response::Codec::write_request(
+            &mut codec,
+            &protocol,
+            &mut request_io,
+            request.clone(),
+        )
+        .await
+        .expect("request write");
+        request_response::Codec::write_response(
+            &mut codec,
+            &protocol,
+            &mut response_io,
+            response.clone(),
+        )
+        .await
+        .expect("response write");
+        request_io.set_position(0);
+        response_io.set_position(0);
+
+        assert_eq!(
+            request_response::Codec::read_request(&mut codec, &protocol, &mut request_io)
+                .await
+                .expect("request read"),
+            request
+        );
+        assert_eq!(
+            request_response::Codec::read_response(&mut codec, &protocol, &mut response_io)
+                .await
+                .expect("response read"),
+            response
+        );
+    }
+
+    #[test]
+    fn pairing_code_v1_wire_shape_is_unchanged() {
+        let request = PairingCodeRequest::Hello {
+            hello: Box::new(hello()),
+        };
+        let mut encoded = serde_json::to_value(request).expect("encode v1 request");
+
+        assert_eq!(encoded["kind"], "hello");
+        assert_eq!(encoded["hello"]["payload"]["version"], 1);
+        assert_eq!(encoded["hello"]["payload"]["network_name"], "runners");
+        encoded["legacy_extension"] = true.into();
+        assert!(serde_json::from_value::<PairingCodeRequest>(encoded).is_ok());
+    }
+
+    #[test]
+    fn pairing_code_v2_rejects_plaintext_network_extensions() {
+        let request = PairingCodeV2Request::Hello {
+            hello: Box::new(hello_v2()),
+        };
+        let mut encoded = serde_json::to_value(request).expect("encode v2 request");
+        encoded["hello"]["payload"]["network_name"] = "runners".into();
+
+        assert!(serde_json::from_value::<PairingCodeV2Request>(encoded).is_err());
     }
 }

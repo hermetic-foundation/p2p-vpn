@@ -27,6 +27,7 @@ use crate::{
 };
 
 pub const PAIRING_CODE_VERSION: u8 = 1;
+pub const PAIRING_CODE_V2_VERSION: u8 = 2;
 pub const PAIRING_CODE_ENTROPY_BITS: usize = 80;
 
 const PAIRING_CODE_BYTES: usize = PAIRING_CODE_ENTROPY_BITS / 8;
@@ -45,6 +46,14 @@ const KEY_DERIVATION_DOMAIN: &[u8] = b"p2p-vpn pairing code keys v1\n";
 const CHALLENGE_AAD_DOMAIN: &[u8] = b"p2p-vpn pairing code encrypted offer v1\n";
 const REQUEST_CONFIRMATION_DOMAIN: &[u8] = b"p2p-vpn pairing code request confirmation v1\n";
 const REQUEST_TRANSCRIPT_DOMAIN: &[u8] = b"p2p-vpn pairing code transcript v1\n";
+
+const LOCATOR_V2_DOMAIN: &[u8] = b"p2p-vpn pairing code locator v2\n";
+const HELLO_V2_SIGNING_DOMAIN: &[u8] = b"p2p-vpn pairing code hello v2\n";
+const CHALLENGE_V2_SIGNING_DOMAIN: &[u8] = b"p2p-vpn pairing code challenge v2\n";
+const SPAKE_V2_IDENTITY_DOMAIN: &[u8] = b"p2p-vpn pairing code spake2 v2\n";
+const KEY_DERIVATION_V2_DOMAIN: &[u8] = b"p2p-vpn pairing code keys v2\n";
+const CHALLENGE_V2_AAD_DOMAIN: &[u8] = b"p2p-vpn pairing code encrypted offer v2\n";
+const REQUEST_V2_CONFIRMATION_DOMAIN: &[u8] = b"p2p-vpn pairing code request confirmation v2\n";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -69,6 +78,16 @@ impl PairingCode {
         hash_length_prefixed(&mut hasher, network_name.as_bytes());
         hash_length_prefixed(&mut hasher, &self.0);
         Ok(URL_SAFE_NO_PAD.encode(hasher.finalize()))
+    }
+
+    /// Returns the v2 rendezvous locator, which intentionally does not depend on an overlay
+    /// profile or network name.
+    #[must_use]
+    pub fn global_locator(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(LOCATOR_V2_DOMAIN);
+        hash_length_prefixed(&mut hasher, &self.0);
+        URL_SAFE_NO_PAD.encode(hasher.finalize())
     }
 
     fn password(&self) -> Password {
@@ -215,8 +234,97 @@ pub struct PairingCodeChallengePayload {
     pub encrypted_offer: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingCodeHelloV2 {
+    pub payload: PairingCodeHelloV2Payload,
+    pub signature: String,
+}
+
+impl PairingCodeHelloV2 {
+    pub fn verify_for_transport_peer_at(
+        &self,
+        transport_peer: Libp2pPeerId,
+        now_unix_seconds: u64,
+    ) -> Result<(), PairingCodeError> {
+        validate_v2_version(self.payload.version)?;
+        validate_locator(&self.payload.locator)?;
+        validate_hello_time(self.payload.issued_at_unix_seconds, now_unix_seconds)?;
+        self.payload.inviter_peer.parse::<Libp2pPeerId>()?;
+        verify_identity_signature(
+            &self.payload.joiner_peer,
+            &self.payload.joiner_public_key,
+            &self.signature,
+            &signing_message(HELLO_V2_SIGNING_DOMAIN, &self.payload)?,
+        )?;
+        if self.payload.joiner_peer != transport_peer.to_string() {
+            return Err(PairingCodeError::TransportPeerMismatch {
+                expected: self.payload.joiner_peer.clone(),
+                actual: transport_peer.to_string(),
+            });
+        }
+        decode_spake_message(&self.payload.spake_message)?;
+        Ok(())
+    }
+}
+
+/// Profile-free v2 hello. The network name is deliberately absent until the encrypted offer is
+/// authenticated and opened.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingCodeHelloV2Payload {
+    pub version: u8,
+    pub locator: String,
+    pub inviter_peer: String,
+    pub joiner_peer: String,
+    pub joiner_public_key: String,
+    pub issued_at_unix_seconds: u64,
+    pub spake_message: String,
+}
+
+pub struct PendingPairingCodeHelloV2 {
+    state: Spake2<Ed25519Group>,
+    payload: PairingCodeHelloV2Payload,
+}
+
+impl fmt::Debug for PendingPairingCodeHelloV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingPairingCodeHelloV2")
+            .field("locator", &self.payload.locator)
+            .field("inviter_peer", &self.payload.inviter_peer)
+            .field("joiner_peer", &self.payload.joiner_peer)
+            .field("state", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingCodeChallengeV2 {
+    pub payload: PairingCodeChallengeV2Payload,
+    pub signature: String,
+}
+
+/// Profile-free v2 challenge. Network membership data exists only in `encrypted_offer`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairingCodeChallengeV2Payload {
+    pub version: u8,
+    pub locator: String,
+    pub inviter_peer: String,
+    pub inviter_public_key: String,
+    pub joiner_peer: String,
+    pub issued_at_unix_seconds: u64,
+    pub expires_at_unix_seconds: u64,
+    pub spake_message: String,
+    pub nonce: String,
+    pub encrypted_offer: String,
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct PairingCodeSession {
+    protocol_version: u8,
     network_name: String,
     locator: String,
     inviter_peer: String,
@@ -227,6 +335,11 @@ pub struct PairingCodeSession {
 }
 
 impl PairingCodeSession {
+    #[must_use]
+    pub const fn protocol_version(&self) -> u8 {
+        self.protocol_version
+    }
+
     #[must_use]
     pub fn network_name(&self) -> &str {
         &self.network_name
@@ -262,6 +375,7 @@ impl fmt::Debug for PairingCodeSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PairingCodeSession")
+            .field("protocol_version", &self.protocol_version)
             .field("network_name", &self.network_name)
             .field("locator", &self.locator)
             .field("inviter_peer", &self.inviter_peer)
@@ -305,6 +419,38 @@ pub fn start_pairing_code_hello_at(
         signature,
     };
     let pending = PendingPairingCodeHello { state, payload };
+    Ok((hello, pending))
+}
+
+pub fn start_pairing_code_hello_v2_at(
+    code: &PairingCode,
+    identity: &NodeIdentity,
+    inviter_peer: Libp2pPeerId,
+    issued_at_unix_seconds: u64,
+) -> Result<(PairingCodeHelloV2, PendingPairingCodeHelloV2), PairingCodeError> {
+    let joiner_peer = identity.peer_id.parse::<Libp2pPeerId>()?;
+    let locator = code.global_locator();
+    let (state, message) = Spake2::<Ed25519Group>::start_a(
+        &code.password(),
+        &spake_identity_v2(&locator, "joiner", inviter_peer, joiner_peer),
+        &spake_identity_v2(&locator, "inviter", inviter_peer, joiner_peer),
+    );
+    let payload = PairingCodeHelloV2Payload {
+        version: PAIRING_CODE_V2_VERSION,
+        locator,
+        inviter_peer: inviter_peer.to_string(),
+        joiner_peer: joiner_peer.to_string(),
+        joiner_public_key: STANDARD.encode(identity.public_key_protobuf()?),
+        issued_at_unix_seconds,
+        spake_message: STANDARD.encode(message),
+    };
+    let signature =
+        STANDARD.encode(identity.sign(&signing_message(HELLO_V2_SIGNING_DOMAIN, &payload)?)?);
+    let hello = PairingCodeHelloV2 {
+        payload: payload.clone(),
+        signature,
+    };
+    let pending = PendingPairingCodeHelloV2 { state, payload };
     Ok((hello, pending))
 }
 
@@ -387,6 +533,80 @@ pub fn answer_pairing_code_hello_at(
         STANDARD.encode(identity.sign(&signing_message(CHALLENGE_SIGNING_DOMAIN, &payload)?)?);
     let challenge = PairingCodeChallenge { payload, signature };
     let session = pairing_code_session(&challenge, &offer, keys.confirmation_key);
+    Ok((challenge, session))
+}
+
+pub fn answer_pairing_code_hello_v2_at(
+    config: &Config,
+    code: &PairingCode,
+    hello: &PairingCodeHelloV2,
+    transport_peer: Libp2pPeerId,
+    offer_options: PairingOfferOptions,
+    issued_at_unix_seconds: u64,
+) -> Result<(PairingCodeChallengeV2, PairingCodeSession), PairingCodeError> {
+    hello.verify_for_transport_peer_at(transport_peer, issued_at_unix_seconds)?;
+    let expected_locator = code.global_locator();
+    if hello.payload.locator != expected_locator {
+        return Err(PairingCodeError::LocatorMismatch);
+    }
+    let identity = NodeIdentity::from_private_key(
+        config
+            .network
+            .private_key
+            .as_deref()
+            .ok_or(PairingCodeError::MissingPrivateKey)?,
+    )?;
+    let inviter_peer = identity.peer_id.parse::<Libp2pPeerId>()?;
+    if hello.payload.inviter_peer != inviter_peer.to_string() {
+        return Err(PairingCodeError::InviterMismatch {
+            expected: inviter_peer.to_string(),
+            actual: hello.payload.inviter_peer.clone(),
+        });
+    }
+
+    let (state, response_message) = Spake2::<Ed25519Group>::start_b(
+        &code.password(),
+        &spake_identity_v2(&expected_locator, "joiner", inviter_peer, transport_peer),
+        &spake_identity_v2(&expected_locator, "inviter", inviter_peer, transport_peer),
+    );
+    let shared_secret = state.finish(&decode_spake_message(&hello.payload.spake_message)?)?;
+    let keys = derive_session_keys_v2(
+        &shared_secret,
+        &expected_locator,
+        inviter_peer,
+        transport_peer,
+    )?;
+    let offer = export_code_pairing_offer_at(config, offer_options, issued_at_unix_seconds)?;
+    let mut nonce = [0_u8; PAIRING_CODE_NONCE_BYTES];
+    OsRng.fill_bytes(&mut nonce);
+    let mut payload = PairingCodeChallengeV2Payload {
+        version: PAIRING_CODE_V2_VERSION,
+        locator: expected_locator,
+        inviter_peer: inviter_peer.to_string(),
+        inviter_public_key: STANDARD.encode(identity.public_key_protobuf()?),
+        joiner_peer: transport_peer.to_string(),
+        issued_at_unix_seconds,
+        expires_at_unix_seconds: offer.payload.expires_at_unix_seconds,
+        spake_message: STANDARD.encode(response_message),
+        nonce: URL_SAFE_NO_PAD.encode(nonce),
+        encrypted_offer: String::new(),
+    };
+    let aad = challenge_v2_aad(&hello.payload, &payload)?;
+    payload.encrypted_offer = URL_SAFE_NO_PAD.encode(
+        ChaCha20Poly1305::new((&keys.offer_key).into())
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &serde_json::to_vec(&offer)?,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| PairingCodeError::OfferEncryption)?,
+    );
+    let signature =
+        STANDARD.encode(identity.sign(&signing_message(CHALLENGE_V2_SIGNING_DOMAIN, &payload)?)?);
+    let challenge = PairingCodeChallengeV2 { payload, signature };
+    let session = pairing_code_session_v2(&challenge, &offer, keys.confirmation_key);
     Ok((challenge, session))
 }
 
@@ -497,6 +717,98 @@ pub fn open_pairing_code_challenge_at(
     Ok((offer, session))
 }
 
+pub fn open_pairing_code_challenge_v2_at(
+    pending: PendingPairingCodeHelloV2,
+    challenge: &PairingCodeChallengeV2,
+    transport_peer: Libp2pPeerId,
+    now_unix_seconds: u64,
+) -> Result<(PairingOffer, PairingCodeSession), PairingCodeError> {
+    validate_v2_version(challenge.payload.version)?;
+    validate_locator(&challenge.payload.locator)?;
+    validate_hello_time(challenge.payload.issued_at_unix_seconds, now_unix_seconds)?;
+    if challenge.payload.locator != pending.payload.locator {
+        return Err(PairingCodeError::LocatorMismatch);
+    }
+    if challenge.payload.inviter_peer != pending.payload.inviter_peer {
+        return Err(PairingCodeError::InviterMismatch {
+            expected: pending.payload.inviter_peer,
+            actual: challenge.payload.inviter_peer.clone(),
+        });
+    }
+    if challenge.payload.inviter_peer != transport_peer.to_string() {
+        return Err(PairingCodeError::TransportPeerMismatch {
+            expected: challenge.payload.inviter_peer.clone(),
+            actual: transport_peer.to_string(),
+        });
+    }
+    if challenge.payload.joiner_peer != pending.payload.joiner_peer {
+        return Err(PairingCodeError::JoinerMismatch {
+            expected: pending.payload.joiner_peer,
+            actual: challenge.payload.joiner_peer.clone(),
+        });
+    }
+    if challenge.payload.expires_at_unix_seconds <= challenge.payload.issued_at_unix_seconds {
+        return Err(PairingCodeError::InvalidExpiry);
+    }
+    if now_unix_seconds > challenge.payload.expires_at_unix_seconds {
+        return Err(PairingCodeError::Expired {
+            expired_at: challenge.payload.expires_at_unix_seconds,
+            now: now_unix_seconds,
+        });
+    }
+    verify_identity_signature(
+        &challenge.payload.inviter_peer,
+        &challenge.payload.inviter_public_key,
+        &challenge.signature,
+        &signing_message(CHALLENGE_V2_SIGNING_DOMAIN, &challenge.payload)?,
+    )?;
+
+    let shared_secret = pending
+        .state
+        .finish(&decode_spake_message(&challenge.payload.spake_message)?)?;
+    let inviter_peer = challenge.payload.inviter_peer.parse::<Libp2pPeerId>()?;
+    let joiner_peer = challenge.payload.joiner_peer.parse::<Libp2pPeerId>()?;
+    let keys = derive_session_keys_v2(
+        &shared_secret,
+        &challenge.payload.locator,
+        inviter_peer,
+        joiner_peer,
+    )?;
+    let nonce = URL_SAFE_NO_PAD.decode(&challenge.payload.nonce)?;
+    if nonce.len() != PAIRING_CODE_NONCE_BYTES {
+        return Err(PairingCodeError::InvalidNonceLength {
+            actual: nonce.len(),
+            expected: PAIRING_CODE_NONCE_BYTES,
+        });
+    }
+    let ciphertext = URL_SAFE_NO_PAD.decode(&challenge.payload.encrypted_offer)?;
+    let aad = challenge_v2_aad(&pending.payload, &challenge.payload)?;
+    let offer_bytes = ChaCha20Poly1305::new((&keys.offer_key).into())
+        .decrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: &ciphertext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| PairingCodeError::OfferDecryption)?;
+    let offer: PairingOffer = serde_json::from_slice(&offer_bytes)?;
+    offer.verify_at(now_unix_seconds)?;
+    if offer.payload.inviter_peer != challenge.payload.inviter_peer {
+        return Err(PairingCodeError::InviterMismatch {
+            expected: challenge.payload.inviter_peer.clone(),
+            actual: offer.payload.inviter_peer.clone(),
+        });
+    }
+    if offer.payload.expires_at_unix_seconds != challenge.payload.expires_at_unix_seconds
+        || offer.payload.issued_at_unix_seconds != challenge.payload.issued_at_unix_seconds
+    {
+        return Err(PairingCodeError::InvalidExpiry);
+    }
+    let session = pairing_code_session_v2(challenge, &offer, keys.confirmation_key);
+    Ok((offer, session))
+}
+
 pub fn authenticate_pairing_request(
     request: &mut PairingRequest,
     session: &PairingCodeSession,
@@ -547,7 +859,25 @@ fn pairing_code_session(
     confirmation_key: [u8; PAIRING_CODE_SESSION_KEY_BYTES],
 ) -> PairingCodeSession {
     PairingCodeSession {
+        protocol_version: PAIRING_CODE_VERSION,
         network_name: challenge.payload.network_name.clone(),
+        locator: challenge.payload.locator.clone(),
+        inviter_peer: challenge.payload.inviter_peer.clone(),
+        joiner_peer: challenge.payload.joiner_peer.clone(),
+        rendezvous_token: offer.payload.rendezvous_token.clone(),
+        expires_at_unix_seconds: offer.payload.expires_at_unix_seconds,
+        confirmation_key,
+    }
+}
+
+fn pairing_code_session_v2(
+    challenge: &PairingCodeChallengeV2,
+    offer: &PairingOffer,
+    confirmation_key: [u8; PAIRING_CODE_SESSION_KEY_BYTES],
+) -> PairingCodeSession {
+    PairingCodeSession {
+        protocol_version: PAIRING_CODE_V2_VERSION,
+        network_name: offer.payload.network_name.clone(),
         locator: challenge.payload.locator.clone(),
         inviter_peer: challenge.payload.inviter_peer.clone(),
         joiner_peer: challenge.payload.joiner_peer.clone(),
@@ -606,7 +936,11 @@ fn request_confirmation_message(
         signature: &'a str,
     }
 
-    let mut message = REQUEST_CONFIRMATION_DOMAIN.to_vec();
+    let mut message = match session.protocol_version {
+        PAIRING_CODE_VERSION => REQUEST_CONFIRMATION_DOMAIN.to_vec(),
+        PAIRING_CODE_V2_VERSION => REQUEST_V2_CONFIRMATION_DOMAIN.to_vec(),
+        version => return Err(PairingCodeError::UnsupportedVersion(version)),
+    };
     append_length_prefixed(&mut message, session.network_name.as_bytes());
     append_length_prefixed(&mut message, session.locator.as_bytes());
     append_length_prefixed(&mut message, session.inviter_peer.as_bytes());
@@ -636,6 +970,28 @@ fn derive_session_keys(
 ) -> Result<SessionKeys, PairingCodeError> {
     let mut salt = KEY_DERIVATION_DOMAIN.to_vec();
     append_length_prefixed(&mut salt, network_name.as_bytes());
+    append_length_prefixed(&mut salt, locator.as_bytes());
+    append_length_prefixed(&mut salt, inviter_peer.to_bytes().as_slice());
+    append_length_prefixed(&mut salt, joiner_peer.to_bytes().as_slice());
+    let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
+    let mut offer_key = [0_u8; PAIRING_CODE_SESSION_KEY_BYTES];
+    let mut confirmation_key = [0_u8; PAIRING_CODE_SESSION_KEY_BYTES];
+    hkdf.expand(b"encrypted offer", &mut offer_key)?;
+    hkdf.expand(b"pairing request confirmation", &mut confirmation_key)?;
+    Ok(SessionKeys {
+        offer_key,
+        confirmation_key,
+    })
+}
+
+fn derive_session_keys_v2(
+    shared_secret: &[u8],
+    locator: &str,
+    inviter_peer: Libp2pPeerId,
+    joiner_peer: Libp2pPeerId,
+) -> Result<SessionKeys, PairingCodeError> {
+    let mut salt = KEY_DERIVATION_V2_DOMAIN.to_vec();
+    append_length_prefixed(&mut salt, &[PAIRING_CODE_V2_VERSION]);
     append_length_prefixed(&mut salt, locator.as_bytes());
     append_length_prefixed(&mut salt, inviter_peer.to_bytes().as_slice());
     append_length_prefixed(&mut salt, joiner_peer.to_bytes().as_slice());
@@ -686,11 +1042,60 @@ fn challenge_aad(
     Ok(aad)
 }
 
+fn challenge_v2_aad(
+    hello: &PairingCodeHelloV2Payload,
+    challenge: &PairingCodeChallengeV2Payload,
+) -> Result<Vec<u8>, PairingCodeError> {
+    #[derive(Serialize)]
+    struct ChallengeV2Aad<'a> {
+        hello: &'a PairingCodeHelloV2Payload,
+        version: u8,
+        locator: &'a str,
+        inviter_peer: &'a str,
+        inviter_public_key: &'a str,
+        joiner_peer: &'a str,
+        issued_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+        spake_message: &'a str,
+        nonce: &'a str,
+    }
+
+    let mut aad = CHALLENGE_V2_AAD_DOMAIN.to_vec();
+    aad.extend(serde_json::to_vec(&ChallengeV2Aad {
+        hello,
+        version: challenge.version,
+        locator: &challenge.locator,
+        inviter_peer: &challenge.inviter_peer,
+        inviter_public_key: &challenge.inviter_public_key,
+        joiner_peer: &challenge.joiner_peer,
+        issued_at_unix_seconds: challenge.issued_at_unix_seconds,
+        expires_at_unix_seconds: challenge.expires_at_unix_seconds,
+        spake_message: &challenge.spake_message,
+        nonce: &challenge.nonce,
+    })?);
+    Ok(aad)
+}
+
 fn spake_identity(network_name: &str, role: &str, peer: Libp2pPeerId) -> SpakeIdentity {
     let mut identity = SPAKE_IDENTITY_DOMAIN.to_vec();
     append_length_prefixed(&mut identity, network_name.as_bytes());
     append_length_prefixed(&mut identity, role.as_bytes());
     append_length_prefixed(&mut identity, peer.to_bytes().as_slice());
+    SpakeIdentity::new(&identity)
+}
+
+fn spake_identity_v2(
+    locator: &str,
+    role: &str,
+    inviter_peer: Libp2pPeerId,
+    joiner_peer: Libp2pPeerId,
+) -> SpakeIdentity {
+    let mut identity = SPAKE_V2_IDENTITY_DOMAIN.to_vec();
+    append_length_prefixed(&mut identity, &[PAIRING_CODE_V2_VERSION]);
+    append_length_prefixed(&mut identity, locator.as_bytes());
+    append_length_prefixed(&mut identity, role.as_bytes());
+    append_length_prefixed(&mut identity, inviter_peer.to_bytes().as_slice());
+    append_length_prefixed(&mut identity, joiner_peer.to_bytes().as_slice());
     SpakeIdentity::new(&identity)
 }
 
@@ -734,6 +1139,14 @@ fn decode_spake_message(encoded: &str) -> Result<Vec<u8>, PairingCodeError> {
 
 fn validate_version(version: u8) -> Result<(), PairingCodeError> {
     if version == PAIRING_CODE_VERSION {
+        Ok(())
+    } else {
+        Err(PairingCodeError::UnsupportedVersion(version))
+    }
+}
+
+fn validate_v2_version(version: u8) -> Result<(), PairingCodeError> {
+    if version == PAIRING_CODE_V2_VERSION {
         Ok(())
     } else {
         Err(PairingCodeError::UnsupportedVersion(version))
@@ -950,6 +1363,43 @@ mod tests {
         (joiner, inviter_session, joiner_session, offer)
     }
 
+    fn exchange_v2() -> (
+        NodeIdentity,
+        PairingCodeSession,
+        PairingCodeSession,
+        PairingOffer,
+        PairingCodeHelloV2,
+        PairingCodeChallengeV2,
+    ) {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let inviter_peer = inviter.peer_id.parse().expect("inviter peer");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let code = code(9);
+        let (hello, pending) =
+            start_pairing_code_hello_v2_at(&code, &joiner, inviter_peer, 1_000).expect("hello");
+        let (challenge, inviter_session) = answer_pairing_code_hello_v2_at(
+            &config(&inviter),
+            &code,
+            &hello,
+            joiner_peer,
+            PairingOfferOptions::default(),
+            1_001,
+        )
+        .expect("challenge");
+        let (offer, joiner_session) =
+            open_pairing_code_challenge_v2_at(pending, &challenge, inviter_peer, 1_002)
+                .expect("open challenge");
+        (
+            joiner,
+            inviter_session,
+            joiner_session,
+            offer,
+            hello,
+            challenge,
+        )
+    }
+
     #[test]
     fn pairing_code_round_trips_human_format() {
         let code = code(0xa5);
@@ -977,6 +1427,119 @@ mod tests {
         assert_ne!(runners, lab);
         assert!(!runners.contains(&code.to_string()));
         assert_eq!(URL_SAFE_NO_PAD.decode(runners).expect("locator").len(), 32);
+    }
+
+    #[test]
+    fn pairing_code_v2_locator_is_profile_independent_and_domain_separated() {
+        let code = code(3);
+        let global = code.global_locator();
+
+        assert_eq!(global, code.global_locator());
+        assert_ne!(global, code.locator("runners").expect("v1 locator"));
+        assert_ne!(global, code.locator("lab").expect("v1 locator"));
+        assert!(!global.contains(&code.to_string()));
+        assert_eq!(URL_SAFE_NO_PAD.decode(global).expect("locator").len(), 32);
+    }
+
+    #[test]
+    fn pairing_code_v2_hides_network_until_offer_is_opened() {
+        let (_, _, _, offer, hello, challenge) = exchange_v2();
+        let hello_json = serde_json::to_string(&hello).expect("serialize hello");
+        let challenge_json = serde_json::to_string(&challenge).expect("serialize challenge");
+
+        assert_eq!(offer.payload.network_name, "runners");
+        assert!(!hello_json.contains("network_name"));
+        assert!(!hello_json.contains("runners"));
+        assert!(!challenge_json.contains("network_name"));
+        assert!(!challenge_json.contains("runners"));
+    }
+
+    #[test]
+    fn pairing_code_v2_exchange_authenticates_existing_pairing_request() {
+        let (joiner, inviter_session, joiner_session, offer, _, _) = exchange_v2();
+        let mut request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner,
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_003,
+        )
+        .expect("request");
+
+        authenticate_pairing_request(&mut request, &joiner_session).expect("authenticate");
+        verify_pairing_request_code_authentication(&request, &inviter_session).expect("verify");
+        assert_eq!(inviter_session, joiner_session);
+        assert_eq!(joiner_session.protocol_version(), PAIRING_CODE_V2_VERSION);
+        assert_eq!(joiner_session.network_name(), "runners");
+    }
+
+    #[test]
+    fn pairing_code_v2_rejects_wrong_code_even_with_observed_locator() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let inviter_peer = inviter.peer_id.parse().expect("inviter peer");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let expected_code = code(1);
+        let guessed_code = code(2);
+        let (mut hello, mut pending) =
+            start_pairing_code_hello_v2_at(&guessed_code, &joiner, inviter_peer, 1_000)
+                .expect("hello");
+        hello.payload.locator = expected_code.global_locator();
+        pending.payload.locator.clone_from(&hello.payload.locator);
+        hello.signature = STANDARD.encode(
+            joiner
+                .sign(
+                    &signing_message(HELLO_V2_SIGNING_DOMAIN, &hello.payload)
+                        .expect("signing message"),
+                )
+                .expect("signature"),
+        );
+        let (challenge, _) = answer_pairing_code_hello_v2_at(
+            &config(&inviter),
+            &expected_code,
+            &hello,
+            joiner_peer,
+            PairingOfferOptions::default(),
+            1_001,
+        )
+        .expect("challenge");
+
+        let error = open_pairing_code_challenge_v2_at(pending, &challenge, inviter_peer, 1_002)
+            .expect_err("wrong SPAKE2 password");
+
+        assert!(matches!(error, PairingCodeError::OfferDecryption));
+    }
+
+    #[test]
+    fn pairing_code_v2_challenge_binds_locator_and_transport_peer() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let other = NodeIdentity::generate_ed25519().expect("other");
+        let inviter_peer = inviter.peer_id.parse().expect("inviter peer");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let other_peer = other.peer_id.parse().expect("other peer");
+        let code = code(4);
+        let (hello, pending) =
+            start_pairing_code_hello_v2_at(&code, &joiner, inviter_peer, 1_000).expect("hello");
+        let (challenge, _) = answer_pairing_code_hello_v2_at(
+            &config(&inviter),
+            &code,
+            &hello,
+            joiner_peer,
+            PairingOfferOptions::default(),
+            1_001,
+        )
+        .expect("challenge");
+
+        let error = open_pairing_code_challenge_v2_at(pending, &challenge, other_peer, 1_002)
+            .expect_err("transport mismatch");
+
+        assert!(matches!(
+            error,
+            PairingCodeError::TransportPeerMismatch { .. }
+        ));
     }
 
     #[test]
