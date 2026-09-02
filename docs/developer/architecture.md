@@ -284,6 +284,8 @@ Public DHT work is serialized per network instance.
 | Recovery priority | Preempts routine maintenance. |
 | Failed recovery | Exponential backoff from 30 seconds to 60 minutes. |
 | Routine maintenance | One round-robin query every two minutes. |
+| libp2p bootstrap | Built-in periodic bootstrap is disabled. |
+| Query parallelism | One in-flight peer per iterative query. |
 | Relay discovery | One closest-peer query while relay capacity is needed. |
 | Bootstrap refresh | Runs only below eight active routing peers. |
 | Healthy paths | Cancel and suppress public recovery queries. |

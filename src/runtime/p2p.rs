@@ -1,4 +1,9 @@
-use std::{collections::HashSet, error::Error, num::NonZeroU8, time::Duration};
+use std::{
+    collections::HashSet,
+    error::Error,
+    num::{NonZeroU8, NonZeroUsize},
+    time::Duration,
+};
 
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder, allow_block_list, autonat,
@@ -34,6 +39,7 @@ const CONNECTION_PING_INTERVAL: Duration = Duration::from_secs(15);
 const CONNECTION_PING_TIMEOUT: Duration = Duration::from_secs(20);
 const SWARM_IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 const DIAL_CONCURRENCY_FACTOR: NonZeroU8 = NonZeroU8::MIN;
+const KADEMLIA_QUERY_PARALLELISM: NonZeroUsize = NonZeroUsize::MIN;
 
 #[derive(NetworkBehaviour)]
 pub struct Behaviour {
@@ -151,7 +157,7 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
             |keypair, relay| -> Result<Behaviour, Box<dyn Error + Send + Sync>> {
                 let local_peer_id = keypair.public().to_peer_id();
                 let store = kad::store::MemoryStore::new(local_peer_id);
-                let kad_config = kad::Config::new(kademlia_protocol);
+                let kad_config = controlled_kademlia_config(kademlia_protocol);
                 let mut kad = kad::Behaviour::with_config(local_peer_id, store, kad_config);
                 if behaviour_discovery.kademlia
                     && behaviour_discovery.kademlia_protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL
@@ -172,8 +178,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                     None
                 } else {
                     let store = kad::store::MemoryStore::new(local_peer_id);
-                    let config =
-                        kad::Config::new(StreamProtocol::new(PUBLIC_IPFS_KADEMLIA_PROTOCOL));
+                    let config = controlled_kademlia_config(StreamProtocol::new(
+                        PUBLIC_IPFS_KADEMLIA_PROTOCOL,
+                    ));
                     let mut behaviour = kad::Behaviour::with_config(local_peer_id, store, config);
                     behaviour.set_mode(Some(kad::Mode::Client));
                     Some(behaviour)
@@ -413,6 +420,14 @@ fn relay_peer_address_from_reservation(reservation: &Multiaddr) -> Option<(PeerI
     }
 
     relay_peer.map(|peer| (peer, relay_address))
+}
+
+fn controlled_kademlia_config(protocol: StreamProtocol) -> kad::Config {
+    let mut config = kad::Config::new(protocol);
+    config
+        .set_parallelism(KADEMLIA_QUERY_PARALLELISM)
+        .set_periodic_bootstrap_interval(None);
+    config
 }
 
 fn start_kademlia(
