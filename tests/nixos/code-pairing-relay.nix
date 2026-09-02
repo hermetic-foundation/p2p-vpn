@@ -6,6 +6,7 @@
 let
   networkName = "nixos-vm-code-pairing-relay";
   instance = "live-relay";
+  kademliaProtocol = "/p2p-vpn/kad/1";
   membershipKey = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=";
   nodeA = {
     peerId = "12D3KooWLgQHZofqKG3dcgJhSjMX5szux1v2xgbDZaReqw7qnEKr";
@@ -82,6 +83,7 @@ let
           mdns = false;
           kademlia = true;
           kademliaProviderAdvertisement = true;
+          inherit kademliaProtocol;
           dcutr = false;
           autonat = false;
         };
@@ -124,6 +126,7 @@ let
           mdns = false;
           kademlia = true;
           kademliaProviderAdvertisement = false;
+          inherit kademliaProtocol;
           dcutr = false;
           autonat = false;
         };
