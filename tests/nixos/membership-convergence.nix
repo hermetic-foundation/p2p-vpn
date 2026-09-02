@@ -578,12 +578,19 @@ pkgs.testers.nixosTest {
         )
 
     with subtest("ambiguous signed hostnames fail closed with unique fallbacks"):
-        pair_with_inviter(
+        issue_membership_record(
             node_b,
-            node_c,
+            "${nodeB.peerId}",
             "${nodeC.peerId}",
-            "${nodeB.hostname}",
-            "${nodeC.vpnIp}",
+            "/tmp/conflict-c.json",
+            hostname="${nodeB.hostname}",
+            vpn_ip="${nodeC.vpnIp}",
+        )
+        replace_persisted_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/conflict-c.json",
             "conflict-c",
         )
         for node in [node_a, node_b, node_c]:
@@ -605,12 +612,19 @@ pkgs.testers.nixosTest {
         wait_for_dns(node_a, node_c_fallback, "${nodeC.vpnIp}")
 
     with subtest("a signed rename resolves the conflict on every node"):
-        pair_with_inviter(
+        issue_membership_record(
             node_b,
-            node_c,
+            "${nodeB.peerId}",
             "${nodeC.peerId}",
-            "${nodeC.hostname}",
-            "${nodeC.vpnIp}",
+            "/tmp/rename-c.json",
+            hostname="${nodeC.hostname}",
+            vpn_ip="${nodeC.vpnIp}",
+        )
+        replace_persisted_record(
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeC.peerId}",
+            "/tmp/rename-c.json",
             "rename-c",
         )
         for node in [node_a, node_b, node_c]:
