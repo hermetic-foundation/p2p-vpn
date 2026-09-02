@@ -8,16 +8,28 @@ use std::{
 use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 
+use crate::hostname::{
+    HostnameRecordError, MAX_HOSTNAME_RECORD_ENCODED_LEN, MAX_HOSTNAME_RECORDS,
+    SignedHostnameRecord, validate_hostname_record_history,
+};
 use crate::membership::{
     MAX_MEMBERSHIP_RECORD_ENCODED_LEN, MAX_MEMBERSHIP_RECORDS, MembershipRecordError,
     SignedMembershipRecord, validate_membership_record_history,
 };
 
-const MEMBERSHIP_STATE_VERSION: u8 = 1;
+const MEMBERSHIP_STATE_VERSION: u8 = 2;
+const LEGACY_MEMBERSHIP_STATE_VERSION: u8 = 1;
 const MEMBERSHIP_STATE_ENVELOPE_BYTES: usize = 64 * 1024;
 pub const MAX_MEMBERSHIP_STATE_BYTES: usize = MAX_MEMBERSHIP_RECORDS
     * (MAX_MEMBERSHIP_RECORD_ENCODED_LEN + 1)
+    + MAX_HOSTNAME_RECORDS * (MAX_HOSTNAME_RECORD_ENCODED_LEN + 1)
     + MEMBERSHIP_STATE_ENVELOPE_BYTES;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PersistedMembershipStateData {
+    pub(crate) records: Vec<SignedMembershipRecord>,
+    pub(crate) hostname_records: Vec<SignedHostnameRecord>,
+}
 
 #[derive(Debug)]
 pub(crate) struct MembershipStateStore {
@@ -34,7 +46,7 @@ impl MembershipStateStore {
         &self,
         expected_network_name: &str,
         expected_local_peer: &str,
-    ) -> Result<Option<Vec<SignedMembershipRecord>>, MembershipStateStoreError> {
+    ) -> Result<Option<PersistedMembershipStateData>, MembershipStateStoreError> {
         let metadata = match fs::symlink_metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -59,7 +71,9 @@ impl MembershipStateStore {
             .read_to_end(&mut bytes)?;
         validate_length(bytes.len())?;
         let state: OwnedPersistedMembershipState = serde_json::from_slice(&bytes)?;
-        if state.version != MEMBERSHIP_STATE_VERSION {
+        if state.version != MEMBERSHIP_STATE_VERSION
+            && state.version != LEGACY_MEMBERSHIP_STATE_VERSION
+        {
             return Err(MembershipStateStoreError::UnsupportedVersion(state.version));
         }
         if state.network_name != expected_network_name {
@@ -75,7 +89,11 @@ impl MembershipStateStore {
             });
         }
         validate_membership_record_history(&state.records, expected_network_name)?;
-        Ok(Some(state.records))
+        validate_hostname_record_history(&state.hostname_records, expected_network_name)?;
+        Ok(Some(PersistedMembershipStateData {
+            records: state.records,
+            hostname_records: state.hostname_records,
+        }))
     }
 
     pub(crate) fn save(
@@ -83,13 +101,16 @@ impl MembershipStateStore {
         network_name: &str,
         local_peer: &str,
         records: &[SignedMembershipRecord],
+        hostname_records: &[SignedHostnameRecord],
     ) -> Result<(), MembershipStateStoreError> {
         validate_membership_record_history(records, network_name)?;
+        validate_hostname_record_history(hostname_records, network_name)?;
         let bytes = serde_json::to_vec(&PersistedMembershipState {
             version: MEMBERSHIP_STATE_VERSION,
             network_name,
             local_peer,
             records,
+            hostname_records,
         })?;
         validate_length(bytes.len())?;
         self.save_with_parent_sync(&bytes, sync_parent_directory)
@@ -156,6 +177,7 @@ struct PersistedMembershipState<'a> {
     network_name: &'a str,
     local_peer: &'a str,
     records: &'a [SignedMembershipRecord],
+    hostname_records: &'a [SignedHostnameRecord],
 }
 
 #[derive(Deserialize)]
@@ -164,6 +186,8 @@ struct OwnedPersistedMembershipState {
     network_name: String,
     local_peer: String,
     records: Vec<SignedMembershipRecord>,
+    #[serde(default)]
+    hostname_records: Vec<SignedHostnameRecord>,
 }
 
 fn validate_state_file(
@@ -215,6 +239,7 @@ pub enum MembershipStateStoreError {
     Io(io::Error),
     Json(serde_json::Error),
     Membership(MembershipRecordError),
+    Hostname(HostnameRecordError),
     MissingParent,
     UnsafeParent(PathBuf),
     UnsafeFile(PathBuf),
@@ -236,6 +261,12 @@ impl std::fmt::Display for MembershipStateStoreError {
                 write!(
                     formatter,
                     "membership state contains an invalid record: {error:?}"
+                )
+            }
+            Self::Hostname(error) => {
+                write!(
+                    formatter,
+                    "membership state contains an invalid hostname record: {error:?}"
                 )
             }
             Self::MissingParent => formatter.write_str("membership state path has no parent"),
@@ -300,11 +331,18 @@ impl From<MembershipRecordError> for MembershipStateStoreError {
     }
 }
 
+impl From<HostnameRecordError> for MembershipStateStoreError {
+    fn from(error: HostnameRecordError) -> Self {
+        Self::Hostname(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     use crate::{
+        hostname::issue_hostname_record_at,
         identity::NodeIdentity,
         membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
     };
@@ -349,11 +387,14 @@ mod tests {
         let records = vec![membership_record()];
 
         store
-            .save("lab", "local-peer", &records)
+            .save("lab", "local-peer", &records, &[])
             .expect("save state");
         assert_eq!(
             store.load("lab", "local-peer").expect("load state"),
-            Some(records)
+            Some(PersistedMembershipStateData {
+                records,
+                hostname_records: Vec::new(),
+            })
         );
         assert_eq!(
             fs::metadata(&path)
@@ -368,11 +409,55 @@ mod tests {
     }
 
     #[test]
+    fn membership_state_round_trips_hostname_records_and_loads_legacy_state() {
+        let directory = test_directory("hostname-round-trip");
+        let path = directory.join("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        let hostname_record = issue_hostname_record_at(&identity, "lab", "renamed", 2, 2_000)
+            .expect("hostname record");
+
+        store
+            .save(
+                "lab",
+                &identity.peer_id,
+                &[],
+                std::slice::from_ref(&hostname_record),
+            )
+            .expect("save state");
+        assert_eq!(
+            store.load("lab", &identity.peer_id).expect("load state"),
+            Some(PersistedMembershipStateData {
+                records: Vec::new(),
+                hostname_records: vec![hostname_record],
+            })
+        );
+
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "network_name": "lab",
+                "local_peer": identity.peer_id,
+                "records": []
+            }))
+            .expect("legacy state"),
+        )
+        .expect("write legacy state");
+        assert_eq!(
+            store.load("lab", &identity.peer_id).expect("legacy load"),
+            Some(PersistedMembershipStateData::default())
+        );
+
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
     fn membership_state_is_bound_to_network_and_local_peer() {
         let directory = test_directory("scope");
         let store = MembershipStateStore::new(directory.join("membership-state.json"));
         store
-            .save("lab", "local-peer", &[membership_record()])
+            .save("lab", "local-peer", &[membership_record()], &[])
             .expect("save state");
 
         assert!(matches!(
@@ -393,7 +478,7 @@ mod tests {
         let path = directory.join("membership-state.json");
         let store = MembershipStateStore::new(&path);
         store
-            .save("lab", "local-peer", &[membership_record()])
+            .save("lab", "local-peer", &[membership_record()], &[])
             .expect("save state");
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("read state")).expect("decode state");

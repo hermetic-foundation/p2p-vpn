@@ -35,10 +35,25 @@ impl NetworkPeerList {
         member_records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<Self, ConfigError> {
-        let peers = network_peer_inventory_at(config, member_records, now_unix_seconds)?
-            .into_iter()
-            .map(|entry| entry.peer)
-            .collect();
+        Self::from_config_with_hostname_records_at(
+            config,
+            member_records,
+            &HashMap::new(),
+            now_unix_seconds,
+        )
+    }
+
+    pub fn from_config_with_hostname_records_at(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &HashMap<PeerId, String>,
+        now_unix_seconds: u64,
+    ) -> Result<Self, ConfigError> {
+        let peers =
+            network_peer_inventory_at(config, member_records, hostname_records, now_unix_seconds)?
+                .into_iter()
+                .map(|entry| entry.peer)
+                .collect();
 
         Ok(Self {
             schema_version: NETWORK_PEER_LIST_SCHEMA_VERSION,
@@ -63,12 +78,32 @@ impl NetworkPeerSnapshot {
         config: &Config,
         member_records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
+        runtime_state: F,
+    ) -> Result<Self, ConfigError>
+    where
+        F: FnMut(PeerId, &NetworkPeer) -> NetworkPeerRuntimeState,
+    {
+        Self::from_config_with_hostname_records_at(
+            config,
+            member_records,
+            &HashMap::new(),
+            now_unix_seconds,
+            runtime_state,
+        )
+    }
+
+    pub fn from_config_with_hostname_records_at<F>(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &HashMap<PeerId, String>,
+        now_unix_seconds: u64,
         mut runtime_state: F,
     ) -> Result<Self, ConfigError>
     where
         F: FnMut(PeerId, &NetworkPeer) -> NetworkPeerRuntimeState,
     {
-        let mut inventory = network_peer_inventory_at(config, member_records, now_unix_seconds)?;
+        let mut inventory =
+            network_peer_inventory_at(config, member_records, hostname_records, now_unix_seconds)?;
         let total_peers = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
         let retained = inventory.len().min(MAX_NETWORK_PEER_SNAPSHOT_PEERS);
         let mut selected = inventory.drain(..retained).collect::<Vec<_>>();
@@ -333,6 +368,7 @@ struct NetworkPeerInventoryEntry {
 fn network_peer_inventory_at(
     config: &Config,
     member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     now_unix_seconds: u64,
 ) -> Result<Vec<NetworkPeerInventoryEntry>, ConfigError> {
     let local_peer = config.local_peer_id()?;
@@ -343,7 +379,9 @@ fn network_peer_inventory_at(
     local
         .membership_sources
         .insert(NetworkPeerMembershipSource::LocalConfiguration);
-    insert_hostname(local, config.network.dns.hostname.as_deref());
+    if !hostname_records.contains_key(&local_peer) {
+        insert_hostname(local, config.network.dns.hostname.as_deref());
+    }
     insert_vpn_ip(local, config.network.vpn_ip.as_deref())?;
     insert_host_routes(local, &config.network.routes)?;
 
@@ -353,7 +391,9 @@ fn network_peer_inventory_at(
         entry
             .membership_sources
             .insert(NetworkPeerMembershipSource::PeerConfiguration);
-        insert_hostname(entry, configured.name.as_deref());
+        if !hostname_records.contains_key(&peer) {
+            insert_hostname(entry, configured.name.as_deref());
+        }
         insert_vpn_ip(entry, configured.vpn_ip.as_deref())?;
         insert_host_routes(entry, &configured.routes)?;
     }
@@ -366,10 +406,18 @@ fn network_peer_inventory_at(
         entry
             .membership_sources
             .insert(NetworkPeerMembershipSource::SignedMembership);
-        for hostname in &member.hostnames {
-            insert_hostname(entry, Some(hostname));
+        if !hostname_records.contains_key(&member.peer) {
+            for hostname in &member.hostnames {
+                insert_hostname(entry, Some(hostname));
+            }
         }
         insert_host_routes(entry, &member.route_grants)?;
+    }
+
+    for (peer, hostname) in hostname_records {
+        if let Some(entry) = peers.get_mut(peer) {
+            insert_hostname(entry, Some(hostname));
+        }
     }
 
     let mut peers = peers

@@ -78,13 +78,29 @@ impl DnsRuntime {
         member_records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<Option<Self>, DnsRuntimeError> {
+        Self::bind_with_hostname_records_at(
+            config,
+            member_records,
+            &std::collections::HashMap::new(),
+            now_unix_seconds,
+        )
+        .await
+    }
+
+    pub async fn bind_with_hostname_records_at(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &std::collections::HashMap<crate::PeerId, String>,
+        now_unix_seconds: u64,
+    ) -> Result<Option<Self>, DnsRuntimeError> {
         if !config.network.dns.enabled {
             return Ok(None);
         }
 
-        let zone = Arc::new(DnsZone::from_config_at(
+        let zone = Arc::new(DnsZone::from_config_with_hostname_records_at(
             config,
             member_records,
+            hostname_records,
             now_unix_seconds,
         )?);
         Self::bind_zone(config.network.dns.listen, zone)
@@ -164,9 +180,29 @@ impl DnsRuntime {
         member_records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<(), DnsRuntimeError> {
+        self.refresh_with_hostname_records_at(
+            config,
+            member_records,
+            &std::collections::HashMap::new(),
+            now_unix_seconds,
+        )
+    }
+
+    pub fn refresh_with_hostname_records_at(
+        &self,
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &std::collections::HashMap<crate::PeerId, String>,
+        now_unix_seconds: u64,
+    ) -> Result<(), DnsRuntimeError> {
         self.last_refresh_attempt_unix_seconds
             .store(now_unix_seconds, Ordering::Relaxed);
-        let zone = match DnsZone::from_config_at(config, member_records, now_unix_seconds) {
+        let zone = match DnsZone::from_config_with_hostname_records_at(
+            config,
+            member_records,
+            hostname_records,
+            now_unix_seconds,
+        ) {
             Ok(zone) => zone,
             Err(error) => {
                 self.metrics

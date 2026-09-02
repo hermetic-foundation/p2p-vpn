@@ -11,6 +11,7 @@ use sha2_010::{Digest as _, Sha256};
 use crate::{
     PathKind, PeerId,
     config::validate_packet_plane_endpoint_candidate,
+    hostname::SignedHostnameRecord,
     membership::{MAX_MEMBERSHIP_RECORDS, SignedMembershipRecord},
     runtime::packet::PACKET_PROTOCOL,
     wire::{HEADER_LEN, WIRE_VERSION},
@@ -19,6 +20,7 @@ use crate::{
 pub const CONTROL_PROTOCOL: &str = "/p2p-vpn/control/1";
 const MAX_CONTROL_MESSAGE_LEN: usize = 16_384;
 pub const MAX_CONTROL_MEMBERSHIP_RECORDS: usize = 8;
+pub const MAX_CONTROL_HOSTNAME_RECORDS: usize = 16;
 pub const MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES: usize = 32;
 pub const MAX_OWNED_QUIC_PACKET_PLANE_CERTIFICATE_DER_LEN: usize = 2048;
 pub const MEMBERSHIP_RECORD_PAGE_VERSION: u8 = 1;
@@ -77,6 +79,8 @@ pub struct ControlCapabilities {
     #[serde(default)]
     pub member_records: Vec<SignedMembershipRecord>,
     #[serde(default)]
+    pub hostname_records: Vec<SignedHostnameRecord>,
+    #[serde(default)]
     pub supports_membership_record_pages: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership_records_snapshot: Option<String>,
@@ -105,6 +109,7 @@ impl ControlCapabilities {
             packet_endpoint_candidates: Vec::new(),
             direct_address_candidates: Vec::new(),
             member_records: Vec::new(),
+            hostname_records: Vec::new(),
             supports_membership_record_pages: false,
             membership_records_snapshot: None,
             membership_record_count: 0,
@@ -132,6 +137,12 @@ impl ControlCapabilities {
     #[must_use]
     pub fn with_member_records(mut self, records: Vec<SignedMembershipRecord>) -> Self {
         self.member_records = records;
+        self
+    }
+
+    #[must_use]
+    pub fn with_hostname_records(mut self, records: Vec<SignedHostnameRecord>) -> Self {
+        self.hostname_records = records;
         self
     }
 
@@ -306,6 +317,7 @@ pub enum ControlRejectionReason {
     UnauthorizedRouteAdvertisement,
     InvalidOwnedQuicCertificate,
     InvalidMembershipRecord,
+    InvalidHostnameRecord,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -446,6 +458,9 @@ pub fn validate_capabilities(
     }
     if capabilities.member_records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
         return Some(ControlRejectionReason::InvalidMembershipRecord);
+    }
+    if capabilities.hostname_records.len() > MAX_CONTROL_HOSTNAME_RECORDS {
+        return Some(ControlRejectionReason::InvalidHostnameRecord);
     }
     if capabilities.supports_membership_record_pages {
         if usize::from(capabilities.membership_record_count) > MAX_MEMBERSHIP_RECORDS
@@ -965,6 +980,7 @@ mod tests {
         assert!(capabilities.advertised_routes.is_empty());
         assert!(capabilities.packet_endpoint_candidates.is_empty());
         assert!(capabilities.member_records.is_empty());
+        assert!(capabilities.hostname_records.is_empty());
         assert!(!capabilities.supports_membership_record_pages);
         assert_eq!(capabilities.membership_records_snapshot, None);
         assert_eq!(capabilities.membership_record_count, 0);
@@ -999,6 +1015,20 @@ mod tests {
         assert_eq!(
             validate_capabilities(&capabilities, "lab", None, &[]),
             Some(ControlRejectionReason::InvalidMembershipRecord)
+        );
+    }
+
+    #[test]
+    fn capabilities_reject_too_many_hostname_records() {
+        let identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let record = crate::hostname::issue_hostname_record_at(&identity, "lab", "host", 1, 1_000)
+            .expect("hostname record");
+        let mut capabilities = ControlCapabilities::local("lab", None, 1280);
+        capabilities.hostname_records = vec![record; MAX_CONTROL_HOSTNAME_RECORDS + 1];
+
+        assert_eq!(
+            validate_capabilities(&capabilities, "lab", None, &[]),
+            Some(ControlRejectionReason::InvalidHostnameRecord)
         );
     }
 

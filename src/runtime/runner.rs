@@ -68,10 +68,11 @@ use crate::{
     runtime::{
         control::{
             ControlCapabilities, ControlRejectionReason, ControlRequest, ControlResponse,
-            MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES, MAX_CONTROL_MEMBERSHIP_RECORDS,
-            MembershipRecordsRejectionReason, MembershipRecordsRequest, PeerCapabilities,
-            accepted_capabilities_response, build_membership_records_page_for_snapshot,
-            membership_records_snapshot, rejected_capabilities_response, validate_capabilities,
+            MAX_CONTROL_DIRECT_ADDRESS_CANDIDATES, MAX_CONTROL_HOSTNAME_RECORDS,
+            MAX_CONTROL_MEMBERSHIP_RECORDS, MembershipRecordsRejectionReason,
+            MembershipRecordsRequest, PeerCapabilities, accepted_capabilities_response,
+            build_membership_records_page_for_snapshot, membership_records_snapshot,
+            rejected_capabilities_response, validate_capabilities,
             validate_membership_records_page,
         },
         control_socket::{
@@ -1368,6 +1369,22 @@ where
         &node.identity.peer_id,
         &metrics,
     )?;
+    if forwarder.reconcile_local_hostname_record(&node.identity, current_unix_seconds_lossy())? {
+        log_runtime_event(
+            LogLevel::Info,
+            "local_hostname_record_updated",
+            &[(
+                "hostname",
+                forwarder
+                    .config()
+                    .network
+                    .dns
+                    .hostname
+                    .as_deref()
+                    .unwrap_or(""),
+            )],
+        );
+    }
     sync_live_tun_routes(&forwarder, &mut tun_runtime, route_controller.as_mut())?;
     persist_membership_records(
         membership_state_store.as_ref(),
@@ -1376,9 +1393,11 @@ where
         &metrics,
     )?;
     let mut persisted_membership_revision = forwarder.membership_revision();
-    let dns_runtime = DnsRuntime::bind_at(
+    let hostname_records = forwarder.effective_hostname_records()?;
+    let dns_runtime = DnsRuntime::bind_with_hostname_records_at(
         forwarder.config(),
         forwarder.member_records(),
+        &hostname_records,
         current_unix_seconds_lossy(),
     )
     .await?;
@@ -2218,9 +2237,21 @@ fn refresh_dns_zone_if_needed(
     if !force && revision == *membership_revision && !runtime.refresh_due(now_unix_seconds) {
         return;
     }
-    if let Err(error) = runtime.refresh_at(
+    let hostname_records = match forwarder.effective_hostname_records() {
+        Ok(records) => records,
+        Err(error) => {
+            log_runtime_event(
+                LogLevel::Error,
+                "dns_hostname_records_invalid",
+                &[("reason", &format!("{error:?}"))],
+            );
+            return;
+        }
+    };
+    if let Err(error) = runtime.refresh_with_hostname_records_at(
         forwarder.config(),
         forwarder.member_records(),
+        &hostname_records,
         now_unix_seconds,
     ) {
         log_runtime_event(
@@ -2390,12 +2421,13 @@ fn load_persisted_membership_records(
             return Err(error.into());
         }
     };
-    let Some(records) = records else {
+    let Some(state) = records else {
         return Ok(());
     };
 
     let now_unix_seconds = current_unix_seconds_lossy();
-    let stats = forwarder.merge_membership_records(&records, now_unix_seconds)?;
+    let stats = forwarder.merge_membership_records(&state.records, now_unix_seconds)?;
+    let hostname_stats = forwarder.merge_hostname_records(&state.hostname_records)?;
     let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
     if changed {
         membership.replace_record_members(
@@ -2408,7 +2440,11 @@ fn load_persisted_membership_records(
         LogLevel::Info,
         "membership_state_loaded",
         &[
-            ("records", &records.len().to_string()),
+            ("records", &state.records.len().to_string()),
+            (
+                "hostname_records",
+                &state.hostname_records.len().to_string(),
+            ),
             ("accepted", &stats.accepted.to_string()),
             (
                 "ignored_stale_or_equal",
@@ -2418,7 +2454,14 @@ fn load_persisted_membership_records(
             ("removed_untrusted", &stats.removed_untrusted.to_string()),
         ],
     );
-    metrics.record_membership_state_loaded(records.len());
+    if hostname_stats.accepted > 0 {
+        log_runtime_event(
+            LogLevel::Info,
+            "hostname_records_loaded",
+            &[("accepted", &hostname_stats.accepted.to_string())],
+        );
+    }
+    metrics.record_membership_state_loaded(state.records.len());
     Ok(())
 }
 
@@ -2435,6 +2478,7 @@ fn persist_membership_records(
         &forwarder.config().network.name,
         local_peer,
         forwarder.member_records(),
+        forwarder.hostname_records(),
     ) {
         metrics.record_membership_state_persist_failure();
         log_runtime_event(
@@ -4541,12 +4585,19 @@ fn handle_runtime_control_request(
             None
         }
         RuntimeControlRequest::NetworkPeers { respond_to } => {
-            let peers = NetworkPeerList::from_config_at(
-                context.forwarder.config(),
-                context.forwarder.member_records(),
-                current_unix_seconds_lossy(),
-            )
-            .map_err(|error| format!("failed to build effective peer inventory: {error:?}"));
+            let peers = context
+                .forwarder
+                .effective_hostname_records()
+                .map_err(|error| format!("failed to build hostname inventory: {error:?}"))
+                .and_then(|hostname_records| {
+                    NetworkPeerList::from_config_with_hostname_records_at(
+                        context.forwarder.config(),
+                        context.forwarder.member_records(),
+                        &hostname_records,
+                        current_unix_seconds_lossy(),
+                    )
+                    .map_err(|error| format!("failed to build effective peer inventory: {error:?}"))
+                });
             if respond_to.send(peers).is_err() {
                 eprintln!("control socket network peers response receiver dropped");
             }
@@ -4560,8 +4611,7 @@ fn handle_runtime_control_request(
                 &context.packet_plane,
                 &context.packet_plane_quic,
                 current_unix_seconds_lossy(),
-            )
-            .map_err(|error| format!("failed to build live peer snapshot: {error:?}"));
+            );
             if respond_to.send(peers).is_err() {
                 eprintln!("control socket peer snapshot response receiver dropped");
             }
@@ -4626,10 +4676,14 @@ fn runtime_peer_snapshot(
     packet_plane: &PacketPlaneSnapshot,
     packet_plane_quic: &PacketPlaneQuicSnapshot,
     now_unix_seconds: u64,
-) -> Result<NetworkPeerSnapshot, ConfigError> {
-    NetworkPeerSnapshot::from_config_at(
+) -> Result<NetworkPeerSnapshot, String> {
+    let hostname_records = forwarder
+        .effective_hostname_records()
+        .map_err(|error| format!("failed to build hostname inventory: {error:?}"))?;
+    NetworkPeerSnapshot::from_config_with_hostname_records_at(
         forwarder.config(),
         forwarder.member_records(),
+        &hostname_records,
         now_unix_seconds,
         |peer, _| {
             let datagram_backend =
@@ -4658,6 +4712,7 @@ fn runtime_peer_snapshot(
             }
         },
     )
+    .map_err(|error| format!("failed to build live peer snapshot: {error:?}"))
 }
 
 fn runtime_peer_lines(
@@ -6245,11 +6300,13 @@ fn publish_kademlia_membership_records(
     metrics: &RuntimeMetrics,
 ) -> Option<kad::QueryId> {
     let records = advertised_member_records(forwarder);
-    if records.is_empty() {
+    let hostname_records = advertised_hostname_records(forwarder);
+    if records.is_empty() && hostname_records.is_empty() {
         return None;
     }
 
-    let Ok(value) = encode_kademlia_membership_records(network_name, membership_tag, records)
+    let Ok(value) =
+        encode_kademlia_membership_records(network_name, membership_tag, records, hostname_records)
     else {
         metrics.record_kademlia_membership_record_publication_failure();
         log_runtime_event(
@@ -15649,6 +15706,8 @@ struct KademliaMembershipRecordBundle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     membership_tag: Option<String>,
     records: Vec<SignedMembershipRecord>,
+    #[serde(default)]
+    hostname_records: Vec<crate::hostname::SignedHostnameRecord>,
 }
 
 #[derive(Debug)]
@@ -15680,12 +15739,14 @@ fn encode_kademlia_membership_records(
     network_name: &str,
     membership_tag: Option<&str>,
     records: Vec<SignedMembershipRecord>,
+    hostname_records: Vec<crate::hostname::SignedHostnameRecord>,
 ) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&KademliaMembershipRecordBundle {
         version: 1,
         network_name: network_name.to_owned(),
         membership_tag: membership_tag.map(str::to_owned),
         records,
+        hostname_records,
     })
 }
 
@@ -15697,7 +15758,7 @@ fn learn_membership_records_from_kademlia_value(
     current_membership_tag: Option<&str>,
     previous_membership_tags: &[String],
     value: &[u8],
-) -> Result<(usize, bool), KademliaMembershipRecordError> {
+) -> Result<(usize, usize, bool), KademliaMembershipRecordError> {
     if value.len() > MAX_KADEMLIA_MEMBERSHIP_RECORD_BYTES {
         return Err(KademliaMembershipRecordError::TooLarge);
     }
@@ -15716,7 +15777,9 @@ fn learn_membership_records_from_kademlia_value(
     ) {
         return Err(KademliaMembershipRecordError::WrongMembershipScope);
     }
-    if bundle.records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS {
+    if bundle.records.len() > MAX_CONTROL_MEMBERSHIP_RECORDS
+        || bundle.hostname_records.len() > MAX_CONTROL_HOSTNAME_RECORDS
+    {
         return Err(KademliaMembershipRecordError::TooManyRecords);
     }
 
@@ -15724,8 +15787,13 @@ fn learn_membership_records_from_kademlia_value(
     let stats = forwarder
         .merge_membership_records(&bundle.records, now_unix_seconds)
         .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
-    let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
-    if changed {
+    let hostname_stats = forwarder
+        .merge_hostname_records(&bundle.hostname_records)
+        .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
+    let membership_changed =
+        stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    let changed = membership_changed || hostname_stats.accepted > 0;
+    if membership_changed {
         membership
             .replace_record_members(
                 forwarder.config(),
@@ -15734,7 +15802,6 @@ fn learn_membership_records_from_kademlia_value(
             )
             .map_err(ForwardError::from)
             .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
-        *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
         let accepted = stats.accepted.to_string();
         let ignored = stats.ignored_stale_or_equal.to_string();
         let removed_expired = stats.removed_expired.to_string();
@@ -15750,7 +15817,10 @@ fn learn_membership_records_from_kademlia_value(
             ],
         );
     }
-    Ok((stats.accepted, changed))
+    if changed {
+        *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
+    }
+    Ok((stats.accepted, hostname_stats.accepted, changed))
 }
 
 fn membership_tag_allowed(
@@ -15827,6 +15897,21 @@ pub(crate) fn advertised_member_records(forwarder: &Forwarder) -> Vec<SignedMemb
     records
 }
 
+pub(crate) fn advertised_hostname_records(
+    forwarder: &Forwarder,
+) -> Vec<crate::hostname::SignedHostnameRecord> {
+    let local_peer = forwarder.config().local_peer().ok();
+    let mut records = forwarder.hostname_records().to_vec();
+    records.sort_unstable_by_key(|record| {
+        (
+            local_peer.as_deref() != Some(record.payload.peer.as_str()),
+            record.payload.peer.clone(),
+        )
+    });
+    records.truncate(MAX_CONTROL_HOSTNAME_RECORDS);
+    records
+}
+
 fn refreshed_local_capabilities(
     local_capabilities: &ControlCapabilities,
     forwarder: &Forwarder,
@@ -15834,6 +15919,7 @@ fn refreshed_local_capabilities(
     let mut capabilities = local_capabilities.clone();
     capabilities.advertised_routes = forwarder.local_advertised_routes();
     capabilities.member_records = advertised_member_records(forwarder);
+    capabilities.hostname_records = advertised_hostname_records(forwarder);
     capabilities.supports_membership_record_pages = true;
     capabilities.membership_records_snapshot =
         Some(membership_records_snapshot(forwarder.member_records()));
@@ -16171,22 +16257,32 @@ fn validate_peer_capabilities(
             Ok(changed) => changed,
             Err(_) => return (Some(ControlRejectionReason::InvalidMembershipRecord), false),
         };
+    let hostname_changed = match forwarder.merge_hostname_records(&capabilities.hostname_records) {
+        Ok(stats) => stats.accepted > 0,
+        Err(_) => {
+            return (
+                Some(ControlRejectionReason::InvalidHostnameRecord),
+                membership_changed,
+            );
+        }
+    };
+    let topology_changed = membership_changed || hostname_changed;
 
     if !forwarder.is_configured_transport_peer(peer) {
         return (
             Some(ControlRejectionReason::UnauthorizedPeer),
-            membership_changed,
+            topology_changed,
         );
     }
 
     if !forwarder.authorizes_advertised_routes(peer, &capabilities.advertised_routes) {
         return (
             Some(ControlRejectionReason::UnauthorizedRouteAdvertisement),
-            membership_changed,
+            topology_changed,
         );
     }
 
-    (None, membership_changed)
+    (None, topology_changed)
 }
 
 fn record_peer_capabilities(
@@ -16215,6 +16311,7 @@ fn log_control_capabilities_summary(
         .len()
         .to_string();
     let member_records = capabilities.member_records.len().to_string();
+    let hostname_records = capabilities.hostname_records.len().to_string();
     log_runtime_event(
         LogLevel::Info,
         event,
@@ -16236,6 +16333,7 @@ fn log_control_capabilities_summary(
             ("udp_candidates", &udp_candidates),
             ("quic_candidates", &quic_candidates),
             ("member_records", &member_records),
+            ("hostname_records", &hostname_records),
             (
                 "owned_udp",
                 if capabilities.supports_owned_udp_packet_plane {
@@ -19387,12 +19485,19 @@ fn handle_kademlia_membership_record_result(
             context.previous_membership_tags,
             value,
         ) {
-            Ok((accepted, changed)) => {
+            Ok((accepted, hostname_accepted, changed)) => {
                 membership_changed = changed;
                 context.metrics.record_kademlia_membership_records_found();
                 context
                     .metrics
                     .record_kademlia_membership_records_accepted(accepted);
+                if hostname_accepted > 0 {
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "kademlia_hostname_records_merged",
+                        &[("accepted", &hostname_accepted.to_string())],
+                    );
+                }
                 if let Err(error) = sync_live_tun_routes(
                     context.forwarder,
                     context.tun_runtime,
@@ -20148,6 +20253,8 @@ fn outbound_drop_reason(error: &ForwardError) -> PacketDropReason {
         | ForwardError::Frame(_)
         | ForwardError::Config(_)
         | ForwardError::LocalPeerChanged { .. }
+        | ForwardError::HostnameRecord(_)
+        | ForwardError::HostnameSequenceExhausted
         | ForwardError::MembershipRecord(_)
         | ForwardError::Route(_)
         | ForwardError::UnauthorizedPeer(_)
@@ -20354,6 +20461,8 @@ fn inbound_drop_reason(error: &ForwardError) -> PacketDropReason {
         | ForwardError::Frame(_)
         | ForwardError::Config(_)
         | ForwardError::LocalPeerChanged { .. }
+        | ForwardError::HostnameRecord(_)
+        | ForwardError::HostnameSequenceExhausted
         | ForwardError::MembershipRecord(_)
         | ForwardError::Route(_)
         | ForwardError::NoRoute(_)
@@ -20471,6 +20580,8 @@ fn packet_rejection_error_name(error: &ForwardError) -> &'static str {
         ForwardError::NoTransportPeer(_) => "no_transport_peer",
         ForwardError::Config(_) => "configuration_error",
         ForwardError::LocalPeerChanged { .. } => "local_peer_changed",
+        ForwardError::HostnameRecord(_) => "hostname_record_error",
+        ForwardError::HostnameSequenceExhausted => "hostname_sequence_exhausted",
         ForwardError::MembershipRecord(_) => "membership_record_error",
         ForwardError::Enqueue(EnqueueError::QueueFull { .. }) => "queue_full",
     }
@@ -20583,6 +20694,7 @@ fn control_rejection_name(reason: ControlRejectionReason) -> &'static str {
         }
         ControlRejectionReason::InvalidOwnedQuicCertificate => "invalid_owned_quic_certificate",
         ControlRejectionReason::InvalidMembershipRecord => "invalid_membership_record",
+        ControlRejectionReason::InvalidHostnameRecord => "invalid_hostname_record",
     }
 }
 
@@ -24397,7 +24509,7 @@ mod tests {
             &issuer,
             MembershipRecordOptions {
                 network_name: "lab".to_owned(),
-                member,
+                member: member.clone(),
                 membership_epoch: 1,
                 sequence: 1,
                 roles: vec![MembershipRole::OverlayMember],
@@ -24407,13 +24519,21 @@ mod tests {
             1_001,
         )
         .expect("member record");
-        let value = encode_kademlia_membership_records("lab", Some("current"), vec![member_record])
-            .expect("encoded bundle");
+        let hostname_record =
+            crate::hostname::issue_hostname_record_at(&member, "lab", "member-renamed", 1, 1_002)
+                .expect("hostname record");
+        let value = encode_kademlia_membership_records(
+            "lab",
+            Some("current"),
+            vec![member_record],
+            vec![hostname_record.clone()],
+        )
+        .expect("encoded bundle");
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut capabilities = ControlCapabilities::local("lab", Some("current".to_owned()), 1280);
 
-        let (accepted, changed) = learn_membership_records_from_kademlia_value(
+        let (accepted, hostname_accepted, changed) = learn_membership_records_from_kademlia_value(
             &mut forwarder,
             &mut membership,
             &mut capabilities,
@@ -24425,9 +24545,11 @@ mod tests {
         .expect("trusted bundle");
 
         assert_eq!(accepted, 1);
+        assert_eq!(hostname_accepted, 1);
         assert!(changed);
         assert!(membership.allows(member_peer));
         assert_eq!(capabilities.member_records.len(), 2);
+        assert_eq!(capabilities.hostname_records, vec![hostname_record]);
     }
 
     #[test]
@@ -24436,7 +24558,8 @@ mod tests {
         let member = peer_id();
         let config = config_with_peer(&local_identity, member);
         let value =
-            encode_kademlia_membership_records("lab", Some("other"), Vec::new()).expect("bundle");
+            encode_kademlia_membership_records("lab", Some("other"), Vec::new(), Vec::new())
+                .expect("bundle");
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut capabilities = ControlCapabilities::local("lab", Some("current".to_owned()), 1280);
@@ -30784,6 +30907,41 @@ mod tests {
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.77.0.0/24", 1)])
         );
         assert_eq!(forwarder.member_record_count(), 2);
+    }
+
+    #[test]
+    fn capability_response_learns_and_republishes_self_signed_hostname() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_peer = remote.peer_id.parse::<Libp2pPeerId>().expect("remote peer");
+        let config = config_with_peer(&local, remote_peer);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let hostname_record =
+            crate::hostname::issue_hostname_record_at(&remote, "lab", "remote-renamed", 1, 1_000)
+                .expect("hostname record");
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_hostname_records(vec![hostname_record.clone()]);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1_280);
+
+        let response = capability_response_for_peer_with_membership_records(
+            &mut forwarder,
+            &mut membership,
+            remote_peer,
+            &remote_capabilities,
+            &local_capabilities,
+            &[],
+        );
+
+        assert_eq!(
+            forwarder.hostname_records(),
+            std::slice::from_ref(&hostname_record)
+        );
+        let ControlResponse::CapabilitiesAccepted(accepted) = response else {
+            panic!("hostname capability was rejected");
+        };
+        assert_eq!(accepted.hostname_records, vec![hostname_record]);
+        assert!(accepted.supports_membership_record_pages);
     }
 
     #[test]

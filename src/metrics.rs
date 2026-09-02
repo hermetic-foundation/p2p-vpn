@@ -195,6 +195,7 @@ pub struct RuntimeMetrics {
     control_reject_unauthorized_route_advertisement: AtomicU64,
     control_reject_invalid_owned_quic_certificate: AtomicU64,
     control_reject_invalid_membership_record: AtomicU64,
+    control_reject_invalid_hostname_record: AtomicU64,
     membership_record_page_requests_sent: AtomicU64,
     membership_record_page_requests_received: AtomicU64,
     membership_record_pages_received: AtomicU64,
@@ -844,6 +845,9 @@ impl RuntimeMetrics {
                 .fetch_add(1, Ordering::Relaxed),
             ControlRejectionReason::InvalidMembershipRecord => self
                 .control_reject_invalid_membership_record
+                .fetch_add(1, Ordering::Relaxed),
+            ControlRejectionReason::InvalidHostnameRecord => self
+                .control_reject_invalid_hostname_record
                 .fetch_add(1, Ordering::Relaxed),
         };
     }
@@ -1502,6 +1506,9 @@ impl RuntimeMetrics {
         snapshot.control_reject_invalid_membership_record = self
             .control_reject_invalid_membership_record
             .load(Ordering::Relaxed);
+        snapshot.control_reject_invalid_hostname_record = self
+            .control_reject_invalid_hostname_record
+            .load(Ordering::Relaxed);
         snapshot.membership_record_page_requests_sent = self
             .membership_record_page_requests_sent
             .load(Ordering::Relaxed);
@@ -1760,6 +1767,7 @@ pub struct RuntimeSnapshot {
     pub control_reject_unauthorized_route_advertisement: u64,
     pub control_reject_invalid_owned_quic_certificate: u64,
     pub control_reject_invalid_membership_record: u64,
+    pub control_reject_invalid_hostname_record: u64,
     pub membership_record_page_requests_sent: u64,
     pub membership_record_page_requests_received: u64,
     pub membership_record_pages_received: u64,
@@ -2212,6 +2220,10 @@ impl RuntimeSnapshot {
             format!(
                 "control_reject_invalid_membership_record {}",
                 self.control_reject_invalid_membership_record
+            ),
+            format!(
+                "control_reject_invalid_hostname_record {}",
+                self.control_reject_invalid_hostname_record
             ),
             format!(
                 "membership_record_page_requests_sent {}",
@@ -2810,6 +2822,7 @@ mod tests {
             ControlRejectionReason::UnauthorizedRouteAdvertisement,
             ControlRejectionReason::InvalidOwnedQuicCertificate,
             ControlRejectionReason::InvalidMembershipRecord,
+            ControlRejectionReason::InvalidHostnameRecord,
         ] {
             metrics.record_control_capability_rejection(reason);
         }
@@ -3227,7 +3240,7 @@ mod tests {
         assert_eq!(snapshot.control_requests_received, 1);
         assert_eq!(snapshot.control_responses_received, 1);
         assert_eq!(snapshot.control_capability_accepts, 1);
-        assert_eq!(snapshot.control_capability_rejections, 11);
+        assert_eq!(snapshot.control_capability_rejections, 12);
         assert_eq!(snapshot.control_reject_unauthorized_peer, 1);
         assert_eq!(snapshot.control_reject_wrong_network, 1);
         assert_eq!(snapshot.control_reject_membership_mismatch, 1);
@@ -3239,6 +3252,7 @@ mod tests {
         assert_eq!(snapshot.control_reject_unauthorized_route_advertisement, 1);
         assert_eq!(snapshot.control_reject_invalid_owned_quic_certificate, 1);
         assert_eq!(snapshot.control_reject_invalid_membership_record, 1);
+        assert_eq!(snapshot.control_reject_invalid_hostname_record, 1);
         assert_eq!(snapshot.control_failures, 1);
         assert_eq!(snapshot.membership_record_page_requests_sent, 1);
         assert_eq!(snapshot.membership_record_page_requests_received, 1);
@@ -3405,7 +3419,7 @@ mod tests {
         assert_metric_line(&snapshot, "control_requests_received 1");
         assert_metric_line(&snapshot, "control_responses_received 1");
         assert_metric_line(&snapshot, "control_capability_accepts 1");
-        assert_metric_line(&snapshot, "control_capability_rejections 11");
+        assert_metric_line(&snapshot, "control_capability_rejections 12");
         assert_metric_line(&snapshot, "control_reject_unauthorized_peer 1");
         assert_metric_line(&snapshot, "control_reject_wrong_network 1");
         assert_metric_line(&snapshot, "control_reject_membership_mismatch 1");
@@ -3423,6 +3437,7 @@ mod tests {
         );
         assert_metric_line(&snapshot, "control_reject_invalid_owned_quic_certificate 1");
         assert_metric_line(&snapshot, "control_reject_invalid_membership_record 1");
+        assert_metric_line(&snapshot, "control_reject_invalid_hostname_record 1");
         assert_metric_line(&snapshot, "control_failures 1");
         assert_metric_line(&snapshot, "membership_record_page_requests_sent 1");
         assert_metric_line(&snapshot, "membership_record_page_requests_received 1");

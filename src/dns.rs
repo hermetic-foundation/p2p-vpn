@@ -148,6 +148,7 @@ pub enum DnsNameSource {
     LocalConfiguration,
     PeerConfiguration,
     SignedMembership,
+    SignedHostname,
     PeerIdFallback,
 }
 
@@ -158,6 +159,7 @@ impl DnsNameSource {
             Self::LocalConfiguration => "local_configuration",
             Self::PeerConfiguration => "peer_configuration",
             Self::SignedMembership => "signed_membership",
+            Self::SignedHostname => "signed_hostname",
             Self::PeerIdFallback => "peer_id_fallback",
         }
     }
@@ -226,6 +228,21 @@ impl DnsZone {
         member_records: &[crate::membership::SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<Self, DnsZoneError> {
+        Self::from_config_with_hostname_records_at(
+            config,
+            member_records,
+            &HashMap::new(),
+            now_unix_seconds,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub fn from_config_with_hostname_records_at(
+        config: &Config,
+        member_records: &[crate::membership::SignedMembershipRecord],
+        hostname_records: &HashMap<PeerId, String>,
+        now_unix_seconds: u64,
+    ) -> Result<Self, DnsZoneError> {
         config
             .network
             .dns
@@ -255,17 +272,19 @@ impl DnsZone {
         )?;
 
         let mut names = HashMap::<String, HashMap<PeerId, BTreeSet<DnsNameSource>>>::new();
-        insert_name(
-            &mut names,
-            config
-                .network
-                .dns
-                .hostname
-                .as_deref()
-                .expect("enabled DNS has a validated hostname"),
-            local_peer,
-            DnsNameSource::LocalConfiguration,
-        )?;
+        if !hostname_records.contains_key(&local_peer) {
+            insert_name(
+                &mut names,
+                config
+                    .network
+                    .dns
+                    .hostname
+                    .as_deref()
+                    .expect("enabled DNS has a validated hostname"),
+                local_peer,
+                DnsNameSource::LocalConfiguration,
+            )?;
+        }
 
         for peer in &config.peers {
             let overlay_peer = peer.peer_id().map_err(DnsZoneError::Config)?;
@@ -276,7 +295,9 @@ impl DnsZone {
                 addresses.insert_ip(parse_explicit_ip(vpn_ip)?);
             }
             add_host_routes(addresses, &peer.routes)?;
-            if let Some(name) = peer.name.as_deref() {
+            if let Some(name) = peer.name.as_deref()
+                && !hostname_records.contains_key(&overlay_peer)
+            {
                 insert_name(
                     &mut names,
                     name,
@@ -297,13 +318,21 @@ impl DnsZone {
                 PeerAddresses::new(member.transport_peer.to_string(), member.peer)
             });
             add_host_routes(addresses, &member.route_grants)?;
-            for hostname in &member.hostnames {
-                insert_name(
-                    &mut names,
-                    hostname,
-                    member.peer,
-                    DnsNameSource::SignedMembership,
-                )?;
+            if !hostname_records.contains_key(&member.peer) {
+                for hostname in &member.hostnames {
+                    insert_name(
+                        &mut names,
+                        hostname,
+                        member.peer,
+                        DnsNameSource::SignedMembership,
+                    )?;
+                }
+            }
+        }
+
+        for (peer, hostname) in hostname_records {
+            if peers.contains_key(peer) {
+                insert_name(&mut names, hostname, *peer, DnsNameSource::SignedHostname)?;
             }
         }
 
@@ -608,6 +637,7 @@ mod tests {
             DiscoveryConfig, InterfaceConfig, NetworkConfig, PacketPlaneConfig, QueueConfig,
             RelayConfig, ResourceConfig,
         },
+        hostname::{effective_hostname_records, issue_hostname_record_at},
         identity::NodeIdentity,
         membership::{
             MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
@@ -741,6 +771,53 @@ mod tests {
             ))
             .is_some()
         );
+    }
+
+    #[test]
+    fn latest_self_signed_hostname_replaces_legacy_membership_name() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let mut config = config_with_dns(&root, "root");
+        config.network.member_records.push(
+            issue_named_membership_record_for_subject_at(
+                &root,
+                MembershipRecordIssueOptions {
+                    network_name: "runners".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&member).expect("subject"),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    revoked: false,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: vec![RouteConfig {
+                        prefix: "10.42.0.2/32".to_owned(),
+                        metric: 0,
+                    }],
+                    expires_at_unix_seconds: None,
+                },
+                Some("old-phone"),
+                1_000,
+            )
+            .expect("membership record"),
+        );
+        let hostname_record = issue_hostname_record_at(&member, "runners", "pixel-8-pro", 2, 2_000)
+            .expect("hostname record");
+        let hostnames = effective_hostname_records(&[hostname_record], "runners")
+            .expect("effective hostname records");
+
+        let zone = DnsZone::from_config_with_hostname_records_at(
+            &config,
+            &config.network.member_records,
+            &hostnames,
+            2_001,
+        )
+        .expect("DNS zone");
+
+        assert!(zone.record("old-phone.runners.p2p-vpn.internal").is_none());
+        let record = zone
+            .record("pixel-8-pro.runners.p2p-vpn.internal")
+            .expect("renamed record");
+        assert_eq!(record.sources, vec![DnsNameSource::SignedHostname]);
+        assert_eq!(record.transport_peer, member.peer_id);
     }
 
     #[test]

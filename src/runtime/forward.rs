@@ -9,6 +9,12 @@ use libp2p::{PeerId as Libp2pPeerId, Swarm, identity::Keypair as Libp2pKeypair, 
 use crate::{
     PeerId, Sequence, SessionId,
     config::{Config, ConfigError, RouteConfig},
+    hostname::{
+        HostnameRecordError, HostnameRecordMergeStats, MAX_HOSTNAME_RECORD_INTEGER,
+        MAX_HOSTNAME_RECORDS, SignedHostnameRecord, effective_hostname_records,
+        issue_hostname_record_at, merge_hostname_records,
+    },
+    identity::NodeIdentity,
     membership::{
         MAX_MEMBERSHIP_RECORDS, MembershipRecordError, MembershipRecordMergeStats,
         SignedMembershipRecord, effective_membership_at, membership_trust_anchors,
@@ -29,6 +35,7 @@ pub struct Forwarder {
     local_peer: PeerId,
     config: Config,
     member_records: Vec<SignedMembershipRecord>,
+    hostname_records: Vec<SignedHostnameRecord>,
     routes: RouteTable,
     peers: HashMap<PeerId, Libp2pPeerId>,
     authorized_peers: AuthorizedPeers,
@@ -129,6 +136,7 @@ impl Forwarder {
             local_peer,
             config: config.clone(),
             member_records: member_records.clone(),
+            hostname_records: Vec::new(),
             routes: config
                 .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?,
             peers: transport_peers_from_config_and_records(
@@ -282,6 +290,59 @@ impl Forwarder {
         Ok(stats)
     }
 
+    pub fn merge_hostname_records(
+        &mut self,
+        records: &[SignedHostnameRecord],
+    ) -> Result<HostnameRecordMergeStats, ForwardError> {
+        let stats = merge_hostname_records(
+            &mut self.hostname_records,
+            records,
+            &self.config.network.name,
+            MAX_HOSTNAME_RECORDS,
+        )?;
+        if stats.accepted > 0 {
+            self.membership_revision = self.membership_revision.wrapping_add(1);
+        }
+        Ok(stats)
+    }
+
+    pub fn reconcile_local_hostname_record(
+        &mut self,
+        identity: &NodeIdentity,
+        now_unix_seconds: u64,
+    ) -> Result<bool, ForwardError> {
+        let local_peer = PeerId::from_libp2p(identity.peer_id.parse()?);
+        if local_peer != self.local_peer {
+            return Err(ForwardError::LocalPeerChanged {
+                expected: self.local_peer,
+                actual: local_peer,
+            });
+        }
+        let Some(hostname) = self.config.network.dns.hostname.as_deref() else {
+            return Ok(false);
+        };
+        let current = self
+            .hostname_records
+            .iter()
+            .find(|record| record.payload.peer == identity.peer_id);
+        if current.is_some_and(|record| record.payload.hostname == hostname) {
+            return Ok(false);
+        }
+        let sequence = current
+            .map_or(0, |record| record.payload.sequence)
+            .checked_add(1)
+            .filter(|sequence| *sequence <= MAX_HOSTNAME_RECORD_INTEGER)
+            .ok_or(ForwardError::HostnameSequenceExhausted)?;
+        let record = issue_hostname_record_at(
+            identity,
+            &self.config.network.name,
+            hostname,
+            sequence,
+            now_unix_seconds,
+        )?;
+        Ok(self.merge_hostname_records(&[record])?.accepted == 1)
+    }
+
     pub fn prepare_reconfigure(
         &self,
         config: Config,
@@ -360,6 +421,18 @@ impl Forwarder {
     #[must_use]
     pub fn member_records(&self) -> &[SignedMembershipRecord] {
         &self.member_records
+    }
+
+    #[must_use]
+    pub fn hostname_records(&self) -> &[SignedHostnameRecord] {
+        &self.hostname_records
+    }
+
+    pub fn effective_hostname_records(&self) -> Result<HashMap<PeerId, String>, ForwardError> {
+        Ok(effective_hostname_records(
+            &self.hostname_records,
+            &self.config.network.name,
+        )?)
     }
 
     #[must_use]
@@ -782,6 +855,7 @@ fn ipv6_endpoint(packet: &[u8], offset: usize) -> Result<IpAddr, ForwardError> {
 #[derive(Debug)]
 pub enum ForwardError {
     Config(ConfigError),
+    HostnameRecord(HostnameRecordError),
     MembershipRecord(MembershipRecordError),
     Route(RouteError),
     Frame(FrameError),
@@ -792,6 +866,7 @@ pub enum ForwardError {
         expected: PeerId,
         actual: PeerId,
     },
+    HostnameSequenceExhausted,
     PacketTooLarge {
         actual: usize,
         max: usize,
@@ -828,6 +903,18 @@ pub enum ForwardError {
 impl From<ConfigError> for ForwardError {
     fn from(error: ConfigError) -> Self {
         Self::Config(error)
+    }
+}
+
+impl From<HostnameRecordError> for ForwardError {
+    fn from(error: HostnameRecordError) -> Self {
+        Self::HostnameRecord(error)
+    }
+}
+
+impl From<libp2p::identity::ParseError> for ForwardError {
+    fn from(error: libp2p::identity::ParseError) -> Self {
+        Self::HostnameRecord(HostnameRecordError::PeerId(error))
     }
 }
 
@@ -1043,6 +1130,41 @@ mod tests {
             format!("{}/128", builtin_ipv6(local)),
             0
         )));
+    }
+
+    #[test]
+    fn local_hostname_reconciliation_preserves_identity_and_advances_sequence() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = config_for(remote);
+        let identity = NodeIdentity::generate_ed25519().expect("identity");
+        config.network.local_peer.clone_from(&identity.peer_id);
+        config.network.private_key = Some(identity.private_key.clone());
+        config.network.dns.hostname = Some("old-host".to_owned());
+        let original_peer = identity.peer_id.clone();
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        assert!(
+            forwarder
+                .reconcile_local_hostname_record(&identity, 1_000)
+                .expect("initial claim")
+        );
+        assert_eq!(forwarder.hostname_records()[0].payload.sequence, 1);
+        assert!(
+            !forwarder
+                .reconcile_local_hostname_record(&identity, 1_001)
+                .expect("stable claim")
+        );
+
+        forwarder.config.network.dns.hostname = Some("new-host".to_owned());
+        assert!(
+            forwarder
+                .reconcile_local_hostname_record(&identity, 2_000)
+                .expect("renamed claim")
+        );
+        assert_eq!(forwarder.hostname_records().len(), 1);
+        assert_eq!(forwarder.hostname_records()[0].payload.hostname, "new-host");
+        assert_eq!(forwarder.hostname_records()[0].payload.sequence, 2);
+        assert_eq!(forwarder.hostname_records()[0].payload.peer, original_peer);
     }
 
     #[test]
