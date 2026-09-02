@@ -535,4 +535,4 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 | Custom route grants | No Android UI |
 | Identity import/export | No Android UI |
 | Release distribution | Debug APK only |
-| Hardware validation | API 35 x86_64 emulator; physical device not recorded |
+| Hardware validation | API 35 x86_64 emulator and API 37 arm64 device |

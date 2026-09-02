@@ -1152,7 +1152,7 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The recorded runs through 2026-09-02 used a clean API 35 x86_64 emulator.
+The managed runs through 2026-09-02 used a clean API 35 x86_64 emulator.
 
 ### Network Workflow
 
@@ -1293,6 +1293,26 @@ behavior, and underlay recovery in the managed emulator.
 
 It does not prove public NAT traversal or physical-device behavior.
 
+### Physical App Workflow
+
+An API 37 arm64 device was validated on 2026-09-02.
+
+| Check | Result |
+| --- | --- |
+| Installation | `adb install -r` installed the validated APK without clearing app data |
+| Migration | Existing profile, hostname, identity, addresses, and enabled state were preserved |
+| Navigation | Home, add, create, join, and network-detail screens rendered without overlap |
+| Hostname | A new join proposed the DNS-safe device hostname `pixel-8-pro` |
+| Activation | The per-network switch reached `Connected` and idled correctly when disabled under always-on ownership |
+| Peers | Seven bounded rows exposed names, dual-stack addresses, path state, origin, and membership provenance |
+| Traffic | IPv4 and IPv6 passed 5/5 in both directions; post-update traffic passed 3/3 |
+| Update | A second `adb install -r` restored the enabled network with the same identity and traffic |
+| Resources | Connected snapshot reported six Java threads and 81,746 KiB PSS |
+
+This proves the physical app workflow and Linux interoperability.
+
+The interactive mobility, Doze, and 30-minute endurance audit remains separate.
+
 ## Current Exclusions
 
 | Area | State |
@@ -1307,4 +1327,5 @@ It does not prove public NAT traversal or physical-device behavior.
 | Identity import/export UI | Excluded |
 | Play Store release pipeline | Excluded |
 | Automated emulator underlay changes | Proven on API 35 x86_64 |
-| Physical arm64 device | Not yet proven |
+| Physical arm64 app workflow | Proven on API 37 |
+| Physical mobility and endurance | Requires the interactive device audit |

@@ -48,7 +48,7 @@ Status is conservative.
 | Authenticated overlay DNS | Operational | Unit, CLI, module lifecycle, transitive VM, and physical four-host proofs. |
 | NixOS module | Operational | Evaluation, lifecycle, mesh, offline pairing, and code-pairing checks. |
 | Android Nix build | Operational | Rust tests, cross build, Java tests, lint, APK, signature, and manifest gate. |
-| Android pair and connect | Partial | API 35 persistence, code pairing, dual-stack paths, relay, and direct promotion proven. |
+| Android pair and connect | Operational | API 35 pairing and lifecycle proof plus API 37 arm64 UI, update, peer, and dual-stack traffic proof. |
 | Android concurrent networks | Operational in API 35 emulator | Migration, shared TUN, independent pairing, traffic, isolation, and lifecycle proof. |
 | Release archive | Operational | Release archive sanity check. |
 
@@ -82,10 +82,11 @@ Status is conservative.
 | 2026-08-30 | Android relay-to-direct E2E | 20 relay and 20 direct packets passed; promotion took 10.300 seconds without restart. |
 | 2026-08-30 | Android autonomous recovery E2E | Wi-Fi, total loss, cellular, and Wi-Fi return recovered without runtime restart. |
 | 2026-09-01 | Android multi-network E2E | Two networks, eight traffic directions, overlap, isolation, process, update, lockdown, and reboot passed. |
+| 2026-09-02 | Android physical app workflow | API 37 arm64 install, nested UI, switch lifecycle, peers, update, and bidirectional dual-stack traffic passed. |
 
 ## Main Remaining Gaps
 
 | Gap | Required Evidence |
 | --- | --- |
 | Public code pairing | Two fresh hosts pair from only a code and pass traffic without manual routes. |
-| Android hardware | Interactive arm64 LAN, hotspot, upstream VPN, LAN return, Doze, endurance, process, and update audit. |
+| Android mobility and endurance | Interactive arm64 hotspot, upstream VPN, LAN return, Doze, and endurance audit. |
