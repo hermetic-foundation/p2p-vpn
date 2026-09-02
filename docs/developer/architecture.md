@@ -276,7 +276,7 @@ They are not VPN members and are not serialized into minimal configs.
 
 ### Query Scheduling
 
-Public DHT work is serialized per network instance.
+Application-scheduled public DHT work is serialized per network instance.
 
 | Work | Policy |
 | --- | --- |
@@ -285,6 +285,7 @@ Public DHT work is serialized per network instance.
 | Failed recovery | Exponential backoff from 30 seconds to 60 minutes. |
 | Routine maintenance | One round-robin query every two minutes. |
 | libp2p bootstrap | Built-in periodic bootstrap is disabled. |
+| Low-peer bootstrap | libp2p may bootstrap while its routing table is below 20 peers. |
 | Query parallelism | One in-flight peer per iterative query. |
 | Relay discovery | One closest-peer query while relay capacity is needed. |
 | Bootstrap refresh | Runs only below eight active routing peers. |
