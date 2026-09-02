@@ -65,61 +65,149 @@ Select one device when several are connected:
 ANDROID_SERIAL=DEVICE_SERIAL nix run .#android-install
 ```
 
-## Create the First Network
+## App Layout
 
-1. Open `p2p-vpn`.
-2. Enter the exact overlay network name.
-3. Select **Create network**.
-
-The network name must match the Linux or NixOS member.
-
-For a NixOS instance named `runners`, the default network name is `runners`.
-
-The app creates a separate libp2p peer ID and p2p-vpn hostname for the network.
-
-The default hostname is `android-` plus 16 identity-derived hexadecimal
-characters. It remains stable while the network identity is preserved.
-
-The new network is selected and enabled.
-
-The app restores the encrypted network collection on later launches.
-
-## Manage Networks
-
-### Add
-
-1. Select **Add network**.
-2. Enter the exact overlay network name.
-3. Select **Create network**.
-
-The app creates a new identity. It does not reuse another network's peer ID,
-membership, routes, hostname, or pairing state.
-
-### Select
-
-Select a network name in the **Networks** list.
-
-Selection changes the identity and pairing controls shown below the list. It
-does not enable, disable, or disconnect a network.
-
-### Enable or Disable
-
-Use the switch beside a network name.
-
-| State | Behavior |
+| Screen | Purpose |
 | --- | --- |
-| Enabled | Joins the shared VPN when the service connects. |
-| Disabled | Remains encrypted on disk without discovery, routes, or packet queues. |
+| **Networks** | Lists saved networks, hostnames, live states, and enable switches. |
+| **Add network** | Opens the create and code-join choices. |
+| **Create network** | Creates a new independent overlay. |
+| **Join by code** | Discovers an inviter and creates the signed local profile. |
+| Network details | Shows identity, addresses, pairing, peers, and removal. |
 
-Changing the enabled set while connected briefly rebuilds the shared VPN.
-Always-on mode restores the complete enabled set afterward.
+Tap a network row to open its details. Use its switch only when changing
+whether that network should run.
+
+## Join an Existing Network
+
+Joining needs only the pairing code. Do not create an empty Android network
+first, and do not enter the Linux network name by hand.
+
+### 1. Open Pairing on Linux
+
+```sh
+sudo p2p-vpn pair open --instance runners
+```
+
+Keep the displayed operation ID and pairing code.
+
+### 2. Join on Android
+
+1. Open **Networks** and select **Add network**.
+2. Select **Join by code**.
+3. Check or edit the proposed device hostname.
+4. Enter the code and select **Join by code**.
+
+Android searches the LAN first, then public libp2p discovery. The pairing code
+authenticates the inviter before any profile is accepted.
+
+### 3. Approve on Linux
+
+Inspect the candidate:
+
+```sh
+sudo p2p-vpn pair status OPEN_OPERATION --instance runners
+```
+
+Compare the peer ID and requested hostname, then approve it:
+
+```sh
+sudo p2p-vpn pair approve \
+  OPEN_OPERATION APPROVAL_ID \
+  --instance runners
+```
+
+The signed network profile appears on Android in the disabled state. The app
+does not require a network name, overlay IP, route, or bootstrap address.
+
+### 4. Enable the Network
+
+Turn on the switch on the network detail page or the **Networks** page.
+
+For the first enabled network, Android may request:
+
+1. Local-network access on Android API 37 or newer.
+2. Android VPN consent.
+3. Connection notifications on Android API 33 or newer.
+
+The switch records desired state. Confirm the adjacent status reaches
+**Connected** before treating the overlay as available.
+
+## Create a New Network
+
+1. Open **Networks** and select **Add network**.
+2. Select **Create network**.
+3. Enter the exact overlay network name.
+4. Select **Create network** again.
+
+The new network opens disabled. It receives a separate identity, membership
+state, routes, hostname, and pairing state.
+
+Enable it before creating a pairing code for another member.
+
+## Hostnames
+
+New profiles propose a DNS-safe hostname from the Android device name.
+
+| Priority | Source |
+| ---: | --- |
+| 1 | User-visible Android device name |
+| 2 | Manufacturer and model |
+| 3 | `android-device` |
+
+Letters become lowercase, separators become `-`, and the label is limited to
+63 ASCII bytes. The join form allows changing it before signing.
+
+An inviter rejects a conflicting hostname. Choose another label and retry.
+
+Existing profiles and signed hostnames are never renamed automatically.
+
+## Enable or Disable
+
+Each network switch is the normal connection control. There is no separate
+Connect or Disconnect action.
+
+| Desired state | Runtime behavior |
+| --- | --- |
+| On | Starts or joins the shared Android VPN. |
+| Off | Performs no discovery, routing, or packet queue work. |
+
+Turning on another network rebuilds the shared TUN with the complete enabled
+set. Each enabled network keeps isolated identity, routes, and queues.
+
+Turning off the final network stops a manually owned VPN. Android always-on
+ownership may retain an idle foreground service for later restoration.
+
+### Live Status
+
+| Status | Meaning |
+| --- | --- |
+| **Disabled** | Desired state is off. |
+| **Starting** | Runtime setup or discovery is in progress. |
+| **Connected** | The network runtime has a usable peer path. |
+| **Degraded** | Desired state is on, but service or path state is incomplete. |
+| **Recovering** | A failed path or underlay is being replaced. |
+
+The switch shows desired state. The text status shows observed connectivity.
+
+## Network Details
+
+| Area | Contents |
+| --- | --- |
+| Identity | Hostname, overlay IPv4/IPv6 addresses, and peer ID. |
+| Pair | Create and copy a code; review and approve incoming requests. |
+| Peers | Hostnames, addresses, connection state, selected path, and provenance. |
+| Removal | Confirmed deletion of identity, membership, and runtime state. |
+
+Peer data is live only while the network is enabled. The list is bounded and
+reports when additional peers were omitted.
 
 ### Remove
 
-Use the remove icon beside a network and confirm the warning.
+Open the network details, select **Remove network**, and confirm the warning.
 
-Removal permanently deletes that network's identity, membership, and runtime
-state. The app does not allow removal of the final stored network.
+Removing the final network returns the app to the empty **Networks** screen.
+This operation permanently deletes that network's private identity.
 
 ### Rename
 
@@ -128,27 +216,10 @@ Protocol network names cannot be renamed in place.
 The name identifies the overlay and DNS namespace. Create and pair a replacement
 network before removing the old one.
 
-## Connect
-
-1. Enable every network that should run.
-2. Select **Connect**.
-3. Allow local-network access when Android requests permission.
-4. Approve the Android VPN prompt.
-5. Allow connection notifications when Android requests permission.
-
-Local-network access is required for LAN discovery and direct peer paths on
-Android API 37 and newer. Denying it leaves the enabled set disconnected.
-
-The app starts every enabled network behind one Android VPN interface.
-
-It installs only their non-overlapping overlay IPv4 and IPv6 routes.
-
-It does not replace the device's default internet route.
-
 ## Always-On VPN
 
-Connect once before enabling always-on mode. This grants VPN consent and
-confirms the saved network collection is readable.
+Enable at least one network before enabling always-on mode. This grants VPN
+consent and confirms the saved network collection is readable.
 
 ### Enable
 
@@ -171,8 +242,8 @@ updates. The app restores every enabled network without another prompt.
 
 The app status shows **Always-on VPN** while Android owns the lifecycle.
 
-The in-app **Disconnect** control is disabled in this mode. Disable always-on
-mode in Android Settings before disconnecting manually.
+Per-network switches still control the desired set. Disable always-on mode in
+Android Settings when Android should stop owning the VPN service.
 
 ### Blocked Connections
 
@@ -185,59 +256,11 @@ does not provide a default route.
 On Android 10 and newer, the app detects lockdown and remains stopped with an
 actionable status instead of entering a reconnect loop.
 
-## Join a Linux Member
-
-### 1. Open Pairing on Linux
-
-```sh
-sudo p2p-vpn pair open --instance runners
-```
-
-Keep the displayed operation ID and pairing code.
-
-### 2. Join on Android
-
-1. Select the target network in the **Networks** list.
-2. Ensure that network is enabled and connected.
-3. Enter the code under **Pair**.
-4. Select **Join by code**.
-
-### 3. Verify on Linux
-
-Inspect the pending request:
-
-```sh
-sudo p2p-vpn pair status OPEN_OPERATION --instance runners
-```
-
-Compare the candidate peer ID with the ID shown by Android.
-
-The request also shows the Android hostname. It is covered by the signed
-pairing request and accepted by default.
-
-### 4. Approve on Linux
-
-```sh
-sudo p2p-vpn pair approve \
-  OPEN_OPERATION APPROVAL_ID \
-  --instance runners
-```
-
-The Android app polls, applies the membership, and acknowledges it.
-
-Linux DNS members can then resolve:
-
-```text
-ANDROID_HOSTNAME.runners.p2p-vpn.internal
-```
-
-Follow [Pairing](pairing.md) to render permanent native Nix artifacts on Linux.
-
 ## Invite a Linux Member
 
 ### 1. Create a Code on Android
 
-Select the target network, connect it, and select **Create code**.
+Open the enabled network's details and select **Create code**.
 
 ### 2. Join on Linux
 
@@ -264,6 +287,8 @@ Optionally enter an assigned hostname, then select **Approve**.
 
 Select **Reject** for an unexpected request.
 
+Follow [Pairing](pairing.md) to render permanent native Nix artifacts on Linux.
+
 ## Verify Traffic
 
 List the converged members on Linux:
@@ -282,6 +307,12 @@ Ping Linux from the Android shell:
 
 ```sh
 nix develop .#android -c adb shell ping -c 5 LINUX_OVERLAY_IPV4
+```
+
+Linux DNS members can resolve the Android member as:
+
+```text
+ANDROID_HOSTNAME.runners.p2p-vpn.internal
 ```
 
 ## Physical Device Audit
@@ -409,13 +440,12 @@ The status view reports:
 
 | Field | Meaning |
 | --- | --- |
-| Network row | Enabled state, hostname, and per-network runtime phase |
-| Selected identity | Network name, stable hostname, and peer ID used by pairing controls |
-| Connection | Aggregate starting, connected, recovering, or failed state |
-| Overlay peers | Members with a supported active path |
-| Direct paths | Healthy direct stream or datagram paths |
-| Relay paths | Healthy circuit-relay paths |
-| Public routers | Public Kademlia routing peers |
+| Network row | Desired switch, hostname, and observed per-network state |
+| Detail identity | Network name, stable hostname, addresses, and peer ID |
+| Peer state | Local, connecting, connected, recovering, or disconnected |
+| Selected path | Datagram, QUIC stream, TCP stream, or circuit relay |
+| Path origin | Configuration, LAN, public routing, hole punching, or relay |
+| Membership | Local configuration, peer configuration, or signed record |
 | Pairing | Discovery, approval, application, or completion |
 
 ## Network Changes
@@ -494,7 +524,7 @@ If the Keystore entry becomes unusable, the app offers **Reset identity**.
 
 | Limit | Current Behavior |
 | --- | --- |
-| Stored networks | 1 to 16 isolated identities |
+| Stored networks | 0 to 16 isolated identities |
 | Simultaneous networks | Up to 16 enabled networks through one TUN |
 | Route overlap | Rejected before activation; the previous active set remains intact |
 | Inter-network forwarding | Never performed; networks are isolated |

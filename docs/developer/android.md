@@ -8,6 +8,8 @@ Java owns Android lifecycle, permissions, persistence, and the VPN interface.
 
 ```text
 MainActivity
+  -> HomeScreen / AddNetworkScreen / NetworkDetailScreen
+  -> desired-state network switches
   -> P2pVpnService
      -> Android VpnService.Builder
      -> encrypted ProfileStore
@@ -26,7 +28,13 @@ MainActivity
 
 | Path | Responsibility |
 | --- | --- |
-| `android/app/src/main/java/.../MainActivity.java` | Native pair-and-connect UI |
+| `android/app/src/main/java/.../MainActivity.java` | Navigation, permissions, and screen coordination |
+| `android/app/src/main/java/.../HomeScreen.java` | Network list and per-network desired-state switches |
+| `android/app/src/main/java/.../AddNetworkScreen.java` | Create and profile-free code-join forms |
+| `android/app/src/main/java/.../NetworkDetailScreen.java` | Identity, pairing, peers, state, and removal |
+| `android/app/src/main/java/.../DeviceHostname.java` | DNS-safe Android device-name normalization |
+| `android/app/src/main/java/.../NetworkUiState.java` | Desired-versus-observed state projection |
+| `android/app/src/main/java/.../PeerSnapshot.java` | Bounded native peer-snapshot parser |
 | `android/app/src/main/java/.../P2pVpnService.java` | VPN and recovery lifecycle |
 | `android/app/src/main/java/.../VpnMode.java` | Always-on and lockdown mode policy |
 | `android/app/src/main/java/.../UnderlayTracker.java` | Deterministic physical-network selection |
@@ -92,6 +100,8 @@ always-on service remains foreground and reports the missing permission.
 | `nativePairRpc` | Calls the existing daemon pairing state machine |
 | `nativePairRpcForNetwork` | Calls one selected network's pairing state machine |
 | `nativeApplyPairingArtifacts` | Applies signed artifacts to the profile |
+| `nativeJoinProfileByCode` | Discovers an inviter and returns one authenticated profile |
+| `nativeCancelProfileJoin` | Cancels the active profile-free discovery operation |
 
 Every JNI response uses a bounded JSON envelope:
 
@@ -301,12 +311,13 @@ those prefixes as active Android routes.
 
 ```text
 no collection
-  -> create one minimal Rust config and identity-derived hostname
+  -> create locally or join from only an authenticated pairing code
+  -> normalize a user-visible Android device hostname
   -> allocate stable presentation addresses
-  -> store a versioned network collection
+  -> store a disabled entry in the versioned network collection
   -> add up to 15 more isolated networks
   -> enable any non-overlapping subset
-  -> connect the enabled set through one VpnService
+  -> reconcile the enabled set through one VpnService
 ```
 
 Each entry contains its private libp2p identity and learned membership config.
@@ -329,11 +340,41 @@ selected UUID and an independent enabled flag per entry.
 
 Selection scopes identity display and pairing. It does not change activation.
 
+New user-created and profile-free joined entries start disabled. Legacy raw
+profiles remain enabled during migration to preserve deployed behavior.
+
+`DeviceHostname` prefers `Settings.Global.DEVICE_NAME`, then manufacturer and
+model, then `android-device`. It emits one lowercase DNS label of at most 63 bytes.
+
+Existing profiles are inspected without rewriting their signed hostname.
+
 Protocol network names are immutable in the UI. Renaming changes the overlay
 and DNS namespace, so users create and pair a replacement network.
 
 The profile stores `network.dns.hostname` while leaving the Android DNS
 listener disabled. Pairing authenticates that label independently of serving DNS.
+
+### Desired and Observed State
+
+The switch is the sole normal desired-state control. It never represents
+observed connectivity.
+
+| Projection | Inputs |
+| --- | --- |
+| Disabled | Desired state is off. |
+| Starting | Desired state is on and the runtime phase is starting. |
+| Connected | Desired state is on and the runtime phase is running. |
+| Recovering | Runtime detail reports bounded recovery or retry. |
+| Degraded | Desired state is on without a complete running path. |
+
+`MainActivity` tracks permission and mutation requests separately from snapshots.
+The UI disables conflicting mutations until the service publishes the result.
+
+Enabling the first network requests permissions and starts the shared service.
+Changing later entries reconciles the complete enabled set through one TUN.
+
+Disabling the last entry stops a manually owned service. Always-on ownership may
+retain an idle foreground service while every network remains disabled.
 
 ## Always-On Lifecycle
 
@@ -342,7 +383,7 @@ The manifest explicitly advertises always-on support.
 `P2pVpnService` is exported only through the signature-protected
 `android.permission.BIND_VPN_SERVICE` boundary.
 
-Android starts `P2pVpnService` without the app's connect action. The service
+Android starts `P2pVpnService` without a network-switch action. The service
 enters the foreground immediately, then queues profile restoration.
 
 ```text
@@ -438,11 +479,39 @@ Legacy state files at `runtime/` move into the migrated network directory.
 Pairing recovery metadata uses schema version 2 and records the network UUID.
 Version 1 metadata binds to the sole migrated profile and is rewritten.
 
-## Pairing Transaction
+## Pairing Transactions
 
-Android uses `/p2p-vpn/pairing-code/1` through the existing runtime RPC.
+Android reuses the platform-neutral pairing protocols. No Android-specific
+wire protocol exists.
 
-No Android-specific pairing protocol exists.
+### Profile-Free Join
+
+The add workflow accepts a code and proposed hostname. It does not accept a
+network name, overlay address, route, or bootstrap peer.
+
+```text
+generate provisional identity
+  -> search mDNS during the LAN-first grace period
+  -> search public IPFS Kademlia providers
+  -> authenticate the inviter with pairing-code protocol v2
+  -> submit the signed hostname request
+  -> wait for inviter approval
+  -> verify signed artifacts and conflicts
+  -> encrypt one disabled profile atomically
+```
+
+At most 128 discovered candidates, eight addresses per peer, 32 pending hellos,
+and 512 total attempts are retained. The complete operation has a fixed timeout.
+
+The API 35 harness may inject one bounded direct candidate because emulator NAT
+does not bridge host mDNS and the private fixture cannot publish to public IPFS.
+
+That input is available only through the `DUMP`-protected debug receiver. It is
+an untrusted dial hint; the pairing code still authenticates the inviter.
+
+### Existing-Profile Pairing
+
+An enabled network uses `/p2p-vpn/pairing-code/1` through its runtime RPC.
 
 Both pairing roles include the stable Android hostname in signed membership
 records. DNS-listener enablement does not control identity claims.
@@ -718,6 +787,25 @@ nix run .#android-e2e -- \
 | Total loss | Runtime stays alive while all physical networks are absent |
 | Cellular return | Discovery and traffic recover without intervention |
 | Wi-Fi return | Preferred underlay and traffic restore automatically |
+
+Run the nested network workflow:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario network-workflow \
+  --output ./android-network-workflow-evidence
+```
+
+| Area | Assertion |
+| --- | --- |
+| Navigation | Home, add, create, join, and detail screens are distinct. |
+| Enrollment | A code and hostname create the signed profile without a placeholder. |
+| Activation | Detail and home switches drive desired state and VPN consent. |
+| Status | The enabled network reports observed `Connected` state. |
+| Peers | Identity, addresses, path, and provenance render from a live snapshot. |
+| Hostname | The managed device name normalizes to a DNS-safe label. |
+| Theme | System dark/light changes preserve desired and runtime state. |
+| Traffic | IPv4 and IPv6 pass 5/5 in both directions. |
 
 Run concurrent multi-network coverage:
 
@@ -1001,7 +1089,8 @@ holds. It is absent from non-debug source sets.
 | `create-profile` | `network` | Queues normal encrypted profile creation |
 | `select-network` | Network UUID | Selects the identity used by pairing controls |
 | `set-network-enabled` | UUID and Boolean | Changes one collection entry's enabled flag |
-| `remove-network` | Network UUID | Removes one non-final network entry |
+| `set-profile-join-candidate` | Peer ID and multiaddress | Sets one bounded, one-shot profile-join dial hint |
+| `remove-network` | Network UUID | Removes one network; the final entry resets the collection |
 | `connect` | None | Starts the normal VPN flow after user consent |
 | `disconnect` | None | Stops the normal VPN flow |
 | `stage-legacy-profile` | None | Rewrites one test profile into the real legacy format |
@@ -1011,6 +1100,9 @@ holds. It is absent from non-debug source sets.
 | `approve-pairing` | Optional `hostname` | Approves the visible candidate |
 | `reject-pairing` | None | Rejects the visible candidate |
 
+`connect` and `disconnect` remain debug compatibility commands for older
+scenarios. The production UI exposes only per-network switches.
+
 Responses are schema-versioned JSON encoded as base64 in broadcast result data.
 
 Status never includes config JSON, private keys, membership keys, or receipts.
@@ -1019,9 +1111,11 @@ It can include an active pairing code; the harness keeps that in private state.
 Diagnostics uses the production report and cannot include those status-only
 identity or pairing fields.
 
-The isolated E2E scenario can also supply one private bootstrap router.
+The pairing-traffic scenario can supply one private bootstrap router. The
+network-workflow scenario can supply one direct profile-join candidate.
 
-That debug-only input never configures the Linux overlay peer as a static peer.
+Neither debug-only input configures the Linux overlay peer as a trusted static
+peer. Signed pairing artifacts remain the membership authority.
 
 ## Verification
 
@@ -1045,9 +1139,9 @@ The gate covers:
 ## Device E2E
 
 1. Build and install with `nix run .#android-install`.
-2. Create the same network name as a Linux instance.
-3. Connect and approve local-network access and VPN permission.
-4. Pair from only the code and approve the candidate.
+2. Open **Add network**, then **Join by code**.
+3. Pair from only the code and approve the candidate on Linux.
+4. Enable the joined network and approve Android VPN permissions.
 5. Read both overlay addresses with `p2p-vpn peers`.
 6. Ping Android from Linux and Linux from `adb shell`.
 7. Change the Android underlay and confirm automatic recovery.
@@ -1058,7 +1152,20 @@ Do not record the private identity, membership key, or pairing code.
 
 ## Recorded E2E
 
-The recorded runs through 2026-09-01 used a clean API 35 x86_64 emulator.
+The recorded runs through 2026-09-02 used a clean API 35 x86_64 emulator.
+
+### Network Workflow
+
+| Check | Result |
+| --- | --- |
+| Navigation | Empty home, add, create, join, detail, and populated home rendered |
+| Profile-free join | Code alone created the signed disabled profile |
+| Hostname | `Managed Test Phone` normalized to `managed-test-phone` |
+| Activation | Detail switch requested VPN consent and reached `Connected` |
+| Home control | Disable and re-enable changed only the selected network |
+| Peer detail | Live identity, addresses, QUIC path, discovery origin, and membership rendered |
+| Appearance | Dark and light system modes preserved desired state |
+| Traffic | IPv4 and IPv6 passed 5/5 in both directions |
 
 ### Profile Lifecycle
 
@@ -1164,23 +1271,21 @@ The recovery run used the automatic path policy and one continuous runtime.
 
 ### Multi-Network Lifecycle
 
-The 2026-09-01 run used two isolated Linux fixtures and one Android TUN.
+The 2026-09-02 run used two isolated Linux fixtures and one Android TUN.
 
 | Check | Result |
 | --- | --- |
 | Legacy migration | Identity preserved in encrypted schema 2 collection |
 | Concurrent activation | Two independently paired identities and runtimes |
-| Initial readiness | All eight probes passed on attempt 1 |
+| Initial readiness | Every leg converged within three bounded attempts |
 | Traffic | Every stage passed 5/5 in eight directions and address families |
 | Overlap rejection | Candidate, collection, runtime generation, and traffic stayed unchanged |
 | Enable state | Disabled sibling route disappeared and restored after re-enable |
 | Underlay change | Wi-Fi/cellular/Wi-Fi passed without runtime restart |
 | Lifecycle | Process death, update, lockdown release, and reboot restored both networks |
 | Failure isolation | One runtime failed; sibling traffic and process generation continued |
-| Resource bound | 6 threads, 41,444 KiB PSS, and empty final queues |
+| Resource bound | 6 threads, 48,187 KiB PSS, and empty final queues |
 | Cleanup | Always-on, emulator, fixtures, logs, and private state passed cleanup |
-
-The machine-readable result contains 67 passed steps and no failed steps.
 
 This proves always-on lifecycle recovery, concurrent isolated networks,
 bidirectional dual-stack traffic, owned QUIC, compatibility streams, relay

@@ -192,7 +192,24 @@ nix run .#android-e2e -- \
 | Recovery | Underlay, process, update, lockdown, and reboot restore traffic. |
 | Bounds | Threads, PSS, queues, logs, evidence, and store growth remain capped. |
 
-The API 35 proof passed on 2026-09-01 with 67 passed evidence steps.
+Run nested navigation and code-only profile enrollment coverage:
+
+```sh
+nix run .#android-e2e -- \
+  --scenario network-workflow \
+  --output ./android-network-workflow-evidence
+```
+
+| Proof | Required Result |
+| --- | --- |
+| Navigation | Home, add, create, join, and detail screens render. |
+| Join | Code alone creates a disabled signed profile. |
+| Hostname | Android device name becomes a DNS-safe default. |
+| Activation | Per-network switches reach accurate observed states. |
+| Peers | Live bounded identity, path, and provenance data render. |
+| Appearance | System theme changes preserve network state. |
+
+Both API 35 workflow proofs passed on 2026-09-02.
 
 Run code pairing and bidirectional packet coverage:
 
