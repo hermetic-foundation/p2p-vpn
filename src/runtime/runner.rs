@@ -134,6 +134,8 @@ use crate::runtime::tun::TunDevice;
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
 const RECOVERY_DISCOVERY_QUERY_TIMEOUT: Duration = Duration::from_mins(1);
+const RECOVERY_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
+const RECOVERY_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(60);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
 const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
@@ -179,6 +181,7 @@ const KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE: u64 = 60 * 60;
 const MAX_RECOVERY_DIAL_ATTEMPTS: usize =
     MAX_MEMBERSHIP_RECORDS * MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES;
 const MAX_RECOVERY_DISCOVERY_QUERIES: usize = MAX_MEMBERSHIP_RECORDS;
+const MAX_CONCURRENT_RECOVERY_DISCOVERY_QUERIES: usize = 1;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 const KADEMLIA_ROUTING_PEER_CAPACITY: usize = 32;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
@@ -4257,7 +4260,9 @@ fn handle_runtime_network_change(
     context.path_probe_tracker.clear();
     let cleared_in_flight_packets = context.packet_in_flight.clear();
     *context.last_blocked_queue_redial = None;
-    context.discovered_peer_addresses.reset_recovery_backoff();
+    context
+        .discovered_peer_addresses
+        .reset_recovery_backoff(&mut context.node.swarm.behaviour_mut().kad);
     context.configured_relay_reservation_retries.reset();
     context.relay_readiness.reset();
     context.public_discovery_backoff.reset();
@@ -5655,7 +5660,17 @@ fn handle_redial_tick(
         relay_readiness,
         configured_relay_reservation_retries,
     );
-    if !public_discovery_quiet && should_query_configured_peer_recovery_discovery(&node.discovery) {
+    if public_discovery_quiet {
+        let cancelled = discovered_peer_addresses
+            .cancel_recovery_discovery_queries(&mut node.swarm.behaviour_mut().kad, Instant::now());
+        if cancelled > 0 {
+            log_runtime_event(
+                LogLevel::Info,
+                "peer_recovery_discovery_suppressed",
+                &[("cancelled_queries", &cancelled.to_string())],
+            );
+        }
+    } else if should_query_configured_peer_recovery_discovery(&node.discovery) {
         query_configured_peer_recovery_discovery(
             &mut node.swarm,
             &node.network_name,
@@ -5739,6 +5754,15 @@ fn query_configured_peer_recovery_discovery_for_peer(
     reason: &'static str,
 ) -> bool {
     let now = Instant::now();
+    let expired =
+        recovery_state.expire_recovery_discovery_queries(&mut swarm.behaviour_mut().kad, now);
+    if expired > 0 {
+        log_runtime_event(
+            LogLevel::Warn,
+            "peer_recovery_discovery_queries_expired",
+            &[("count", &expired.to_string())],
+        );
+    }
     if !recovery_state.should_query_recovery_discovery_at(peer, now) {
         return false;
     }
@@ -5751,8 +5775,7 @@ fn query_configured_peer_recovery_discovery_for_peer(
                 membership_tag,
                 peer,
             ));
-    let closest_query = swarm.behaviour_mut().kad.get_closest_peers(peer);
-    recovery_state.record_recovery_discovery_queries(peer, [record_query, closest_query], now);
+    recovery_state.record_recovery_discovery_queries(peer, [record_query], now);
     metrics.record_kademlia_provider_lookup();
     log_runtime_event(
         LogLevel::Info,
@@ -8556,15 +8579,15 @@ impl DiscoveredPeerAddresses {
         });
     }
 
-    fn reset_recovery_backoff(&mut self) {
+    fn reset_recovery_backoff(&mut self, kademlia: &mut kad::Behaviour<kad::store::MemoryStore>) {
         for entry in &mut self.addresses {
             entry.failure_count = 0;
             entry.quarantined_until = None;
         }
         self.recovery_dial_attempts.clear();
         self.last_recovery_dial_prune = None;
+        self.cancel_recovery_discovery_queries(kademlia, Instant::now());
         self.recovery_discovery_queries.clear();
-        self.recovery_discovery_query_peers.clear();
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
@@ -8735,29 +8758,29 @@ impl DiscoveredPeerAddresses {
         }
         if let Some(query) = self.recovery_discovery_queries.get_mut(&peer) {
             if query.pending_queries > 0 {
-                if now.saturating_duration_since(query.last_query)
-                    < RECOVERY_DISCOVERY_QUERY_TIMEOUT
-                {
-                    return false;
-                }
-                self.recovery_discovery_query_peers
-                    .retain(|_, candidate| *candidate != peer);
-                query.pending_queries = 0;
+                return false;
             }
-            return now >= query.retry_after;
+            if now < query.retry_after {
+                return false;
+            }
+        } else {
+            if self.recovery_discovery_queries.len() >= MAX_RECOVERY_DISCOVERY_QUERIES {
+                return false;
+            }
+            self.recovery_discovery_queries.insert(
+                peer,
+                RecoveryDiscoveryQuery {
+                    last_query: now,
+                    pending_queries: 0,
+                    attempt_count: 0,
+                    retry_after: now,
+                },
+            );
         }
-        if self.recovery_discovery_queries.len() >= MAX_RECOVERY_DISCOVERY_QUERIES {
+
+        if self.recovery_discovery_query_peers.len() >= MAX_CONCURRENT_RECOVERY_DISCOVERY_QUERIES {
             return false;
         }
-        self.recovery_discovery_queries.insert(
-            peer,
-            RecoveryDiscoveryQuery {
-                last_query: now,
-                pending_queries: 0,
-                attempt_count: 0,
-                retry_after: now,
-            },
-        );
         true
     }
 
@@ -8772,7 +8795,7 @@ impl DiscoveredPeerAddresses {
         };
         state.last_query = now;
         state.attempt_count = state.attempt_count.saturating_add(1);
-        state.retry_after = now + discovered_address_failure_backoff(state.attempt_count);
+        state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
         for query in queries {
             if self
                 .recovery_discovery_query_peers
@@ -8784,13 +8807,82 @@ impl DiscoveredPeerAddresses {
         }
     }
 
-    fn finish_recovery_discovery_query(&mut self, query: kad::QueryId) {
+    fn finish_recovery_discovery_query(&mut self, query: kad::QueryId, now: Instant) {
         let Some(peer) = self.recovery_discovery_query_peers.remove(&query) else {
             return;
         };
         if let Some(state) = self.recovery_discovery_queries.get_mut(&peer) {
             state.pending_queries = state.pending_queries.saturating_sub(1);
+            if state.pending_queries == 0 {
+                state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
+            }
         }
+    }
+
+    fn expire_recovery_discovery_queries(
+        &mut self,
+        kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+        now: Instant,
+    ) -> usize {
+        let expired_peers = self
+            .recovery_discovery_queries
+            .iter()
+            .filter_map(|(peer, query)| {
+                (query.pending_queries > 0
+                    && now.saturating_duration_since(query.last_query)
+                        >= RECOVERY_DISCOVERY_QUERY_TIMEOUT)
+                    .then_some(*peer)
+            })
+            .collect::<HashSet<_>>();
+        if expired_peers.is_empty() {
+            return 0;
+        }
+
+        let expired_queries = self
+            .recovery_discovery_query_peers
+            .iter()
+            .filter_map(|(query, peer)| expired_peers.contains(peer).then_some((*query, *peer)))
+            .collect::<Vec<_>>();
+        for (query, peer) in &expired_queries {
+            if let Some(mut pending) = kademlia.query_mut(query) {
+                pending.finish();
+            }
+            self.recovery_discovery_query_peers.remove(query);
+            if let Some(state) = self.recovery_discovery_queries.get_mut(peer) {
+                state.pending_queries = state.pending_queries.saturating_sub(1);
+            }
+        }
+        for peer in expired_peers {
+            if let Some(state) = self.recovery_discovery_queries.get_mut(&peer) {
+                state.pending_queries = 0;
+                state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
+            }
+        }
+        expired_queries.len()
+    }
+
+    fn cancel_recovery_discovery_queries(
+        &mut self,
+        kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+        now: Instant,
+    ) -> usize {
+        let queries = self
+            .recovery_discovery_query_peers
+            .drain()
+            .collect::<Vec<_>>();
+        for (query, peer) in &queries {
+            if let Some(mut pending) = kademlia.query_mut(query) {
+                pending.finish();
+            }
+            if let Some(state) = self.recovery_discovery_queries.get_mut(peer) {
+                state.pending_queries = state.pending_queries.saturating_sub(1);
+                if state.pending_queries == 0 {
+                    state.retry_after =
+                        now + recovery_discovery_failure_backoff(state.attempt_count);
+                }
+            }
+        }
+        queries.len()
     }
 
     fn make_recovery_dial_room(
@@ -8828,6 +8920,13 @@ fn discovered_address_failure_backoff(failure_count: u8) -> Duration {
     DISCOVERED_ADDRESS_FAILURE_BACKOFF_BASE
         .saturating_mul(1_u32 << exponent)
         .min(DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX)
+}
+
+fn recovery_discovery_failure_backoff(failure_count: u8) -> Duration {
+    let exponent = u32::from(failure_count.saturating_sub(1)).min(8);
+    RECOVERY_DISCOVERY_BACKOFF_BASE
+        .saturating_mul(1_u32 << exponent)
+        .min(RECOVERY_DISCOVERY_BACKOFF_MAX)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -19032,7 +19131,7 @@ fn handle_kademlia_event(
                 context.kademlia_maintenance.finish_query(id);
                 context
                     .discovered_peer_addresses
-                    .finish_recovery_discovery_query(id);
+                    .finish_recovery_discovery_query(id, Instant::now());
                 context.code_pairing_sessions.finish_join_lookup(id);
             }
             log_runtime_event(
@@ -25544,13 +25643,14 @@ mod tests {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(query_ids.len(), 2);
+        assert_eq!(query_ids.len(), 1);
         assert!(
             !recovery_state
                 .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)
         );
+        let query_finished_at = query_started_at + Duration::from_secs(1);
         for query in query_ids {
-            recovery_state.finish_recovery_discovery_query(query);
+            recovery_state.finish_recovery_discovery_query(query, query_finished_at);
         }
         assert_eq!(
             recovery_state
@@ -25560,33 +25660,93 @@ mod tests {
                 .pending_queries,
             0
         );
-        assert!(
-            recovery_state
-                .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)
-        );
-
-        let second_started = query_started_at + REDIAL_INTERVAL;
-        let second_queries = [
-            node.swarm.behaviour_mut().kad.get_record(
-                crate::runtime::p2p::kademlia_peer_addresses_key("lab", None, remote),
-            ),
-            node.swarm.behaviour_mut().kad.get_closest_peers(remote),
-        ];
-        recovery_state.record_recovery_discovery_queries(remote, second_queries, second_started);
-        for query in second_queries {
-            recovery_state.finish_recovery_discovery_query(query);
-        }
-        assert!(
-            !recovery_state
-                .should_query_recovery_discovery_at(remote, second_started + REDIAL_INTERVAL)
-        );
+        assert!(!recovery_state.should_query_recovery_discovery_at(
+            remote,
+            query_finished_at + RECOVERY_DISCOVERY_BACKOFF_BASE - Duration::from_millis(1),
+        ));
         assert!(recovery_state.should_query_recovery_discovery_at(
             remote,
-            second_started + REDIAL_INTERVAL.saturating_mul(2),
+            query_finished_at + RECOVERY_DISCOVERY_BACKOFF_BASE,
+        ));
+
+        let second_started = query_finished_at + RECOVERY_DISCOVERY_BACKOFF_BASE;
+        let second_query = node.swarm.behaviour_mut().kad.get_record(
+            crate::runtime::p2p::kademlia_peer_addresses_key("lab", None, remote),
+        );
+        recovery_state.record_recovery_discovery_queries(remote, [second_query], second_started);
+        recovery_state
+            .finish_recovery_discovery_query(second_query, second_started + Duration::from_secs(1));
+        assert!(!recovery_state.should_query_recovery_discovery_at(
+            remote,
+            second_started + Duration::from_secs(1) + RECOVERY_DISCOVERY_BACKOFF_BASE,
+        ));
+        assert!(recovery_state.should_query_recovery_discovery_at(
+            remote,
+            second_started
+                + Duration::from_secs(1)
+                + RECOVERY_DISCOVERY_BACKOFF_BASE.saturating_mul(2),
         ));
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
+    }
+
+    #[tokio::test]
+    async fn recovery_discovery_serializes_peers_and_cancels_timeouts() {
+        let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+        let first = peer_id();
+        let second = peer_id();
+        let mut node = build_node(&HostConfig {
+            identity: local_identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let metrics = RuntimeMetrics::default();
+        let mut recovery_state = DiscoveredPeerAddresses::default();
+
+        assert!(query_configured_peer_recovery_discovery_for_peer(
+            &mut node.swarm,
+            "lab",
+            None,
+            first,
+            &mut recovery_state,
+            &metrics,
+            "test",
+        ));
+        let started_at = recovery_state
+            .recovery_discovery_queries
+            .get(&first)
+            .expect("first recovery state")
+            .last_query;
+        assert!(!recovery_state.should_query_recovery_discovery_at(second, started_at));
+
+        let expired_at = started_at + RECOVERY_DISCOVERY_QUERY_TIMEOUT;
+        assert_eq!(
+            recovery_state.expire_recovery_discovery_queries(
+                &mut node.swarm.behaviour_mut().kad,
+                expired_at,
+            ),
+            1
+        );
+        assert!(recovery_state.recovery_discovery_query_peers.is_empty());
+        assert!(!recovery_state.should_query_recovery_discovery_at(
+            first,
+            expired_at + RECOVERY_DISCOVERY_BACKOFF_BASE - Duration::from_millis(1),
+        ));
+        assert!(recovery_state.should_query_recovery_discovery_at(second, expired_at));
     }
 
     #[test]
