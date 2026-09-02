@@ -27,10 +27,29 @@ Public routing connections stay outside the VPN data plane.
 | Pairing probe | Active pairing session | Pairing protocol only |
 | Overlay member | Valid static or signed membership | Approved routes and packets |
 
-The daemon retains at most 64 identified public routing peers.
+The daemon retains at most 32 identified public routing peers per instance.
 
 Unknown peers have 30 seconds to identify or present membership. Invalid
 overlay capability attempts are disconnected and quarantined with backoff.
+
+## Public DHT Resource Policy
+
+Public IPFS Kademlia always runs in client mode.
+
+It can issue lookups and publish records. It does not accept public DHT
+server duties or advertise itself as a Kademlia server.
+
+| Control | Behavior |
+| --- | --- |
+| Maintenance cadence | At most once every two minutes. |
+| Query overlap | A second cycle cannot start while one is active. |
+| Query timeout | Stale cycle queries are canceled after 90 seconds. |
+| Healthy overlay | Active maintenance is canceled and public discovery rests. |
+| Offline peer recovery | Starts at 10 seconds, then backs off to five minutes. |
+
+The five-second scheduler only evaluates state.
+
+It does not launch a DHT batch on every tick.
 
 ## Code Pairing Over Public Paths
 

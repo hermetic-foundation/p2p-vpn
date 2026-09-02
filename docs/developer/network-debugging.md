@@ -110,6 +110,40 @@ Expected behavior during the pause:
 
 Do not treat this event as a LAN failure by itself.
 
+## Public DHT Connection Churn
+
+Count TCP sockets owned by an instance process:
+
+```sh
+pid=$(systemctl show -p MainPID --value p2p-vpn-INSTANCE.service)
+sudo ss -Htanp | awk -v pid="$pid" '
+  index($0, "pid=" pid ",") { count[$1]++; total++ }
+  END { print "total", total; for (state in count) print state, count[state] }
+'
+```
+
+Count discovery events over five minutes:
+
+```sh
+journalctl --since '5 min ago' -u p2p-vpn-INSTANCE.service -o cat \
+  | rg -o 'event=[^ ]+' \
+  | sort \
+  | uniq -c \
+  | sort -nr
+```
+
+| Signal | Interpretation |
+| --- | --- |
+| `kademlia_maintenance_started` no more than once per two minutes | Expected maintenance. |
+| `kademlia_maintenance_suppressed` | A healthy overlay canceled remaining public work. |
+| `kademlia_maintenance_queries_expired` | Public queries exceeded the bounded cycle timeout. |
+| Continuous `kademlia_query_progressed` bursts | Possible query-overlap regression. |
+| More than 32 routing peers per instance | Routing-capacity regression. |
+
+Public `/ipfs/kad/1.0.0` instances must remain Kademlia clients.
+
+Private custom protocols may run in server mode.
+
 ## Public Address Pollution
 
 Public discovery must not create neighbor entries for arbitrary private hosts.

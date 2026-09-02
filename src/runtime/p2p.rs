@@ -153,7 +153,9 @@ pub fn build_node(config: &HostConfig) -> Result<P2pNode, P2pBuildError> {
                 let store = kad::store::MemoryStore::new(local_peer_id);
                 let kad_config = kad::Config::new(kademlia_protocol);
                 let mut kad = kad::Behaviour::with_config(local_peer_id, store, kad_config);
-                if behaviour_discovery.kademlia {
+                if behaviour_discovery.kademlia
+                    && behaviour_discovery.kademlia_protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL
+                {
                     kad.set_mode(Some(kad::Mode::Server));
                 } else {
                     kad.set_mode(Some(kad::Mode::Client));
@@ -760,10 +762,41 @@ mod tests {
         .expect("node should build");
 
         assert_eq!(node.discovery.kademlia_protocol, "/ipfs/kad/1.0.0");
+        assert_eq!(node.swarm.behaviour().kad.mode(), kad::Mode::Client);
         assert!(!node.swarm.behaviour().pairing_kad.is_enabled());
         assert!(public_pairing_uses_primary_kad(node.swarm.behaviour()));
         assert!(!node.startup.kademlia.rendezvous_advertise_started);
         assert!(!node.startup.kademlia.rendezvous_lookup_started);
+    }
+
+    #[tokio::test]
+    async fn build_node_serves_only_private_kademlia_protocols() {
+        let discovery = DiscoveryConfig {
+            kademlia_protocol: "/p2p-vpn/kad/1".to_owned(),
+            ..DiscoveryConfig::default()
+        };
+
+        let node = build_node(&HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery,
+        })
+        .expect("node should build");
+
+        assert_eq!(node.swarm.behaviour().kad.mode(), kad::Mode::Server);
+        assert!(node.swarm.behaviour().pairing_kad.is_enabled());
     }
 
     #[test]

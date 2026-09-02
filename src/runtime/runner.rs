@@ -146,7 +146,9 @@ const MEMBERSHIP_PROBE_QUARANTINE_MAX: Duration = Duration::from_mins(10);
 const MEMBERSHIP_PROBE_QUARANTINE_RESET: Duration = Duration::from_mins(30);
 const MEMBERSHIP_PROBE_QUARANTINE_CAPACITY: usize = 1024;
 const MAX_MEMBERSHIP_SYNC_BYTES: usize = MAX_MEMBERSHIP_RECORDS * MAX_MEMBERSHIP_RECORD_ENCODED_LEN;
-const KADEMLIA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const KADEMLIA_MAINTENANCE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const KADEMLIA_MAINTENANCE_INTERVAL: Duration = Duration::from_mins(2);
+const KADEMLIA_MAINTENANCE_QUERY_TIMEOUT: Duration = Duration::from_secs(90);
 const PUBLIC_DISCOVERY_LAN_FIRST_GRACE: Duration = Duration::from_secs(60);
 const PUBLIC_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
 const PUBLIC_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(10);
@@ -178,7 +180,7 @@ const MAX_RECOVERY_DIAL_ATTEMPTS: usize =
     MAX_MEMBERSHIP_RECORDS * MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES;
 const MAX_RECOVERY_DISCOVERY_QUERIES: usize = MAX_MEMBERSHIP_RECORDS;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
-const KADEMLIA_ROUTING_PEER_CAPACITY: usize = 64;
+const KADEMLIA_ROUTING_PEER_CAPACITY: usize = 32;
 const AUTO_RELAY_DISCOVERY_QUERY_FANOUT: usize = 4;
 const STREAM_FALLBACK_ORDERED_FLOW_WINDOW: usize = 16;
 
@@ -939,9 +941,6 @@ where
         discovery: config.network.discovery.clone(),
     })?;
     node.bootstrap_peer_addresses = effective_bootstrap_peers;
-    if public_bootstrap_defaults {
-        reconcile_public_kademlia_mode(&mut node.swarm, &config.network.discovery, true);
-    }
     node.packet_endpoint_candidates = config.packet_plane_endpoint_candidates()?;
     let packet_plane = PacketPlaneRuntime::bind_with_replay_window_limit(
         config.packet_plane_listen_addrs()?,
@@ -1421,6 +1420,7 @@ where
         !kademlia_lookup_keys.is_empty(),
         queue_config,
     );
+    let mut kademlia_maintenance = KademliaMaintenance::new(Instant::now());
     let mut packet_endpoint_candidates = node.packet_endpoint_candidates.clone();
     for listener in packet_plane.snapshot().listeners {
         if !listener.ip().is_unspecified() {
@@ -1615,6 +1615,7 @@ where
                         active_connections: &mut active_connections,
                         connection_epochs: &mut connection_epochs,
                         membership_probe_connections: &mut membership_probe_connections,
+                        kademlia_maintenance: &mut kademlia_maintenance,
                     },
                     event,
                 ).await?;
@@ -1713,11 +1714,6 @@ where
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
                 );
-                reconcile_public_kademlia_mode(
-                    &mut node.swarm,
-                    &discovery,
-                    public_discovery_quiet,
-                );
                 expire_pending_auto_relay_reservations(
                     &mut node.swarm,
                     &mut auto_relay,
@@ -1746,12 +1742,12 @@ where
                 );
             }
             () = async {
-                timers.kademlia_refresh
+                timers.kademlia_maintenance
                     .as_mut()
-                    .expect("kademlia refresh interval is present")
+                    .expect("kademlia maintenance interval is present")
                     .tick()
                     .await;
-            }, if timers.kademlia_refresh.is_some() => {
+            }, if timers.kademlia_maintenance.is_some() => {
                 let public_discovery_quiet = public_discovery_suppressed(
                     public_discovery_holdoff_until,
                     &forwarder,
@@ -1760,31 +1756,65 @@ where
                     Some(&packet_plane),
                     packet_plane_quic.as_ref(),
                 );
-                reconcile_public_kademlia_mode(
-                    &mut node.swarm,
-                    &discovery,
-                    public_discovery_quiet,
+                let now = Instant::now();
+                if public_discovery_quiet {
+                    let cancelled = kademlia_maintenance
+                        .cancel_queries(&mut node.swarm.behaviour_mut().kad);
+                    if cancelled > 0 {
+                        log_runtime_event(
+                            LogLevel::Info,
+                            "kademlia_maintenance_suppressed",
+                            &[("cancelled_queries", &cancelled.to_string())],
+                        );
+                    }
+                }
+                let expired = kademlia_maintenance.expire_queries(
+                    &mut node.swarm.behaviour_mut().kad,
+                    now,
                 );
-                refresh_kademlia_rendezvous(
-                    &mut node.swarm,
-                    &KademliaRefreshContext {
-                        advertise_key: kademlia_rendezvous_key
-                            .as_ref()
-                            .expect("kademlia rendezvous key is present"),
-                        lookup_keys: &kademlia_lookup_keys,
-                        membership_record_advertise_key: kademlia_membership_records_key.as_ref(),
-                        membership_record_lookup_keys: &kademlia_membership_record_lookup_keys,
-                        network_name: &node.network_name,
-                        membership_tag: node.membership_tag.as_deref(),
-                        forwarder: &forwarder,
-                        identity: &node.identity,
-                        advertise_provider: discovery.kademlia_provider_advertisement,
-                        auto_relay: &auto_relay,
-                        public_discovery_backoff: &public_discovery_backoff,
-                        public_discovery_quiet,
-                        metrics: &metrics,
-                    },
-                );
+                if expired > 0 {
+                    log_runtime_event(
+                        LogLevel::Warn,
+                        "kademlia_maintenance_queries_expired",
+                        &[("count", &expired.to_string())],
+                    );
+                }
+                if kademlia_maintenance.should_start(now, public_discovery_quiet) {
+                    let queries = refresh_kademlia_rendezvous(
+                        &mut node.swarm,
+                        &KademliaRefreshContext {
+                            advertise_key: kademlia_rendezvous_key
+                                .as_ref()
+                                .expect("kademlia rendezvous key is present"),
+                            lookup_keys: &kademlia_lookup_keys,
+                            membership_record_advertise_key:
+                                kademlia_membership_records_key.as_ref(),
+                            membership_record_lookup_keys:
+                                &kademlia_membership_record_lookup_keys,
+                            network_name: &node.network_name,
+                            membership_tag: node.membership_tag.as_deref(),
+                            forwarder: &forwarder,
+                            identity: &node.identity,
+                            advertise_provider: discovery.kademlia_provider_advertisement,
+                            auto_relay: &auto_relay,
+                            public_discovery_backoff: &public_discovery_backoff,
+                            public_discovery_quiet,
+                            metrics: &metrics,
+                        },
+                    );
+                    let query_count = kademlia_maintenance.record_started(queries, now);
+                    log_runtime_event(
+                        LogLevel::Info,
+                        "kademlia_maintenance_started",
+                        &[
+                            ("queries", &query_count.to_string()),
+                            (
+                                "next_seconds",
+                                &KADEMLIA_MAINTENANCE_INTERVAL.as_secs().to_string(),
+                            ),
+                        ],
+                    );
+                }
             }
             _ = timers.queue_expiry.tick() => {
                 expire_pending_packet_plane_hellos(
@@ -1934,6 +1964,17 @@ where
                                 connection_epochs: &mut connection_epochs,
                             },
                         );
+                        let cancelled = kademlia_maintenance.reset(
+                            &mut node.swarm.behaviour_mut().kad,
+                            Instant::now(),
+                        );
+                        if cancelled > 0 {
+                            log_runtime_event(
+                                LogLevel::Info,
+                                "kademlia_maintenance_reset",
+                                &[("cancelled_queries", &cancelled.to_string())],
+                            );
+                        }
                         if respond_to.send(response).is_err() {
                             eprintln!("runtime network change response receiver dropped");
                         }
@@ -2010,6 +2051,7 @@ where
                                 active_connections: &mut active_connections,
                                 connection_epochs: &mut connection_epochs,
                                 membership_probe_connections: &mut membership_probe_connections,
+                                kademlia_maintenance: &mut kademlia_maintenance,
                             };
                             promote_all_authenticated_overlay_connections(
                                 &mut node.swarm,
@@ -2166,10 +2208,89 @@ fn refresh_dns_zone_if_needed(
     *membership_revision = revision;
 }
 
+#[derive(Debug)]
+struct KademliaMaintenance {
+    next_due: Instant,
+    started_at: Option<Instant>,
+    queries: HashSet<kad::QueryId>,
+}
+
+impl KademliaMaintenance {
+    fn new(now: Instant) -> Self {
+        Self {
+            next_due: now,
+            started_at: None,
+            queries: HashSet::new(),
+        }
+    }
+
+    fn should_start(&self, now: Instant, suppressed: bool) -> bool {
+        !suppressed && self.queries.is_empty() && now >= self.next_due
+    }
+
+    fn record_started(
+        &mut self,
+        queries: impl IntoIterator<Item = kad::QueryId>,
+        now: Instant,
+    ) -> usize {
+        self.queries.extend(queries);
+        self.started_at = (!self.queries.is_empty()).then_some(now);
+        self.next_due = now + KADEMLIA_MAINTENANCE_INTERVAL;
+        self.queries.len()
+    }
+
+    fn finish_query(&mut self, query: kad::QueryId) -> bool {
+        let removed = self.queries.remove(&query);
+        if self.queries.is_empty() {
+            self.started_at = None;
+        }
+        removed
+    }
+
+    fn expire_queries(
+        &mut self,
+        kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+        now: Instant,
+    ) -> usize {
+        if self.started_at.is_none_or(|started| {
+            now.saturating_duration_since(started) < KADEMLIA_MAINTENANCE_QUERY_TIMEOUT
+        }) {
+            return 0;
+        }
+        self.cancel_queries(kademlia)
+    }
+
+    fn reset(
+        &mut self,
+        kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+        now: Instant,
+    ) -> usize {
+        let cancelled = self.cancel_queries(kademlia);
+        self.next_due = now;
+        cancelled
+    }
+
+    fn cancel_queries(&mut self, kademlia: &mut kad::Behaviour<kad::store::MemoryStore>) -> usize {
+        let queries = self.queries.drain().collect::<Vec<_>>();
+        for query in &queries {
+            if let Some(mut query) = kademlia.query_mut(query) {
+                query.finish();
+            }
+        }
+        self.started_at = None;
+        queries.len()
+    }
+
+    #[cfg(test)]
+    fn pending_queries(&self) -> usize {
+        self.queries.len()
+    }
+}
+
 struct RuntimeTimers {
     metrics: Option<tokio::time::Interval>,
     redial: tokio::time::Interval,
-    kademlia_refresh: Option<tokio::time::Interval>,
+    kademlia_maintenance: Option<tokio::time::Interval>,
     queue_expiry: tokio::time::Interval,
     path_probe: tokio::time::Interval,
     code_pairing: tokio::time::Interval,
@@ -2719,8 +2840,8 @@ impl RuntimeTimers {
         Self {
             metrics: metrics_interval.map(tokio::time::interval),
             redial: tokio::time::interval(REDIAL_INTERVAL),
-            kademlia_refresh: kademlia_enabled
-                .then(|| tokio::time::interval(KADEMLIA_REFRESH_INTERVAL)),
+            kademlia_maintenance: kademlia_enabled
+                .then(|| tokio::time::interval(KADEMLIA_MAINTENANCE_POLL_INTERVAL)),
             queue_expiry: tokio::time::interval(queue_expiry_interval(
                 queue_config.max_packet_age(),
             )),
@@ -2731,7 +2852,7 @@ impl RuntimeTimers {
 
     async fn prime(&mut self) {
         self.redial.tick().await;
-        if let Some(tick) = &mut self.kademlia_refresh {
+        if let Some(tick) = &mut self.kademlia_maintenance {
             tick.tick().await;
         }
         self.queue_expiry.tick().await;
@@ -4193,11 +4314,6 @@ fn handle_runtime_network_change(
         }
     }
 
-    reconcile_public_kademlia_mode(
-        &mut context.node.swarm,
-        &context.node.discovery,
-        context.public_bootstrap_defaults,
-    );
     publish_kademlia_peer_address_record_for_capabilities(
         &mut context.node.swarm,
         &context.node.discovery,
@@ -5901,34 +6017,30 @@ struct KademliaRefreshContext<'a> {
     metrics: &'a RuntimeMetrics,
 }
 
-fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaRefreshContext<'_>) {
+fn refresh_kademlia_rendezvous(
+    swarm: &mut Swarm<Behaviour>,
+    context: &KademliaRefreshContext<'_>,
+) -> Vec<kad::QueryId> {
     if context.public_discovery_quiet {
-        return;
+        return Vec::new();
     }
+    let mut queries = Vec::new();
 
     if context.auto_relay.should_discover_candidates() {
-        query_auto_relay_infrastructure(swarm, context.metrics, "kademlia_refresh");
+        queries.extend(query_auto_relay_infrastructure(
+            swarm,
+            context.metrics,
+            "kademlia_maintenance",
+        ));
     }
 
-    publish_kademlia_peer_address_record(
+    if let Some(query) = start_kademlia_peer_address_record_publication(
         swarm,
         context.network_name,
         context.membership_tag,
         context.identity,
-    );
-
-    for peer in context.forwarder.configured_transport_peers() {
-        if peer != *swarm.local_peer_id() {
-            swarm
-                .behaviour_mut()
-                .kad
-                .get_record(crate::runtime::p2p::kademlia_peer_addresses_key(
-                    context.network_name,
-                    context.membership_tag,
-                    peer,
-                ));
-            swarm.behaviour_mut().kad.get_closest_peers(peer);
-        }
+    ) {
+        queries.push(query);
     }
 
     if context.advertise_provider {
@@ -5937,7 +6049,10 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
             .kad
             .start_providing(context.advertise_key.clone())
         {
-            Ok(_) => context.metrics.record_kademlia_provider_advertisement(),
+            Ok(query) => {
+                queries.push(query);
+                context.metrics.record_kademlia_provider_advertisement();
+            }
             Err(error) => {
                 context
                     .metrics
@@ -5952,31 +6067,36 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
     }
 
     for lookup_key in context.lookup_keys {
-        swarm.behaviour_mut().kad.get_providers(lookup_key.clone());
+        queries.push(swarm.behaviour_mut().kad.get_providers(lookup_key.clone()));
         context.metrics.record_kademlia_provider_lookup();
     }
 
     if context.advertise_provider
         && let Some(record_key) = context.membership_record_advertise_key
     {
-        publish_kademlia_membership_records(
+        if let Some(query) = publish_kademlia_membership_records(
             swarm,
             record_key,
             context.network_name,
             context.membership_tag,
             context.forwarder,
             context.metrics,
-        );
+        ) {
+            queries.push(query);
+        }
     }
 
     for lookup_key in context.membership_record_lookup_keys {
-        swarm.behaviour_mut().kad.get_record(lookup_key.clone());
+        queries.push(swarm.behaviour_mut().kad.get_record(lookup_key.clone()));
         context.metrics.record_kademlia_membership_record_lookup();
     }
 
     if !context.public_discovery_backoff.suppresses(Instant::now()) {
         match swarm.behaviour_mut().kad.bootstrap() {
-            Ok(_) => context.metrics.record_kademlia_bootstrap_refresh(),
+            Ok(query) => {
+                queries.push(query);
+                context.metrics.record_kademlia_bootstrap_refresh();
+            }
             Err(error) => {
                 context.metrics.record_kademlia_bootstrap_failure();
                 log_runtime_event(
@@ -5987,6 +6107,7 @@ fn refresh_kademlia_rendezvous(swarm: &mut Swarm<Behaviour>, context: &KademliaR
             }
         }
     }
+    queries
 }
 
 fn publish_kademlia_membership_records(
@@ -5996,10 +6117,10 @@ fn publish_kademlia_membership_records(
     membership_tag: Option<&str>,
     forwarder: &Forwarder,
     metrics: &RuntimeMetrics,
-) {
+) -> Option<kad::QueryId> {
     let records = advertised_member_records(forwarder);
     if records.is_empty() {
-        return;
+        return None;
     }
 
     let Ok(value) = encode_kademlia_membership_records(network_name, membership_tag, records)
@@ -6010,7 +6131,7 @@ fn publish_kademlia_membership_records(
             "kademlia_membership_record_publication_failed",
             &[("reason", "encode_failed")],
         );
-        return;
+        return None;
     };
     let record = kad::Record {
         key: record_key.clone(),
@@ -6024,7 +6145,10 @@ fn publish_kademlia_membership_records(
         .kad
         .put_record(record, kad::Quorum::One)
     {
-        Ok(_) => metrics.record_kademlia_membership_record_publication(),
+        Ok(query) => {
+            metrics.record_kademlia_membership_record_publication();
+            Some(query)
+        }
         Err(error) => {
             metrics.record_kademlia_membership_record_publication_failure();
             log_runtime_event(
@@ -6032,6 +6156,7 @@ fn publish_kademlia_membership_records(
                 "kademlia_membership_record_publication_failed",
                 &[("error", &format!("{error:?}"))],
             );
+            None
         }
     }
 }
@@ -6098,6 +6223,20 @@ fn publish_kademlia_peer_address_record(
     membership_tag: Option<&str>,
     identity: &NodeIdentity,
 ) {
+    let _ = start_kademlia_peer_address_record_publication(
+        swarm,
+        network_name,
+        membership_tag,
+        identity,
+    );
+}
+
+fn start_kademlia_peer_address_record_publication(
+    swarm: &mut Swarm<Behaviour>,
+    network_name: &str,
+    membership_tag: Option<&str>,
+    identity: &NodeIdentity,
+) -> Option<kad::QueryId> {
     let addresses = local_advertisable_addresses(swarm);
     let key = crate::runtime::p2p::kademlia_peer_addresses_key(
         network_name,
@@ -6120,7 +6259,7 @@ fn publish_kademlia_peer_address_record(
                     &[("reason", &error.to_string())],
                 );
             }
-            return;
+            return None;
         }
     };
     let record = kad::Record {
@@ -6130,16 +6269,20 @@ fn publish_kademlia_peer_address_record(
         expires: None,
     };
 
-    if let Err(error) = swarm
+    match swarm
         .behaviour_mut()
         .kad
         .put_record(record, kad::Quorum::One)
     {
-        log_runtime_event(
-            LogLevel::Warn,
-            "kademlia_peer_address_record_publication_failed",
-            &[("error", &format!("{error:?}"))],
-        );
+        Ok(query) => Some(query),
+        Err(error) => {
+            log_runtime_event(
+                LogLevel::Warn,
+                "kademlia_peer_address_record_publication_failed",
+                &[("error", &format!("{error:?}"))],
+            );
+            None
+        }
     }
 }
 
@@ -8301,6 +8444,8 @@ struct RecoveryDialAttempt {
 struct RecoveryDiscoveryQuery {
     last_query: Instant,
     pending_queries: usize,
+    attempt_count: u8,
+    retry_after: Instant,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -8567,27 +8712,39 @@ impl DiscoveredPeerAddresses {
             attempt.failure_count = 0;
             attempt.retry_after = now + REDIAL_INTERVAL;
         }
+        if let Some(query) = self.recovery_discovery_queries.get_mut(&peer) {
+            query.attempt_count = 0;
+            query.retry_after = now + REDIAL_INTERVAL;
+        }
     }
 
     fn should_query_recovery_discovery_at(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
-        let expired_peers = self
+        let stale_peers = self
             .recovery_discovery_queries
             .iter()
             .filter_map(|(candidate, query)| {
                 let age = now.saturating_duration_since(query.last_query);
-                (age >= RECOVERY_DISCOVERY_QUERY_TIMEOUT
-                    || (query.pending_queries == 0 && age >= REDIAL_INTERVAL))
-                    .then_some(*candidate)
+                (query.pending_queries == 0 && age >= RECOVERY_DIAL_STATE_TTL).then_some(*candidate)
             })
             .collect::<HashSet<_>>();
-        if !expired_peers.is_empty() {
+        if !stale_peers.is_empty() {
             self.recovery_discovery_queries
-                .retain(|candidate, _| !expired_peers.contains(candidate));
+                .retain(|candidate, _| !stale_peers.contains(candidate));
             self.recovery_discovery_query_peers
-                .retain(|_, candidate| !expired_peers.contains(candidate));
+                .retain(|_, candidate| !stale_peers.contains(candidate));
         }
-        if self.recovery_discovery_queries.contains_key(&peer) {
-            return false;
+        if let Some(query) = self.recovery_discovery_queries.get_mut(&peer) {
+            if query.pending_queries > 0 {
+                if now.saturating_duration_since(query.last_query)
+                    < RECOVERY_DISCOVERY_QUERY_TIMEOUT
+                {
+                    return false;
+                }
+                self.recovery_discovery_query_peers
+                    .retain(|_, candidate| *candidate != peer);
+                query.pending_queries = 0;
+            }
+            return now >= query.retry_after;
         }
         if self.recovery_discovery_queries.len() >= MAX_RECOVERY_DISCOVERY_QUERIES {
             return false;
@@ -8597,6 +8754,8 @@ impl DiscoveredPeerAddresses {
             RecoveryDiscoveryQuery {
                 last_query: now,
                 pending_queries: 0,
+                attempt_count: 0,
+                retry_after: now,
             },
         );
         true
@@ -8612,6 +8771,8 @@ impl DiscoveredPeerAddresses {
             return;
         };
         state.last_query = now;
+        state.attempt_count = state.attempt_count.saturating_add(1);
+        state.retry_after = now + discovered_address_failure_backoff(state.attempt_count);
         for query in queries {
             if self
                 .recovery_discovery_query_peers
@@ -9765,23 +9926,6 @@ fn public_discovery_holdoff_active(holdoff_until: Option<Instant>, now: Instant)
     holdoff_until.is_some_and(|until| now < until)
 }
 
-fn reconcile_public_kademlia_mode(
-    swarm: &mut Swarm<Behaviour>,
-    discovery: &DiscoveryConfig,
-    public_discovery_suppressed: bool,
-) {
-    if !discovery.kademlia || discovery.kademlia_protocol != PUBLIC_IPFS_KADEMLIA_PROTOCOL {
-        return;
-    }
-
-    let mode = if public_discovery_suppressed {
-        kad::Mode::Client
-    } else {
-        kad::Mode::Server
-    };
-    swarm.behaviour_mut().kad.set_mode(Some(mode));
-}
-
 fn public_discovery_quiet_mode(
     forwarder: &Forwarder,
     paths: &PathSet,
@@ -10252,6 +10396,7 @@ struct SwarmEventContext<'a> {
     active_connections: &'a mut HashMap<(Libp2pPeerId, ConnectionId), ConnectedPoint>,
     connection_epochs: &'a mut ConnectionEpochs,
     membership_probe_connections: &'a mut MembershipProbeConnections,
+    kademlia_maintenance: &'a mut KademliaMaintenance,
 }
 
 #[derive(Debug, Default)]
@@ -10431,6 +10576,7 @@ async fn handle_swarm_event(
                 membership_probe_connections: context.membership_probe_connections,
                 connection_epochs: context.connection_epochs,
                 public_discovery_quiet,
+                kademlia_maintenance: context.kademlia_maintenance,
             };
             handle_behaviour_event(swarm, &mut behaviour_context, event);
         }
@@ -18243,6 +18389,7 @@ struct BehaviourEventContext<'a> {
     membership_probe_connections: &'a mut MembershipProbeConnections,
     connection_epochs: &'a ConnectionEpochs,
     public_discovery_quiet: bool,
+    kademlia_maintenance: &'a mut KademliaMaintenance,
 }
 
 fn handle_behaviour_event(
@@ -18392,6 +18539,7 @@ fn handle_behaviour_event(
                     identity: context.identity,
                     code_pairing_sessions: context.code_pairing_sessions,
                     public_discovery_quiet: context.public_discovery_quiet,
+                    kademlia_maintenance: context.kademlia_maintenance,
                 },
                 event,
             );
@@ -18691,7 +18839,7 @@ fn handle_autonat_event(
             auto_relay.record_reachability(reachability);
             metrics.record_autonat_status(reachability);
             if auto_relay.private_reachability() && !public_discovery_quiet {
-                query_auto_relay_infrastructure(swarm, metrics, "autonat_private");
+                let _ = query_auto_relay_infrastructure(swarm, metrics, "autonat_private");
             }
             if !public_discovery_quiet {
                 attempt_auto_relay_reservations(swarm, auto_relay, metrics);
@@ -18757,6 +18905,7 @@ struct KademliaEventContext<'a> {
     identity: &'a NodeIdentity,
     code_pairing_sessions: &'a mut CodePairingSessions,
     public_discovery_quiet: bool,
+    kademlia_maintenance: &'a mut KademliaMaintenance,
 }
 
 fn handle_kademlia_event(
@@ -18880,6 +19029,7 @@ fn handle_kademlia_event(
                 &result,
             );
             if step.last {
+                context.kademlia_maintenance.finish_query(id);
                 context
                     .discovered_peer_addresses
                     .finish_recovery_discovery_query(id);
@@ -19108,7 +19258,7 @@ fn query_auto_relay_infrastructure(
     swarm: &mut Swarm<Behaviour>,
     metrics: &RuntimeMetrics,
     reason: &'static str,
-) {
+) -> Vec<kad::QueryId> {
     let local_peer = *swarm.local_peer_id();
     let mut targets = vec![local_peer];
     for _ in 1..AUTO_RELAY_DISCOVERY_QUERY_FANOUT {
@@ -19118,15 +19268,19 @@ fn query_auto_relay_infrastructure(
                 .to_peer_id(),
         );
     }
-    for target in targets {
-        swarm.behaviour_mut().kad.get_closest_peers(target);
-        metrics.record_auto_relay_discovery_query();
-        log_runtime_event(
-            LogLevel::Info,
-            "auto_relay_discovery_query",
-            &[("reason", reason), ("target", &target.to_string())],
-        );
-    }
+    targets
+        .into_iter()
+        .map(|target| {
+            let query = swarm.behaviour_mut().kad.get_closest_peers(target);
+            metrics.record_auto_relay_discovery_query();
+            log_runtime_event(
+                LogLevel::Info,
+                "auto_relay_discovery_query",
+                &[("reason", reason), ("target", &target.to_string())],
+            );
+            query
+        })
+        .collect()
 }
 
 fn handle_kademlia_put_record_result(metrics: &RuntimeMetrics, result: &kad::QueryResult) {
@@ -21531,7 +21685,7 @@ mod tests {
         assert!(matches!(
             validate_pairing_hostname_available(
                 &config,
-                &[existing_record.clone()],
+                std::slice::from_ref(&existing_record),
                 &joiner.peer_id,
                 Some("inviter-host"),
                 1_001,
@@ -21542,7 +21696,7 @@ mod tests {
         assert!(matches!(
             validate_pairing_hostname_available(
                 &config,
-                &[existing_record.clone()],
+                std::slice::from_ref(&existing_record),
                 &joiner.peer_id,
                 Some("existing-host"),
                 1_001,
@@ -23551,6 +23705,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kademlia_maintenance_never_overlaps_and_cancels_stale_queries() {
+        let mut node = build_node(&HostConfig {
+            identity: crate::identity::NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let now = Instant::now();
+        let mut maintenance = KademliaMaintenance::new(now);
+
+        assert!(maintenance.should_start(now, false));
+        let first = node.swarm.behaviour_mut().kad.get_closest_peers(peer_id());
+        assert_eq!(maintenance.record_started([first], now), 1);
+        assert!(!maintenance.should_start(now + KADEMLIA_MAINTENANCE_INTERVAL, false));
+        assert!(maintenance.finish_query(first));
+        assert!(maintenance.should_start(now + KADEMLIA_MAINTENANCE_INTERVAL, false));
+        if let Some(mut query) = node.swarm.behaviour_mut().kad.query_mut(&first) {
+            query.finish();
+        }
+
+        let second_started = now + KADEMLIA_MAINTENANCE_INTERVAL;
+        let second = node.swarm.behaviour_mut().kad.get_closest_peers(peer_id());
+        maintenance.record_started([second], second_started);
+        assert_eq!(maintenance.pending_queries(), 1);
+        assert_eq!(
+            maintenance.expire_queries(
+                &mut node.swarm.behaviour_mut().kad,
+                second_started + KADEMLIA_MAINTENANCE_QUERY_TIMEOUT,
+            ),
+            1
+        );
+        assert_eq!(maintenance.pending_queries(), 0);
+        assert!(
+            !maintenance.should_start(second_started + KADEMLIA_MAINTENANCE_QUERY_TIMEOUT, false)
+        );
+        assert!(maintenance.should_start(second_started + KADEMLIA_MAINTENANCE_INTERVAL, false));
+    }
+
+    #[tokio::test]
     async fn kademlia_refresh_records_lookup_advertisement_and_bootstrap_result() {
         let discovery = DiscoveryConfig {
             mdns: false,
@@ -23588,7 +23793,7 @@ mod tests {
         auto_relay.record_reachability(AutoNatReachability::Private);
         let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
-        refresh_kademlia_rendezvous(
+        let queries = refresh_kademlia_rendezvous(
             &mut node.swarm,
             &KademliaRefreshContext {
                 advertise_key: &key,
@@ -23606,6 +23811,7 @@ mod tests {
                 metrics: &metrics,
             },
         );
+        assert!(!queries.is_empty());
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -23656,7 +23862,7 @@ mod tests {
         auto_relay.record_reachability(AutoNatReachability::Private);
         let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
-        refresh_kademlia_rendezvous(
+        let queries = refresh_kademlia_rendezvous(
             &mut node.swarm,
             &KademliaRefreshContext {
                 advertise_key: &key,
@@ -23674,6 +23880,7 @@ mod tests {
                 metrics: &metrics,
             },
         );
+        assert!(queries.is_empty());
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 0);
@@ -23723,7 +23930,7 @@ mod tests {
             suppressed_until: Some(Instant::now() + Duration::from_secs(30)),
         };
 
-        refresh_kademlia_rendezvous(
+        let queries = refresh_kademlia_rendezvous(
             &mut node.swarm,
             &KademliaRefreshContext {
                 advertise_key: &key,
@@ -23741,6 +23948,7 @@ mod tests {
                 metrics: &metrics,
             },
         );
+        assert!(!queries.is_empty());
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -23789,7 +23997,7 @@ mod tests {
         let auto_relay = AutoRelayState::default();
         let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
-        refresh_kademlia_rendezvous(
+        let queries = refresh_kademlia_rendezvous(
             &mut node.swarm,
             &KademliaRefreshContext {
                 advertise_key: &key,
@@ -23807,6 +24015,7 @@ mod tests {
                 metrics: &metrics,
             },
         );
+        assert!(!queries.is_empty());
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);
@@ -23868,7 +24077,7 @@ mod tests {
             .expect("forwarder");
         let public_discovery_backoff = PublicDiscoveryBackoff::default();
 
-        refresh_kademlia_rendezvous(
+        let queries = refresh_kademlia_rendezvous(
             &mut node.swarm,
             &KademliaRefreshContext {
                 advertise_key: &current_key,
@@ -23886,6 +24095,7 @@ mod tests {
                 metrics: &metrics,
             },
         );
+        assert!(!queries.is_empty());
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 3);
@@ -25354,6 +25564,26 @@ mod tests {
             recovery_state
                 .should_query_recovery_discovery_at(remote, query_started_at + REDIAL_INTERVAL)
         );
+
+        let second_started = query_started_at + REDIAL_INTERVAL;
+        let second_queries = [
+            node.swarm.behaviour_mut().kad.get_record(
+                crate::runtime::p2p::kademlia_peer_addresses_key("lab", None, remote),
+            ),
+            node.swarm.behaviour_mut().kad.get_closest_peers(remote),
+        ];
+        recovery_state.record_recovery_discovery_queries(remote, second_queries, second_started);
+        for query in second_queries {
+            recovery_state.finish_recovery_discovery_query(query);
+        }
+        assert!(
+            !recovery_state
+                .should_query_recovery_discovery_at(remote, second_started + REDIAL_INTERVAL)
+        );
+        assert!(recovery_state.should_query_recovery_discovery_at(
+            remote,
+            second_started + REDIAL_INTERVAL.saturating_mul(2),
+        ));
 
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
         assert_eq!(snapshot.kademlia_provider_lookups, 1);

@@ -176,7 +176,7 @@ See [Overlay DNS](dns.md) for split DNS, signed names, and JSON integration.
 | Setting | Default | Use |
 | --- | --- | --- |
 | `mdns` | enabled | LAN peer discovery. |
-| `kademlia` | enabled | Public DHT-backed provider discovery. |
+| `kademlia` | enabled | Public DHT-backed provider discovery in client mode. |
 | `kademlia_provider_advertisement` | enabled | Advertise this overlay peer. |
 | `kademlia_protocol` | `/ipfs/kad/1.0.0` | Public libp2p/IPFS DHT. |
 | `dcutr` | enabled | Hole punching support. |
@@ -204,6 +204,10 @@ They are bootstrap, relay, AutoNAT, and routing infrastructure only.
 For private-only DHTs, set a private Kademlia protocol.
 
 Then provide private bootstrap peers.
+
+Public `/ipfs/kad/1.0.0` nodes never serve the public DHT.
+
+Custom private Kademlia protocols retain server behavior.
 
 ## Relay Settings
 
