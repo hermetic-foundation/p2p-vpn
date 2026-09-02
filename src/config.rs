@@ -1153,7 +1153,7 @@ const fn default_max_pending_incoming_connections() -> u32 {
 }
 
 const fn default_max_pending_outgoing_connections() -> u32 {
-    64
+    16
 }
 
 const fn default_max_established_incoming_connections() -> u32 {
@@ -4036,7 +4036,7 @@ mod tests {
         assert_eq!(config.resources.packet_stream_limit(), 256);
         assert_eq!(config.resources.control_stream_limit(), 64);
         assert_eq!(config.resources.max_pending_incoming_connections, 64);
-        assert_eq!(config.resources.max_pending_outgoing_connections, 64);
+        assert_eq!(config.resources.max_pending_outgoing_connections, 16);
         assert_eq!(config.resources.max_established_incoming_connections, 256);
         assert_eq!(config.resources.max_established_outgoing_connections, 256);
         assert_eq!(config.resources.max_established_connections_per_peer, 8);

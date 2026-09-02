@@ -216,7 +216,7 @@ enum Command {
         max_pairing_requests_per_peer_per_second: u32,
         #[arg(long, default_value_t = 64)]
         max_pending_incoming_connections: u32,
-        #[arg(long, default_value_t = 64)]
+        #[arg(long, default_value_t = 16)]
         max_pending_outgoing_connections: u32,
         #[arg(long, default_value_t = 256)]
         max_established_incoming_connections: u32,

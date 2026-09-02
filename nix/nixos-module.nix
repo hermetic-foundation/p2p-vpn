@@ -1122,7 +1122,7 @@ let
                 };
                 maxPendingOutgoingConnections = mkOption {
                   type = types.ints.positive;
-                  default = 64;
+                  default = 16;
                   description = "Maximum pending outgoing connections.";
                 };
                 maxEstablishedIncomingConnections = mkOption {

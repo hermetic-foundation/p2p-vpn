@@ -47,7 +47,7 @@ Transport roles are independent from overlay authorization:
 | Role | Bound | Promotion rule |
 | --- | --- | --- |
 | Membership probe | 30-second lifetime | Valid signed membership or pairing |
-| Public routing | 64 peers | Valid signed membership only |
+| Public routing | 32 peers | Valid signed membership only |
 | Relay infrastructure | 64 candidates | Valid signed membership only |
 | Overlay member | Membership history bound | Already authorized |
 
@@ -273,6 +273,24 @@ Provider results are dialed only when they match configured overlay peers.
 Bootstrap peers are runtime defaults for the public DHT profile.
 
 They are not VPN members and are not serialized into minimal configs.
+
+### Query Scheduling
+
+Public DHT work is serialized per network instance.
+
+| Work | Policy |
+| --- | --- |
+| Peer recovery | One signed address-record lookup at a time. |
+| Recovery priority | Preempts routine maintenance. |
+| Failed recovery | Exponential backoff from 30 seconds to 60 minutes. |
+| Routine maintenance | One round-robin query every two minutes. |
+| Relay discovery | One closest-peer query while relay capacity is needed. |
+| Bootstrap refresh | Runs only below eight active routing peers. |
+| Healthy paths | Cancel and suppress public recovery queries. |
+
+The default pending outbound connection limit is `16` per instance.
+
+Explicit resource configuration can override this safety limit.
 
 Address scope follows discovery provenance:
 
