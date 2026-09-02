@@ -1307,6 +1307,7 @@ An API 37 arm64 device was validated on 2026-09-02.
 | Peers | Seven bounded rows exposed names, dual-stack addresses, path state, origin, and membership provenance |
 | Traffic | IPv4 and IPv6 passed 5/5 in both directions; post-update traffic passed 3/3 |
 | Update | A second `adb install -r` restored the enabled network with the same identity and traffic |
+| Boot restoration | Android started the service and restored identity plus 20/20 dual-stack replies without opening the app |
 | Resources | Connected snapshot reported six Java threads and 81,746 KiB PSS |
 
 This proves the physical app workflow and Linux interoperability.

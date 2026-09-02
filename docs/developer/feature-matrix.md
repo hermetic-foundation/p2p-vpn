@@ -82,7 +82,7 @@ Status is conservative.
 | 2026-08-30 | Android relay-to-direct E2E | 20 relay and 20 direct packets passed; promotion took 10.300 seconds without restart. |
 | 2026-08-30 | Android autonomous recovery E2E | Wi-Fi, total loss, cellular, and Wi-Fi return recovered without runtime restart. |
 | 2026-09-01 | Android multi-network E2E | Two networks, eight traffic directions, overlap, isolation, process, update, lockdown, and reboot passed. |
-| 2026-09-02 | Android physical app workflow | API 37 arm64 install, nested UI, switch lifecycle, peers, update, and bidirectional dual-stack traffic passed. |
+| 2026-09-02 | Android physical app workflow | API 37 arm64 install, nested UI, switch lifecycle, peers, update, autonomous boot restoration, and bidirectional dual-stack traffic passed. |
 
 ## Main Remaining Gaps
 

@@ -162,6 +162,19 @@ An inviter rejects a conflicting hostname. Choose another label and retry.
 
 Existing profiles and signed hostnames are never renamed automatically.
 
+### Existing Profiles
+
+Device-derived naming applies when a network is created or joined.
+
+| Profile | Hostname behavior |
+| --- | --- |
+| New network | Uses the current device-derived label. |
+| Existing network | Keeps its previously signed hostname. |
+
+An existing `android-<identifier>` hostname means the profile predates
+device-derived naming. Replace and pair that network again to assign a new
+signed hostname; updating the app does not rewrite membership identity.
+
 ## Enable or Disable
 
 Each network switch is the normal connection control. There is no separate
