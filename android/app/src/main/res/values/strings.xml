@@ -16,6 +16,7 @@
     <string name="remove_network_warning">This permanently removes this network identity and membership from the device.</string>
     <string name="identity_title">Identity</string>
     <string name="hostname_label">Hostname</string>
+    <string name="save_hostname">Save</string>
     <string name="addresses_label">Overlay addresses</string>
     <string name="peer_id_label">Peer ID</string>
     <string name="peers_title">Peers</string>

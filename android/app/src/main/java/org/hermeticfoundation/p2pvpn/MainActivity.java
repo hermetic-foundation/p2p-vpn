@@ -377,6 +377,7 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             public void setNetworkEnabled(String networkId, boolean enabled) {
                 requestNetworkEnabled(networkId, enabled);
             }
+
         };
     }
 
@@ -424,6 +425,13 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             @Override
             public void setNetworkEnabled(String networkId, boolean enabled) {
                 requestNetworkEnabled(networkId, enabled);
+            }
+
+            @Override
+            public void renameNetwork(String networkId, String hostname) {
+                if (binder != null) {
+                    binder.renameNetwork(networkId, hostname);
+                }
             }
 
             @Override

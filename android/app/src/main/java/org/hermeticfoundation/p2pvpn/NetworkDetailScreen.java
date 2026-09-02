@@ -18,6 +18,8 @@ final class NetworkDetailScreen {
 
         void setNetworkEnabled(String networkId, boolean enabled);
 
+        void renameNetwork(String networkId, String hostname);
+
         void openPairing();
 
         void approvePairing(String hostname);
@@ -35,7 +37,8 @@ final class NetworkDetailScreen {
     private final TextView title;
     private final TextView state;
     private final Switch enabled;
-    private final TextView hostname;
+    private final EditText hostname;
+    private final Button saveHostname;
     private final TextView addresses;
     private final TextView peerId;
     private final Button openPairing;
@@ -63,6 +66,7 @@ final class NetworkDetailScreen {
         state = root.findViewById(R.id.detail_state);
         enabled = root.findViewById(R.id.detail_enabled);
         hostname = root.findViewById(R.id.detail_hostname);
+        saveHostname = root.findViewById(R.id.save_hostname);
         addresses = root.findViewById(R.id.detail_addresses);
         peerId = root.findViewById(R.id.detail_peer_id);
         openPairing = root.findViewById(R.id.open_pairing);
@@ -80,6 +84,8 @@ final class NetworkDetailScreen {
 
         root.findViewById(R.id.navigate_back).setOnClickListener(view -> listener.back());
         openPairing.setOnClickListener(view -> listener.openPairing());
+        saveHostname.setOnClickListener(
+                view -> listener.renameNetwork(networkId, hostname.getText().toString()));
         approve.setOnClickListener(
                 view -> listener.approvePairing(assignedHostname.getText().toString()));
         reject.setOnClickListener(view -> listener.rejectPairing());
@@ -141,7 +147,10 @@ final class NetworkDetailScreen {
                         listener.setNetworkEnabled(network.id, checked);
                     }
                 });
-        hostname.setText(network.hostname);
+        if (!hostname.hasFocus()) {
+            hostname.setText(network.hostname);
+        }
+        saveHostname.setEnabled(canMutate && !hostname.getText().toString().trim().isEmpty());
         addresses.setText(String.join("\n", network.addresses));
         peerId.setText(network.peerId);
 

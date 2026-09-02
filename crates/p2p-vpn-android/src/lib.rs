@@ -412,6 +412,22 @@ pub fn create_profile_with_hostname(
     inspect_profile(&config_json)
 }
 
+pub fn rename_profile(config_json: &str, hostname: &str) -> Result<AndroidProfile, String> {
+    let before = inspect_profile(config_json)?;
+    let mut config: Config = serde_json::from_str(config_json)
+        .map_err(|error| format!("invalid profile JSON: {error}"))?;
+    let hostname = canonical_dns_label(hostname)
+        .map_err(|_| "Android profile contains an invalid hostname".to_owned())?;
+    config.network.dns.hostname = Some(hostname);
+    let encoded = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode renamed profile: {error}"))?;
+    let after = inspect_profile(&encoded)?;
+    if after.peer_id != before.peer_id || after.addresses != before.addresses {
+        return Err("renaming a profile changed its network identity".to_owned());
+    }
+    Ok(after)
+}
+
 pub fn create_profile_with_bootstrap(
     network_name: &str,
     bootstrap_peer_id: &str,
@@ -1390,6 +1406,20 @@ mod android {
         jni_response(&mut env, |env| {
             let config_json = read_string(env, &config_json)?;
             inspect_profile(&config_json)
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeRenameProfile(
+        mut env: JNIEnv,
+        _class: JClass,
+        config_json: JString,
+        hostname: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let config_json = read_string(env, &config_json)?;
+            let hostname = read_string(env, &hostname)?;
+            rename_profile(&config_json, &hostname)
         })
     }
 
@@ -2897,6 +2927,20 @@ mod tests {
         assert_eq!(profile.hostname, "midi-pixel");
         assert_eq!(encoded["network"]["dns"]["hostname"], "midi-pixel");
         assert!(create_profile_with_hostname("personal", "not valid!").is_err());
+    }
+
+    #[test]
+    fn profile_hostname_can_change_without_changing_network_identity() {
+        let profile =
+            create_profile_with_hostname("personal", "old-phone").expect("profile with hostname");
+
+        let renamed = rename_profile(&profile.config_json, "Pixel-8-Pro").expect("renamed profile");
+
+        assert_eq!(renamed.hostname, "pixel-8-pro");
+        assert_eq!(renamed.peer_id, profile.peer_id);
+        assert_eq!(renamed.addresses, profile.addresses);
+        assert_eq!(renamed.routes, profile.routes);
+        assert!(rename_profile(&profile.config_json, "not valid!").is_err());
     }
 
     #[test]

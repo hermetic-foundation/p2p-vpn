@@ -21,6 +21,8 @@ final class NativeBridge {
 
     static native String nativeInspectProfile(String configJson);
 
+    static native String nativeRenameProfile(String configJson, String hostname);
+
     static native String nativeStart(
             String networkId,
             String configJson,

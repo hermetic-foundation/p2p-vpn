@@ -1356,6 +1356,54 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
+    private void renameNetwork(String networkId, String hostname) {
+        if (!beginNetworkMutation("Updating hostname")) {
+            return;
+        }
+        boolean resumeConnection = false;
+        boolean mutationSucceeded = false;
+        try {
+            if (profileCollection == null) {
+                throw new P2pVpnException("No p2p-vpn network is available");
+            }
+            String normalized = ProfileCollection.Entry.normalizeNetworkId(networkId);
+            ProfileCollection.Entry network = profileCollection.find(normalized);
+            if (network == null) {
+                throw new P2pVpnException("Cannot update an unknown network");
+            }
+            AndroidProfile current = profileFor(normalized);
+            AndroidProfile renamed =
+                    AndroidProfile.fromNative(
+                            NativeResponse.objectValue(
+                                    NativeBridge.nativeRenameProfile(
+                                            network.configJson, hostname.trim())));
+            if (!renamed.peerId.equals(current.peerId)) {
+                throw new P2pVpnException("Hostname update changed the network identity");
+            }
+            if (!renamed.hostname.equals(current.hostname)) {
+                Map<String, AndroidProfile> profiles = new LinkedHashMap<>(inspectedProfiles);
+                profiles.put(normalized, renamed);
+                ProfileCollection updated =
+                        profileCollection.replace(network.withConfig(renamed.configJson));
+                persistProfileCollection(updated, Collections.unmodifiableMap(profiles), runtimeFiles);
+                if (network.enabled) {
+                    resumeConnection = suspendConnectionForNetworkChange();
+                }
+                recordDiagnosticEvent("network_hostname_updated");
+            }
+            connectionDetail = "Hostname set to " + renamed.hostname;
+            mutationSucceeded = true;
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+            if (mutationSucceeded && resumeConnection) {
+                connectRequested(false);
+            }
+        }
+    }
+
     private void reconcileEnabledNetworks() {
         refreshVpnMode(false);
         NetworkActivationPolicy.Outcome outcome =
@@ -2654,6 +2702,10 @@ public final class P2pVpnService extends VpnService {
         void setNetworkEnabled(String networkId, boolean enabled) {
             worker.execute(
                     () -> P2pVpnService.this.setNetworkEnabled(networkId, enabled));
+        }
+
+        void renameNetwork(String networkId, String hostname) {
+            worker.execute(() -> P2pVpnService.this.renameNetwork(networkId, hostname));
         }
 
         void removeNetwork(String networkId) {
