@@ -1535,17 +1535,20 @@ mod android {
         pairing_code: JString,
         hostname: JString,
         existing_network_names_json: JString,
+        candidate_hints_json: JString,
     ) -> jstring {
         jni_response(&mut env, |env| {
             let operation_id = read_string(env, &operation_id)?;
             let pairing_code = read_string(env, &pairing_code)?;
             let hostname = read_string(env, &hostname)?;
             let existing_network_names_json = read_string(env, &existing_network_names_json)?;
+            let candidate_hints_json = read_string(env, &candidate_hints_json)?;
             join_profile_by_code(
                 &operation_id,
                 &pairing_code,
                 &hostname,
                 &existing_network_names_json,
+                &candidate_hints_json,
             )
         })
     }
@@ -1585,6 +1588,7 @@ mod android {
         pairing_code: &str,
         hostname: &str,
         existing_network_names_json: &str,
+        candidate_hints_json: &str,
     ) -> Result<AndroidProfile, String> {
         let lease = ProfileJoinLease::acquire(operation_id.to_owned())?;
         if lease.cancelled.load(Ordering::Acquire) {
@@ -1600,11 +1604,14 @@ mod android {
         if existing_network_names.len() > 16 {
             return Err("existing network list is invalid".to_owned());
         }
+        let candidate_hints = serde_json::from_str(candidate_hints_json)
+            .map_err(|_| "pairing discovery candidate hints are invalid".to_owned())?;
         let identity = NodeIdentity::generate_ed25519()
             .map_err(|error| format!("failed to generate pairing identity: {error:?}"))?;
         let options = PairingBootstrapOptions {
             existing_network_names,
             requested_hostname: Some(hostname),
+            candidate_hints,
             ..PairingBootstrapOptions::default()
         };
         let runtime = control_runtime()?;

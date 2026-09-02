@@ -47,6 +47,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
                 case "set-network-enabled":
                     setNetworkEnabled(context, intent);
                     return;
+                case "set-profile-join-candidate":
+                    ProfileJoinDiscoveryHints.setNextForDebug(
+                            requiredExtra(
+                                    intent,
+                                    "peer_id",
+                                    ProfileJoinDiscoveryHints.MAX_PEER_ID_LENGTH),
+                            requiredExtra(
+                                    intent,
+                                    "address",
+                                    ProfileJoinDiscoveryHints.MAX_ADDRESS_LENGTH));
+                    accepted(command);
+                    return;
                 case "join-pairing":
                     enqueue(context, command, requiredExtra(intent, "code", 64));
                     return;
@@ -182,9 +194,18 @@ public final class DebugAutomationReceiver extends BroadcastReceiver {
         if (!intent.hasExtra("enabled")) {
             throw new IllegalArgumentException("invalid_enabled");
         }
+        boolean enabled = intent.getBooleanExtra("enabled", false);
+        if (enabled && !LocalNetworkPermission.isGranted(context)) {
+            respond(false, null, "local_network_permission_required");
+            return;
+        }
+        if (enabled && VpnService.prepare(context) != null) {
+            respond(false, null, "vpn_permission_required");
+            return;
+        }
         JSONObject settings = new JSONObject();
         settings.put("network_id", requiredExtra(intent, "network_id", 36));
-        settings.put("enabled", intent.getBooleanExtra("enabled", false));
+        settings.put("enabled", enabled);
         enqueue(context, "set-network-enabled", settings.toString());
     }
 

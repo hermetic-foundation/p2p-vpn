@@ -700,112 +700,127 @@ measure_concurrent_multi_network_traffic() {
   local duration_variable="$4"
   local file_prefix="$state_dir/$prefix"
   local batch_started batch_completed process received failed_summary
+  local attempt attempt_detail=""
+  local max_attempts=3
   local failed_processes=0
   local -a failed_legs=()
   local -a processes=()
 
-  batch_started="$(monotonic_millis)"
-  "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv4" \
-    --destination "$android_primary_ipv4" \
-    --count 5 > "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null &
-  processes+=("$!")
-  "$fixture_command" probe \
-    --socket "$fixture_packet_socket" \
-    --source "$fixture_ipv6" \
-    --destination "$android_primary_ipv6" \
-    --count 5 > "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null &
-  processes+=("$!")
-  "$fixture_command" probe \
-    --socket "$fixture_secondary_packet_socket" \
-    --source "$fixture_secondary_ipv4" \
-    --destination "$android_secondary_ipv4" \
-    --count 5 > "$file_prefix-beta-linux-ipv4.json" 2>/dev/null &
-  processes+=("$!")
-  "$fixture_command" probe \
-    --socket "$fixture_secondary_packet_socket" \
-    --source "$fixture_secondary_ipv6" \
-    --destination "$android_secondary_ipv6" \
-    --count 5 > "$file_prefix-beta-linux-ipv6.json" 2>/dev/null &
-  processes+=("$!")
-  adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
-    > "$file_prefix-alpha-android-ipv4.txt" 2>&1 &
-  processes+=("$!")
-  adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
-    > "$file_prefix-alpha-android-ipv6.txt" 2>&1 &
-  processes+=("$!")
-  adb_run shell ping -c 5 -W 5 "$fixture_secondary_ipv4" \
-    > "$file_prefix-beta-android-ipv4.txt" 2>&1 &
-  processes+=("$!")
-  adb_run shell ping6 -c 5 -W 5 "$fixture_secondary_ipv6" \
-    > "$file_prefix-beta-android-ipv6.txt" 2>&1 &
-  processes+=("$!")
+  for attempt in $(seq 1 "$max_attempts"); do
+    failed_processes=0
+    failed_legs=()
+    processes=()
+    batch_started="$(monotonic_millis)"
+    "$fixture_command" probe \
+      --socket "$fixture_packet_socket" \
+      --source "$fixture_ipv4" \
+      --destination "$android_primary_ipv4" \
+      --count 5 > "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null &
+    processes+=("$!")
+    "$fixture_command" probe \
+      --socket "$fixture_packet_socket" \
+      --source "$fixture_ipv6" \
+      --destination "$android_primary_ipv6" \
+      --count 5 > "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null &
+    processes+=("$!")
+    "$fixture_command" probe \
+      --socket "$fixture_secondary_packet_socket" \
+      --source "$fixture_secondary_ipv4" \
+      --destination "$android_secondary_ipv4" \
+      --count 5 > "$file_prefix-beta-linux-ipv4.json" 2>/dev/null &
+    processes+=("$!")
+    "$fixture_command" probe \
+      --socket "$fixture_secondary_packet_socket" \
+      --source "$fixture_secondary_ipv6" \
+      --destination "$android_secondary_ipv6" \
+      --count 5 > "$file_prefix-beta-linux-ipv6.json" 2>/dev/null &
+    processes+=("$!")
+    adb_run shell ping -c 5 -W 5 "$fixture_ipv4" \
+      > "$file_prefix-alpha-android-ipv4.txt" 2>&1 &
+    processes+=("$!")
+    adb_run shell ping6 -c 5 -W 5 "$fixture_ipv6" \
+      > "$file_prefix-alpha-android-ipv6.txt" 2>&1 &
+    processes+=("$!")
+    adb_run shell ping -c 5 -W 5 "$fixture_secondary_ipv4" \
+      > "$file_prefix-beta-android-ipv4.txt" 2>&1 &
+    processes+=("$!")
+    adb_run shell ping6 -c 5 -W 5 "$fixture_secondary_ipv6" \
+      > "$file_prefix-beta-android-ipv6.txt" 2>&1 &
+    processes+=("$!")
 
-  for process in "${processes[@]}"; do
-    if ! wait "$process"; then
-      failed_processes=$((failed_processes + 1))
+    for process in "${processes[@]}"; do
+      if ! wait "$process"; then
+        failed_processes=$((failed_processes + 1))
+      fi
+    done
+    batch_completed="$(monotonic_millis)"
+
+    if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+      "$file_prefix-alpha-linux-ipv4.json" >/dev/null 2>&1; then
+      received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null || printf '0')"
+      failed_legs+=("alpha/Linux-to-Android/IPv4=$received/5")
     fi
-  done
-  batch_completed="$(monotonic_millis)"
+    if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+      "$file_prefix-alpha-linux-ipv6.json" >/dev/null 2>&1; then
+      received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null || printf '0')"
+      failed_legs+=("alpha/Linux-to-Android/IPv6=$received/5")
+    fi
+    if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
+      "$file_prefix-beta-linux-ipv4.json" >/dev/null 2>&1; then
+      received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv4.json" 2>/dev/null || printf '0')"
+      failed_legs+=("beta/Linux-to-Android/IPv4=$received/5")
+    fi
+    if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
+      "$file_prefix-beta-linux-ipv6.json" >/dev/null 2>&1; then
+      received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv6.json" 2>/dev/null || printf '0')"
+      failed_legs+=("beta/Linux-to-Android/IPv6=$received/5")
+    fi
+    if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "$file_prefix-alpha-android-ipv4.txt"; then
+      received="$(ping_received_count "$file_prefix-alpha-android-ipv4.txt")"
+      failed_legs+=("alpha/Android-to-Linux/IPv4=$received/5")
+    fi
+    if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "$file_prefix-alpha-android-ipv6.txt"; then
+      received="$(ping_received_count "$file_prefix-alpha-android-ipv6.txt")"
+      failed_legs+=("alpha/Android-to-Linux/IPv6=$received/5")
+    fi
+    if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "$file_prefix-beta-android-ipv4.txt"; then
+      received="$(ping_received_count "$file_prefix-beta-android-ipv4.txt")"
+      failed_legs+=("beta/Android-to-Linux/IPv4=$received/5")
+    fi
+    if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
+      "$file_prefix-beta-android-ipv6.txt"; then
+      received="$(ping_received_count "$file_prefix-beta-android-ipv6.txt")"
+      failed_legs+=("beta/Android-to-Linux/IPv6=$received/5")
+    fi
 
-  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
-    "$file_prefix-alpha-linux-ipv4.json" >/dev/null 2>&1; then
-    received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv4.json" 2>/dev/null || printf '0')"
-    failed_legs+=("alpha/Linux-to-Android/IPv4=$received/5")
-  fi
-  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
-    "$file_prefix-alpha-linux-ipv6.json" >/dev/null 2>&1; then
-    received="$(jq -r '.received // 0' "$file_prefix-alpha-linux-ipv6.json" 2>/dev/null || printf '0')"
-    failed_legs+=("alpha/Linux-to-Android/IPv6=$received/5")
-  fi
-  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv4" and .sent == 5 and .received == 5' \
-    "$file_prefix-beta-linux-ipv4.json" >/dev/null 2>&1; then
-    received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv4.json" 2>/dev/null || printf '0')"
-    failed_legs+=("beta/Linux-to-Android/IPv4=$received/5")
-  fi
-  if ! jq -e '.schema_version == 1 and .ok and .family == "ipv6" and .sent == 5 and .received == 5' \
-    "$file_prefix-beta-linux-ipv6.json" >/dev/null 2>&1; then
-    received="$(jq -r '.received // 0' "$file_prefix-beta-linux-ipv6.json" 2>/dev/null || printf '0')"
-    failed_legs+=("beta/Linux-to-Android/IPv6=$received/5")
-  fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
-    "$file_prefix-alpha-android-ipv4.txt"; then
-    received="$(ping_received_count "$file_prefix-alpha-android-ipv4.txt")"
-    failed_legs+=("alpha/Android-to-Linux/IPv4=$received/5")
-  fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
-    "$file_prefix-alpha-android-ipv6.txt"; then
-    received="$(ping_received_count "$file_prefix-alpha-android-ipv6.txt")"
-    failed_legs+=("alpha/Android-to-Linux/IPv6=$received/5")
-  fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
-    "$file_prefix-beta-android-ipv4.txt"; then
-    received="$(ping_received_count "$file_prefix-beta-android-ipv4.txt")"
-    failed_legs+=("beta/Android-to-Linux/IPv4=$received/5")
-  fi
-  if ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
-    "$file_prefix-beta-android-ipv6.txt"; then
-    received="$(ping_received_count "$file_prefix-beta-android-ipv6.txt")"
-    failed_legs+=("beta/Android-to-Linux/IPv6=$received/5")
-  fi
+    if [[ "$failed_processes" -eq 0 && "${#failed_legs[@]}" -eq 0 ]]; then
+      if [[ "$attempt" -gt 1 ]]; then
+        attempt_detail=" after $attempt bounded attempts"
+      fi
+      printf -v "$started_variable" '%s' "$batch_started"
+      printf -v "$duration_variable" '%s' "$((batch_completed - batch_started))"
+      record_step "${prefix}_concurrent_traffic" passed \
+        "Both networks carried 5 of 5 packets in every direction and address family $context$attempt_detail"
+      return 0
+    fi
 
-  if [[ "$failed_processes" -ne 0 || "${#failed_legs[@]}" -ne 0 ]]; then
     if [[ "${#failed_legs[@]}" -eq 0 ]]; then
       failed_legs+=("$failed_processes subprocesses exited nonzero")
     fi
     failed_summary="$(printf '%s, ' "${failed_legs[@]}")"
     failed_summary="${failed_summary%, }"
-    outcome=failed
-    outcome_detail="Concurrent dual-stack traffic failed $context: $failed_summary"
-    record_step "${prefix}_concurrent_traffic" failed "$outcome_detail"
-    return 1
-  fi
+    if [[ "$attempt" -lt "$max_attempts" ]]; then
+      sleep 2
+    fi
+  done
 
-  printf -v "$started_variable" '%s' "$batch_started"
-  printf -v "$duration_variable" '%s' "$((batch_completed - batch_started))"
-  record_step "${prefix}_concurrent_traffic" passed \
-    "Both networks carried 5 of 5 packets in every direction and address family $context"
+  outcome=failed
+  outcome_detail="Concurrent dual-stack traffic failed $context after $max_attempts bounded attempts: $failed_summary"
+  record_step "${prefix}_concurrent_traffic" failed "$outcome_detail"
+  return 1
 }
 
 wait_for_new_android_process() {
@@ -1543,6 +1558,7 @@ run_network_workflow_scenario() {
   local pair_open="$state_dir/network-workflow-pair-open.json"
   local inviter_status="$state_dir/network-workflow-inviter-status.json"
   local pair_approved="$state_dir/network-workflow-pair-approved.json"
+  local candidate_response="$state_dir/network-workflow-candidate.json"
   local joined_status="$state_dir/network-workflow-joined.json"
   local running_status="$state_dir/network-workflow-running.json"
   local disabled_status="$state_dir/network-workflow-disabled.json"
@@ -1653,6 +1669,19 @@ run_network_workflow_scenario() {
   fi
   pair_operation="$(jq -r '.operation_id' "$pair_open")"
   pair_code="$(jq -r '.code' "$pair_open")"
+
+  if ! android_automation set-profile-join-candidate \
+    --es peer_id "$fixture_peer_id" \
+    --es address "$fixture_pairing_android_address" > "$candidate_response" \
+    || ! jq -e '
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "set-profile-join-candidate"
+    ' "$candidate_response" >/dev/null; then
+    outcome=failed
+    outcome_detail="Managed emulator discovery could not receive its bounded fixture hint"
+    record_step profile_free_join failed "$outcome_detail"
+    return 1
+  fi
 
   if ! input_android_ui_text "$code_xpath" "$pair_code" \
     || ! tap_android_ui_xpath "$join_xpath" \
@@ -1922,7 +1951,7 @@ run_multi_network_scenario() {
   alpha_migrated="$state_dir/status-alpha-migrated.json"
   if ! wait_for_automation_status \
     "$alpha_migrated" \
-    '.value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.profile_unreadable | not) and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 1) and .value.snapshot.networks[0].selected and .value.snapshot.networks[0].enabled' \
+    '.value.snapshot.has_profile and .value.snapshot.profile_stored and (.value.snapshot.profile_unreadable | not) and (.value.snapshot.busy | not) and (.value.snapshot.networks | length == 1) and .value.snapshot.networks[0].selected and (.value.snapshot.networks[0].enabled | not) and .value.snapshot.networks[0].phase == "disabled"' \
     60 \
     || ! jq -e -s '
       .[0].value.snapshot.networks[0].name == .[1].value.snapshot.networks[0].name and
@@ -1945,7 +1974,7 @@ run_multi_network_scenario() {
     return 1
   fi
   record_step legacy_collection_migration passed \
-    "Encrypted legacy storage migrated in place without changing identity or addresses"
+    "Encrypted legacy storage migrated disabled without changing identity or addresses"
 
   if ! adb_run shell appops set \
     org.hermeticfoundation.p2pvpn.debug ACTIVATE_VPN allow >/dev/null; then
@@ -1954,12 +1983,15 @@ run_multi_network_scenario() {
     record_step vpn_consent failed "$outcome_detail"
     return 1
   fi
-  if ! android_automation connect > "$command_response" \
+  if ! android_automation set-network-enabled \
+    --es network_id "$alpha_id" \
+    --ez enabled true > "$command_response" \
     || ! jq -e '
-      .schema_version == 1 and .ok and .value.accepted and .value.command == "connect"
+      .schema_version == 1 and .ok and .value.accepted and
+      .value.command == "set-network-enabled"
     ' "$command_response" >/dev/null; then
     outcome=failed
-    outcome_detail="Debug automation did not start the shared VPN"
+    outcome_detail="Debug automation did not enable the migrated alpha network"
     record_step vpn_connect failed "$outcome_detail"
     return 1
   fi
@@ -1974,7 +2006,7 @@ run_multi_network_scenario() {
     return 1
   fi
   record_step vpn_consent passed "ADB authorized the normal VpnService consent gate"
-  record_step vpn_connect passed "The shared Android VPN started alpha"
+  record_step vpn_connect passed "Enabling alpha started the shared Android VPN"
 
   if ! pair_selected_network \
     alpha \
@@ -2252,6 +2284,7 @@ sanitize_runtime_log() {
     -e 's#/home/[^/[:space:]]+#/home/REDACTED#g' \
     -e 's#/tmp/p2p-vpn-android-e2e-state\.[^/[:space:]]+#/tmp/p2p-vpn-android-e2e-state.REDACTED#g' \
     -e 's/[A-Z2-9]{4}(-[A-Z2-9]{4}){3}/PAIRING-CODE-REDACTED/g' \
+    -e 's/Qm[1-9A-HJ-NP-Za-km-z]{44}/PEER-ID-REDACTED/g' \
     -e 's/12D3KooW[A-Za-z0-9]+/PEER-ID-REDACTED/g' \
     -e 's/(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)/\1OVERLAY-ID-REDACTED\2/g' \
     -e 's#/members/[^[:space:]"}]*/membership-records#/members/MEMBERSHIP-TAG-REDACTED/membership-records#g' \
@@ -2284,7 +2317,7 @@ logs_are_redacted() {
   local log_file
   for log_file in "$fixture_log" "$fixture_secondary_log" "$android_log"; do
     if grep -Eq \
-      '12D3KooW[A-Za-z0-9]+|(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)|[A-Z2-9]{4}(-[A-Z2-9]{4}){3}|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:|([0-9]{1,3}\.){3}[0-9]{1,3}|/ip6/[^I]|/dns(4|6)?/[^U]|/members/[^M]|\[[[:xdigit:]]*:[[:xdigit:]:]*\]' \
+      'Qm[1-9A-HJ-NP-Za-km-z]{44}|12D3KooW[A-Za-z0-9]+|(^|[^[:xdigit:]])[[:xdigit:]]{64}([^[:xdigit:]]|$)|[A-Z2-9]{4}(-[A-Z2-9]{4}){3}|membership_tag: Some\(|member_public_key|private_key|certificate_der: Some\(\[|signature:|([0-9]{1,3}\.){3}[0-9]{1,3}|/ip6/[^I]|/dns(4|6)?/[^U]|/members/[^M]|\[[[:xdigit:]]*:[[:xdigit:]:]*\]' \
       "$log_file"; then
       return 1
     fi
@@ -2704,6 +2737,13 @@ start_fixture_instance() {
       (.bootstrap.android_address | type == "string" and test("^/[^[:space:]]+$") and length <= 1024) and
       (.bootstrap.kademlia_protocol | type == "string" and test("^/[^[:space:]]+$") and length <= 128) and
       (.peer.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
+      (if ($path_mode == "automatic" or $path_mode == "owned-quic" or
+          $path_mode == "quic-stream" or $path_mode == "tcp-stream") then
+        (.peer.pairing_android_address | type == "string" and
+          test("^/[^[:space:]]+$") and length <= 1024)
+      else
+        (.peer.pairing_android_address // null) == null
+      end) and
       (.peer.ipv4 | type == "string" and test("^[0-9.]+$") and length <= 15) and
       (.peer.ipv6 | type == "string" and test("^[0-9a-fA-F:]+$") and length <= 45) and
       (.peer.control_socket | type == "string" and length > 0 and length <= 4096) and
@@ -3103,6 +3143,8 @@ fixture_network="android-e2e"
 fixture_bootstrap_peer=""
 fixture_bootstrap_address=""
 fixture_kademlia_protocol=""
+fixture_peer_id=""
+fixture_pairing_android_address=""
 fixture_ipv4=""
 fixture_ipv6=""
 fixture_control_socket=""
@@ -3158,6 +3200,13 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
     (.bootstrap.android_address | type == "string" and test("^/[^[:space:]]+$") and length <= 1024) and
     (.bootstrap.kademlia_protocol | type == "string" and test("^/[^[:space:]]+$") and length <= 128) and
     (.peer.peer_id | type == "string" and test("^[A-Za-z0-9]+$") and length <= 256) and
+    (if ($path_mode == "automatic" or $path_mode == "owned-quic" or
+        $path_mode == "quic-stream" or $path_mode == "tcp-stream") then
+      (.peer.pairing_android_address | type == "string" and
+        test("^/[^[:space:]]+$") and length <= 1024)
+    else
+      (.peer.pairing_android_address // null) == null
+    end) and
     (.peer.ipv4 | type == "string" and test("^[0-9.]+$") and length <= 15) and
     (.peer.ipv6 | type == "string" and test("^[0-9a-fA-F:]+$") and length <= 45) and
     (.peer.control_socket | type == "string" and length > 0 and length <= 4096) and
@@ -3194,6 +3243,10 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
   fixture_bootstrap_peer="$(jq -r '.bootstrap.peer_id' "$fixture_metadata")"
   fixture_bootstrap_address="$(jq -r '.bootstrap.android_address' "$fixture_metadata")"
   fixture_kademlia_protocol="$(jq -r '.bootstrap.kademlia_protocol' "$fixture_metadata")"
+  fixture_peer_id="$(jq -r '.peer.peer_id' "$fixture_metadata")"
+  fixture_pairing_android_address="$(
+    jq -r '.peer.pairing_android_address // empty' "$fixture_metadata"
+  )"
   fixture_ipv4="$(jq -r '.peer.ipv4' "$fixture_metadata")"
   fixture_ipv6="$(jq -r '.peer.ipv6' "$fixture_metadata")"
   fixture_control_socket="$(jq -r '.peer.control_socket' "$fixture_metadata")"

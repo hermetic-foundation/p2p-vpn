@@ -129,6 +129,7 @@ struct BootstrapMetadata {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct PeerMetadata {
     peer_id: String,
+    pairing_android_address: Option<String>,
     ipv4: Ipv4Addr,
     ipv6: Ipv6Addr,
     control_socket: String,
@@ -358,6 +359,19 @@ async fn run_fixture(
     ));
     wait_for_path(&packet_control_socket, "packet control socket").await?;
 
+    let peer_pairing_android_address = match path_mode {
+        FixturePathMode::Automatic | FixturePathMode::OwnedQuic | FixturePathMode::TcpStream => {
+            Some(format!(
+                "/ip4/{emulator_host_alias}/tcp/{peer_tcp_port}/p2p/{}",
+                peer_identity.peer_id
+            ))
+        }
+        FixturePathMode::QuicStream => Some(format!(
+            "/ip4/{emulator_host_alias}/udp/{peer_quic_port}/quic-v1/p2p/{}",
+            peer_identity.peer_id
+        )),
+        FixturePathMode::RelayOnly | FixturePathMode::RelayToDirect => None,
+    };
     let metadata = FixtureMetadata {
         schema_version: SCHEMA_VERSION,
         network: network.to_owned(),
@@ -383,6 +397,7 @@ async fn run_fixture(
         },
         peer: PeerMetadata {
             peer_id: peer_identity.peer_id,
+            pairing_android_address: peer_pairing_android_address,
             ipv4: tun.addresses.ipv4,
             ipv6: tun.addresses.ipv6,
             control_socket: control_socket.to_string_lossy().into_owned(),
@@ -1372,6 +1387,10 @@ mod tests {
             },
             peer: PeerMetadata {
                 peer_id: peer.peer_id.clone(),
+                pairing_android_address: Some(format!(
+                    "/ip4/10.0.2.2/tcp/42301/p2p/{}",
+                    peer.peer_id
+                )),
                 ipv4: TunRuntimeConfig::from_config(&peer_config)
                     .expect("TUN config")
                     .addresses

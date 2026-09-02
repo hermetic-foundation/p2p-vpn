@@ -18,7 +18,7 @@ use libp2p::{
 
 use crate::{
     config::{
-        PUBLIC_IPFS_KADEMLIA_PROTOCOL, ResourceConfig, RouteConfig,
+        BootstrapPeerConfig, PUBLIC_IPFS_KADEMLIA_PROTOCOL, ResourceConfig, RouteConfig,
         public_ipfs_bootstrap_peer_configs,
     },
     identity::NodeIdentity,
@@ -47,6 +47,7 @@ pub const MAX_PAIRING_BOOTSTRAP_PENDING_HELLOS: usize = 32;
 pub const MAX_PAIRING_BOOTSTRAP_ATTEMPTS_PER_PEER: u8 = 8;
 pub const MAX_PAIRING_BOOTSTRAP_TOTAL_ATTEMPTS: u16 = 512;
 pub const MAX_PAIRING_BOOTSTRAP_EXISTING_NETWORKS: usize = 256;
+pub const MAX_PAIRING_BOOTSTRAP_CANDIDATE_HINTS: usize = 8;
 
 const BOOTSTRAP_IDENTIFY_PROTOCOL: &str = "/p2p-vpn/pairing-bootstrap/2";
 const BOOTSTRAP_TICK: Duration = Duration::from_millis(250);
@@ -62,6 +63,9 @@ pub struct PairingBootstrapOptions {
     pub requested_hostname: Option<String>,
     pub requested_vpn_ip: Option<String>,
     pub requested_routes: Vec<RouteConfig>,
+    /// Untrusted dial hints for environments where multicast discovery cannot cross the local
+    /// boundary. The pairing code still authenticates the inviter before any profile is accepted.
+    pub candidate_hints: Vec<BootstrapPeerConfig>,
 }
 
 impl Default for PairingBootstrapOptions {
@@ -73,6 +77,7 @@ impl Default for PairingBootstrapOptions {
             requested_hostname: None,
             requested_vpn_ip: None,
             requested_routes: Vec::new(),
+            candidate_hints: Vec::new(),
         }
     }
 }
@@ -331,6 +336,7 @@ pub async fn join_by_code_v2(
     let local_peer = *swarm.local_peer_id();
     let now = Instant::now();
     let mut state = BootstrapState::new(now, options.lan_grace);
+    seed_candidate_hints(&mut swarm, &mut state, &options.candidate_hints, now)?;
     let mut tick = tokio::time::interval(BOOTSTRAP_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let deadline = tokio::time::sleep(options.timeout);
@@ -382,6 +388,34 @@ fn validate_options(options: &PairingBootstrapOptions) -> Result<(), PairingBoot
         return Err(PairingBootstrapError::Build(
             "existing network names are invalid".to_owned(),
         ));
+    }
+    if options.candidate_hints.len() > MAX_PAIRING_BOOTSTRAP_CANDIDATE_HINTS
+        || options
+            .candidate_hints
+            .iter()
+            .any(|candidate| candidate.peer_address().is_err())
+    {
+        return Err(PairingBootstrapError::Build(
+            "pairing discovery candidate hints are invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn seed_candidate_hints(
+    swarm: &mut Swarm<PairingBootstrapBehaviour>,
+    state: &mut BootstrapState,
+    candidates: &[BootstrapPeerConfig],
+    now: Instant,
+) -> Result<(), PairingBootstrapError> {
+    for configured in candidates {
+        let (peer, mut address) = configured.peer_address().map_err(|error| {
+            PairingBootstrapError::Build(format!("pairing discovery candidate: {error:?}"))
+        })?;
+        strip_trailing_peer(&mut address, peer);
+        if state.record_lan_candidate(peer, address.clone(), now) {
+            swarm.behaviour_mut().kad.add_address(&peer, address);
+        }
     }
     Ok(())
 }
@@ -828,6 +862,33 @@ mod tests {
             ..PairingBootstrapOptions::default()
         };
 
+        assert!(matches!(
+            validate_options(&options),
+            Err(PairingBootstrapError::Build(_))
+        ));
+    }
+
+    #[test]
+    fn options_reject_unbounded_or_invalid_candidate_hints() {
+        let mut options = PairingBootstrapOptions {
+            candidate_hints: vec![
+                BootstrapPeerConfig {
+                    id: PeerId::random().to_string(),
+                    address: "/ip4/127.0.0.1/tcp/1".to_owned(),
+                };
+                MAX_PAIRING_BOOTSTRAP_CANDIDATE_HINTS + 1
+            ],
+            ..PairingBootstrapOptions::default()
+        };
+        assert!(matches!(
+            validate_options(&options),
+            Err(PairingBootstrapError::Build(_))
+        ));
+
+        options.candidate_hints = vec![BootstrapPeerConfig {
+            id: "not-a-peer-id".to_owned(),
+            address: "/ip4/127.0.0.1/tcp/1".to_owned(),
+        }];
         assert!(matches!(
             validate_options(&options),
             Err(PairingBootstrapError::Build(_))

@@ -746,6 +746,15 @@
                         },
                         peer: {
                           peer_id: "12D3KooWFakeLinuxPeer",
+                          pairing_android_address: (
+                            if ($path_mode == "relay-only" or $path_mode == "relay-to-direct") then
+                              null
+                            elif $path_mode == "quic-stream" then
+                              "/ip4/10.0.2.2/udp/42302/quic-v1/p2p/12D3KooWFakeLinuxPeer"
+                            else
+                              "/ip4/10.0.2.2/tcp/42301/p2p/12D3KooWFakeLinuxPeer"
+                            end
+                          ),
                           ipv4: "100.64.0.2",
                           ipv6: "fd42::2",
                           control_socket: $control
@@ -775,7 +784,7 @@
                     printf 'private state: %s code ABCD-EFGH-JKLM-NPQR\n' "$state_dir"
                     printf 'ControlCapabilities { membership_tag: Some("secret-tag"), owned_quic_packet_plane_certificate_der: Some([1, 2]), member_public_key: "secret-key", signature: "secret-signature" }\n'
                     printf 'underlay 192.0.2.44 [fd00::44]:42300 /dns4/private.example/udp/42300\n'
-                    printf 'peer 12D3KooWFakeFixturePeer overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef key /members/c2VjcmV0+/membership-records/1\n'
+                    printf 'peer 12D3KooWFakeFixturePeer legacy-peer=QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef key /members/c2VjcmV0+/membership-records/1\n'
                     trap 'exit 0' INT TERM
                     while :; do sleep 1; done
                     ;;
@@ -1406,7 +1415,7 @@
                     fi
                     ;;
                   logcat*)
-                    printf '1.0 I p2p-vpn: p2p_vpn::runtime::runner event=test peer=12D3KooWFakeAndroidPeer overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef address=/ip6/fd42::9/tcp/42300 key=/members/c2VjcmV0+/membership-records/1\n'
+                    printf '1.0 I p2p-vpn: p2p_vpn::runtime::runner event=test peer=12D3KooWFakeAndroidPeer legacy-peer=QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN overlay=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef address=/ip6/fd42::9/tcp/42300 key=/members/c2VjcmV0+/membership-records/1\n'
                     ;;
                   'shell svc wifi disable')
                     : "''${underlay_state:?}"
@@ -1687,23 +1696,27 @@
                   "$test_root/pairing-evidence/fixture.log"
                 ! grep -Eq '(192\.0\.2\.44|fd00::44|private\.example)' \
                   "$test_root/pairing-evidence/fixture.log"
-                ! grep -Eq '12D3KooW[A-Za-z0-9]+' \
+                ! grep -Eq 'Qm[1-9A-HJ-NP-Za-km-z]{44}|12D3KooW[A-Za-z0-9]+' \
                   "$test_root/pairing-evidence/fixture.log"
                 ! grep -Fq '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
                   "$test_root/pairing-evidence/fixture.log"
                 ! grep -Fq 'c2VjcmV0+' "$test_root/pairing-evidence/fixture.log"
                 grep -Fq 'peer PEER-ID-REDACTED' \
                   "$test_root/pairing-evidence/fixture.log"
+                grep -Fq 'legacy-peer=PEER-ID-REDACTED' \
+                  "$test_root/pairing-evidence/fixture.log"
                 grep -Fq 'overlay=OVERLAY-ID-REDACTED' \
                   "$test_root/pairing-evidence/fixture.log"
                 grep -Fq '/members/MEMBERSHIP-TAG-REDACTED/membership-records/1' \
                   "$test_root/pairing-evidence/fixture.log"
                 test "$(wc -c < "$test_root/pairing-evidence/android.log")" -le ${toString (1024 * 1024)}
-                ! grep -Eq '12D3KooW[A-Za-z0-9]+|fd42::9|c2VjcmV0+|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
+                ! grep -Eq 'Qm[1-9A-HJ-NP-Za-km-z]{44}|12D3KooW[A-Za-z0-9]+|fd42::9|c2VjcmV0+|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
                   "$test_root/pairing-evidence/android.log"
                 grep -Fq 'p2p_vpn::runtime::runner' \
                   "$test_root/pairing-evidence/android.log"
                 grep -Fq 'peer=PEER-ID-REDACTED' \
+                  "$test_root/pairing-evidence/android.log"
+                grep -Fq 'legacy-peer=PEER-ID-REDACTED' \
                   "$test_root/pairing-evidence/android.log"
                 grep -Fq 'overlay=OVERLAY-ID-REDACTED' \
                   "$test_root/pairing-evidence/android.log"

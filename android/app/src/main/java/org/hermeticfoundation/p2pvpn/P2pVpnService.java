@@ -1150,6 +1150,7 @@ public final class P2pVpnService extends VpnService {
 
         ProfileJoinOperation operation =
                 new ProfileJoinOperation(PairingOperationId.generate());
+        String candidateHintsJson = ProfileJoinDiscoveryHints.consumeNextForDebug();
         profileJoinOperation = operation;
         operationInProgress = true;
         pairingDetail = "Searching on LAN, then through public libp2p discovery";
@@ -1167,7 +1168,8 @@ public final class P2pVpnService extends VpnService {
                                                         operation.id,
                                                         request.pairingCode,
                                                         request.hostname,
-                                                        request.existingNetworkNamesJson)));
+                                                        request.existingNetworkNamesJson,
+                                                        candidateHintsJson)));
                         result = ProfileJoinResult.success(joined);
                     } catch (P2pVpnException | RuntimeException | LinkageError error) {
                         result = ProfileJoinResult.failure(failureMessage(error));

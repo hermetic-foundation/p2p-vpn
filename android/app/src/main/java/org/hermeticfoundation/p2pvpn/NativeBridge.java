@@ -49,7 +49,8 @@ final class NativeBridge {
             String operationId,
             String pairingCode,
             String hostname,
-            String existingNetworkNamesJson);
+            String existingNetworkNamesJson,
+            String candidateHintsJson);
 
     static native String nativeCancelProfileJoin(String operationId);
 }
