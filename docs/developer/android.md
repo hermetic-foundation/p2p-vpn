@@ -348,11 +348,18 @@ model, then `android-device`. It emits one lowercase DNS label of at most 63 byt
 
 Existing profiles are inspected without rewriting their signed hostname.
 
+The detail screen may explicitly rename an existing profile. JNI rewrites only
+`network.dns.hostname` and verifies that Peer ID, addresses, and routes match.
+
+The daemon then signs a monotonic hostname record with the existing identity.
+Enabled profiles reconnect so the new record propagates without deleting state.
+
 Protocol network names are immutable in the UI. Renaming changes the overlay
 and DNS namespace, so users create and pair a replacement network.
 
 The profile stores `network.dns.hostname` while leaving the Android DNS
-listener disabled. Pairing authenticates that label independently of serving DNS.
+listener disabled. Pairing establishes the initial label; later labels are
+self-signed by the unchanged member identity.
 
 ### Desired and Observed State
 

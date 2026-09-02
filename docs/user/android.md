@@ -169,11 +169,17 @@ Device-derived naming applies when a network is created or joined.
 | Profile | Hostname behavior |
 | --- | --- |
 | New network | Uses the current device-derived label. |
-| Existing network | Keeps its previously signed hostname. |
+| Existing network | Keeps its hostname until the user changes it. |
 
 An existing `android-<identifier>` hostname means the profile predates
-device-derived naming. Replace and pair that network again to assign a new
-signed hostname; updating the app does not rewrite membership identity.
+device-derived naming. Open the network details, edit **Hostname**, and select
+**Save hostname**. Updating the app alone does not rename existing profiles.
+
+Renaming preserves the network identity, Peer ID, overlay addresses, routes,
+and membership. If enabled, the network reconnects and publishes the new name.
+
+After convergence, Linux members resolve the new FQDN. The old FQDN no longer
+resolves, while the stable peer-ID fallback remains available.
 
 ## Enable or Disable
 
@@ -207,7 +213,7 @@ The switch shows desired state. The text status shows observed connectivity.
 
 | Area | Contents |
 | --- | --- |
-| Identity | Hostname, overlay IPv4/IPv6 addresses, and peer ID. |
+| Identity | Editable hostname, overlay IPv4/IPv6 addresses, and peer ID. |
 | Pair | Create and copy a code; review and approve incoming requests. |
 | Peers | Hostnames, addresses, connection state, selected path, and provenance. |
 | Removal | Confirmed deletion of identity, membership, and runtime state. |
@@ -222,7 +228,7 @@ Open the network details, select **Remove network**, and confirm the warning.
 Removing the final network returns the app to the empty **Networks** screen.
 This operation permanently deletes that network's private identity.
 
-### Rename
+### Rename Network
 
 Protocol network names cannot be renamed in place.
 

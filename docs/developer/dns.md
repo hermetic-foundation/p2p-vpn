@@ -7,7 +7,7 @@ User commands and configuration live in [Overlay DNS](../user/dns.md).
 ## Components
 
 ```text
-signed membership + static config
+signed membership + peer-signed hostname records + static config
   -> effective membership graph
   -> immutable DnsZone snapshot
   -> watch-channel publication
@@ -19,7 +19,8 @@ signed membership + static config
 | --- | --- | --- |
 | Naming model | `src/dns.rs` | Canonical labels, records, conflicts, PTR map |
 | DNS runtime | `src/runtime/dns.rs` | UDP/TCP protocol, limits, metrics, refresh |
-| Membership | `src/membership.rs` | Signed hostname claims and effective authority |
+| Membership | `src/membership.rs` | Effective peer and route authority |
+| Hostname records | `src/hostname.rs` | Member-signed mutable names and merge rules |
 | Pairing | `src/pairing.rs` | Authenticated requested and assigned hostnames |
 | Daemon integration | `src/runtime/runner.rs` | Lifecycle, refresh, control-socket views |
 | NixOS integration | `nix/nixos-module.nix` | Split DNS registration and cleanup |
@@ -46,12 +47,39 @@ Both labels use one ASCII DNS label and reject leading or trailing hyphens.
 | --- | --- |
 | Local `dns.hostname` | Local configuration |
 | Static `peers[].name` | Local static authorization |
-| Membership `hostname` | Signature and delegated trust graph |
+| Hostname record | Self-signature from an effective member |
+| Membership `hostname` | Initial and legacy delegated name |
 | Peer-ID fallback | Derived from each effective member identity |
 
 Multiple sources for the same peer and label collapse into one record set.
 
 Multiple peers for one label create a conflict and no forward record.
+
+A hostname record overrides static and membership names for the same Peer ID.
+It has no effect unless that Peer ID is already an effective member.
+
+## Mutable Hostname Records
+
+The payload binds these fields under a versioned signature domain:
+
+| Field | Purpose |
+| --- | --- |
+| `network_name` | Prevents use in another overlay. |
+| `peer`, `public_key` | Binds the name to one libp2p identity. |
+| `sequence` | Selects the latest record for that peer. |
+| `hostname` | Carries one canonical DNS label. |
+| `issued_at_unix_seconds` | Supports diagnosis without deciding precedence. |
+
+The member signs its own record with its existing libp2p identity.
+
+Merge behavior is monotonic. A higher sequence replaces the prior record;
+equal-sequence unequal records fail closed as equivocation.
+
+Records are bounded to 2 KiB each and 256 per network. Capabilities and the
+network-scoped Kademlia bundle carry bounded subsets with the local record first.
+
+The daemon reconciles `dns.hostname` at startup. A changed value issues sequence
+`n + 1`; an unchanged value preserves the existing record and sequence.
 
 ## Membership Extension
 
@@ -217,11 +245,13 @@ All setup and cleanup operations serialize through one runtime lock.
 | NixOS native mode | `dns.enable` defaults false |
 | Membership records | Missing `hostname` remains valid |
 | Persisted membership | Existing format version remains readable |
+| Control capabilities | Missing `hostname_records` decodes as empty |
+| Kademlia bundle | Missing `hostname_records` decodes as empty |
 | Pairing requests | Missing `requested_hostname` remains valid |
 | Native and JSON modes | Remain separate complete modes |
 
-No public protocol version changed because every added serialized field is
-optional and covered by compatibility tests.
+No existing wire version changed. New serialized fields are additive, optional,
+and covered by compatibility tests.
 
 ## Verification
 

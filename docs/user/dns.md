@@ -1,6 +1,6 @@
 # Overlay DNS
 
-Overlay DNS maps authenticated members to stable private names.
+Overlay DNS maps authenticated members to private names.
 
 It is opt-in and does not replace public DNS.
 
@@ -58,8 +58,11 @@ sudo nixos-rebuild switch
 
 Pair the node once with an authorized member.
 
-The pairing request includes its configured DNS hostname. Approval signs that
-claim unless `pair approve --hostname` supplies another label.
+The pairing request includes its configured DNS hostname. Approval establishes
+the initial name unless `pair approve --hostname` supplies another label.
+
+After pairing, each member signs its own hostname updates. A hostname change
+does not change its Peer ID, overlay addresses, or membership grants.
 
 ## Minimal JSON Setup
 
@@ -136,6 +139,40 @@ Host and network labels must meet all rules:
 
 Each DNS-enabled instance must use a unique `networkName` on one NixOS host.
 
+## Rename a Host
+
+### NixOS
+
+Set the desired hostname on the existing instance:
+
+```nix
+{
+  services.p2p-vpn.instances.monarchic-runners.dns.hostname =
+    "runner-west";
+}
+```
+
+Apply the configuration:
+
+```sh
+sudo nixos-rebuild switch
+```
+
+The restarted daemon signs and distributes the new name with its existing
+private key. Do not regenerate the key or pair the host again.
+
+### JSON
+
+Change only `network.dns.hostname` in the existing configuration, then restart
+the daemon. Keep `network.private_key` and the state directory unchanged.
+
+### Android
+
+Open the network details, edit **Hostname**, and select **Save hostname**.
+
+The new FQDN appears after convergence. The previous friendly FQDN disappears;
+the Peer ID, overlay addresses, and peer-ID fallback name stay unchanged.
+
 ## Inspect DNS
 
 ### Status
@@ -198,8 +235,8 @@ The daemon handles this deterministically:
 | `dns list` | `dns_conflict` entry |
 | Peer fallback | Both unique fallback names remain available |
 
-Resolve a conflict by issuing a newer signed claim through pairing or membership
-record management.
+Resolve a conflict by changing one member's configured hostname. Its daemon
+issues and distributes a newer self-signed hostname record.
 
 ## Revocation and Expiry
 
@@ -207,8 +244,8 @@ DNS follows effective membership state.
 
 | Event | DNS Result |
 | --- | --- |
-| New signed hostname | Appears after membership convergence |
-| Signed rename | Replaces the old friendly name |
+| New signed hostname | Appears after hostname-record convergence |
+| Signed rename | Replaces the old friendly name; Peer ID stays unchanged |
 | Last effective grant expires | Friendly, fallback, address, and PTR records disappear |
 | Last effective grant is revoked | The revoked member's records disappear |
 | Daemon restart | Persisted valid claims restore before peer reconnection |
@@ -224,9 +261,10 @@ Records use a short TTL so clients stop using stale answers quickly.
 | Recursion | Never performed |
 | Unrelated forward query | Refused |
 | Unrelated reverse query | Refused |
-| DNSSEC | Not used; signed membership authenticates records before they are served |
+| DNSSEC | Not used; membership and peer-signed hostname records authenticate answers |
 | Public bootstrap peer | Never receives an overlay record by discovery alone |
-| Signed claim | Validated through the membership trust graph |
+| Membership | Determines whether a peer may receive any DNS records |
+| Hostname record | Names only its signing Peer ID; grants no membership or routes |
 | Private suffix guard | Prevents unmatched `p2p-vpn.internal` queries from leaking |
 
 The responder supports bounded UDP and TCP DNS.
@@ -261,7 +299,7 @@ Existing JSON, native Nix, and signed membership records remain valid.
 | NixOS native mode | Set `dns.enable = true` on every member |
 | NixOS JSON mode | Enable DNS in JSON; keep `resolvedIntegration = true` |
 | Standalone JSON | Enable DNS and configure the host resolver separately |
-| Old signed grants | Re-pair for friendly names, or use fallback names |
+| Old signed grants | Existing membership hostname remains valid until superseded |
 | Static peers | Add `peers.<id>.name` or re-pair |
 
 Changing `networkName` changes the DNS zone and invalidates network-bound signed

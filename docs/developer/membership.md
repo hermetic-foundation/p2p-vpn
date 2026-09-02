@@ -235,10 +235,11 @@ Building it from already-restored membership would skip required route commands.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "network_name": "lab",
   "local_peer": "12D3KooW...",
-  "records": []
+  "records": [],
+  "hostname_records": []
 }
 ```
 
@@ -249,11 +250,15 @@ Building it from already-restored membership would skip required route commands.
 | Size | Bounded from record limits plus a 64 KiB envelope allowance. |
 | Scope | Network name and local peer must match. |
 | Records | Full history validates before return. |
+| Hostnames | Latest peer-signed mutable name per identity validates before return. |
 | Replacement | Owner-only temporary file, fsync, atomic rename. |
 | Directory durability | Parent directory is synced after rename. |
 | Unknown version | Startup fails closed. |
 
-The persistence revision changes only when retained membership history changes.
+Version 1 remains readable and loads with no mutable hostname records.
+
+The persistence revision changes when retained membership or hostname records
+change.
 
 Runtime saves are skipped while that revision remains unchanged.
 
