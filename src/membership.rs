@@ -14,6 +14,7 @@ pub const MEMBERSHIP_RECORD_VERSION: u8 = 1;
 pub const MAX_MEMBERSHIP_RECORD_INTEGER: u64 = i64::MAX as u64;
 pub const MAX_MEMBERSHIP_RECORDS: usize = 256;
 pub const MAX_MEMBERSHIP_RECORD_ENCODED_LEN: usize = 12 * 1024;
+pub const MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS: u64 = 60;
 
 const SIGNING_DOMAIN: &[u8] = b"p2p-vpn membership record v1\n";
 
@@ -281,6 +282,7 @@ pub fn merge_membership_records_at(
             stats.ignored_stale_or_equal += 1;
             continue;
         }
+        validate_payload_issue_time(&incoming_record.payload, now_unix_seconds)?;
         if merged.len() >= max_records {
             return Err(MembershipRecordError::TooManyRecords {
                 max: max_records,
@@ -299,7 +301,10 @@ pub fn merge_membership_records_at(
         });
     }
 
-    let evaluation = evaluate_membership_ledger_at(&merged, trusted_issuers, now_unix_seconds)?;
+    // Authorize bounded clock lead during ingestion; effective state still uses each caller's time.
+    let authorization_horizon = now_unix_seconds.saturating_add(MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS);
+    let evaluation =
+        evaluate_membership_ledger_at(&merged, trusted_issuers, authorization_horizon)?;
     for index in added_incoming {
         let record = &merged[index];
         if !evaluation.accepted.contains(&index) {
@@ -1016,11 +1021,27 @@ fn validate_payload_time(
     payload: &MembershipRecordPayload,
     now_unix_seconds: u64,
 ) -> Result<(), MembershipRecordError> {
+    validate_payload_issue_time(payload, now_unix_seconds)?;
     if let Some(expires_at) = payload.expires_at_unix_seconds
         && now_unix_seconds >= expires_at
     {
         return Err(MembershipRecordError::Expired {
             expired_at: expires_at,
+            now: now_unix_seconds,
+        });
+    }
+    Ok(())
+}
+
+fn validate_payload_issue_time(
+    payload: &MembershipRecordPayload,
+    now_unix_seconds: u64,
+) -> Result<(), MembershipRecordError> {
+    if payload.issued_at_unix_seconds
+        > now_unix_seconds.saturating_add(MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS)
+    {
+        return Err(MembershipRecordError::IssuedInFuture {
+            issued_at: payload.issued_at_unix_seconds,
             now: now_unix_seconds,
         });
     }
@@ -1122,6 +1143,10 @@ pub enum MembershipRecordError {
     },
     Expired {
         expired_at: u64,
+        now: u64,
+    },
+    IssuedInFuture {
+        issued_at: u64,
         now: u64,
     },
     ExpiredBeforeIssued,
@@ -2735,6 +2760,124 @@ mod tests {
                 8,
             ),
             Err(MembershipRecordError::UntrustedIssuer { .. })
+        ));
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn merge_membership_records_retains_near_future_grant_without_applying_it_early() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_libp2p(member.peer_id.parse().expect("member peer"));
+        let root = overlay_record(&issuer, &issuer, 1, 900, None);
+        let future_grant = overlay_record(
+            &issuer,
+            &member,
+            1,
+            1_000 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS,
+            None,
+        );
+        let mut records = vec![root];
+        let mut trusted_issuers = TrustedMembershipIssuers::default();
+        trusted_issuers.insert(issuer.peer_id.clone());
+
+        let stats = merge_membership_records_at(
+            &mut records,
+            &[future_grant],
+            "lab",
+            1_000,
+            &trusted_issuers,
+            8,
+        )
+        .expect("near-future record is retained");
+
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(records.len(), 2);
+        let before =
+            effective_membership_at(&records, "lab", 999 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS)
+                .expect("membership before grant");
+        assert!(!before.members.contains_key(&member_peer));
+        let at_issue =
+            effective_membership_at(&records, "lab", 1_000 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS)
+                .expect("membership at grant");
+        assert!(at_issue.members.contains_key(&member_peer));
+    }
+
+    #[test]
+    fn merge_membership_records_retains_near_future_revocation_without_applying_it_early() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_libp2p(member.peer_id.parse().expect("member peer"));
+        let root = overlay_record(&issuer, &issuer, 1, 900, None);
+        let grant = overlay_record(&issuer, &member, 1, 900, None);
+        let future_revocation = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_000 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS,
+        )
+        .expect("future revocation");
+        let mut records = vec![root, grant];
+        let mut trusted_issuers = TrustedMembershipIssuers::default();
+        trusted_issuers.insert(issuer.peer_id.clone());
+
+        let stats = merge_membership_records_at(
+            &mut records,
+            &[future_revocation],
+            "lab",
+            1_000,
+            &trusted_issuers,
+            8,
+        )
+        .expect("near-future revocation is retained");
+
+        assert_eq!(stats.accepted, 1);
+        let before =
+            effective_membership_at(&records, "lab", 1_000).expect("membership before revocation");
+        assert!(before.members.contains_key(&member_peer));
+        let at_issue =
+            effective_membership_at(&records, "lab", 1_000 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS)
+                .expect("membership at revocation");
+        assert!(!at_issue.members.contains_key(&member_peer));
+    }
+
+    #[test]
+    fn merge_membership_records_rejects_record_beyond_clock_skew_bound() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root = overlay_record(&issuer, &issuer, 1, 900, None);
+        let future_grant = overlay_record(
+            &issuer,
+            &member,
+            1,
+            1_001 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS,
+            None,
+        );
+        let mut records = vec![root];
+        let mut trusted_issuers = TrustedMembershipIssuers::default();
+        trusted_issuers.insert(issuer.peer_id);
+
+        assert!(matches!(
+            merge_membership_records_at(
+                &mut records,
+                &[future_grant],
+                "lab",
+                1_000,
+                &trusted_issuers,
+                8,
+            ),
+            Err(MembershipRecordError::IssuedInFuture {
+                issued_at,
+                now: 1_000,
+            }) if issued_at == 1_001 + MAX_MEMBERSHIP_CLOCK_SKEW_SECONDS
         ));
         assert_eq!(records.len(), 1);
     }

@@ -279,7 +279,7 @@ impl Forwarder {
         let effective_changed = routes != self.routes
             || peers != self.peers
             || authorized_peers != self.authorized_peers;
-        if records_changed {
+        if records_changed || effective_changed {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
         self.membership_effective_refresh_pending |= effective_changed;
@@ -1339,6 +1339,66 @@ mod tests {
         assert!(
             forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
+        );
+    }
+
+    #[test]
+    fn membership_refresh_activates_retained_future_record_and_advances_revision() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = member.peer_id.parse::<Libp2pPeerId>().expect("member peer");
+        let mut config = config_for(member_peer);
+        config.peers.clear();
+        config.network.local_peer = issuer.peer_id.clone();
+        config.network.private_key = Some(issuer.private_key.clone());
+        let root = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: issuer.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("root record");
+        let future_grant = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("future grant");
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+
+        forwarder
+            .merge_membership_records(&[root], 1_000)
+            .expect("root merge");
+        forwarder
+            .merge_membership_records(&[future_grant], 1_000)
+            .expect("future grant merge");
+        let retained_revision = forwarder.membership_revision();
+        assert!(!forwarder.is_configured_transport_peer(member_peer));
+
+        let (_, effective_changed) = forwarder
+            .refresh_membership_records(1_001)
+            .expect("membership refresh");
+
+        assert!(effective_changed);
+        assert!(forwarder.is_configured_transport_peer(member_peer));
+        assert_eq!(
+            forwarder.membership_revision(),
+            retained_revision.wrapping_add(1)
         );
     }
 
