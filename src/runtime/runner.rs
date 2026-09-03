@@ -21837,7 +21837,16 @@ mod tests {
             Some(Vec::new()),
         )
         .expect("pairing response");
-        assert_eq!(response.payload.member_records.len(), 3);
+        assert_eq!(response.payload.member_records.len(), 2);
+        assert_eq!(
+            response
+                .payload
+                .member_records
+                .iter()
+                .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+                .count(),
+            1
+        );
 
         let mut live_config = config.clone();
         live_config.network.member_records = forwarder.member_records().to_vec();
@@ -21862,7 +21871,15 @@ mod tests {
         )
         .expect("runtime commit");
 
-        assert_eq!(forwarder.member_records().len(), existing_count + 3);
+        assert_eq!(forwarder.member_records().len(), existing_count + 2);
+        assert_eq!(
+            forwarder
+                .member_records()
+                .iter()
+                .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+                .count(),
+            1
+        );
         for (member, _) in existing_members {
             assert!(
                 forwarder
