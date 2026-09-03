@@ -15538,7 +15538,13 @@ fn pairing_response_membership_snapshot(
         .is_some_and(|path| path.len() == 1 && path[0].payload.issuer_peer == inviter_peer);
 
     let mut minimal = membership_proof.unwrap_or_else(|| vec![inviter_record.clone()]);
-    if inviter_is_root {
+    let unchanged_inviter_root = inviter_is_root
+        && minimal.iter().any(|record| {
+            record.payload.issuer_peer == inviter_peer
+                && record.payload.member_peer == inviter_peer
+                && membership_grant_matches(&record.payload, &inviter_record.payload)
+        });
+    if inviter_is_root && !unchanged_inviter_root {
         upsert_pairing_snapshot_record(&mut minimal, &inviter_record)?;
     }
     upsert_pairing_snapshot_record(&mut minimal, &joiner_record)?;
@@ -15549,6 +15555,22 @@ fn pairing_response_membership_snapshot(
         });
     }
     Ok(minimal)
+}
+
+fn membership_grant_matches(
+    left: &crate::membership::MembershipRecordPayload,
+    right: &crate::membership::MembershipRecordPayload,
+) -> bool {
+    left.network_name == right.network_name
+        && left.member_peer == right.member_peer
+        && left.member_public_key == right.member_public_key
+        && left.issuer_peer == right.issuer_peer
+        && left.issuer_public_key == right.issuer_public_key
+        && left.revoked == right.revoked
+        && left.hostname == right.hostname
+        && left.roles == right.roles
+        && left.route_grants == right.route_grants
+        && left.expires_at_unix_seconds == right.expires_at_unix_seconds
 }
 
 fn upsert_pairing_snapshot_record(
@@ -22229,6 +22251,95 @@ mod tests {
                 .hostname
                 .as_deref(),
             Some("approved-host")
+        );
+    }
+
+    #[test]
+    fn code_pairing_response_reuses_an_unchanged_root_record() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let first_joiner = NodeIdentity::generate_ed25519().expect("first joiner identity");
+        let second_joiner = NodeIdentity::generate_ed25519().expect("second joiner identity");
+        let mut config = config_with_peer(
+            &inviter,
+            first_joiner.peer_id.parse().expect("first joiner peer"),
+        );
+        config.network.dns.hostname = Some("inviter-host".to_owned());
+
+        let first_offer =
+            export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+                .expect("first offer");
+        let first_request = build_pairing_request_at(
+            &first_offer,
+            PairingRequestOptions {
+                identity: first_joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("first request");
+        let first_response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            first_joiner.peer_id.parse().expect("first joiner peer"),
+            &first_request,
+            1_002,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("first response");
+        let root_record = first_response
+            .payload
+            .member_records
+            .iter()
+            .find(|record| record.payload.issuer_peer == record.payload.member_peer)
+            .expect("root record")
+            .clone();
+        config.network.member_records = first_response.payload.member_records;
+
+        let second_offer =
+            export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_100)
+                .expect("second offer");
+        let second_request = build_pairing_request_at(
+            &second_offer,
+            PairingRequestOptions {
+                identity: second_joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_101,
+        )
+        .expect("second request");
+        let second_response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            second_joiner.peer_id.parse().expect("second joiner peer"),
+            &second_request,
+            1_102,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("second response");
+
+        assert_eq!(second_response.payload.member_records.len(), 2);
+        assert!(
+            second_response
+                .payload
+                .member_records
+                .contains(&root_record)
+        );
+        assert_eq!(
+            second_response
+                .payload
+                .member_records
+                .iter()
+                .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+                .count(),
+            1
         );
     }
 
