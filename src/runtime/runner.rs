@@ -170,6 +170,7 @@ const PATH_PROBE_TOKEN_LEN: usize = 8;
 const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 const PATH_PROBE_RTT_TTL: Duration = Duration::from_mins(2);
 const MAX_PENDING_PATH_PROBES: usize = 4096;
+const PACKET_STREAM_IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
 const PACKET_PLANE_PENDING_HELLO_TIMEOUT: Duration = Duration::from_secs(25);
 const PAIRING_RESPONSE_EXPIRES_IN_SECONDS: u64 = 600;
 const PACKET_PLANE_QUIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1906,6 +1907,7 @@ where
             _ = timers.code_pairing.tick() => {
                 let now_unix_seconds = current_unix_seconds_lossy();
                 let now = Instant::now();
+                refresh_pairing_lan_candidates(&node.swarm, &mut code_pairing_sessions, now);
                 let actions = code_pairing_sessions.expire(now_unix_seconds, now);
                 pairing_replay_tokens.replace_code_approval(
                     code_pairing_sessions
@@ -2884,6 +2886,30 @@ fn drive_code_pairing_discovery(
         metrics.record_kademlia_provider_lookup();
         metrics.record_code_pairing_public_lookup();
     }
+}
+
+fn refresh_pairing_lan_candidates(
+    swarm: &Swarm<Behaviour>,
+    sessions: &mut CodePairingSessions,
+    now: Instant,
+) {
+    let peers = swarm
+        .behaviour()
+        .mdns
+        .as_ref()
+        .into_iter()
+        .flat_map(mdns::tokio::Behaviour::discovered_nodes)
+        .chain(
+            swarm
+                .behaviour()
+                .pairing_mdns
+                .as_ref()
+                .into_iter()
+                .flat_map(mdns::tokio::Behaviour::discovered_nodes),
+        )
+        .copied()
+        .collect::<HashSet<_>>();
+    sessions.refresh_lan_candidates(peers, now);
 }
 
 fn drive_open_pairing_provider_v2(
@@ -9400,6 +9426,16 @@ async fn drain_outbound_queue(
     queues: &mut PeerQueues,
     context: &mut QueueDrainContext<'_>,
 ) {
+    let expired_in_flight = context
+        .packet_in_flight
+        .expire(Instant::now(), PACKET_STREAM_IN_FLIGHT_TIMEOUT);
+    if expired_in_flight > 0 {
+        log_runtime_event(
+            LogLevel::Warn,
+            "packet_stream_in_flight_expired",
+            &[("requests", &expired_in_flight.to_string())],
+        );
+    }
     expire_outbound_queue(queues, context.metrics);
     while let Some(packet) = queues.dequeue_ready_packet(|peer, packet| {
         let decision = packet_transport_decision(
@@ -9990,6 +10026,21 @@ impl PacketInFlight {
             }
         }
         Some(request)
+    }
+
+    fn expire(&mut self, now: Instant, timeout: Duration) -> usize {
+        let expired = self
+            .requests
+            .iter()
+            .filter_map(|(request_id, request)| {
+                (now.saturating_duration_since(request.sent_at) > timeout).then_some(*request_id)
+            })
+            .collect::<Vec<_>>();
+        let count = expired.len();
+        for request_id in expired {
+            self.complete(request_id);
+        }
+        count
     }
 
     fn clear(&mut self) -> usize {
@@ -16178,20 +16229,39 @@ fn prune_expired_membership_records(
 }
 
 pub(crate) fn advertised_member_records(forwarder: &Forwarder) -> Vec<SignedMembershipRecord> {
-    let mut records = forwarder
-        .config()
-        .local_peer()
-        .ok()
+    let local_peer = forwarder.config().local_peer().ok();
+    let mut records = local_peer
+        .as_deref()
         .and_then(|local_peer| {
             overlay_membership_trust_path_at(
                 forwarder.member_records(),
-                &local_peer,
+                local_peer,
                 current_unix_seconds_lossy(),
             )
             .ok()
             .flatten()
         })
         .unwrap_or_default();
+    if let Some(local_peer) = local_peer.as_deref()
+        && let Some(latest_self_record) = forwarder
+            .member_records()
+            .iter()
+            .filter(|record| {
+                record.payload.issuer_peer == local_peer && record.payload.member_peer == local_peer
+            })
+            .max_by_key(|record| {
+                (
+                    record.payload.membership_epoch,
+                    record.payload.sequence,
+                    record.payload.issued_at_unix_seconds,
+                    record.payload.revoked,
+                    record.signature.as_str(),
+                )
+            })
+    {
+        records.retain(|record| record != latest_self_record);
+        records.insert(0, latest_self_record.clone());
+    }
     records.truncate(MAX_CONTROL_MEMBERSHIP_RECORDS);
     for record in forwarder.member_records() {
         if records.len() >= MAX_CONTROL_MEMBERSHIP_RECORDS {
@@ -22871,6 +22941,120 @@ mod tests {
                 && record.payload.member_peer == remote.peer_id
                 && record.payload.revoked
         }));
+    }
+
+    #[test]
+    fn advertised_records_prioritize_resignation_beyond_inline_limit() {
+        let creator = NodeIdentity::generate_ed25519().expect("creator identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let now = current_unix_seconds_lossy().max(30);
+        let root = issue_membership_record_at(
+            &creator,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: creator.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now - 20,
+        )
+        .expect("root record");
+        let grant = issue_membership_record_at(
+            &creator,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: remote.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now - 19,
+        )
+        .expect("remote grant");
+        let mut baseline = vec![root, grant];
+        for offset in 0..MAX_CONTROL_MEMBERSHIP_RECORDS {
+            let filler = NodeIdentity::generate_ed25519().expect("filler identity");
+            baseline.push(
+                issue_membership_record_at(
+                    &creator,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member: filler,
+                        membership_epoch: 1,
+                        sequence: 1,
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: None,
+                    },
+                    now - 18 + u64::try_from(offset).expect("bounded offset"),
+                )
+                .expect("filler grant"),
+            );
+        }
+        let resignation = issue_membership_record_for_subject_at(
+            &remote,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&remote).expect("remote subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now,
+        )
+        .expect("remote resignation");
+
+        let mut sender_config =
+            config_with_peer(&remote, creator.peer_id.parse().expect("creator"));
+        sender_config.peers.clear();
+        sender_config.network.member_records = baseline.clone();
+        sender_config
+            .network
+            .member_records
+            .push(resignation.clone());
+        let sender = Forwarder::from_config(&sender_config).expect("sender forwarder");
+        let advertised = advertised_member_records(&sender);
+        assert_eq!(advertised.len(), MAX_CONTROL_MEMBERSHIP_RECORDS);
+        assert_eq!(advertised.first(), Some(&resignation));
+
+        let mut receiver_config = config_with_peer(&creator, remote_peer);
+        receiver_config.peers.clear();
+        receiver_config.network.member_records = baseline;
+        let mut receiver = Forwarder::from_config(&receiver_config).expect("receiver forwarder");
+        let mut membership = OverlayMembership::from_config(&receiver_config).expect("membership");
+        let remote_capabilities =
+            ControlCapabilities::local("lab", None, 1_280).with_member_records(advertised);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1_280);
+
+        let (response, membership_changed) =
+            capability_response_for_peer_with_membership_records_result(
+                &mut receiver,
+                &mut membership,
+                remote_peer,
+                &remote_capabilities,
+                &local_capabilities,
+                &[],
+            );
+
+        assert!(membership_changed);
+        assert_eq!(
+            response,
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
+        );
+        assert_eq!(
+            receiver.member_record_count(),
+            MAX_CONTROL_MEMBERSHIP_RECORDS + 3
+        );
+        assert!(!membership.allows(remote_peer));
     }
 
     #[test]
@@ -33345,7 +33529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_outbound_queue_respects_packet_in_flight_window() {
+    async fn drain_outbound_queue_expires_stale_packet_in_flight_window() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let remote = peer_id();
         let remote_overlay = PeerId::from_libp2p(remote);
@@ -33450,6 +33634,20 @@ mod tests {
         assert_eq!(snapshot.outbound_queue_blocked_no_supported_path_events, 0);
         assert_eq!(snapshot.outbound_queue_blocked_packet_window_events, 1);
         assert_eq!(snapshot.queue.queued_packets, 1);
+        assert_eq!(context.packet_in_flight.in_flight_for(remote_overlay), 1);
+
+        for request in context.packet_in_flight.requests.values_mut() {
+            request.sent_at = request
+                .sent_at
+                .checked_sub(PACKET_STREAM_IN_FLIGHT_TIMEOUT + Duration::from_secs(1))
+                .expect("test instant can move backward");
+        }
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 2);
+        assert_eq!(snapshot.outbound_stream_fallback_packets, 2);
+        assert_eq!(snapshot.queue.queued_packets, 0);
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 1);
     }
 

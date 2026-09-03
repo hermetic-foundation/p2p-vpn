@@ -1708,6 +1708,18 @@ impl CodePairingSessions {
         }
     }
 
+    pub fn refresh_lan_candidates(
+        &mut self,
+        peers: impl IntoIterator<Item = Libp2pPeerId>,
+        now: Instant,
+    ) {
+        for peer in peers {
+            if let Some(candidate) = self.lan_candidates.get_mut(&peer) {
+                candidate.last_seen = now;
+            }
+        }
+    }
+
     #[must_use]
     pub fn pending_lan_peers(&self, local_peer: Libp2pPeerId, now: Instant) -> Vec<Libp2pPeerId> {
         let Some(join) = self.active_join() else {
@@ -4692,6 +4704,26 @@ mod tests {
             now + CODE_PAIRING_LAN_CANDIDATE_TTL + Duration::from_secs(2),
         );
         assert!(sessions.lan_candidates.is_empty());
+    }
+
+    #[test]
+    fn live_mdns_candidates_refresh_before_pairing_cache_expiry() {
+        let mut sessions = CodePairingSessions::new();
+        let now = Instant::now();
+        let candidate = peer(1);
+        sessions.record_lan_candidate(
+            candidate,
+            "/ip4/127.0.0.1/tcp/4001"
+                .parse()
+                .expect("candidate address"),
+            now,
+        );
+        let refreshed_at = now + CODE_PAIRING_LAN_CANDIDATE_TTL + Duration::from_secs(1);
+        sessions.refresh_lan_candidates([candidate], refreshed_at);
+
+        sessions.expire(1_000, refreshed_at + Duration::from_secs(1));
+
+        assert_eq!(sessions.lan_addresses(candidate).len(), 1);
     }
 
     #[test]
