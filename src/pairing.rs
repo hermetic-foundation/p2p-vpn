@@ -740,8 +740,7 @@ fn validate_response_trust_root_against_existing_config(
         }
         return Ok(());
     }
-    let existing_roots =
-        latest_active_pairing_trust_roots(&base.network.member_records, now_unix_seconds);
+    let existing_roots = pairing_trust_roots(&base.network.member_records);
     if existing_roots.is_empty() {
         return Err(PairingError::MissingInviterTrustRoot);
     }
@@ -761,23 +760,12 @@ fn validate_response_trust_root_against_existing_config(
     })
 }
 
-fn latest_active_pairing_trust_roots(
-    records: &[SignedMembershipRecord],
-    now_unix_seconds: u64,
-) -> Vec<String> {
+fn pairing_trust_roots(records: &[SignedMembershipRecord]) -> Vec<String> {
     let mut roots = records
         .iter()
         .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
         .filter(|record| {
-            latest_membership_record_from(
-                records,
-                &record.payload.issuer_peer,
-                &record.payload.member_peer,
-            ) == Some(*record)
-        })
-        .filter(|record| {
-            !record.is_expired_at(now_unix_seconds)
-                && !record.payload.revoked
+            !record.payload.revoked
                 && record
                     .payload
                     .roles
@@ -843,26 +831,21 @@ fn upsert_pairing_membership_record(
     records: &mut Vec<SignedMembershipRecord>,
     incoming: &SignedMembershipRecord,
 ) -> Result<(), PairingError> {
-    let existing = records.iter().position(|record| {
+    if records.contains(incoming) {
+        return Ok(());
+    }
+    if records.iter().any(|record| {
         record.payload.issuer_peer == incoming.payload.issuer_peer
             && record.payload.member_peer == incoming.payload.member_peer
-    });
-    let Some(index) = existing else {
-        records.push(incoming.clone());
-        return Ok(());
-    };
-
-    let current = &records[index];
-    let current_version = (current.payload.membership_epoch, current.payload.sequence);
-    let incoming_version = (incoming.payload.membership_epoch, incoming.payload.sequence);
-    if incoming_version > current_version {
-        records[index] = incoming.clone();
-    } else if incoming_version == current_version && current != incoming {
+            && record.payload.membership_epoch == incoming.payload.membership_epoch
+            && record.payload.sequence == incoming.payload.sequence
+    }) {
         return Err(PairingError::ConflictingMembershipRecord {
             issuer: incoming.payload.issuer_peer.clone(),
             member: incoming.payload.member_peer.clone(),
         });
     }
+    records.push(incoming.clone());
     Ok(())
 }
 

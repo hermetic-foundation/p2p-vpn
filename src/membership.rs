@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use libp2p::{PeerId as Libp2pPeerId, identity::PublicKey};
@@ -248,12 +251,13 @@ pub fn merge_membership_records_at(
 ) -> Result<MembershipRecordMergeStats, MembershipRecordError> {
     let mut stats = MembershipRecordMergeStats::default();
     let mut merged = Vec::with_capacity(records.len().saturating_add(incoming.len()));
+    let mut added_incoming = Vec::new();
     for record in records.iter() {
         ensure_record_network(record, network_name)?;
         record.verify()?;
         merged.push(record.clone());
     }
-    merged = canonical_membership_records(&merged)?;
+    validate_membership_record_versions(&merged)?;
 
     for record in incoming {
         ensure_record_network(record, network_name)?;
@@ -261,35 +265,31 @@ pub fn merge_membership_records_at(
     }
 
     for incoming_record in incoming {
-        let existing_index = merged.iter().position(|record| {
+        if merged.contains(incoming_record) {
+            stats.ignored_stale_or_equal += 1;
+            continue;
+        }
+        if let Some(existing) = merged.iter().find(|record| {
             record.payload.issuer_peer == incoming_record.payload.issuer_peer
                 && record.payload.member_peer == incoming_record.payload.member_peer
-        });
-        if let Some(index) = existing_index {
-            let existing = &merged[index];
-            let incoming_version = (
-                incoming_record.payload.membership_epoch,
-                incoming_record.payload.sequence,
-            );
-            let existing_version = (existing.payload.membership_epoch, existing.payload.sequence);
-            if incoming_version > existing_version {
-                merged[index] = incoming_record.clone();
-                stats.accepted += 1;
-            } else if incoming_version == existing_version && incoming_record != existing {
+                && record.payload.membership_epoch == incoming_record.payload.membership_epoch
+                && record.payload.sequence == incoming_record.payload.sequence
+        }) {
+            if existing != incoming_record {
                 return Err(conflicting_record_version(incoming_record));
-            } else {
-                stats.ignored_stale_or_equal += 1;
             }
-        } else {
-            if merged.len() >= max_records {
-                return Err(MembershipRecordError::TooManyRecords {
-                    max: max_records,
-                    actual: merged.len() + 1,
-                });
-            }
-            merged.push(incoming_record.clone());
-            stats.accepted += 1;
+            stats.ignored_stale_or_equal += 1;
+            continue;
         }
+        if merged.len() >= max_records {
+            return Err(MembershipRecordError::TooManyRecords {
+                max: max_records,
+                actual: merged.len() + 1,
+            });
+        }
+        merged.push(incoming_record.clone());
+        added_incoming.push(merged.len() - 1);
+        stats.accepted += 1;
     }
 
     if merged.len() > max_records {
@@ -299,35 +299,15 @@ pub fn merge_membership_records_at(
         });
     }
 
-    let active_records = active_membership_records(&merged, now_unix_seconds);
-    let active_trusted_issuers =
-        active_trusted_membership_issuers(&merged, trusted_issuers, now_unix_seconds);
-    let authorized_issuers =
-        authorized_membership_issuers(&active_records, &active_trusted_issuers);
-    for record in incoming {
-        let self_transition = record.payload.issuer_peer == record.payload.member_peer;
-        if self_transition && !trusted_issuers.contains(&record.payload.issuer_peer) {
-            return Err(MembershipRecordError::UntrustedIssuer {
-                issuer: record.payload.issuer_peer.clone(),
-            });
-        }
-        let issuer_authorized = authorized_issuers.contains(&record.payload.issuer_peer)
-            || self_transition && trusted_issuers.contains(&record.payload.issuer_peer);
-        if !issuer_authorized {
+    let evaluation = evaluate_membership_ledger_at(&merged, trusted_issuers, now_unix_seconds)?;
+    for index in added_incoming {
+        let record = &merged[index];
+        if !evaluation.accepted.contains(&index) {
             return Err(MembershipRecordError::UntrustedIssuer {
                 issuer: record.payload.issuer_peer.clone(),
             });
         }
     }
-
-    let authorized_issuers =
-        authorized_membership_issuers(&active_records, &active_trusted_issuers);
-    let before_trust_filter = merged.len();
-    merged.retain(|record| {
-        authorized_issuers.contains(&record.payload.issuer_peer)
-            || record.payload.issuer_peer == record.payload.member_peer
-    });
-    stats.removed_untrusted = before_trust_filter - merged.len();
     *records = merged;
 
     Ok(stats)
@@ -371,31 +351,12 @@ pub fn trusted_membership_issuers_at(
     now_unix_seconds: u64,
 ) -> Result<TrustedMembershipIssuers, MembershipRecordError> {
     let anchors = membership_trust_anchors(records, network_name)?;
-    let latest_records = canonical_membership_records(records)?;
-    let has_explicit_root_record = latest_records
-        .iter()
-        .any(|record| record.payload.issuer_peer == record.payload.member_peer);
-    let active_records = latest_records
-        .iter()
-        .filter(|record| !record.is_expired_at(now_unix_seconds));
-
-    let mut issuers = HashSet::new();
-    if has_explicit_root_record {
-        issuers.extend(
-            active_records
-                .filter(|record| {
-                    let payload = &record.payload;
-                    payload.issuer_peer == payload.member_peer
-                        && anchors.contains(&payload.issuer_peer)
-                        && !payload.revoked
-                        && payload.roles.contains(&MembershipRole::OverlayMember)
-                })
-                .map(|record| record.payload.issuer_peer.clone()),
-        );
-    } else {
-        // Legacy configurations treated every explicitly configured issuer as a root.
-        issuers.extend(active_records.map(|record| record.payload.issuer_peer.clone()));
-    }
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    let issuers = anchors
+        .issuers
+        .into_iter()
+        .filter(|peer| evaluation.states.get(peer).is_none_or(|state| state.active))
+        .collect();
     Ok(TrustedMembershipIssuers { issuers })
 }
 
@@ -429,28 +390,27 @@ pub fn effective_membership_at(
     now_unix_seconds: u64,
 ) -> Result<EffectiveMembership, MembershipRecordError> {
     validate_membership_record_history(records, network_name)?;
-    let latest_records = latest_membership_record_indices(records)?
-        .into_iter()
-        .map(|index| records[index].clone())
-        .filter(|record| !record.is_expired_at(now_unix_seconds))
-        .collect::<Vec<_>>();
-    let trusted_issuers = trusted_membership_issuers_at(records, network_name, now_unix_seconds)?;
-    let authorized_issuers = authorized_membership_issuers(&latest_records, &trusted_issuers);
+    let anchors = membership_trust_anchors(records, network_name)?;
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
 
     let mut members = HashMap::new();
-    for record in latest_records {
-        let payload = &record.payload;
-        if !authorized_issuers.contains(&payload.issuer_peer) {
+    for state in evaluation.states.values() {
+        if !state.active {
             continue;
         }
-        if payload.revoked {
-            continue;
-        }
-        let candidate = EffectiveMember::try_from_payload(payload)?;
-        members
-            .entry(candidate.peer)
-            .and_modify(|member: &mut EffectiveMember| member.merge_payload(payload))
-            .or_insert(candidate);
+        let payload = &records[state.record_index].payload;
+        let original_admission = evaluation
+            .first_admissions
+            .get(&payload.member_peer)
+            .map(|index| &records[*index].payload);
+        let current_admission = evaluation
+            .current_admissions
+            .get(&payload.member_peer)
+            .map(|index| &records[*index].payload)
+            .unwrap_or(payload);
+        let candidate =
+            EffectiveMember::try_from_payload(payload, current_admission, original_admission)?;
+        members.insert(candidate.peer, candidate);
     }
 
     Ok(EffectiveMembership { members })
@@ -506,129 +466,318 @@ fn canonical_membership_records(
         .collect())
 }
 
+fn validate_membership_record_versions(
+    records: &[SignedMembershipRecord],
+) -> Result<(), MembershipRecordError> {
+    latest_membership_record_indices(records).map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LedgerMemberState {
+    record_index: usize,
+    active: bool,
+}
+
+#[derive(Debug, Default)]
+struct MembershipLedgerEvaluation {
+    accepted: HashSet<usize>,
+    states: HashMap<String, LedgerMemberState>,
+    event_authorizers: HashMap<usize, Option<usize>>,
+    first_admissions: HashMap<String, usize>,
+    current_admissions: HashMap<String, usize>,
+}
+
+fn evaluate_membership_ledger_at(
+    records: &[SignedMembershipRecord],
+    trusted_roots: &TrustedMembershipIssuers,
+    now_unix_seconds: u64,
+) -> Result<MembershipLedgerEvaluation, MembershipRecordError> {
+    validate_membership_record_versions(records)?;
+    let mut ordered = (0..records.len())
+        .filter(|index| records[*index].payload.issued_at_unix_seconds <= now_unix_seconds)
+        .collect::<Vec<_>>();
+    ordered
+        .sort_unstable_by(|left, right| membership_event_order(&records[*left], &records[*right]));
+
+    let mut evaluation = MembershipLedgerEvaluation::default();
+    let mut cursor = 0;
+    while cursor < ordered.len() {
+        let issued_at = records[ordered[cursor]].payload.issued_at_unix_seconds;
+        expire_members_at(&mut evaluation.states, records, issued_at);
+        let end = ordered[cursor..]
+            .iter()
+            .position(|index| records[*index].payload.issued_at_unix_seconds != issued_at)
+            .map_or(ordered.len(), |offset| cursor + offset);
+        let group = &ordered[cursor..end];
+
+        let mut pending = group
+            .iter()
+            .copied()
+            .filter(|index| !records[*index].payload.revoked)
+            .collect::<Vec<_>>();
+        let mut made_progress = true;
+        while made_progress && !pending.is_empty() {
+            made_progress = false;
+            pending.retain(|index| {
+                let payload = &records[*index].payload;
+                if !issuer_is_active_or_genesis(payload, &evaluation.states, trusted_roots) {
+                    return true;
+                }
+                evaluation.accepted.insert(*index);
+                evaluation.event_authorizers.insert(
+                    *index,
+                    evaluation
+                        .states
+                        .get(&payload.issuer_peer)
+                        .map(|state| state.record_index),
+                );
+                let was_active = evaluation
+                    .states
+                    .get(&payload.member_peer)
+                    .is_some_and(|state| state.active);
+                if apply_membership_event(&mut evaluation.states, records, *index)
+                    && records[*index]
+                        .payload
+                        .roles
+                        .contains(&MembershipRole::OverlayMember)
+                {
+                    evaluation
+                        .first_admissions
+                        .entry(payload.member_peer.clone())
+                        .or_insert(*index);
+                    if !was_active {
+                        evaluation
+                            .current_admissions
+                            .insert(payload.member_peer.clone(), *index);
+                    }
+                }
+                made_progress = true;
+                false
+            });
+        }
+
+        let authorized_revocations = group
+            .iter()
+            .copied()
+            .filter(|index| records[*index].payload.revoked)
+            .filter(|index| {
+                let payload = &records[*index].payload;
+                issuer_is_active(payload, &evaluation.states, trusted_roots)
+                    && evaluation
+                        .states
+                        .get(&payload.member_peer)
+                        .is_some_and(|state| state.active)
+            })
+            .collect::<Vec<_>>();
+        for index in authorized_revocations {
+            evaluation.accepted.insert(index);
+            let payload = &records[index].payload;
+            evaluation.event_authorizers.insert(
+                index,
+                evaluation
+                    .states
+                    .get(&payload.issuer_peer)
+                    .map(|state| state.record_index),
+            );
+            apply_membership_event(&mut evaluation.states, records, index);
+        }
+        cursor = end;
+    }
+    expire_members_at(&mut evaluation.states, records, now_unix_seconds);
+    Ok(evaluation)
+}
+
+fn membership_event_order(
+    left: &SignedMembershipRecord,
+    right: &SignedMembershipRecord,
+) -> Ordering {
+    let left_payload = &left.payload;
+    let right_payload = &right.payload;
+    left_payload
+        .issued_at_unix_seconds
+        .cmp(&right_payload.issued_at_unix_seconds)
+        .then_with(|| left_payload.revoked.cmp(&right_payload.revoked))
+        .then_with(|| {
+            let left_delegated = left_payload.issuer_peer != left_payload.member_peer;
+            let right_delegated = right_payload.issuer_peer != right_payload.member_peer;
+            left_delegated.cmp(&right_delegated)
+        })
+        .then_with(|| {
+            membership_record_version(left_payload).cmp(&membership_record_version(right_payload))
+        })
+        .then_with(|| left_payload.issuer_peer.cmp(&right_payload.issuer_peer))
+        .then_with(|| left_payload.member_peer.cmp(&right_payload.member_peer))
+        .then_with(|| left.signature.cmp(&right.signature))
+}
+
+fn issuer_is_active_or_genesis(
+    payload: &MembershipRecordPayload,
+    states: &HashMap<String, LedgerMemberState>,
+    trusted_roots: &TrustedMembershipIssuers,
+) -> bool {
+    if payload.issuer_peer == payload.member_peer {
+        return trusted_roots.contains(&payload.issuer_peer)
+            && states
+                .get(&payload.issuer_peer)
+                .is_none_or(|state| state.active);
+    }
+    issuer_is_active(payload, states, trusted_roots)
+}
+
+fn issuer_is_active(
+    payload: &MembershipRecordPayload,
+    states: &HashMap<String, LedgerMemberState>,
+    trusted_roots: &TrustedMembershipIssuers,
+) -> bool {
+    states.get(&payload.issuer_peer).map_or_else(
+        || trusted_roots.contains(&payload.issuer_peer),
+        |state| state.active,
+    )
+}
+
+fn apply_membership_event(
+    states: &mut HashMap<String, LedgerMemberState>,
+    records: &[SignedMembershipRecord],
+    candidate_index: usize,
+) -> bool {
+    let candidate = &records[candidate_index];
+    let payload = &candidate.payload;
+    let replace = states.get(&payload.member_peer).is_none_or(|current| {
+        membership_event_wins(candidate, &records[current.record_index], current.active)
+    });
+    if replace {
+        states.insert(
+            payload.member_peer.clone(),
+            LedgerMemberState {
+                record_index: candidate_index,
+                active: !payload.revoked && payload.roles.contains(&MembershipRole::OverlayMember),
+            },
+        );
+    }
+    replace
+}
+
+fn membership_event_wins(
+    candidate: &SignedMembershipRecord,
+    current: &SignedMembershipRecord,
+    current_active: bool,
+) -> bool {
+    let candidate_version = membership_record_version(&candidate.payload);
+    let current_version = membership_record_version(&current.payload);
+    if !current_active && !candidate.payload.revoked {
+        return candidate.payload.membership_epoch > current.payload.membership_epoch;
+    }
+    candidate_version > current_version
+        || candidate_version == current_version
+            && candidate.payload.revoked
+            && !current.payload.revoked
+        || candidate_version == current_version
+            && candidate.payload.revoked == current.payload.revoked
+            && (
+                candidate.payload.issuer_peer.as_str(),
+                candidate.signature.as_str(),
+            ) > (
+                current.payload.issuer_peer.as_str(),
+                current.signature.as_str(),
+            )
+}
+
+const fn membership_record_version(payload: &MembershipRecordPayload) -> (u64, u64) {
+    (payload.membership_epoch, payload.sequence)
+}
+
+fn expire_members_at(
+    states: &mut HashMap<String, LedgerMemberState>,
+    records: &[SignedMembershipRecord],
+    now_unix_seconds: u64,
+) {
+    for state in states.values_mut() {
+        if state.active && records[state.record_index].is_expired_at(now_unix_seconds) {
+            state.active = false;
+        }
+    }
+}
+
 pub(crate) fn overlay_membership_trust_path_at(
     records: &[SignedMembershipRecord],
     member_peer: &str,
     now_unix_seconds: u64,
 ) -> Result<Option<Vec<SignedMembershipRecord>>, MembershipRecordError> {
-    let records = canonical_membership_records(records)?
-        .into_iter()
-        .filter(|record| !record.is_expired_at(now_unix_seconds))
-        .collect::<Vec<_>>();
-    let roots = records
-        .iter()
-        .enumerate()
-        .filter(|(_, record)| {
-            let payload = &record.payload;
-            payload.issuer_peer == payload.member_peer
-                && !payload.revoked
-                && payload.roles.contains(&MembershipRole::OverlayMember)
-        })
-        .map(|(index, record)| (record.payload.member_peer.clone(), index))
-        .collect::<HashMap<_, _>>();
-    if roots.is_empty() {
+    let anchors = membership_trust_anchors(
+        records,
+        records
+            .first()
+            .map_or("", |record| record.payload.network_name.as_str()),
+    )?;
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    let Some(state) = evaluation
+        .states
+        .get(member_peer)
+        .filter(|state| state.active)
+    else {
         return Ok(None);
-    }
-
-    let mut authorized = HashSet::new();
-    let mut queue = VecDeque::new();
-    for record in &records {
-        let peer = &record.payload.member_peer;
-        if roots.contains_key(peer) && authorized.insert(peer.clone()) {
-            queue.push_back(peer.clone());
-        }
-    }
-    let mut predecessor = HashMap::<String, usize>::new();
-    while let Some(issuer_peer) = queue.pop_front() {
-        for (index, record) in records.iter().enumerate() {
-            let payload = &record.payload;
-            if payload.issuer_peer == issuer_peer
-                && !payload.revoked
-                && payload.roles.contains(&MembershipRole::OverlayMember)
-                && authorized.insert(payload.member_peer.clone())
-            {
-                predecessor.insert(payload.member_peer.clone(), index);
-                queue.push_back(payload.member_peer.clone());
-            }
-        }
-    }
-    if !authorized.contains(member_peer) {
-        return Ok(None);
-    }
+    };
 
     let mut path = Vec::new();
-    let mut current = member_peer.to_owned();
-    while let Some(index) = predecessor.get(&current).copied() {
-        let record = records[index].clone();
-        current.clone_from(&record.payload.issuer_peer);
-        path.push(record);
+    let mut current = Some(state.record_index);
+    let mut visited = HashSet::new();
+    while let Some(index) = current {
+        if !visited.insert(index) {
+            return Err(MembershipRecordError::UntrustedIssuer {
+                issuer: records[index].payload.issuer_peer.clone(),
+            });
+        }
+        path.push(records[index].clone());
+        current = evaluation.event_authorizers.get(&index).copied().flatten();
     }
-    let root_index =
-        roots
-            .get(&current)
-            .copied()
-            .ok_or_else(|| MembershipRecordError::UntrustedIssuer {
-                issuer: current.clone(),
-            })?;
-    path.push(records[root_index].clone());
     path.reverse();
     Ok(Some(path))
 }
 
-fn active_trusted_membership_issuers(
+pub(crate) fn overlay_membership_proof_at(
     records: &[SignedMembershipRecord],
-    trusted_issuers: &TrustedMembershipIssuers,
+    member_peer: &str,
     now_unix_seconds: u64,
-) -> TrustedMembershipIssuers {
-    let mut active = TrustedMembershipIssuers::default();
-    for issuer in &trusted_issuers.issuers {
-        let self_record = records.iter().find(|record| {
-            record.payload.issuer_peer == *issuer && record.payload.member_peer == *issuer
-        });
-        if self_record.is_none_or(|record| {
-            !record.is_expired_at(now_unix_seconds)
-                && !record.payload.revoked
-                && record
-                    .payload
-                    .roles
-                    .contains(&MembershipRole::OverlayMember)
-        }) {
-            active.insert(issuer.clone());
+) -> Result<Option<Vec<SignedMembershipRecord>>, MembershipRecordError> {
+    let network_name = records
+        .first()
+        .map_or("", |record| record.payload.network_name.as_str());
+    let anchors = membership_trust_anchors(records, network_name)?;
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    let Some(state) = evaluation
+        .states
+        .get(member_peer)
+        .filter(|state| state.active)
+    else {
+        return Ok(None);
+    };
+
+    let mut included = HashSet::new();
+    let mut pending = vec![state.record_index];
+    while let Some(index) = pending.pop() {
+        if !included.insert(index) {
+            continue;
+        }
+        if let Some(authorizer) = evaluation.event_authorizers.get(&index).copied().flatten() {
+            pending.push(authorizer);
+        }
+        let subject = &records[index].payload.member_peer;
+        if let Some(current) = evaluation.states.get(subject)
+            && current.record_index != index
+        {
+            pending.push(current.record_index);
         }
     }
-    active
-}
 
-fn active_membership_records(
-    records: &[SignedMembershipRecord],
-    now_unix_seconds: u64,
-) -> Vec<SignedMembershipRecord> {
-    records
-        .iter()
-        .filter(|record| !record.is_expired_at(now_unix_seconds))
-        .cloned()
-        .collect()
-}
-
-fn authorized_membership_issuers(
-    records: &[SignedMembershipRecord],
-    trusted_issuers: &TrustedMembershipIssuers,
-) -> HashSet<String> {
-    let mut authorized = trusted_issuers.issuers.clone();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for record in records {
-            let payload = &record.payload;
-            if authorized.contains(&payload.issuer_peer)
-                && !payload.revoked
-                && payload.roles.contains(&MembershipRole::OverlayMember)
-            {
-                changed |= authorized.insert(payload.member_peer.clone());
-            }
-        }
-    }
-    authorized
+    let mut indices = included.into_iter().collect::<Vec<_>>();
+    indices
+        .sort_unstable_by(|left, right| membership_event_order(&records[*left], &records[*right]));
+    Ok(Some(
+        indices
+            .into_iter()
+            .map(|index| records[index].clone())
+            .collect(),
+    ))
 }
 
 fn conflicting_record_version(record: &SignedMembershipRecord) -> MembershipRecordError {
@@ -659,19 +808,32 @@ pub struct EffectiveMember {
     pub transport_peer: Libp2pPeerId,
     pub membership_epoch: u64,
     pub sequence: u64,
+    pub effective_inviter_peer: Option<Libp2pPeerId>,
+    pub original_inviter_peer: Option<Libp2pPeerId>,
+    pub admitted_at_unix_seconds: u64,
+    pub original_admitted_at_unix_seconds: u64,
     pub hostnames: Vec<String>,
     pub roles: Vec<MembershipRole>,
     pub route_grants: Vec<RouteConfig>,
 }
 
 impl EffectiveMember {
-    fn try_from_payload(payload: &MembershipRecordPayload) -> Result<Self, MembershipRecordError> {
+    fn try_from_payload(
+        payload: &MembershipRecordPayload,
+        current_admission: &MembershipRecordPayload,
+        original_admission: Option<&MembershipRecordPayload>,
+    ) -> Result<Self, MembershipRecordError> {
         let transport_peer = payload.member_peer.parse::<Libp2pPeerId>()?;
+        let original_admission = original_admission.unwrap_or(payload);
         Ok(Self {
             peer: PeerId::from_libp2p(transport_peer),
             transport_peer,
             membership_epoch: payload.membership_epoch,
             sequence: payload.sequence,
+            effective_inviter_peer: inviter_peer(current_admission)?,
+            original_inviter_peer: inviter_peer(original_admission)?,
+            admitted_at_unix_seconds: current_admission.issued_at_unix_seconds,
+            original_admitted_at_unix_seconds: original_admission.issued_at_unix_seconds,
             hostnames: payload
                 .hostname
                 .as_deref()
@@ -689,31 +851,15 @@ impl EffectiveMember {
     pub fn has_role(&self, role: MembershipRole) -> bool {
         self.roles.contains(&role)
     }
+}
 
-    fn merge_payload(&mut self, payload: &MembershipRecordPayload) {
-        if (payload.membership_epoch, payload.sequence) > (self.membership_epoch, self.sequence) {
-            self.membership_epoch = payload.membership_epoch;
-            self.sequence = payload.sequence;
-        }
-        if let Some(hostname) = payload
-            .hostname
-            .as_deref()
-            .and_then(|hostname| canonical_dns_label(hostname).ok())
-            && !self.hostnames.contains(&hostname)
-        {
-            self.hostnames.push(hostname);
-        }
-        for role in &payload.roles {
-            if !self.roles.contains(role) {
-                self.roles.push(*role);
-            }
-        }
-        for route in &payload.route_grants {
-            if !self.route_grants.contains(route) {
-                self.route_grants.push(route.clone());
-            }
-        }
+fn inviter_peer(
+    payload: &MembershipRecordPayload,
+) -> Result<Option<Libp2pPeerId>, MembershipRecordError> {
+    if payload.issuer_peer == payload.member_peer {
+        return Ok(None);
     }
+    Ok(Some(payload.issuer_peer.parse::<Libp2pPeerId>()?))
 }
 
 fn validate_payload(payload: &MembershipRecordPayload) -> Result<(), MembershipRecordError> {
@@ -1471,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_membership_revocation_is_scoped_to_issuer() {
+    fn effective_membership_revocation_applies_to_the_member_globally() {
         let issuer_a = NodeIdentity::generate_ed25519().expect("issuer a");
         let issuer_b = NodeIdentity::generate_ed25519().expect("issuer b");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -1527,18 +1673,7 @@ mod tests {
 
         let effective = effective_membership_at(&[grant_a, revocation_a, grant_b], "lab", 1_500)
             .expect("effective");
-        let members = effective.overlay_members().collect::<Vec<_>>();
-
-        assert_eq!(members.len(), 1);
-        assert!(members[0].has_role(MembershipRole::OverlayMember));
-        assert!(members[0].has_role(MembershipRole::RouteAuthority));
-        assert_eq!(
-            members[0].route_grants,
-            vec![RouteConfig {
-                prefix: "10.42.0.0/24".to_owned(),
-                metric: 10,
-            }]
-        );
+        assert_eq!(effective.overlay_members().count(), 0);
     }
 
     #[test]
@@ -1673,7 +1808,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_membership_records_cascades_delegate_revocation() {
+    fn merge_membership_records_preserves_members_admitted_by_revoked_peer() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -1711,15 +1846,214 @@ mod tests {
         .expect("revocation merge");
 
         assert_eq!(stats.accepted, 1);
-        assert_eq!(stats.removed_untrusted, 1);
-        assert!(!records.iter().any(|record| {
+        assert_eq!(stats.removed_untrusted, 0);
+        assert!(records.iter().any(|record| {
             record.payload.issuer_peer == delegate.peer_id
                 && record.payload.member_peer == member.peer_id
         }));
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        let peers = effective
+            .overlay_members()
+            .map(|candidate| candidate.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(!peers.contains(&delegate.peer_id));
+        assert!(peers.contains(&member.peer_id));
     }
 
     #[test]
-    fn merge_membership_records_cascades_trust_root_revocation() {
+    fn any_active_member_can_revoke_another_member() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let member_a = NodeIdentity::generate_ed25519().expect("member a");
+        let member_b = NodeIdentity::generate_ed25519().expect("member b");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let grant_a = overlay_record(&root, &member_a, 2, 1_000, None);
+        let grant_b = overlay_record(&root, &member_b, 3, 1_000, None);
+        let revocation = issue_membership_record_for_subject_at(
+            &member_b,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member_a).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("revocation");
+        let mut records = vec![root_record, grant_a, grant_b];
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted roots");
+
+        merge_membership_records_at(&mut records, &[revocation], "lab", 1_100, &trusted, 8)
+            .expect("member revocation");
+
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        let peers = effective
+            .overlay_members()
+            .map(|member| member.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(!peers.contains(&member_a.peer_id));
+        assert!(peers.contains(&member_b.peer_id));
+    }
+
+    #[test]
+    fn departed_member_cannot_issue_new_membership_events() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let departed = NodeIdentity::generate_ed25519().expect("departed");
+        let candidate = NodeIdentity::generate_ed25519().expect("candidate");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let grant = overlay_record(&root, &departed, 2, 1_000, None);
+        let revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&departed).expect("subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("revocation");
+        let late_grant = overlay_record(&departed, &candidate, 1, 1_200, None);
+        let mut records = vec![root_record, grant, revocation];
+        let original = records.clone();
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_200).expect("trusted roots");
+
+        assert!(matches!(
+            merge_membership_records_at(&mut records, &[late_grant], "lab", 1_200, &trusted, 8),
+            Err(MembershipRecordError::UntrustedIssuer { issuer }) if issuer == departed.peer_id
+        ));
+        assert_eq!(records, original);
+    }
+
+    #[test]
+    fn self_resignation_requires_a_higher_epoch_for_readmission() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let grant = overlay_record(&root, &member, 2, 1_000, None);
+        let resignation = issue_membership_record_for_subject_at(
+            &member,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("resignation");
+        let stale_readmission = overlay_record(&root, &member, 4, 1_200, None);
+        let readmission = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: 2,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_300,
+        )
+        .expect("readmission");
+        let records = vec![root_record, grant, resignation, stale_readmission];
+
+        let resigned = effective_membership_at(&records, "lab", 1_200).expect("resigned");
+        assert!(
+            !resigned
+                .overlay_members()
+                .any(|candidate| candidate.transport_peer.to_string() == member.peer_id)
+        );
+        let readmitted =
+            effective_membership_at(&[records, vec![readmission]].concat(), "lab", 1_300)
+                .expect("readmitted");
+        assert!(
+            readmitted
+                .overlay_members()
+                .any(|candidate| candidate.transport_peer.to_string() == member.peer_id)
+        );
+    }
+
+    #[test]
+    fn effective_membership_preserves_original_and_current_inviter_provenance() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let original_inviter = NodeIdentity::generate_ed25519().expect("original inviter");
+        let current_inviter = NodeIdentity::generate_ed25519().expect("current inviter");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let original_inviter_record = overlay_record(&root, &original_inviter, 2, 1_001, None);
+        let current_inviter_record = overlay_record(&root, &current_inviter, 3, 1_002, None);
+        let original_admission = overlay_record(&original_inviter, &member, 4, 1_010, None);
+        let revocation = issue_membership_record_for_subject_at(
+            &current_inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 5,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_020,
+        )
+        .expect("revocation");
+        let readmission = issue_membership_record_at(
+            &current_inviter,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: member.clone(),
+                membership_epoch: 2,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_030,
+        )
+        .expect("readmission");
+        let records = vec![
+            root_record,
+            original_inviter_record,
+            current_inviter_record,
+            original_admission,
+            revocation,
+            readmission,
+        ];
+
+        let effective = effective_membership_at(&records, "lab", 1_030).expect("effective");
+        let member = effective
+            .overlay_members()
+            .find(|candidate| candidate.transport_peer.to_string() == member.peer_id)
+            .expect("readmitted member");
+
+        assert_eq!(
+            member.original_inviter_peer.map(|peer| peer.to_string()),
+            Some(original_inviter.peer_id)
+        );
+        assert_eq!(
+            member.effective_inviter_peer.map(|peer| peer.to_string()),
+            Some(current_inviter.peer_id)
+        );
+        assert_eq!(member.original_admitted_at_unix_seconds, 1_010);
+        assert_eq!(member.admitted_at_unix_seconds, 1_030);
+    }
+
+    #[test]
+    fn merge_membership_records_preserves_network_after_creator_resigns() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -1756,12 +2090,16 @@ mod tests {
         .expect("root revocation merge");
 
         assert_eq!(stats.accepted, 1);
-        assert_eq!(stats.removed_untrusted, 2);
-        assert_eq!(records.len(), 1);
-        assert!(records[0].payload.revoked);
-        assert_eq!(records[0].payload.member_peer, root.peer_id);
+        assert_eq!(stats.removed_untrusted, 0);
+        assert_eq!(records.len(), 4);
         let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
-        assert_eq!(effective.overlay_members().count(), 0);
+        let peers = effective
+            .overlay_members()
+            .map(|candidate| candidate.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(!peers.contains(&root.peer_id));
+        assert!(peers.contains(&delegate.peer_id));
+        assert!(peers.contains(&member.peer_id));
     }
 
     #[test]
@@ -1808,21 +2146,23 @@ mod tests {
                 .expect("expiry merge");
 
         assert_eq!(stats.removed_expired, 0);
-        assert_eq!(stats.removed_untrusted, 1);
-        assert_eq!(records.len(), 2);
+        assert_eq!(stats.removed_untrusted, 0);
+        assert_eq!(records.len(), 3);
         assert!(records.iter().any(|record| {
             record.payload.member_peer == delegate.peer_id && record.is_expired_at(1_100)
         }));
         let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
-        assert!(
-            effective
-                .overlay_members()
-                .all(|member| member.transport_peer.to_string() == root.peer_id)
-        );
+        let peers = effective
+            .overlay_members()
+            .map(|candidate| candidate.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(peers.contains(&root.peer_id));
+        assert!(!peers.contains(&delegate.peer_id));
+        assert!(peers.contains(&member.peer_id));
     }
 
     #[test]
-    fn overlay_trust_path_rejects_a_revoked_root_and_its_descendants() {
+    fn overlay_trust_path_preserves_a_member_after_creator_resignation() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let root_record = overlay_record(&root, &root, 1, 1_000, None);
@@ -1850,7 +2190,53 @@ mod tests {
         )
         .expect("trust graph");
 
-        assert!(path.is_none());
+        let path = path.expect("delegate remains independently admitted");
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0].payload.member_peer, root.peer_id);
+        assert_eq!(path[1].payload.member_peer, delegate.peer_id);
+    }
+
+    #[test]
+    fn overlay_membership_proof_carries_creator_resignation() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let delegate = NodeIdentity::generate_ed25519().expect("delegate");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let delegate_record = overlay_record(&root, &delegate, 1, 1_000, None);
+        let root_revocation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&root).expect("root subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("root revocation");
+
+        let proof = overlay_membership_proof_at(
+            &[root_record, delegate_record, root_revocation],
+            &delegate.peer_id,
+            1_100,
+        )
+        .expect("membership proof")
+        .expect("delegate remains independently admitted");
+
+        assert_eq!(proof.len(), 3);
+        assert!(proof.iter().any(|record| {
+            record.payload.member_peer == root.peer_id && record.payload.revoked
+        }));
+        let effective = effective_membership_at(&proof, "lab", 1_100).expect("proof membership");
+        let peers = effective
+            .overlay_members()
+            .map(|member| member.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(!peers.contains(&root.peer_id));
+        assert!(peers.contains(&delegate.peer_id));
     }
 
     #[test]
@@ -1883,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_membership_filters_revoked_delegate_descendants_after_restart() {
+    fn effective_membership_preserves_revoked_delegate_descendants_after_restart() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let member = NodeIdentity::generate_ed25519().expect("member");
@@ -1920,7 +2306,7 @@ mod tests {
             .collect::<HashSet<_>>();
         assert!(member_peers.contains(&root.peer_id));
         assert!(!member_peers.contains(&delegate.peer_id));
-        assert!(!member_peers.contains(&member.peer_id));
+        assert!(member_peers.contains(&member.peer_id));
     }
 
     #[test]
@@ -2111,7 +2497,7 @@ mod tests {
                 removed_untrusted: 0,
             }
         );
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
         assert!(records.iter().any(|record| record.payload.sequence == 2));
         assert!(records.iter().any(|record| record.is_expired_at(1_100)));
     }
@@ -2122,7 +2508,7 @@ mod tests {
         let member = NodeIdentity::generate_ed25519().expect("member");
         let older = overlay_record(&issuer, &member, 1, 1_000, None);
         let newer = overlay_record(&issuer, &member, 2, 1_010, Some(1_050));
-        let mut records = vec![older];
+        let mut records = vec![older.clone()];
         let trusted =
             trusted_membership_issuers_at(&records, "lab", 1_000).expect("trusted issuer");
 
@@ -2138,7 +2524,7 @@ mod tests {
         let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
 
         assert_eq!(stats.accepted, 1);
-        assert_eq!(records, vec![newer]);
+        assert_eq!(records, vec![older, newer]);
         assert_eq!(effective.overlay_members().count(), 0);
     }
 
@@ -2192,8 +2578,8 @@ mod tests {
 
         assert_eq!(stats.accepted, 1);
         assert_eq!(stats.ignored_stale_or_equal, 1);
-        assert_eq!(records.len(), 1);
-        assert!(records[0].payload.revoked);
+        assert_eq!(records.len(), 2);
+        assert!(records[1].payload.revoked);
         let effective = effective_membership_at(&records, "lab", 1_500).expect("effective");
         assert_eq!(effective.overlay_members().count(), 0);
     }

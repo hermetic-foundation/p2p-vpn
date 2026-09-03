@@ -1389,7 +1389,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_a_revoked_root_retains_its_explicit_tombstone() {
+    fn creator_resignation_retains_history_and_delegate_authority() {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let delegate = NodeIdentity::generate_ed25519().expect("delegate");
         let candidate = NodeIdentity::generate_ed25519().expect("candidate");
@@ -1451,9 +1451,14 @@ mod tests {
             .prune_membership_records(1_100)
             .expect("prune revoked trust graph");
 
-        assert_eq!(stats.removed_untrusted, 1);
-        assert_eq!(forwarder.member_records().len(), 1);
-        assert!(forwarder.member_records()[0].payload.revoked);
+        assert_eq!(stats.removed_untrusted, 0);
+        assert_eq!(forwarder.member_records().len(), 3);
+        assert!(
+            forwarder
+                .member_records()
+                .iter()
+                .any(|record| record.payload.revoked)
+        );
         let delegated_grant = issue_membership_record_at(
             &delegate,
             MembershipRecordOptions {
@@ -1465,15 +1470,13 @@ mod tests {
                 route_grants: Vec::new(),
                 expires_at_unix_seconds: None,
             },
-            1_100,
+            1_101,
         )
         .expect("delegated grant");
-        assert!(matches!(
-            forwarder.merge_membership_records(&[delegated_grant], 1_100),
-            Err(ForwardError::MembershipRecord(
-                MembershipRecordError::UntrustedIssuer { issuer }
-            )) if issuer == delegate.peer_id
-        ));
+        forwarder
+            .merge_membership_records(&[delegated_grant], 1_101)
+            .expect("delegate remains authorized");
+        assert_eq!(forwarder.member_records().len(), 4);
     }
 
     #[test]

@@ -45,7 +45,8 @@ use crate::{
         MAX_MEMBERSHIP_RECORD_ENCODED_LEN, MAX_MEMBERSHIP_RECORD_INTEGER, MAX_MEMBERSHIP_RECORDS,
         MembershipRecordIssueOptions, MembershipRecordSubject, MembershipRole,
         SignedMembershipRecord, effective_membership_at,
-        issue_named_membership_record_for_subject_at, overlay_membership_trust_path_at,
+        issue_named_membership_record_for_subject_at, overlay_membership_proof_at,
+        overlay_membership_trust_path_at,
     },
     metrics::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
@@ -15206,14 +15207,30 @@ fn next_pairing_membership_version(
 ) -> Result<(u64, u64), crate::pairing::PairingError> {
     let latest = records
         .iter()
-        .filter(|record| {
-            record.payload.issuer_peer == issuer_peer && record.payload.member_peer == member_peer
-        })
-        .max_by_key(|record| (record.payload.membership_epoch, record.payload.sequence));
+        .filter(|record| record.payload.member_peer == member_peer)
+        .max_by(|left, right| {
+            (
+                left.payload.membership_epoch,
+                left.payload.sequence,
+                left.payload.revoked,
+                left.payload.issuer_peer.as_str(),
+                left.signature.as_str(),
+            )
+                .cmp(&(
+                    right.payload.membership_epoch,
+                    right.payload.sequence,
+                    right.payload.revoked,
+                    right.payload.issuer_peer.as_str(),
+                    right.signature.as_str(),
+                ))
+        });
     let Some(latest) = latest else {
         return Ok((1, now_unix_seconds));
     };
-    if latest.payload.sequence < MAX_MEMBERSHIP_RECORD_INTEGER {
+    if !latest.payload.revoked
+        && !latest.is_expired_at(now_unix_seconds)
+        && latest.payload.sequence < MAX_MEMBERSHIP_RECORD_INTEGER
+    {
         let next_sequence = latest.payload.sequence + 1;
         return Ok((
             latest.payload.membership_epoch,
@@ -15229,7 +15246,7 @@ fn next_pairing_membership_version(
             issuer: issuer_peer.to_owned(),
             member: member_peer.to_owned(),
         })?;
-    Ok((next_epoch, now_unix_seconds))
+    Ok((next_epoch, now_unix_seconds.max(1)))
 }
 
 fn pairing_response_membership_snapshot(
@@ -15252,14 +15269,11 @@ fn pairing_response_membership_snapshot(
         }
         has_explicit_root_record |= record.payload.issuer_peer == record.payload.member_peer;
         record.verify()?;
-        if record.is_expired_at(now_unix_seconds) {
-            continue;
-        }
         upsert_pairing_snapshot_record(&mut records, record)?;
     }
 
-    let trust_path = overlay_membership_trust_path_at(&records, inviter_peer, now_unix_seconds)?;
-    if has_explicit_root_record && trust_path.is_none() {
+    let membership_proof = overlay_membership_proof_at(&records, inviter_peer, now_unix_seconds)?;
+    if has_explicit_root_record && membership_proof.is_none() {
         return Err(crate::pairing::PairingError::MissingInviterTrustRoot);
     }
     if !has_explicit_root_record
@@ -15273,11 +15287,11 @@ fn pairing_response_membership_snapshot(
             },
         );
     }
-    let inviter_is_root = trust_path
+    let inviter_is_root = membership_proof
         .as_ref()
         .is_some_and(|path| path.len() == 1 && path[0].payload.issuer_peer == inviter_peer);
 
-    let mut minimal = trust_path.unwrap_or_else(|| vec![inviter_record.clone()]);
+    let mut minimal = membership_proof.unwrap_or_else(|| vec![inviter_record.clone()]);
     if inviter_is_root {
         upsert_pairing_snapshot_record(&mut minimal, &inviter_record)?;
     }
@@ -15295,24 +15309,21 @@ fn upsert_pairing_snapshot_record(
     records: &mut Vec<SignedMembershipRecord>,
     incoming: &SignedMembershipRecord,
 ) -> Result<(), crate::pairing::PairingError> {
-    let Some(index) = records.iter().position(|record| {
+    if records.contains(incoming) {
+        return Ok(());
+    }
+    if records.iter().any(|record| {
         record.payload.issuer_peer == incoming.payload.issuer_peer
             && record.payload.member_peer == incoming.payload.member_peer
-    }) else {
-        records.push(incoming.clone());
-        return Ok(());
-    };
-    let current = &records[index];
-    let current_version = (current.payload.membership_epoch, current.payload.sequence);
-    let incoming_version = (incoming.payload.membership_epoch, incoming.payload.sequence);
-    if incoming_version > current_version {
-        records[index] = incoming.clone();
-    } else if incoming_version == current_version && current != incoming {
+            && record.payload.membership_epoch == incoming.payload.membership_epoch
+            && record.payload.sequence == incoming.payload.sequence
+    }) {
         return Err(crate::pairing::PairingError::ConflictingMembershipRecord {
             issuer: incoming.payload.issuer_peer.clone(),
             member: incoming.payload.member_peer.clone(),
         });
     }
+    records.push(incoming.clone());
     Ok(())
 }
 
@@ -21490,7 +21501,7 @@ mod tests {
             Some(Vec::new()),
         )
         .expect("pairing response");
-        assert_eq!(response.payload.member_records.len(), 2);
+        assert_eq!(response.payload.member_records.len(), 3);
 
         let mut live_config = config.clone();
         live_config.network.member_records = forwarder.member_records().to_vec();
@@ -21515,7 +21526,7 @@ mod tests {
         )
         .expect("runtime commit");
 
-        assert_eq!(forwarder.member_records().len(), existing_count + 2);
+        assert_eq!(forwarder.member_records().len(), existing_count + 3);
         for (member, _) in existing_members {
             assert!(
                 forwarder
@@ -22137,6 +22148,98 @@ mod tests {
     }
 
     #[test]
+    fn active_member_can_pair_after_creator_resigns() {
+        let creator = NodeIdentity::generate_ed25519().expect("creator identity");
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut config = config_with_peer(&inviter, joiner_peer);
+        let creator_record = issue_membership_record_at(
+            &creator,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: creator.clone(),
+                membership_epoch: 1,
+                sequence: 900,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            900,
+        )
+        .expect("creator record");
+        let inviter_record = issue_membership_record_at(
+            &creator,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: inviter.clone(),
+                membership_epoch: 1,
+                sequence: 901,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            901,
+        )
+        .expect("inviter grant");
+        let creator_resignation = issue_membership_record_for_subject_at(
+            &creator,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&creator).expect("creator subject"),
+                membership_epoch: 1,
+                sequence: 902,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            902,
+        )
+        .expect("creator resignation");
+        config.network.member_records = vec![creator_record, inviter_record, creator_resignation];
+        let offer = export_code_pairing_offer_at(&config, PairingOfferOptions::default(), 1_000)
+            .expect("code pairing offer");
+        let request = build_pairing_request_at(
+            &offer,
+            PairingRequestOptions {
+                identity: joiner.clone(),
+                requested_vpn_ip: None,
+                requested_routes: Vec::new(),
+            },
+            1_001,
+        )
+        .expect("pairing request");
+
+        let response = pairing_response_for_request_with_grants(
+            &config,
+            &inviter,
+            &mut HashSet::new(),
+            joiner_peer,
+            &request,
+            1_002,
+            PairingAcceptanceMode::CodeApproval,
+            None,
+            Some(Vec::new()),
+        )
+        .expect("pairing response");
+
+        assert_eq!(response.payload.member_records.len(), 4);
+        assert!(response.payload.member_records.iter().any(|record| {
+            record.payload.member_peer == creator.peer_id && record.payload.revoked
+        }));
+        let effective = effective_membership_at(&response.payload.member_records, "lab", 1_002)
+            .expect("response membership");
+        let peers = effective
+            .overlay_members()
+            .map(|member| member.transport_peer.to_string())
+            .collect::<HashSet<_>>();
+        assert!(!peers.contains(&creator.peer_id));
+        assert!(peers.contains(&inviter.peer_id));
+        assert!(peers.contains(&joiner.peer_id));
+    }
+
+    #[test]
     fn code_pairing_response_omits_unrelated_expired_membership_records() {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
@@ -22267,8 +22370,8 @@ mod tests {
             })
             .expect("replacement joiner grant");
 
-        assert_eq!(joiner_record.payload.membership_epoch, 7);
-        assert_eq!(joiner_record.payload.sequence, 5_001);
+        assert_eq!(joiner_record.payload.membership_epoch, 8);
+        assert_eq!(joiner_record.payload.sequence, 1_002);
         assert!(!joiner_record.payload.revoked);
         assert!(
             joiner_record
@@ -31101,7 +31204,7 @@ mod tests {
             panic!("expected accepted capabilities");
         };
 
-        assert_eq!(accepted.member_records.len(), 2);
+        assert_eq!(accepted.member_records.len(), 3);
         assert!(
             accepted
                 .member_records
