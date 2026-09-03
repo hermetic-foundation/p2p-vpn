@@ -77,13 +77,13 @@ use crate::{
             validate_membership_records_page,
         },
         control_socket::{
-            ControlSocket, DnsControlRequest, MAX_PAIR_RPC_RESPONSE_LEN, PairRpcCandidate,
-            PairRpcCompletionArtifacts, PairRpcDiagnostics, PairRpcDiscoveryStage,
-            PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode, PairRpcJoinStarted,
-            PairRpcMembershipRecordPayload, PairRpcMembershipRole, PairRpcNixPlan,
-            PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase, PairRpcReceipt,
-            PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
-            PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlReceiver,
+            ControlSocket, DnsControlRequest, MAX_PAIR_RPC_RESPONSE_LEN, MembershipMutationResult,
+            PairRpcCandidate, PairRpcCompletionArtifacts, PairRpcDiagnostics,
+            PairRpcDiscoveryStage, PairRpcErrorCode, PairRpcFailure, PairRpcFailureCode,
+            PairRpcJoinStarted, PairRpcMembershipRecordPayload, PairRpcMembershipRole,
+            PairRpcNixPlan, PairRpcOpenStarted, PairRpcOperationStatus, PairRpcPeer, PairRpcPhase,
+            PairRpcReceipt, PairRpcRequest, PairRpcResponseEnvelope, PairRpcResult, PairRpcRole,
+            PairRpcRoute, PairRpcSignedMembershipRecord, PairRpcTransport, RuntimeControlReceiver,
             RuntimeControlRequest, RuntimeNetworkChange, runtime_control_channel,
         },
         dns::{DnsRuntime, DnsRuntimeError},
@@ -2024,6 +2024,74 @@ where
                         }
                         if respond_to.send(response).is_err() {
                             eprintln!("runtime network change response receiver dropped");
+                        }
+                        continue;
+                    }
+                    RuntimeControlRequest::MembershipRevoke {
+                        member_peer,
+                        respond_to,
+                    } => {
+                        let response = apply_local_membership_revocation(
+                            &mut forwarder,
+                            &mut membership,
+                            &mut tun_runtime,
+                            route_controller.as_mut(),
+                            &mut local_capabilities,
+                            &node.identity,
+                            member_peer.as_deref(),
+                        );
+                        if let Ok(result) = &response {
+                            send_control_capabilities_to_connected_peers(
+                                &mut node.swarm,
+                                &forwarder,
+                                &local_capabilities,
+                                &metrics,
+                            );
+                            reconcile_runtime_kademlia_scope(
+                                &mut node,
+                                &local_capabilities,
+                                &previous_membership_tags,
+                                &mut kademlia_rendezvous_key,
+                                &mut kademlia_lookup_keys,
+                                &mut kademlia_membership_records_key,
+                                &mut kademlia_membership_record_lookup_keys,
+                            );
+                            persist_membership_records_if_changed(
+                                membership_state_store.as_ref(),
+                                &forwarder,
+                                &node.identity.peer_id,
+                                &mut persisted_membership_revision,
+                                &metrics,
+                            )?;
+                            refresh_dns_zone_if_needed(
+                                dns_runtime.as_ref(),
+                                &forwarder,
+                                &mut dns_membership_revision,
+                                true,
+                            );
+                            log_runtime_event(
+                                LogLevel::Info,
+                                if result.resigned {
+                                    "membership_resigned"
+                                } else {
+                                    "membership_revoked"
+                                },
+                                &[
+                                    ("member", &result.member_peer),
+                                    ("issuer", &result.issuer_peer),
+                                ],
+                            );
+                            if !result.resigned
+                                && let Ok(peer) = result.member_peer.parse::<Libp2pPeerId>()
+                            {
+                                peer_capabilities.remove(PeerId::from_libp2p(peer));
+                                let _ = node.swarm.disconnect_peer_id(peer);
+                            }
+                        }
+                        if respond_to.send(response).is_err() {
+                            eprintln!(
+                                "control socket membership mutation response receiver dropped"
+                            );
                         }
                         continue;
                     }
@@ -4615,6 +4683,15 @@ fn handle_runtime_control_request(
             );
             if respond_to.send(peers).is_err() {
                 eprintln!("control socket peer snapshot response receiver dropped");
+            }
+            None
+        }
+        RuntimeControlRequest::MembershipRevoke { respond_to, .. } => {
+            if respond_to
+                .send(Err("membership mutation is not initialized".to_owned()))
+                .is_err()
+            {
+                eprintln!("control socket membership mutation response receiver dropped");
             }
             None
         }
@@ -9116,22 +9193,29 @@ impl OverlayMembership {
     ) -> Result<Self, ConfigError> {
         let mut peers = HashSet::new();
         let mut configured_infrastructure_peers = HashSet::new();
-        peers.insert(
-            config
-                .local_peer()?
-                .parse()
-                .map_err(ConfigError::Libp2pPeerId)?,
-        );
+        let local_peer: Libp2pPeerId = config
+            .local_peer()?
+            .parse()
+            .map_err(ConfigError::Libp2pPeerId)?;
+        peers.insert(local_peer);
 
         for peer in &config.peers {
             peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
         }
 
-        for member in
-            effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
+        let effective =
+            effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+        let local_has_record = member_records
+            .iter()
+            .any(|record| record.payload.member_peer == local_peer.to_string());
+        let local_is_active = !local_has_record
+            || effective
                 .overlay_members()
-        {
-            peers.insert(member.transport_peer);
+                .any(|member| member.transport_peer == local_peer);
+        if local_is_active {
+            for member in effective.overlay_members() {
+                peers.insert(member.transport_peer);
+            }
         }
 
         for peer in &config.network.bootstrap_peers {
@@ -15247,6 +15331,168 @@ fn next_pairing_membership_version(
             member: member_peer.to_owned(),
         })?;
     Ok((next_epoch, now_unix_seconds.max(1)))
+}
+
+fn issue_local_membership_revocation_at(
+    forwarder: &Forwarder,
+    identity: &NodeIdentity,
+    member_peer: &str,
+    now_unix_seconds: u64,
+) -> Result<SignedMembershipRecord, String> {
+    let member_transport_peer = member_peer
+        .parse::<Libp2pPeerId>()
+        .map_err(|error| format!("invalid member peer ID: {error}"))?;
+    let effective = effective_membership_at(
+        forwarder.member_records(),
+        &forwarder.config().network.name,
+        now_unix_seconds,
+    )
+    .map_err(|error| format!("failed to evaluate membership: {error:?}"))?;
+    if !effective
+        .overlay_members()
+        .any(|member| member.transport_peer.to_string() == identity.peer_id)
+    {
+        return Err("local peer is not an active signed network member".to_owned());
+    }
+    if !effective
+        .overlay_members()
+        .any(|member| member.transport_peer == member_transport_peer)
+    {
+        return Err(format!(
+            "peer {member_peer} is not an active signed network member"
+        ));
+    }
+    if forwarder
+        .config()
+        .peers
+        .iter()
+        .any(|peer| peer.id == member_peer)
+    {
+        return Err(format!(
+            "peer {member_peer} is authorized by declarative peer configuration; remove that entry before revoking membership"
+        ));
+    }
+    if member_peer == identity.peer_id && !forwarder.config().peers.is_empty() {
+        return Err(
+            "local peer has declarative peer authorization; remove those entries before resigning"
+                .to_owned(),
+        );
+    }
+
+    let latest = forwarder
+        .member_records()
+        .iter()
+        .filter(|record| record.payload.member_peer == member_peer)
+        .max_by(|left, right| {
+            (
+                left.payload.membership_epoch,
+                left.payload.sequence,
+                left.payload.revoked,
+                left.payload.issuer_peer.as_str(),
+                left.signature.as_str(),
+            )
+                .cmp(&(
+                    right.payload.membership_epoch,
+                    right.payload.sequence,
+                    right.payload.revoked,
+                    right.payload.issuer_peer.as_str(),
+                    right.signature.as_str(),
+                ))
+        })
+        .ok_or_else(|| format!("peer {member_peer} has no signed membership record"))?;
+    let (membership_epoch, sequence) = if latest.payload.sequence < MAX_MEMBERSHIP_RECORD_INTEGER {
+        (
+            latest.payload.membership_epoch,
+            latest.payload.sequence.saturating_add(1),
+        )
+    } else {
+        (
+            latest
+                .payload
+                .membership_epoch
+                .checked_add(1)
+                .filter(|epoch| *epoch <= MAX_MEMBERSHIP_RECORD_INTEGER)
+                .ok_or_else(|| format!("membership version is exhausted for peer {member_peer}"))?,
+            1,
+        )
+    };
+
+    issue_named_membership_record_for_subject_at(
+        identity,
+        MembershipRecordIssueOptions {
+            network_name: forwarder.config().network.name.clone(),
+            member: MembershipRecordSubject {
+                peer_id: member_peer.to_owned(),
+                public_key: latest.payload.member_public_key.clone(),
+            },
+            membership_epoch,
+            sequence,
+            revoked: true,
+            roles: Vec::new(),
+            route_grants: Vec::new(),
+            expires_at_unix_seconds: None,
+        },
+        None,
+        now_unix_seconds,
+    )
+    .map_err(|error| format!("failed to sign membership revocation: {error:?}"))
+}
+
+fn apply_local_membership_revocation(
+    forwarder: &mut Forwarder,
+    membership: &mut OverlayMembership,
+    tun_runtime: &mut TunRuntimeConfig,
+    route_controller: &mut dyn TunRouteController,
+    local_capabilities: &mut ControlCapabilities,
+    identity: &NodeIdentity,
+    member_peer: Option<&str>,
+) -> Result<MembershipMutationResult, String> {
+    let target = member_peer.unwrap_or(&identity.peer_id);
+    let now_unix_seconds = current_unix_seconds_lossy();
+    let record =
+        issue_local_membership_revocation_at(forwarder, identity, target, now_unix_seconds)?;
+    if forwarder.member_records().len() >= MAX_MEMBERSHIP_RECORDS {
+        return Err(format!(
+            "membership history reached its {MAX_MEMBERSHIP_RECORDS}-record limit"
+        ));
+    }
+    let mut next_config = forwarder.config().clone();
+    next_config.network.member_records = forwarder.member_records().to_vec();
+    next_config.network.member_records.push(record.clone());
+    let forwarder_update = forwarder
+        .prepare_reconfigure(next_config.clone(), now_unix_seconds)
+        .map_err(|error| format!("failed to prepare membership revocation: {error:?}"))?;
+    let next_membership = OverlayMembership::from_config_with_member_records(
+        &next_config,
+        &next_config.network.member_records,
+        now_unix_seconds,
+    )
+    .map_err(|error| format!("failed to refresh membership authorization: {error:?}"))?;
+    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
+        &next_config,
+        &next_config.network.member_records,
+        now_unix_seconds,
+    )
+    .map_err(|error| format!("failed to prepare membership routes: {error:?}"))?;
+    let route_update = next_tun
+        .route_reconciliation_from(tun_runtime)
+        .map_err(|error| format!("failed to prepare membership route update: {error:?}"))?;
+    route_controller
+        .reconcile(tun_runtime, &next_tun, &route_update)
+        .map_err(|error| format!("failed to apply membership routes: {error:?}"))?;
+
+    forwarder.commit_reconfigure(forwarder_update);
+    *membership = next_membership;
+    *tun_runtime = next_tun;
+    *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
+
+    Ok(MembershipMutationResult {
+        member_peer: target.to_owned(),
+        issuer_peer: identity.peer_id.clone(),
+        membership_epoch: record.payload.membership_epoch,
+        sequence: record.payload.sequence,
+        resigned: target == identity.peer_id,
+    })
 }
 
 fn pairing_response_membership_snapshot(
@@ -22237,6 +22483,106 @@ mod tests {
         assert!(!peers.contains(&creator.peer_id));
         assert!(peers.contains(&inviter.peer_id));
         assert!(peers.contains(&joiner.peer_id));
+    }
+
+    #[test]
+    fn local_active_member_issues_global_revocation_and_can_resign() {
+        let creator = NodeIdentity::generate_ed25519().expect("creator identity");
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let target = NodeIdentity::generate_ed25519().expect("target identity");
+        let mut config = config_with_peer(
+            &local,
+            target.peer_id.parse().expect("target transport peer"),
+        );
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &creator,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: creator.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("creator record"),
+            issue_membership_record_at(
+                &creator,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: local.clone(),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_001,
+            )
+            .expect("local grant"),
+            issue_membership_record_at(
+                &creator,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: target.clone(),
+                    membership_epoch: 1,
+                    sequence: 3,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_002,
+            )
+            .expect("target grant"),
+        ];
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
+        let mut route_controller = PreconfiguredTunRoutes;
+        let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
+
+        let revoked = apply_local_membership_revocation(
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &mut route_controller,
+            &mut capabilities,
+            &local,
+            Some(&target.peer_id),
+        )
+        .expect("target revocation");
+        assert_eq!(revoked.issuer_peer, local.peer_id);
+        assert_eq!(revoked.member_peer, target.peer_id);
+        assert!(!revoked.resigned);
+        assert!(!membership.allows(target.peer_id.parse().expect("target peer")));
+
+        let resigned = apply_local_membership_revocation(
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &mut route_controller,
+            &mut capabilities,
+            &local,
+            None,
+        )
+        .expect("self resignation");
+        assert_eq!(resigned.member_peer, local.peer_id);
+        assert!(resigned.resigned);
+        assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        assert_eq!(membership.len(), 1);
+        assert!(matches!(
+            issue_local_membership_revocation_at(
+                &forwarder,
+                &local,
+                &creator.peer_id,
+                current_unix_seconds_lossy(),
+            ),
+            Err(error) if error.contains("local peer is not an active")
+        ));
     }
 
     #[test]

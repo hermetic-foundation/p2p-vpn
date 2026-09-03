@@ -23,6 +23,8 @@ const PATHS_REQUEST: &[u8] = b"paths\n";
 const MTU_REQUEST: &[u8] = b"mtu\n";
 const CAPABILITIES_REQUEST: &[u8] = b"capabilities\n";
 const NETWORK_PEERS_REQUEST: &[u8] = b"network-peers-v1\n";
+const MEMBERSHIP_RESIGN_REQUEST: &[u8] = b"membership-resign-v1\n";
+const MEMBERSHIP_REVOKE_PREFIX: &[u8] = b"membership-revoke-v1 ";
 const SHUTDOWN_REQUEST: &[u8] = b"shutdown\n";
 const PAIR_RPC_FRAME_PREFIX: &str = "rpc-v1 ";
 const MAX_REQUEST_LEN: usize = 512;
@@ -32,6 +34,15 @@ const REQUEST_CHANNEL: usize = 16;
 pub const PAIR_RPC_VERSION: u8 = 1;
 pub const MAX_PAIR_RPC_REQUEST_LEN: usize = 64 * 1024;
 pub const MAX_PAIR_RPC_RESPONSE_LEN: usize = MAX_RESPONSE_LEN;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MembershipMutationResult {
+    pub member_peer: String,
+    pub issuer_peer: String,
+    pub membership_epoch: u64,
+    pub sequence: u64,
+    pub resigned: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PairRpcRequestEnvelope {
@@ -507,6 +518,10 @@ pub enum RuntimeControlRequest {
     PeerSnapshot {
         respond_to: oneshot::Sender<Result<NetworkPeerSnapshot, String>>,
     },
+    MembershipRevoke {
+        member_peer: Option<String>,
+        respond_to: oneshot::Sender<Result<MembershipMutationResult, String>>,
+    },
     Dns {
         request: DnsControlRequest,
         respond_to: oneshot::Sender<Vec<String>>,
@@ -609,6 +624,22 @@ impl RuntimeControlHandle {
         let (respond_to, response) = oneshot::channel();
         self.send(RuntimeControlRequest::PeerSnapshot { respond_to })
             .await?;
+        response
+            .await
+            .map_err(|_| runtime_response_dropped())?
+            .map_err(io::Error::other)
+    }
+
+    pub async fn revoke_member(
+        &self,
+        member_peer: Option<String>,
+    ) -> io::Result<MembershipMutationResult> {
+        let (respond_to, response) = oneshot::channel();
+        self.send(RuntimeControlRequest::MembershipRevoke {
+            member_peer,
+            respond_to,
+        })
+        .await?;
         response
             .await
             .map_err(|_| runtime_response_dropped())?
@@ -780,6 +811,23 @@ async fn handle_connection(
     if header == NETWORK_PEERS_REQUEST {
         return handle_network_peers_connection(&mut stream, &tx).await;
     }
+    if header == MEMBERSHIP_RESIGN_REQUEST {
+        return handle_membership_mutation_connection(&mut stream, &tx, None).await;
+    }
+    if let Some(encoded_peer) = header.strip_prefix(MEMBERSHIP_REVOKE_PREFIX) {
+        let encoded_peer = encoded_peer.strip_suffix(b"\n").unwrap_or(encoded_peer);
+        let member_peer = std::str::from_utf8(encoded_peer)
+            .ok()
+            .filter(|peer| !peer.is_empty() && !peer.contains(char::is_whitespace))
+            .map(str::to_owned);
+        let Some(member_peer) = member_peer else {
+            stream
+                .write_all(b"error invalid membership peer ID\n")
+                .await?;
+            return Ok(());
+        };
+        return handle_membership_mutation_connection(&mut stream, &tx, Some(member_peer)).await;
+    }
     let request = match header.as_slice() {
         STATUS_REQUEST => RequestKind::Status,
         STATE_REQUEST => RequestKind::State,
@@ -806,6 +854,38 @@ async fn handle_connection(
     };
 
     handle_legacy_connection(&mut stream, &tx, request).await
+}
+
+async fn handle_membership_mutation_connection(
+    stream: &mut UnixStream,
+    tx: &mpsc::Sender<RuntimeControlRequest>,
+    member_peer: Option<String>,
+) -> io::Result<()> {
+    let (respond_to, response) = oneshot::channel();
+    tx.send(RuntimeControlRequest::MembershipRevoke {
+        member_peer,
+        respond_to,
+    })
+    .await
+    .map_err(|_| runtime_stopped())?;
+    let response = response
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "runtime response dropped"))?;
+
+    match response {
+        Ok(result) => {
+            let body = serde_json::to_string(&result).map_err(invalid_data)?;
+            stream
+                .write_all(encode_line_response(&[body]).as_bytes())
+                .await
+        }
+        Err(error) => {
+            let error = error.split_whitespace().collect::<Vec<_>>().join(" ");
+            stream
+                .write_all(format!("error {error}\n").as_bytes())
+                .await
+        }
+    }
 }
 
 async fn handle_network_peers_connection(
@@ -1212,6 +1292,48 @@ pub async fn query_network_peers(
         )));
     }
     Ok(peers)
+}
+
+pub async fn query_membership_revoke(
+    path: &Path,
+    timeout: std::time::Duration,
+    member_peer: &str,
+) -> Result<MembershipMutationResult, QueryError> {
+    if member_peer.is_empty() || member_peer.contains(char::is_whitespace) {
+        return Err(QueryError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "membership peer ID must be a non-empty token",
+        )));
+    }
+    query_membership_mutation(
+        path,
+        timeout,
+        format!("membership-revoke-v1 {member_peer}\n").as_bytes(),
+    )
+    .await
+}
+
+pub async fn query_membership_resign(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<MembershipMutationResult, QueryError> {
+    query_membership_mutation(path, timeout, MEMBERSHIP_RESIGN_REQUEST).await
+}
+
+async fn query_membership_mutation(
+    path: &Path,
+    timeout: std::time::Duration,
+    request: &[u8],
+) -> Result<MembershipMutationResult, QueryError> {
+    let mut lines = query_lines(path, timeout, request).await?;
+    if lines.len() != 1 {
+        return Err(QueryError::InvalidResponse(format!(
+            "membership mutation response contains {} lines, expected one",
+            lines.len()
+        )));
+    }
+    serde_json::from_str(&lines.remove(0))
+        .map_err(|error| QueryError::InvalidResponse(error.to_string()))
 }
 
 pub async fn query_dns_status(
@@ -1931,6 +2053,69 @@ mod tests {
             .expect("query");
 
         assert_eq!(lines, vec!["shutdown accepted".to_owned()]);
+        responder.await.expect("responder");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn control_socket_serves_membership_revoke_and_resign_requests() {
+        let path = std::env::temp_dir().join(format!(
+            "p2p-vpn-control-{}-{}.sock",
+            std::process::id(),
+            "membership-mutations"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (socket, mut rx) = ControlSocket::bind(&path).expect("control socket");
+        let responder = tokio::spawn(async move {
+            let Some(RuntimeControlRequest::MembershipRevoke {
+                member_peer,
+                respond_to,
+            }) = rx.recv().await
+            else {
+                panic!("expected membership revoke request");
+            };
+            assert_eq!(member_peer.as_deref(), Some("12D3KooTarget"));
+            respond_to
+                .send(Ok(MembershipMutationResult {
+                    member_peer: "12D3KooTarget".to_owned(),
+                    issuer_peer: "12D3KooIssuer".to_owned(),
+                    membership_epoch: 4,
+                    sequence: 9,
+                    resigned: false,
+                }))
+                .expect("revoke response accepted");
+
+            let Some(RuntimeControlRequest::MembershipRevoke {
+                member_peer,
+                respond_to,
+            }) = rx.recv().await
+            else {
+                panic!("expected membership resign request");
+            };
+            assert_eq!(member_peer, None);
+            respond_to
+                .send(Ok(MembershipMutationResult {
+                    member_peer: "12D3KooIssuer".to_owned(),
+                    issuer_peer: "12D3KooIssuer".to_owned(),
+                    membership_epoch: 4,
+                    sequence: 10,
+                    resigned: true,
+                }))
+                .expect("resign response accepted");
+        });
+
+        let revoked =
+            query_membership_revoke(&path, std::time::Duration::from_secs(1), "12D3KooTarget")
+                .await
+                .expect("revoke query");
+        assert_eq!(revoked.member_peer, "12D3KooTarget");
+        assert!(!revoked.resigned);
+
+        let resigned = query_membership_resign(&path, std::time::Duration::from_secs(1))
+            .await
+            .expect("resign query");
+        assert_eq!(resigned.member_peer, "12D3KooIssuer");
+        assert!(resigned.resigned);
         responder.await.expect("responder");
         drop(socket);
     }

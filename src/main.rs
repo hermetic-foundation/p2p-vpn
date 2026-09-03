@@ -64,7 +64,7 @@ use p2p_vpn::{
             PairRpcRejectionReason, PairRpcRequest, PairRpcRequestEnvelope,
             PairRpcResponseEnvelope, PairRpcResult, PairRpcRole, PairRpcRoute,
             PairRpcSignedMembershipRecord, query_dns_list, query_dns_resolve, query_dns_status,
-            query_network_peers, query_pair_rpc,
+            query_membership_resign, query_membership_revoke, query_network_peers, query_pair_rpc,
         },
         dns::{DnsLookupType, DnsRuntime, MAX_DNS_CONTROL_LIST_LIMIT},
         forward::session_id_for_peer,
@@ -458,6 +458,10 @@ enum Command {
         #[command(subcommand)]
         command: PairCommand,
     },
+    Membership {
+        #[command(subcommand)]
+        command: MembershipCommand,
+    },
     Dns {
         #[command(subcommand)]
         command: DnsCommand,
@@ -849,6 +853,25 @@ enum PairCommand {
         timeout_seconds: u64,
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MembershipCommand {
+    /// Revoke an active member from a running network.
+    Revoke {
+        member_peer: String,
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
+    },
+    /// Revoke this daemon's own membership without affecting other members.
+    Resign {
+        #[command(flatten)]
+        target: DaemonTarget,
+        #[arg(long, value_enum, default_value_t = DaemonViewFormat::Text)]
+        format: DaemonViewFormat,
     },
 }
 
@@ -1416,6 +1439,7 @@ async fn main() -> Result<(), String> {
                 .await
             }
         },
+        Command::Membership { command } => membership_command(command).await,
         Command::Dns { command } => dns_command(command).await,
         Command::MembershipRecordIssue {
             issuer_config,
@@ -8299,6 +8323,50 @@ async fn dns_command(command: DnsCommand) -> Result<(), String> {
         }
     };
     write_daemon_view_output(view, &lines, format)
+}
+
+async fn membership_command(command: MembershipCommand) -> Result<(), String> {
+    let (target, member_peer, format) = match command {
+        MembershipCommand::Revoke {
+            member_peer,
+            target,
+            format,
+        } => (target, Some(member_peer), format),
+        MembershipCommand::Resign { target, format } => (target, None, format),
+    };
+    let (socket, timeout) = daemon_target(&target)?;
+    let result = match member_peer {
+        Some(member_peer) => query_membership_revoke(&socket, timeout, &member_peer).await,
+        None => query_membership_resign(&socket, timeout).await,
+    }
+    .map_err(|error| {
+        format!(
+            "membership mutation failed through {}: {error:?}",
+            socket.display()
+        )
+    })?;
+
+    match format {
+        DaemonViewFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&result)
+                .map_err(|error| format!("failed to encode membership result: {error}"))?
+        ),
+        DaemonViewFormat::Text => {
+            println!(
+                "membership: {}",
+                if result.resigned {
+                    "resigned"
+                } else {
+                    "revoked"
+                }
+            );
+            println!("member: {}", result.member_peer);
+            println!("issuer: {}", result.issuer_peer);
+            println!("version: {}:{}", result.membership_epoch, result.sequence);
+        }
+    }
+    Ok(())
 }
 
 async fn peers_command(target: &DaemonTarget, format: DaemonViewFormat) -> Result<(), String> {
@@ -15955,6 +16023,55 @@ mod tests {
             }
             address
         }
+    }
+
+    #[test]
+    fn cli_parses_membership_governance_commands() {
+        let revoke = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership",
+            "revoke",
+            "12D3KooTarget",
+            "--instance",
+            "runners",
+            "--format",
+            "json",
+        ])
+        .expect("revoke CLI");
+        let Command::Membership {
+            command:
+                MembershipCommand::Revoke {
+                    member_peer,
+                    target,
+                    format,
+                },
+        } = revoke.command
+        else {
+            panic!("expected membership revoke command");
+        };
+        assert_eq!(member_peer, "12D3KooTarget");
+        assert_eq!(target.instance.as_deref(), Some("runners"));
+        assert_eq!(format, DaemonViewFormat::Json);
+
+        let resign = Cli::try_parse_from([
+            "p2p-vpn",
+            "membership",
+            "resign",
+            "--socket",
+            "/run/p2p-vpn-runners/control.sock",
+        ])
+        .expect("resign CLI");
+        let Command::Membership {
+            command: MembershipCommand::Resign { target, format },
+        } = resign.command
+        else {
+            panic!("expected membership resign command");
+        };
+        assert_eq!(
+            target.socket,
+            Some(PathBuf::from("/run/p2p-vpn-runners/control.sock"))
+        );
+        assert_eq!(format, DaemonViewFormat::Text);
     }
 
     #[test]

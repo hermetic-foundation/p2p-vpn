@@ -8,13 +8,14 @@ User behavior is documented in [Network Membership](../user/membership.md).
 
 | Invariant | Enforcement |
 | --- | --- |
-| Network names do not authorize | Every dynamic member needs a valid trust path. |
+| Network names do not authorize | Every dynamic member needs accepted signed admission history. |
 | Transport identity is bound | Record public keys must derive their declared peer IDs. |
 | Route ownership is explicit | Only signed built-in or granted prefixes compile. |
 | Updates are monotonic | `(membership_epoch, sequence)` selects the latest record. |
 | Equivocation fails closed | Equal version with unequal payload is rejected. |
 | Revocation survives restart | Newer tombstones remain in signed history. |
-| Untrusted delegation is removed | Effective membership follows active roots only. |
+| Membership is ownerless | A creator may resign without disabling later members. |
+| Provenance is not authority | Revoking an inviter does not revoke its invitees. |
 | Dissemination is bounded | Record, page, snapshot, concurrency, and rate limits apply. |
 
 ## Record Schema
@@ -38,19 +39,21 @@ The current record version is `1`.
 
 Portable integer fields are capped at signed 64-bit range for native Nix parity.
 
-## Trust Roots
+## Genesis And Authorization
 
 An explicit root is a self-issued `overlay_member` record.
 
 Its issuer and member peer IDs are equal.
 
-```text
-root --signs--> member A --signs--> member B
-```
+The self-record anchors network history and pairing compatibility.
 
-Active overlay members form the delegated issuer graph.
+It does not grant permanent owner powers.
 
-Trust-path selection uses breadth-first traversal and returns a shortest valid chain.
+Every active member may issue a later admission or revocation event.
+
+Event authorization uses the issuer's state at the event's signed issue time.
+
+Removing an issuer later does not invalidate events accepted while it was active.
 
 ### Compatibility Mode
 
@@ -62,15 +65,15 @@ Once any explicit self-record exists, only explicit roots anchor trust.
 
 Receiver-side pairing rejects implicit multi-issuer migration into that strict mode.
 
-## Canonical Merge
+## Ledger Merge
 
-The canonical key is:
+Equal-version equivocation is scoped by:
 
 ```text
 (issuer_peer, member_peer)
 ```
 
-The canonical version is:
+The effective state for each member is ordered by:
 
 ```text
 (membership_epoch, sequence)
@@ -82,16 +85,15 @@ The forwarder commits routes, peers, and authorization only after validation suc
 
 | Comparison | Result |
 | --- | --- |
-| Incoming version is newer | Accept replacement. |
-| Incoming version is older | Count as stale. |
+| New distinct signed event | Retain as bounded audit history. |
+| Higher target version | Replace the target's effective state. |
+| Lower target version | Keep as history without changing effective state. |
 | Version and payload match | Count as already known. |
 | Version matches, payload differs | Return `ConflictingRecordVersion`. |
 | Record exceeds bounds | Reject the full merge. |
-| Issuer has no active trust path | Reject incoming authority. |
+| Issuer was inactive at issue time | Reject incoming authority. |
 
-The effective member map can combine roles and distinct route grants from multiple issuers.
-
-A revocation remains scoped to its issuer-to-member relationship.
+Concurrent target events use revoked-first safety and stable signer/signature tie-breaks.
 
 ## Expiry and Revocation
 
@@ -108,25 +110,27 @@ Revocation records must have:
 | `route_grants` | empty |
 | `expires_at_unix_seconds` | absent |
 
-Revoking a delegate removes records issued only through that delegate.
+Revocation changes only the target member's effective state.
 
-Revoking a root removes the root's reachable delegated subgraph.
+Previously admitted descendants remain active.
+
+Re-admission requires a membership epoch above the revoked or expired epoch.
 
 ## Pairing Admission
 
-Code pairing returns the joiner grant plus the inviter's complete valid trust path.
+Code pairing returns the joiner grant plus a bounded authorization proof.
 
 The response is accepted only when that path reaches a local trust anchor.
 
-```text
-trusted root
-  -> inviter grant
-  -> joiner grant
-```
+The proof includes historical authorizers and their current tombstones.
+
+A joiner therefore does not resurrect a creator that already resigned.
 
 Both sides merge the same signed history before applying forwarding and TUN changes.
 
 Native pairing artifacts retain that history instead of flattening it into static peers.
+
+Pairing a revoked peer again advances its epoch and creates explicit re-admission.
 
 ## Connected-Peer Dissemination
 
@@ -184,14 +188,14 @@ An open inviter must admit unknown peers until the pairing protocol authenticate
 
 Kademlia publishes at most eight records in a 64 KiB bundle.
 
-The local trust path is prioritized before other records.
+The local authorization proof is prioritized before other records.
 
 | Property | Rule |
 | --- | --- |
 | DHT key | Network and optional membership-tag scoped. |
 | Bundle | Versioned JSON with network and membership scope. |
 | Authority | None until every signature and trust edge validates. |
-| Purpose | Bootstrap trust-path discovery and convergence acceleration. |
+| Purpose | Bootstrap authorization discovery and convergence acceleration. |
 | Complete history | Retrieved from authenticated connected-peer paging. |
 
 Public DHT writers cannot authorize themselves by publishing a matching network name.
@@ -210,6 +214,10 @@ An accepted record update changes four runtime surfaces:
 Kernel route commands have inverse operations for rollback.
 
 Route conflicts abort before a new forwarding state is committed.
+
+Local revoke and resign requests use the same staged route transaction.
+
+Successful mutations persist state and advertise new capabilities immediately.
 
 ## Restart Order
 
@@ -279,6 +287,10 @@ Learned records remain mutable service state and never rewrite the Nix source.
 
 This preserves Nix evaluation purity while supporting offline restart recovery.
 
+Declarative `peers` remain separate static authorization.
+
+A signed revoke refuses targets still authorized through that option.
+
 ## Observability
 
 ### Status Views
@@ -320,10 +332,10 @@ Secrets are never included in membership events.
 
 | Layer | Coverage |
 | --- | --- |
-| Membership unit tests | Signatures, bounds, delegation, conflict, expiry, revocation. |
+| Membership unit tests | Signatures, bounds, flat authorization, conflict, expiry, and re-admission. |
 | Control unit tests | Snapshot stability, cursor validation, frame-sized pages. |
 | Runner unit tests | Atomic merge, sync retry, persistence, route restore. |
-| Pairing tests | Trust-path preservation and receiver anchor checks. |
+| Pairing tests | Authorization proofs, departed creators, and receiver anchor checks. |
 | Nix evaluation | Native records and durable state wiring. |
 | Four-VM convergence | Independent pairing, full mesh, restart, relay, movement. |
 

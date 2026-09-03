@@ -737,6 +737,7 @@ fn transport_peers_from_config_and_records(
     member_records: &[SignedMembershipRecord],
     now_unix_seconds: u64,
 ) -> Result<HashMap<PeerId, Libp2pPeerId>, ConfigError> {
+    let local_transport_peer = config.local_peer()?;
     let local_peer = config.local_peer_id()?;
     let mut peers: HashMap<PeerId, Libp2pPeerId> = config
         .peers
@@ -746,11 +747,20 @@ fn transport_peers_from_config_and_records(
             Some((PeerId::from_libp2p(libp2p_peer), libp2p_peer))
         })
         .collect();
-    for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
-        .overlay_members()
-    {
-        if member.peer != local_peer {
-            peers.insert(member.peer, member.transport_peer);
+    let effective =
+        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+    let local_has_record = member_records
+        .iter()
+        .any(|record| record.payload.member_peer == local_transport_peer);
+    let local_is_active = !local_has_record
+        || effective
+            .overlay_members()
+            .any(|member| member.peer == local_peer);
+    if local_is_active {
+        for member in effective.overlay_members() {
+            if member.peer != local_peer {
+                peers.insert(member.peer, member.transport_peer);
+            }
         }
     }
     Ok(peers)
@@ -761,13 +771,23 @@ fn authorized_peers_from_config_and_records(
     member_records: &[SignedMembershipRecord],
     now_unix_seconds: u64,
 ) -> Result<AuthorizedPeers, ConfigError> {
+    let local_transport_peer = config.local_peer()?;
     let local_peer = config.local_peer_id()?;
     let mut authorized = AuthorizedPeers::from_config(config);
-    for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
-        .overlay_members()
-    {
-        if member.peer != local_peer {
-            authorized.insert(member.transport_peer);
+    let effective =
+        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+    let local_has_record = member_records
+        .iter()
+        .any(|record| record.payload.member_peer == local_transport_peer);
+    let local_is_active = !local_has_record
+        || effective
+            .overlay_members()
+            .any(|member| member.peer == local_peer);
+    if local_is_active {
+        for member in effective.overlay_members() {
+            if member.peer != local_peer {
+                authorized.insert(member.transport_peer);
+            }
         }
     }
     Ok(authorized)

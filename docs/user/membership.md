@@ -51,20 +51,22 @@ Public bootstrap and relay nodes provide reachability only.
 
 They do not become overlay members unless they also hold a valid grant.
 
-## Trust Graph
+## Flat Membership Ledger
 
 An overlay starts from a signed self-record that acts as a trust root.
 
-Pairing preserves that root and the complete trust path to the new member.
+That record identifies the network history. It does not remain an owner account.
 
 | Role | Authority |
 | --- | --- |
-| `overlay_member` | Join the overlay and admit another member through approved pairing. |
+| `overlay_member` | Join the overlay, admit members, revoke members, and resign. |
 | `route_authority` | Originate the routes listed in the signed record. |
 
 An admitted member can pair a later node without returning to the original root.
 
-Every receiver still validates the complete signature chain to a configured root.
+Each admission remains valid after its inviter leaves.
+
+Inviter identity is retained as audit provenance, not ongoing authority.
 
 ## Automatic Convergence
 
@@ -92,7 +94,7 @@ Network movement therefore does not pin a peer to an old underlay route.
 
 ## Updates and Conflicts
 
-Each issuer-to-member relationship has a monotonic version:
+Each member has a network-wide effective state selected by:
 
 ```text
 (membership_epoch, sequence)
@@ -100,8 +102,8 @@ Each issuer-to-member relationship has a monotonic version:
 
 | Incoming Record | Result |
 | --- | --- |
-| Higher version | Replaces the older record. |
-| Lower version | Ignored as stale. |
+| Higher version | Wins the member's effective state. |
+| Lower version | Remains audit history but does not win. |
 | Identical version and payload | Ignored as already known. |
 | Identical version, different payload | Rejected as equivocation. |
 | Invalid signature or network | Rejected. |
@@ -111,17 +113,38 @@ The same result is used after restart and regardless of arrival order.
 
 ## Revocation and Expiry
 
-A revocation is a newer signed record with `revoked = true`.
+A revocation is a newer member-state record with `revoked = true`.
 
 It carries no roles, routes, or expiry and remains as a non-expiring tombstone.
 
 | Event | Effective Result |
 | --- | --- |
-| Member revocation | Removes that issuer's grant to the member. |
-| Issuer revocation | Removes authority derived through that issuer. |
-| Root revocation | Removes the root and its delegated descendants. |
+| Member revocation | Removes that member globally after convergence. |
+| Inviter revocation | Keeps independently admitted members active. |
+| Creator resignation | Keeps the remaining network active and governable. |
+| Self-resignation | Removes only the resigning member. |
 | Grant expiry | Deactivates the grant at its deadline. |
 | Newer expired grant | Does not revive an older grant after restart. |
+
+Any active signed member can revoke another signed member:
+
+```sh
+sudo p2p-vpn membership revoke PEER_ID --instance lab
+```
+
+A member can leave without deleting the network:
+
+```sh
+sudo p2p-vpn membership resign --instance lab
+```
+
+Pair the peer again to readmit it. Re-admission advances the membership epoch.
+
+The daemon stays available for re-pairing but stops authorizing signed peers.
+
+Declarative `peers` entries remain independent authorization.
+
+Remove such entries from Nix or JSON before revoking or resigning.
 
 Removing a record from one config is not a network-wide revocation.
 
@@ -242,7 +265,7 @@ Failure events include a stable reason or an operator action.
 | Snapshot-change restarts | 3 |
 | Failed-sync retry delay | 30 seconds |
 
-The record limit counts issuer-to-member relationships, not only unique nodes.
+The record limit counts retained admission, update, and revocation history.
 
 ## Troubleshooting
 
@@ -253,5 +276,6 @@ The record limit counts issuer-to-member relationships, not only unique nodes.
 | Restart loses a learned route | `--membership-state`, file mode, and load events. |
 | State load stops the service | Journal reason, local peer, network, and file version. |
 | Same-version records disagree | Replace them with one higher-version authoritative record. |
-| Revoked descendant remains reachable | Confirm the newer revocation reached every member. |
+| Revoked member remains reachable | Remove any declarative `peers` entry, then confirm the tombstone converged. |
+| Inviter was revoked but invitees remain | Expected; admissions are independent. |
 | Public relay is connected but unauthorized | Expected; relay membership is separate from reachability. |
