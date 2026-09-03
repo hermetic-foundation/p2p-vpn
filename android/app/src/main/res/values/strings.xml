@@ -39,6 +39,15 @@
     <string name="peer_membership_local">Local configuration</string>
     <string name="peer_membership_configured">Peer configuration</string>
     <string name="peer_membership_signed">Signed membership</string>
+    <string name="peer_membership_state">State: %1$s</string>
+    <string name="peer_membership_state_configured">Configured</string>
+    <string name="peer_membership_state_active">Active</string>
+    <string name="peer_membership_state_revoked">Revoked</string>
+    <string name="peer_membership_state_expired">Expired</string>
+    <string name="peer_membership_state_inactive">Inactive</string>
+    <string name="peer_invited_by">Invited by: %1$s</string>
+    <string name="peer_originally_invited_by">Originally invited by: %1$s</string>
+    <string name="peer_inviter_genesis">Genesis member</string>
     <string name="peer_path_udp">UDP datagram</string>
     <string name="peer_path_quic_datagram">QUIC datagram</string>
     <string name="peer_path_quic_stream">QUIC stream</string>

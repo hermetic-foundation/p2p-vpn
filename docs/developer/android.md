@@ -34,7 +34,7 @@ MainActivity
 | `android/app/src/main/java/.../NetworkDetailScreen.java` | Identity, pairing, peers, state, and removal |
 | `android/app/src/main/java/.../DeviceHostname.java` | DNS-safe Android device-name normalization |
 | `android/app/src/main/java/.../NetworkUiState.java` | Desired-versus-observed state projection |
-| `android/app/src/main/java/.../PeerSnapshot.java` | Bounded native peer-snapshot parser |
+| `android/app/src/main/java/.../PeerSnapshot.java` | Bounded peer, state, and inviter-provenance parser |
 | `android/app/src/main/java/.../P2pVpnService.java` | VPN and recovery lifecycle |
 | `android/app/src/main/java/.../VpnMode.java` | Always-on and lockdown mode policy |
 | `android/app/src/main/java/.../UnderlayTracker.java` | Deterministic physical-network selection |

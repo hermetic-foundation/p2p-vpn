@@ -406,14 +406,47 @@ pub fn effective_membership_at(
         let current_admission = evaluation
             .current_admissions
             .get(&payload.member_peer)
-            .map(|index| &records[*index].payload)
-            .unwrap_or(payload);
+            .map_or(payload, |index| &records[*index].payload);
         let candidate =
             EffectiveMember::try_from_payload(payload, current_admission, original_admission)?;
         members.insert(candidate.peer, candidate);
     }
 
     Ok(EffectiveMembership { members })
+}
+
+pub fn membership_audit_at(
+    records: &[SignedMembershipRecord],
+    network_name: &str,
+    now_unix_seconds: u64,
+) -> Result<Vec<MembershipAuditMember>, MembershipRecordError> {
+    validate_membership_record_history(records, network_name)?;
+    let anchors = membership_trust_anchors(records, network_name)?;
+    let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
+    let mut members = evaluation
+        .states
+        .iter()
+        .map(|(member_peer, state)| {
+            let state_payload = &records[state.record_index].payload;
+            let current_admission = evaluation
+                .current_admissions
+                .get(member_peer)
+                .map(|index| &records[*index].payload);
+            let original_admission = evaluation
+                .first_admissions
+                .get(member_peer)
+                .map(|index| &records[*index].payload);
+            MembershipAuditMember::try_from_payloads(
+                state_payload,
+                current_admission,
+                original_admission,
+                state.active,
+                now_unix_seconds,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    members.sort_unstable_by_key(|member| member.transport_peer);
+    Ok(members)
 }
 
 fn ensure_record_network(
@@ -815,6 +848,76 @@ pub struct EffectiveMember {
     pub hostnames: Vec<String>,
     pub roles: Vec<MembershipRole>,
     pub route_grants: Vec<RouteConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MembershipState {
+    Active,
+    Revoked,
+    Expired,
+    Inactive,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MembershipAuditMember {
+    pub peer: PeerId,
+    pub transport_peer: Libp2pPeerId,
+    pub state: MembershipState,
+    pub effective_inviter_peer: Option<Libp2pPeerId>,
+    pub original_inviter_peer: Option<Libp2pPeerId>,
+    pub admitted_at_unix_seconds: Option<u64>,
+    pub original_admitted_at_unix_seconds: Option<u64>,
+    pub state_changed_at_unix_seconds: u64,
+    pub hostname: Option<String>,
+}
+
+impl MembershipAuditMember {
+    fn try_from_payloads(
+        state_payload: &MembershipRecordPayload,
+        current_admission: Option<&MembershipRecordPayload>,
+        original_admission: Option<&MembershipRecordPayload>,
+        active: bool,
+        now_unix_seconds: u64,
+    ) -> Result<Self, MembershipRecordError> {
+        let transport_peer = state_payload.member_peer.parse::<Libp2pPeerId>()?;
+        let (state, state_changed_at_unix_seconds) = if active {
+            (
+                MembershipState::Active,
+                state_payload.issued_at_unix_seconds,
+            )
+        } else if state_payload.revoked {
+            (
+                MembershipState::Revoked,
+                state_payload.issued_at_unix_seconds,
+            )
+        } else if let Some(expires_at) = state_payload.expires_at_unix_seconds
+            && now_unix_seconds >= expires_at
+        {
+            (MembershipState::Expired, expires_at)
+        } else {
+            (
+                MembershipState::Inactive,
+                state_payload.issued_at_unix_seconds,
+            )
+        };
+        Ok(Self {
+            peer: PeerId::from_libp2p(transport_peer),
+            transport_peer,
+            state,
+            effective_inviter_peer: current_admission.map(inviter_peer).transpose()?.flatten(),
+            original_inviter_peer: original_admission.map(inviter_peer).transpose()?.flatten(),
+            admitted_at_unix_seconds: current_admission
+                .map(|payload| payload.issued_at_unix_seconds),
+            original_admitted_at_unix_seconds: original_admission
+                .map(|payload| payload.issued_at_unix_seconds),
+            state_changed_at_unix_seconds,
+            hostname: current_admission
+                .and_then(|payload| payload.hostname.as_deref())
+                .map(canonical_dns_label)
+                .transpose()
+                .map_err(MembershipRecordError::InvalidHostname)?,
+        })
+    }
 }
 
 impl EffectiveMember {

@@ -67,6 +67,8 @@ partial inventory when one instance is unavailable.
 | `INSTANCE` | NixOS module instance containing the peer |
 | `HOSTNAMES` | Authenticated short names; `-` when unnamed |
 | `IPV4` | Identity-derived and explicit IPv4 host addresses |
+| `STATE` | Signed-ledger state, or `configured` for a static-only peer |
+| `INVITED_BY` | First admission inviter hostname or peer ID; `genesis` for a root |
 | `LOCAL` | Whether the row is local to that instance |
 | `PEER_ID` | libp2p public identity |
 
@@ -95,6 +97,12 @@ sudo p2p-vpn peers --format json
 | `peers[].ipv4` | Sorted IPv4 array |
 | `peers[].ipv6` | Sorted IPv6 array |
 | `peers[].local` | Boolean |
+| `peers[].membership.state` | `configured`, `active`, `revoked`, `expired`, or `inactive` |
+| `peers[].membership.effective_inviter` | Current admission inviter identity and optional hostname |
+| `peers[].membership.original_inviter` | First admission inviter identity and optional hostname |
+| `peers[].membership.admitted_at_unix_seconds` | Current admission time |
+| `peers[].membership.original_admitted_at_unix_seconds` | First admission time |
+| `peers[].membership.state_changed_at_unix_seconds` | Effective state-record time |
 
 Use a control socket outside the NixOS module:
 
@@ -119,6 +127,12 @@ sudo p2p-vpn peers \
 | `peers[].ipv4` | Sorted IPv4 array |
 | `peers[].ipv6` | Sorted IPv6 array |
 | `peers[].local` | Boolean |
+| `peers[].membership` | Optional signed-ledger state and admission provenance |
+
+Revoked, expired, and inactive signed members remain visible for audit.
+
+Their derived addresses are omitted unless declarative configuration still
+authorizes them independently.
 
 Legacy config inspection remains available:
 

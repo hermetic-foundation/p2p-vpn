@@ -9,7 +9,9 @@ use crate::{
     PathKind, PeerId,
     config::{Config, ConfigError, RouteConfig, vpn_ip_host_route},
     dns::canonical_dns_label,
-    membership::{SignedMembershipRecord, effective_membership_at},
+    membership::{
+        MembershipState, SignedMembershipRecord, effective_membership_at, membership_audit_at,
+    },
     path::PathOrigin,
     route::{builtin_ipv4, builtin_ipv6},
 };
@@ -159,6 +161,7 @@ pub struct NetworkPeerSnapshotPeer {
     pub ipv4: Vec<Ipv4Addr>,
     pub ipv6: Vec<Ipv6Addr>,
     pub local: bool,
+    pub membership: Option<NetworkPeerMembership>,
     pub membership_sources: Vec<NetworkPeerMembershipSource>,
     pub connection_state: NetworkPeerConnectionState,
     pub selected_path: Option<NetworkPeerPathKind>,
@@ -180,6 +183,7 @@ impl NetworkPeerSnapshotPeer {
             ipv4: peer.ipv4,
             ipv6: peer.ipv6,
             local: peer.local,
+            membership: peer.membership,
             membership_sources: entry.membership_sources,
             connection_state: runtime_state.connection_state,
             selected_path: runtime_state.selected_path,
@@ -194,6 +198,38 @@ pub enum NetworkPeerMembershipSource {
     LocalConfiguration,
     PeerConfiguration,
     SignedMembership,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkPeerMembershipState {
+    Configured,
+    Active,
+    Revoked,
+    Expired,
+    Inactive,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkPeerInviter {
+    pub peer_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkPeerMembership {
+    pub state: NetworkPeerMembershipState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_inviter: Option<NetworkPeerInviter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_inviter: Option<NetworkPeerInviter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted_at_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_admitted_at_unix_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_changed_at_unix_seconds: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -308,6 +344,8 @@ pub struct NetworkPeer {
     pub ipv4: Vec<Ipv4Addr>,
     pub ipv6: Vec<Ipv6Addr>,
     pub local: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership: Option<NetworkPeerMembership>,
 }
 
 #[derive(Debug)]
@@ -317,6 +355,14 @@ struct NetworkPeerBuilder {
     ipv4: BTreeSet<Ipv4Addr>,
     ipv6: BTreeSet<Ipv6Addr>,
     local: bool,
+    membership_state: Option<NetworkPeerMembershipState>,
+    effective_inviter_peer_id: Option<String>,
+    effective_inviter_hostname: Option<String>,
+    original_inviter_peer_id: Option<String>,
+    original_inviter_hostname: Option<String>,
+    admitted_at_unix_seconds: Option<u64>,
+    original_admitted_at_unix_seconds: Option<u64>,
+    membership_state_changed_at_unix_seconds: Option<u64>,
     membership_sources: BTreeSet<NetworkPeerMembershipSource>,
 }
 
@@ -328,6 +374,14 @@ impl NetworkPeerBuilder {
             ipv4: BTreeSet::from([builtin_ipv4(peer)]),
             ipv6: BTreeSet::from([builtin_ipv6(peer)]),
             local: false,
+            membership_state: None,
+            effective_inviter_peer_id: None,
+            effective_inviter_hostname: None,
+            original_inviter_peer_id: None,
+            original_inviter_hostname: None,
+            admitted_at_unix_seconds: None,
+            original_admitted_at_unix_seconds: None,
+            membership_state_changed_at_unix_seconds: None,
             membership_sources: BTreeSet::new(),
         }
     }
@@ -341,6 +395,24 @@ impl NetworkPeerBuilder {
                 ipv4: self.ipv4.into_iter().collect(),
                 ipv6: self.ipv6.into_iter().collect(),
                 local: self.local,
+                membership: self.membership_state.map(|state| NetworkPeerMembership {
+                    state,
+                    effective_inviter: self.effective_inviter_peer_id.map(|peer_id| {
+                        NetworkPeerInviter {
+                            peer_id,
+                            hostname: self.effective_inviter_hostname,
+                        }
+                    }),
+                    original_inviter: self.original_inviter_peer_id.map(|peer_id| {
+                        NetworkPeerInviter {
+                            peer_id,
+                            hostname: self.original_inviter_hostname,
+                        }
+                    }),
+                    admitted_at_unix_seconds: self.admitted_at_unix_seconds,
+                    original_admitted_at_unix_seconds: self.original_admitted_at_unix_seconds,
+                    state_changed_at_unix_seconds: self.membership_state_changed_at_unix_seconds,
+                }),
             },
             membership_sources: self.membership_sources.into_iter().collect(),
         }
@@ -365,6 +437,21 @@ struct NetworkPeerInventoryEntry {
     membership_sources: Vec<NetworkPeerMembershipSource>,
 }
 
+impl NetworkPeerInventoryEntry {
+    fn operationally_authorized(&self) -> bool {
+        self.peer.local
+            || self
+                .membership_sources
+                .contains(&NetworkPeerMembershipSource::PeerConfiguration)
+            || self.peer.membership.as_ref().is_some_and(|membership| {
+                matches!(
+                    membership.state,
+                    NetworkPeerMembershipState::Configured | NetworkPeerMembershipState::Active
+                )
+            })
+    }
+}
+
 fn network_peer_inventory_at(
     config: &Config,
     member_records: &[SignedMembershipRecord],
@@ -376,6 +463,7 @@ fn network_peer_inventory_at(
 
     let local = peer_entry(&mut peers, local_peer, config.local_peer()?);
     local.local = true;
+    local.membership_state = Some(NetworkPeerMembershipState::Configured);
     local
         .membership_sources
         .insert(NetworkPeerMembershipSource::LocalConfiguration);
@@ -388,6 +476,7 @@ fn network_peer_inventory_at(
     for configured in &config.peers {
         let peer = configured.peer_id()?;
         let entry = peer_entry(&mut peers, peer, configured.id.clone());
+        entry.membership_state = Some(NetworkPeerMembershipState::Configured);
         entry
             .membership_sources
             .insert(NetworkPeerMembershipSource::PeerConfiguration);
@@ -397,6 +486,14 @@ fn network_peer_inventory_at(
         insert_vpn_ip(entry, configured.vpn_ip.as_deref())?;
         insert_host_routes(entry, &configured.routes)?;
     }
+
+    insert_membership_audit(
+        &mut peers,
+        member_records,
+        &config.network.name,
+        hostname_records,
+        now_unix_seconds,
+    )?;
 
     for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
         .overlay_members()
@@ -420,6 +517,26 @@ fn network_peer_inventory_at(
         }
     }
 
+    let inviter_hostnames = peers
+        .values()
+        .filter_map(|entry| {
+            entry
+                .hostnames
+                .first()
+                .map(|hostname| (entry.peer_id.clone(), hostname.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    for entry in peers.values_mut() {
+        entry.effective_inviter_hostname = entry
+            .effective_inviter_peer_id
+            .as_ref()
+            .and_then(|peer| inviter_hostnames.get(peer).cloned());
+        entry.original_inviter_hostname = entry
+            .original_inviter_peer_id
+            .as_ref()
+            .and_then(|peer| inviter_hostnames.get(peer).cloned());
+    }
+
     let mut peers = peers
         .into_iter()
         .map(|(overlay_peer, builder)| builder.finish(overlay_peer))
@@ -427,13 +544,55 @@ fn network_peer_inventory_at(
     peers.sort_by(|left, right| {
         let left_name = left.peer.hostnames.first().map(String::as_str);
         let right_name = right.peer.hostnames.first().map(String::as_str);
-        left_name
-            .is_none()
-            .cmp(&right_name.is_none())
+        right
+            .operationally_authorized()
+            .cmp(&left.operationally_authorized())
+            .then_with(|| left_name.is_none().cmp(&right_name.is_none()))
             .then_with(|| left_name.cmp(&right_name))
             .then_with(|| left.peer.peer_id.cmp(&right.peer.peer_id))
     });
     Ok(peers)
+}
+
+fn insert_membership_audit(
+    peers: &mut HashMap<PeerId, NetworkPeerBuilder>,
+    member_records: &[SignedMembershipRecord],
+    network_name: &str,
+    hostname_records: &HashMap<PeerId, String>,
+    now_unix_seconds: u64,
+) -> Result<(), ConfigError> {
+    for member in membership_audit_at(member_records, network_name, now_unix_seconds)? {
+        let entry = peer_entry(peers, member.peer, member.transport_peer.to_string());
+        entry.peer_id = member.transport_peer.to_string();
+        entry.membership_state = Some(match member.state {
+            MembershipState::Active => NetworkPeerMembershipState::Active,
+            MembershipState::Revoked => NetworkPeerMembershipState::Revoked,
+            MembershipState::Expired => NetworkPeerMembershipState::Expired,
+            MembershipState::Inactive => NetworkPeerMembershipState::Inactive,
+        });
+        entry.effective_inviter_peer_id =
+            member.effective_inviter_peer.map(|peer| peer.to_string());
+        entry.original_inviter_peer_id = member.original_inviter_peer.map(|peer| peer.to_string());
+        entry.admitted_at_unix_seconds = member.admitted_at_unix_seconds;
+        entry.original_admitted_at_unix_seconds = member.original_admitted_at_unix_seconds;
+        entry.membership_state_changed_at_unix_seconds = Some(member.state_changed_at_unix_seconds);
+        if !hostname_records.contains_key(&member.peer) {
+            insert_hostname(entry, member.hostname.as_deref());
+        }
+        entry
+            .membership_sources
+            .insert(NetworkPeerMembershipSource::SignedMembership);
+        if member.state != MembershipState::Active
+            && !entry.local
+            && !entry
+                .membership_sources
+                .contains(&NetworkPeerMembershipSource::PeerConfiguration)
+        {
+            entry.ipv4.clear();
+            entry.ipv6.clear();
+        }
+    }
+    Ok(())
 }
 
 fn peer_entry(
@@ -575,6 +734,22 @@ mod tests {
             .iter()
             .find(|peer| peer.peer_id == signed.peer_id)
             .expect("signed peer");
+        let membership = signed_peer.membership.as_ref().expect("signed membership");
+        assert_eq!(membership.state, NetworkPeerMembershipState::Active);
+        assert_eq!(
+            membership
+                .effective_inviter
+                .as_ref()
+                .map(|inviter| inviter.peer_id.as_str()),
+            Some(local.peer_id.as_str())
+        );
+        assert_eq!(
+            membership
+                .effective_inviter
+                .as_ref()
+                .and_then(|inviter| inviter.hostname.as_deref()),
+            Some("local-runner")
+        );
         assert!(
             signed_peer
                 .ipv4
@@ -655,6 +830,96 @@ mod tests {
     }
 
     #[test]
+    fn inventory_retains_revoked_member_as_an_audit_entry_without_routes() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let member = NodeIdentity::generate_ed25519().expect("member identity");
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "network": {
+                "name": "lab",
+                "private_key": local.private_key.clone(),
+                "dns": {
+                    "enabled": true,
+                    "hostname": "local-node"
+                }
+            },
+            "peers": []
+        }))
+        .expect("config");
+        let root = issue_named_membership_record_for_subject_at(
+            &local,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&local).expect("local subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            Some("local-node"),
+            1_000,
+        )
+        .expect("root record");
+        let grant = issue_named_membership_record_for_subject_at(
+            &local,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            Some("departed-node"),
+            1_001,
+        )
+        .expect("member grant");
+        let revocation = issue_named_membership_record_for_subject_at(
+            &local,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&member).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            None,
+            1_002,
+        )
+        .expect("member revocation");
+        config.network.member_records = vec![root, grant, revocation];
+
+        let inventory =
+            NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_003)
+                .expect("peer inventory");
+        assert_eq!(inventory.peers[0].peer_id, local.peer_id);
+        let revoked = inventory
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == member.peer_id)
+            .expect("revoked audit entry");
+        let membership = revoked.membership.as_ref().expect("membership details");
+
+        assert_eq!(membership.state, NetworkPeerMembershipState::Revoked);
+        assert_eq!(
+            membership
+                .effective_inviter
+                .as_ref()
+                .and_then(|inviter| inviter.hostname.as_deref()),
+            Some("local-node")
+        );
+        assert_eq!(revoked.hostnames, ["departed-node"]);
+        assert!(revoked.ipv4.is_empty());
+        assert!(revoked.ipv6.is_empty());
+    }
+
+    #[test]
     fn snapshot_is_bounded_and_always_retains_the_local_peer() {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let peers = (0..=MAX_NETWORK_PEER_SNAPSHOT_PEERS)
@@ -718,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn inventory_omits_non_overlay_and_expired_membership_records() {
+    fn inventory_retains_inactive_and_expired_membership_audit_entries() {
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let routing_peer = NodeIdentity::generate_ed25519().expect("routing identity");
         let expired_peer = NodeIdentity::generate_ed25519().expect("expired identity");
@@ -771,7 +1036,41 @@ mod tests {
             NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_001)
                 .expect("peer inventory");
 
-        assert_eq!(inventory.peers.len(), 1);
-        assert_eq!(inventory.peers[0].peer_id, local.peer_id);
+        assert_eq!(inventory.peers.len(), 3);
+        let routing = inventory
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == routing_peer.peer_id)
+            .expect("routing-only audit entry");
+        assert_eq!(
+            routing
+                .membership
+                .as_ref()
+                .map(|membership| membership.state),
+            Some(NetworkPeerMembershipState::Inactive)
+        );
+        assert!(routing.ipv4.is_empty());
+        assert!(routing.ipv6.is_empty());
+        let expired = inventory
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == expired_peer.peer_id)
+            .expect("expired audit entry");
+        assert_eq!(
+            expired
+                .membership
+                .as_ref()
+                .map(|membership| membership.state),
+            Some(NetworkPeerMembershipState::Expired)
+        );
+        assert_eq!(
+            expired
+                .membership
+                .as_ref()
+                .and_then(|membership| membership.state_changed_at_unix_seconds),
+            Some(1_001)
+        );
+        assert!(expired.ipv4.is_empty());
+        assert!(expired.ipv6.is_empty());
     }
 }

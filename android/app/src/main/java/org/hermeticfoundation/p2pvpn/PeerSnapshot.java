@@ -296,6 +296,104 @@ final class PeerSnapshot {
         }
     }
 
+    enum MembershipState {
+        CONFIGURED("configured"),
+        ACTIVE("active"),
+        REVOKED("revoked"),
+        EXPIRED("expired"),
+        INACTIVE("inactive");
+
+        final String wireName;
+
+        MembershipState(String wireName) {
+            this.wireName = wireName;
+        }
+
+        static MembershipState parse(String value) throws P2pVpnException {
+            for (MembershipState state : values()) {
+                if (state.wireName.equals(value)) {
+                    return state;
+                }
+            }
+            throw new P2pVpnException("Peer snapshot contains an unknown membership state");
+        }
+    }
+
+    static final class Inviter {
+        final String peerId;
+        final Optional<String> hostname;
+
+        private Inviter(String peerId, String hostname) {
+            this.peerId = peerId;
+            this.hostname = Optional.ofNullable(hostname);
+        }
+
+        private static Inviter parse(JSONObject value) throws P2pVpnException {
+            String peerId = Peer.requirePeerId(requireString(value, "peer_id"));
+            String hostname = null;
+            if (value.has("hostname") && !value.isNull("hostname")) {
+                hostname = requireString(value, "hostname");
+                Peer.requireDnsHostname(hostname);
+            }
+            return new Inviter(peerId, hostname);
+        }
+    }
+
+    static final class Membership {
+        final MembershipState state;
+        final Optional<Inviter> effectiveInviter;
+        final Optional<Inviter> originalInviter;
+        final Optional<Long> admittedAtUnixSeconds;
+        final Optional<Long> originalAdmittedAtUnixSeconds;
+        final Optional<Long> stateChangedAtUnixSeconds;
+
+        private Membership(
+                MembershipState state,
+                Inviter effectiveInviter,
+                Inviter originalInviter,
+                Long admittedAtUnixSeconds,
+                Long originalAdmittedAtUnixSeconds,
+                Long stateChangedAtUnixSeconds) {
+            this.state = state;
+            this.effectiveInviter = Optional.ofNullable(effectiveInviter);
+            this.originalInviter = Optional.ofNullable(originalInviter);
+            this.admittedAtUnixSeconds = Optional.ofNullable(admittedAtUnixSeconds);
+            this.originalAdmittedAtUnixSeconds =
+                    Optional.ofNullable(originalAdmittedAtUnixSeconds);
+            this.stateChangedAtUnixSeconds = Optional.ofNullable(stateChangedAtUnixSeconds);
+        }
+
+        private static Membership parse(JSONObject value) throws P2pVpnException {
+            return new Membership(
+                    MembershipState.parse(requireString(value, "state")),
+                    parseOptionalInviter(value, "effective_inviter"),
+                    parseOptionalInviter(value, "original_inviter"),
+                    parseOptionalLong(value, "admitted_at_unix_seconds"),
+                    parseOptionalLong(value, "original_admitted_at_unix_seconds"),
+                    parseOptionalLong(value, "state_changed_at_unix_seconds"));
+        }
+
+        private static Inviter parseOptionalInviter(JSONObject value, String key)
+                throws P2pVpnException {
+            if (!value.has(key) || value.isNull(key)) {
+                return null;
+            }
+            Object encoded = value.opt(key);
+            if (!(encoded instanceof JSONObject)) {
+                throw new P2pVpnException("Peer snapshot membership inviter is not an object");
+            }
+            return Inviter.parse((JSONObject) encoded);
+        }
+
+        private static Long parseOptionalLong(JSONObject value, String key)
+                throws P2pVpnException {
+            if (!value.has(key) || value.isNull(key)) {
+                return null;
+            }
+            return requireNonNegativeLong(value, key);
+        }
+    }
+
     enum ConnectionState {
         LOCAL("local"),
         CONNECTED("connected"),
@@ -374,6 +472,7 @@ final class PeerSnapshot {
         final List<String> ipv4;
         final List<String> ipv6;
         final boolean local;
+        final Optional<Membership> membership;
         final List<MembershipSource> membershipSources;
         final ConnectionState connectionState;
         final Optional<PathKind> selectedPath;
@@ -385,6 +484,7 @@ final class PeerSnapshot {
                 List<String> ipv4,
                 List<String> ipv6,
                 boolean local,
+                Membership membership,
                 List<MembershipSource> membershipSources,
                 ConnectionState connectionState,
                 PathKind selectedPath,
@@ -394,6 +494,7 @@ final class PeerSnapshot {
             this.ipv4 = immutableCopy(ipv4);
             this.ipv6 = immutableCopy(ipv6);
             this.local = local;
+            this.membership = Optional.ofNullable(membership);
             this.membershipSources = immutableCopy(membershipSources);
             this.connectionState = connectionState;
             this.selectedPath = Optional.ofNullable(selectedPath);
@@ -406,6 +507,7 @@ final class PeerSnapshot {
             List<String> ipv4 = parseAddresses(requireArray(value, "ipv4"), false);
             List<String> ipv6 = parseAddresses(requireArray(value, "ipv6"), true);
             boolean local = requireBoolean(value, "local");
+            Membership membership = parseOptionalMembership(value);
             List<MembershipSource> membershipSources =
                     parseMembershipSources(requireArray(value, "membership_sources"));
             ConnectionState connectionState =
@@ -437,10 +539,23 @@ final class PeerSnapshot {
                     ipv4,
                     ipv6,
                     local,
+                    membership,
                     membershipSources,
                     connectionState,
                     selectedPath,
                     pathOrigin);
+        }
+
+        private static Membership parseOptionalMembership(JSONObject value)
+                throws P2pVpnException {
+            if (!value.has("membership") || value.isNull("membership")) {
+                return null;
+            }
+            Object encoded = value.opt("membership");
+            if (!(encoded instanceof JSONObject)) {
+                throw new P2pVpnException("Peer snapshot membership is not an object");
+            }
+            return Membership.parse((JSONObject) encoded);
         }
 
         private static String requirePeerId(String value) throws P2pVpnException {

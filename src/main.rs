@@ -8471,6 +8471,42 @@ fn write_network_peer_list(
     Ok(())
 }
 
+fn network_peer_membership_state(peer: &NetworkPeer) -> &'static str {
+    peer.membership
+        .as_ref()
+        .map_or("configured", |membership| match membership.state {
+            p2p_vpn::network_peer::NetworkPeerMembershipState::Configured => "configured",
+            p2p_vpn::network_peer::NetworkPeerMembershipState::Active => "active",
+            p2p_vpn::network_peer::NetworkPeerMembershipState::Revoked => "revoked",
+            p2p_vpn::network_peer::NetworkPeerMembershipState::Expired => "expired",
+            p2p_vpn::network_peer::NetworkPeerMembershipState::Inactive => "inactive",
+        })
+}
+
+fn network_peer_inviter(peer: &NetworkPeer) -> String {
+    peer.membership.as_ref().map_or_else(
+        || "-".to_owned(),
+        |membership| {
+            if membership.state == p2p_vpn::network_peer::NetworkPeerMembershipState::Configured {
+                return "-".to_owned();
+            }
+            membership
+                .original_inviter
+                .as_ref()
+                .or(membership.effective_inviter.as_ref())
+                .map_or_else(
+                    || "genesis".to_owned(),
+                    |inviter| {
+                        inviter
+                            .hostname
+                            .clone()
+                            .unwrap_or_else(|| inviter.peer_id.clone())
+                    },
+                )
+        },
+    )
+}
+
 fn network_peer_list_text(peers: &NetworkPeerList) -> String {
     let rows = peers
         .peers
@@ -8490,33 +8526,47 @@ fn network_peer_list_text(peers: &NetworkPeerList) -> String {
                     .collect::<Vec<_>>()
                     .join(",")
             };
-            (hostnames, ipv4, peer)
+            let membership_state = network_peer_membership_state(peer);
+            let invited_by = network_peer_inviter(peer);
+            (hostnames, ipv4, membership_state, invited_by, peer)
         })
         .collect::<Vec<_>>();
     let hostname_width = rows
         .iter()
-        .map(|(hostname, _, _)| hostname.len())
+        .map(|(hostname, _, _, _, _)| hostname.len())
         .max()
         .unwrap_or(0)
         .max("HOSTNAMES".len());
     let ipv4_width = rows
         .iter()
-        .map(|(_, ipv4, _)| ipv4.len())
+        .map(|(_, ipv4, _, _, _)| ipv4.len())
         .max()
         .unwrap_or(0)
         .max("IPV4".len());
+    let state_width = rows
+        .iter()
+        .map(|(_, _, state, _, _)| state.len())
+        .max()
+        .unwrap_or(0)
+        .max("STATE".len());
+    let inviter_width = rows
+        .iter()
+        .map(|(_, _, _, inviter, _)| inviter.len())
+        .max()
+        .unwrap_or(0)
+        .max("INVITED_BY".len());
     let mut lines = vec![
         format!("network: {}", peers.network),
         format!("peers: {}", peers.peers.len()),
         String::new(),
         format!(
-            "{:<hostname_width$}  {:<ipv4_width$}  LOCAL  PEER_ID",
-            "HOSTNAMES", "IPV4"
+            "{:<hostname_width$}  {:<ipv4_width$}  {:<state_width$}  {:<inviter_width$}  LOCAL  PEER_ID",
+            "HOSTNAMES", "IPV4", "STATE", "INVITED_BY"
         ),
     ];
-    for (hostnames, ipv4, peer) in rows {
+    for (hostnames, ipv4, state, invited_by, peer) in rows {
         lines.push(format!(
-            "{hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {:<5}  {}",
+            "{hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {state:<state_width$}  {invited_by:<inviter_width$}  {:<5}  {}",
             if peer.local { "yes" } else { "no" },
             peer.peer_id
         ));
@@ -8546,39 +8596,60 @@ fn all_instance_network_peer_list_text(peers: &AllInstanceNetworkPeerList) -> St
                     .collect::<Vec<_>>()
                     .join(",")
             };
-            (&entry.instance, hostnames, ipv4, &entry.peer)
+            let membership_state = network_peer_membership_state(&entry.peer);
+            let invited_by = network_peer_inviter(&entry.peer);
+            (
+                &entry.instance,
+                hostnames,
+                ipv4,
+                membership_state,
+                invited_by,
+                &entry.peer,
+            )
         })
         .collect::<Vec<_>>();
     let instance_width = rows
         .iter()
-        .map(|(instance, _, _, _)| instance.len())
+        .map(|(instance, _, _, _, _, _)| instance.len())
         .max()
         .unwrap_or(0)
         .max("INSTANCE".len());
     let hostname_width = rows
         .iter()
-        .map(|(_, hostname, _, _)| hostname.len())
+        .map(|(_, hostname, _, _, _, _)| hostname.len())
         .max()
         .unwrap_or(0)
         .max("HOSTNAMES".len());
     let ipv4_width = rows
         .iter()
-        .map(|(_, _, ipv4, _)| ipv4.len())
+        .map(|(_, _, ipv4, _, _, _)| ipv4.len())
         .max()
         .unwrap_or(0)
         .max("IPV4".len());
+    let state_width = rows
+        .iter()
+        .map(|(_, _, _, state, _, _)| state.len())
+        .max()
+        .unwrap_or(0)
+        .max("STATE".len());
+    let inviter_width = rows
+        .iter()
+        .map(|(_, _, _, _, inviter, _)| inviter.len())
+        .max()
+        .unwrap_or(0)
+        .max("INVITED_BY".len());
     let mut lines = vec![
         format!("instances: {}", peers.instance_count),
         format!("peers: {}", peers.peers.len()),
         String::new(),
         format!(
-            "{:<instance_width$}  {:<hostname_width$}  {:<ipv4_width$}  LOCAL  PEER_ID",
-            "INSTANCE", "HOSTNAMES", "IPV4"
+            "{:<instance_width$}  {:<hostname_width$}  {:<ipv4_width$}  {:<state_width$}  {:<inviter_width$}  LOCAL  PEER_ID",
+            "INSTANCE", "HOSTNAMES", "IPV4", "STATE", "INVITED_BY"
         ),
     ];
-    for (instance, hostnames, ipv4, peer) in rows {
+    for (instance, hostnames, ipv4, state, invited_by, peer) in rows {
         lines.push(format!(
-            "{instance:<instance_width$}  {hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {:<5}  {}",
+            "{instance:<instance_width$}  {hostnames:<hostname_width$}  {ipv4:<ipv4_width$}  {state:<state_width$}  {invited_by:<inviter_width$}  {:<5}  {}",
             if peer.local { "yes" } else { "no" },
             peer.peer_id
         ));
@@ -11313,6 +11384,20 @@ mod tests {
                 ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
                 ipv6: vec!["fd00::1".parse().expect("IPv6")],
                 local: true,
+                membership: Some(p2p_vpn::network_peer::NetworkPeerMembership {
+                    state: p2p_vpn::network_peer::NetworkPeerMembershipState::Active,
+                    effective_inviter: Some(p2p_vpn::network_peer::NetworkPeerInviter {
+                        peer_id: "12D3KooWInviter".to_owned(),
+                        hostname: Some("scheduler".to_owned()),
+                    }),
+                    original_inviter: Some(p2p_vpn::network_peer::NetworkPeerInviter {
+                        peer_id: "12D3KooWFounder".to_owned(),
+                        hostname: Some("founder".to_owned()),
+                    }),
+                    admitted_at_unix_seconds: Some(1_000),
+                    original_admitted_at_unix_seconds: Some(1_000),
+                    state_changed_at_unix_seconds: Some(1_000),
+                }),
             }],
         };
 
@@ -11320,7 +11405,10 @@ mod tests {
 
         assert!(output.starts_with("network: runner-mesh\npeers: 1\n\n"));
         assert!(output.contains("HOSTNAMES  IPV4"));
-        assert!(output.contains("worker-1   100.64.0.1  yes"));
+        assert!(output.contains("STATE   INVITED_BY"));
+        assert!(output.contains("worker-1   100.64.0.1  active  founder"));
+        assert!(!output.contains("scheduler"));
+        assert!(output.contains("yes    12D3KooWWorker"));
         assert!(output.contains("12D3KooWWorker"));
     }
 
@@ -11335,6 +11423,17 @@ mod tests {
                 ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
                 ipv6: vec!["fd00::1".parse().expect("IPv6")],
                 local: false,
+                membership: Some(p2p_vpn::network_peer::NetworkPeerMembership {
+                    state: p2p_vpn::network_peer::NetworkPeerMembershipState::Revoked,
+                    effective_inviter: Some(p2p_vpn::network_peer::NetworkPeerInviter {
+                        peer_id: "12D3KooWInviter".to_owned(),
+                        hostname: None,
+                    }),
+                    original_inviter: None,
+                    admitted_at_unix_seconds: Some(1_000),
+                    original_admitted_at_unix_seconds: None,
+                    state_changed_at_unix_seconds: Some(2_000),
+                }),
             }],
         };
 
@@ -11345,6 +11444,11 @@ mod tests {
         assert_eq!(output["peers"][0]["hostnames"][0], "worker-1");
         assert_eq!(output["peers"][0]["ipv4"][0], "100.64.0.1");
         assert_eq!(output["peers"][0]["ipv6"][0], "fd00::1");
+        assert_eq!(output["peers"][0]["membership"]["state"], "revoked");
+        assert_eq!(
+            output["peers"][0]["membership"]["effective_inviter"]["peer_id"],
+            "12D3KooWInviter"
+        );
     }
 
     #[tokio::test]
@@ -11388,6 +11492,7 @@ mod tests {
                         ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
                         ipv6: Vec::new(),
                         local: true,
+                        membership: None,
                     }],
                 }))
                 .expect("alpha response accepted");
@@ -11408,6 +11513,7 @@ mod tests {
                         ipv4: vec!["100.64.0.2".parse().expect("IPv4")],
                         ipv6: Vec::new(),
                         local: false,
+                        membership: None,
                     }],
                 }))
                 .expect("beta response accepted");
@@ -11428,6 +11534,8 @@ mod tests {
         assert!(text.starts_with("instances: 2\npeers: 2\n\n"));
         assert!(text.contains("INSTANCE  HOSTNAMES"));
         assert!(text.contains("alpha     alpha-host"));
+        assert!(text.contains("configured  -"));
+        assert!(!text.contains("genesis"));
         let json = serde_json::to_value(&peers).expect("peer list JSON");
         assert_eq!(json["peers"][0]["instance"], "alpha");
         assert_eq!(json["peers"][0]["network"], "personal");

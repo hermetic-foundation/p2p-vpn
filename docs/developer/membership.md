@@ -116,6 +116,25 @@ Previously admitted descendants remain active.
 
 Re-admission requires a membership epoch above the revoked or expired epoch.
 
+## Audit Projection
+
+Peer inventory projects accepted ledger history without exposing signatures or
+raw records.
+
+| Field | Meaning |
+| --- | --- |
+| `state` | Current signed-ledger state. |
+| `effective_inviter` | Issuer of the current admission epoch. |
+| `original_inviter` | Issuer of the first accepted admission. |
+| `admitted_at_unix_seconds` | Current admission record time. |
+| `original_admitted_at_unix_seconds` | First admission record time. |
+| `state_changed_at_unix_seconds` | Effective grant, expiry, or tombstone record time. |
+
+Revoked, expired, and inactive members remain in the inventory for audit.
+
+They have no derived routes unless static configuration authorizes them
+independently. Operationally authorized rows sort before inactive history.
+
 ## Pairing Admission
 
 Code pairing returns the joiner grant plus a bounded authorization proof.

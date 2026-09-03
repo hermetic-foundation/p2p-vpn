@@ -16,6 +16,21 @@ public final class PeerSnapshotTest {
         JSONObject local = localPeer("localPeer", "android-phone");
         JSONObject remote = connectedPeer("remotePeer", "runner-one", "10.42.0.2", "fd00::2");
         remote.getJSONArray("membership_sources").put("peer_configuration");
+        remote.put(
+                "membership",
+                new JSONObject()
+                        .put("state", "active")
+                        .put(
+                                "effective_inviter",
+                                new JSONObject()
+                                        .put("peer_id", "currentInviter")
+                                        .put("hostname", "current-host"))
+                        .put(
+                                "original_inviter",
+                                new JSONObject().put("peer_id", "originalInviter"))
+                        .put("admitted_at_unix_seconds", 1_788_290_900L)
+                        .put("original_admitted_at_unix_seconds", 1_788_290_000L)
+                        .put("state_changed_at_unix_seconds", 1_788_290_900L));
         remote.put("future_metric", 12);
         JSONObject encoded = snapshot(new JSONArray().put(local).put(remote), 2, 2, false);
 
@@ -41,6 +56,14 @@ public final class PeerSnapshotTest {
         assertEquals(
                 PeerSnapshot.MembershipSource.PEER_CONFIGURATION,
                 parsed.peers.get(1).membershipSources.get(1));
+        PeerSnapshot.Membership membership = parsed.peers.get(1).membership.get();
+        assertEquals(PeerSnapshot.MembershipState.ACTIVE, membership.state);
+        assertEquals("currentInviter", membership.effectiveInviter.get().peerId);
+        assertEquals("current-host", membership.effectiveInviter.get().hostname.get());
+        assertEquals("originalInviter", membership.originalInviter.get().peerId);
+        assertEquals(Optional.of(1_788_290_900L), membership.admittedAtUnixSeconds);
+        assertEquals(
+                Optional.of(1_788_290_000L), membership.originalAdmittedAtUnixSeconds);
     }
 
     @Test
@@ -177,6 +200,51 @@ public final class PeerSnapshotTest {
 
         peer = connectedPeer("remotePeer", "runner-one", "10.42.0.2", "fd00::2");
         peer.put("selected_path", "relay-through-peer-id");
+        assertMalformed(singlePeerSnapshot(peer));
+    }
+
+    @Test
+    public void rejectsMalformedMembershipProvenance() throws Exception {
+        JSONObject peer = disconnectedPeer("remotePeer", "runner-one");
+        peer.put("membership", new JSONObject().put("state", "removed"));
+        assertMalformed(singlePeerSnapshot(peer));
+
+        peer = disconnectedPeer("remotePeer", "runner-one");
+        peer.put(
+                "membership",
+                new JSONObject()
+                        .put("state", "active")
+                        .put("effective_inviter", "not-an-object"));
+        assertMalformed(singlePeerSnapshot(peer));
+
+        peer = disconnectedPeer("remotePeer", "runner-one");
+        peer.put(
+                "membership",
+                new JSONObject()
+                        .put("state", "active")
+                        .put(
+                                "effective_inviter",
+                                new JSONObject().put("peer_id", "invalid peer")));
+        assertMalformed(singlePeerSnapshot(peer));
+
+        peer = disconnectedPeer("remotePeer", "runner-one");
+        peer.put(
+                "membership",
+                new JSONObject()
+                        .put("state", "active")
+                        .put(
+                                "effective_inviter",
+                                new JSONObject()
+                                        .put("peer_id", "inviterPeer")
+                                        .put("hostname", "Invalid-Host")));
+        assertMalformed(singlePeerSnapshot(peer));
+
+        peer = disconnectedPeer("remotePeer", "runner-one");
+        peer.put(
+                "membership",
+                new JSONObject()
+                        .put("state", "revoked")
+                        .put("state_changed_at_unix_seconds", -1));
         assertMalformed(singlePeerSnapshot(peer));
     }
 

@@ -296,7 +296,61 @@ final class NetworkDetailScreen {
                     break;
             }
         }
-        return activity.getString(R.string.peer_membership, sources.toString());
+        StringBuilder details =
+                new StringBuilder(activity.getString(R.string.peer_membership, sources.toString()));
+        if (!peer.membership.isPresent()) {
+            return details.toString();
+        }
+        PeerSnapshot.Membership membership = peer.membership.get();
+        details.append("\n")
+                .append(
+                        activity.getString(
+                                R.string.peer_membership_state,
+                                membershipStateName(membership.state)));
+        if (membership.state != PeerSnapshot.MembershipState.CONFIGURED) {
+            details.append("\n")
+                    .append(
+                            activity.getString(
+                                    R.string.peer_invited_by,
+                                    inviterName(membership.effectiveInviter.orElse(null))));
+        }
+        if (membership.state != PeerSnapshot.MembershipState.CONFIGURED
+                && membership.originalInviter.isPresent()
+                && membership.effectiveInviter.map(
+                                inviter ->
+                                        !inviter.peerId.equals(
+                                                membership.originalInviter.get().peerId))
+                        .orElse(true)) {
+            details.append("\n")
+                    .append(
+                            activity.getString(
+                                    R.string.peer_originally_invited_by,
+                                    inviterName(membership.originalInviter.get())));
+        }
+        return details.toString();
+    }
+
+    private String inviterName(PeerSnapshot.Inviter inviter) {
+        if (inviter == null) {
+            return activity.getString(R.string.peer_inviter_genesis);
+        }
+        return inviter.hostname.orElse(inviter.peerId);
+    }
+
+    private String membershipStateName(PeerSnapshot.MembershipState state) {
+        switch (state) {
+            case ACTIVE:
+                return activity.getString(R.string.peer_membership_state_active);
+            case REVOKED:
+                return activity.getString(R.string.peer_membership_state_revoked);
+            case EXPIRED:
+                return activity.getString(R.string.peer_membership_state_expired);
+            case INACTIVE:
+                return activity.getString(R.string.peer_membership_state_inactive);
+            case CONFIGURED:
+            default:
+                return activity.getString(R.string.peer_membership_state_configured);
+        }
     }
 
     private String pathName(PeerSnapshot.PathKind path) {

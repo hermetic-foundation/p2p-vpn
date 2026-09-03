@@ -2210,6 +2210,7 @@ mod tests {
                 ipv4: vec!["100.64.0.1".parse().expect("IPv4")],
                 ipv6: vec!["fd00::1".parse().expect("IPv6")],
                 local: true,
+                membership: None,
             }],
         };
         let response = expected.clone();
