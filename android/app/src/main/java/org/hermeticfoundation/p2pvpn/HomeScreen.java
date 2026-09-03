@@ -5,6 +5,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -28,7 +29,7 @@ final class HomeScreen {
     private final LinearLayout recovery;
     private final Button reset;
     private final Button add;
-    private final View diagnostics;
+    private final View overflow;
     private final TextView status;
 
     HomeScreen(Activity activity, View root, Listener listener) {
@@ -39,12 +40,26 @@ final class HomeScreen {
         recovery = root.findViewById(R.id.profile_recovery);
         reset = root.findViewById(R.id.reset_profile);
         add = root.findViewById(R.id.add_network);
-        diagnostics = root.findViewById(R.id.export_diagnostics);
+        overflow = root.findViewById(R.id.home_overflow);
         status = root.findViewById(R.id.home_status);
 
         add.setOnClickListener(view -> listener.addNetwork());
-        diagnostics.setOnClickListener(view -> listener.exportDiagnostics());
+        overflow.setOnClickListener(this::showOverflowMenu);
         reset.setOnClickListener(view -> listener.resetUnreadableProfile());
+    }
+
+    private void showOverflowMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(activity, anchor);
+        menu.inflate(R.menu.home_overflow);
+        menu.setOnMenuItemClickListener(
+                item -> {
+                    if (item.getItemId() != R.id.action_export_diagnostics) {
+                        return false;
+                    }
+                    listener.exportDiagnostics();
+                    return true;
+                });
+        menu.show();
     }
 
     void render(
@@ -59,7 +74,7 @@ final class HomeScreen {
             empty.setVisibility(View.VISIBLE);
             recovery.setVisibility(View.GONE);
             add.setEnabled(false);
-            diagnostics.setEnabled(false);
+            overflow.setEnabled(false);
             status.setText(R.string.loading);
             return;
         }
@@ -78,7 +93,7 @@ final class HomeScreen {
                         && !snapshot.busy
                         && !snapshot.pairingActive
                         && snapshot.networks.size() < ProfileCollection.MAX_NETWORKS);
-        diagnostics.setEnabled(bound);
+        overflow.setEnabled(bound);
 
         boolean canMutate =
                 bound

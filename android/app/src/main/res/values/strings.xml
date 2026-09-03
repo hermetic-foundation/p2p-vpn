@@ -8,6 +8,7 @@
     <string name="network_name_hint">Network name</string>
     <string name="create_network">Create network</string>
     <string name="add_network">Add network</string>
+    <string name="more_options">More options</string>
     <string name="join_by_code">Join by code</string>
     <string name="enable_network_named">Enable %1$s</string>
     <string name="disable_network_named">Disable %1$s</string>
