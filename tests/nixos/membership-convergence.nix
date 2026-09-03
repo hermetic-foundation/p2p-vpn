@@ -239,6 +239,36 @@ pkgs.testers.nixosTest {
     def wait_for_three_records(node):
         wait_for_record_count(node, 3)
 
+    def wait_for_records_everywhere(count):
+        for node in [node_a, node_b, node_c]:
+            wait_for_record_count(node, count)
+
+    def wait_for_membership_state(
+        node,
+        peer_id,
+        expected_state,
+        effective_inviter=None,
+        original_inviter=None,
+    ):
+        expression = (
+            '.peers[] | select(.peer_id == $peer and .membership.state == $state)'
+        )
+        arguments = (
+            " --arg peer " + shlex.quote(peer_id)
+            + " --arg state " + shlex.quote(expected_state)
+        )
+        if effective_inviter is not None:
+            expression += " | select(.membership.effective_inviter.peer_id == $effective)"
+            arguments += " --arg effective " + shlex.quote(effective_inviter)
+        if original_inviter is not None:
+            expression += " | select(.membership.original_inviter.peer_id == $original)"
+            arguments += " --arg original " + shlex.quote(original_inviter)
+        node.wait_until_succeeds(
+            "p2p-vpn peers --instance ${instance} --format json | jq -e"
+            + arguments + " " + shlex.quote(expression),
+            timeout=120,
+        )
+
     def dns_resolve(name):
         return "p2p-vpn dns resolve " + name + " --socket ${socket} --type a"
 
@@ -294,14 +324,16 @@ pkgs.testers.nixosTest {
         vpn_ip=None,
         expires_at=None,
         revoked=False,
+        next_epoch=False,
     ):
         current = latest_membership_record(node, issuer_peer, member_peer)["payload"]
+        membership_epoch = current["membership_epoch"] + (1 if next_epoch else 0)
         command = (
             "p2p-vpn membership-record-issue"
             + " --issuer-config /run/p2p-vpn-${instance}/config.json"
             + " --member-peer " + shlex.quote(member_peer)
             + " --member-public-key " + shlex.quote(current["member_public_key"])
-            + " --membership-epoch " + str(current["membership_epoch"])
+            + " --membership-epoch " + str(membership_epoch)
             + " --sequence " + str(current["sequence"] + 1)
             + " --output " + shlex.quote(output)
             + " --force"
@@ -417,7 +449,7 @@ pkgs.testers.nixosTest {
             (node_c, "${nodeC.peerId}"),
         ]:
             node.succeed(
-                "jq -e '.version == 1 and .network_name == \"${networkName}\" "
+                "jq -e '.version == 2 and .network_name == \"${networkName}\" "
                 "and .local_peer == \"" + peer + "\" and (.records | length) == 3' "
                 "/var/lib/p2p-vpn/${instance}/membership-state.json"
             )
@@ -554,7 +586,7 @@ pkgs.testers.nixosTest {
             "expire-c",
         )
         for node in [node_a, node_b, node_c]:
-            wait_for_three_records(node)
+            wait_for_record_count(node, 4)
         wait_for_dns(node_a, "${nodeC.hostname}", "${nodeC.vpnIp}")
         node_a.wait_until_succeeds(
             "jq -e --argjson expires " + str(expires_at)
@@ -568,7 +600,7 @@ pkgs.testers.nixosTest {
         for node in [node_a, node_b]:
             wait_for_dns_status(node, "${nodeC.hostname}", "nxdomain", timeout=120)
             wait_for_dns_status(node, node_c_fallback, "nxdomain", timeout=120)
-            wait_for_three_records(node)
+            wait_for_record_count(node, 4)
         node_a.wait_until_succeeds(
             "! resolvectl query ${nodeC.hostname}.${zone}", timeout=120
         )
@@ -577,7 +609,7 @@ pkgs.testers.nixosTest {
             timeout=120,
         )
 
-    with subtest("ambiguous signed hostnames fail closed with unique fallbacks"):
+    with subtest("dedicated hostname records override inviter membership claims"):
         issue_membership_record(
             node_b,
             "${nodeB.peerId}",
@@ -585,6 +617,7 @@ pkgs.testers.nixosTest {
             "/tmp/conflict-c.json",
             hostname="${nodeB.hostname}",
             vpn_ip="${nodeC.vpnIp}",
+            next_epoch=True,
         )
         replace_persisted_record(
             node_b,
@@ -594,24 +627,16 @@ pkgs.testers.nixosTest {
             "conflict-c",
         )
         for node in [node_a, node_b, node_c]:
-            wait_for_three_records(node)
-            node.wait_until_succeeds(
-                dns_resolve("${nodeB.hostname}")
-                + " | grep -F 'status=conflict' | grep -F 'peers_total=2'",
-                timeout=120,
-            )
-        node_a.wait_until_succeeds(
+            wait_for_record_count(node, 5)
+            wait_for_dns(node, "${nodeB.hostname}", "${nodeB.vpnIp}")
+            wait_for_dns(node, "${nodeC.hostname}", "${nodeC.vpnIp}")
+        node_a.fail(
             "p2p-vpn dns list --socket ${socket} "
-            "| grep -F 'dns_conflict name=${nodeB.hostname}.${zone}.' "
-            "| grep -F 'peers_total=2'",
-            timeout=120,
-        )
-        node_a.wait_until_succeeds(
-            "! resolvectl query ${nodeB.hostname}.${zone}", timeout=120
+            "| grep -F 'dns_conflict name=${nodeB.hostname}.${zone}.'"
         )
         wait_for_dns(node_a, node_c_fallback, "${nodeC.vpnIp}")
 
-    with subtest("a signed rename resolves the conflict on every node"):
+    with subtest("later membership hostname leaves dedicated hostname authoritative"):
         issue_membership_record(
             node_b,
             "${nodeB.peerId}",
@@ -628,27 +653,17 @@ pkgs.testers.nixosTest {
             "rename-c",
         )
         for node in [node_a, node_b, node_c]:
-            wait_for_three_records(node)
+            wait_for_record_count(node, 6)
             wait_for_dns(node, "${nodeB.hostname}", "${nodeB.vpnIp}")
             wait_for_dns(node, "${nodeC.hostname}", "${nodeC.vpnIp}")
 
-    with subtest("signed revocation removes names routes and fallback after restart"):
-        issue_membership_record(
-            node_b,
-            "${nodeB.peerId}",
-            "${nodeC.peerId}",
-            "/tmp/revoke-c.json",
-            revoked=True,
-        )
-        replace_persisted_record(
-            node_b,
-            "${nodeB.peerId}",
-            "${nodeC.peerId}",
-            "/tmp/revoke-c.json",
-            "revoke-c",
+    with subtest("runtime revocation removes names routes and fallback after restart"):
+        node_b.succeed(
+            "p2p-vpn membership revoke ${nodeC.peerId} --instance ${instance}"
         )
         for node in [node_a, node_b]:
-            wait_for_three_records(node)
+            wait_for_record_count(node, 7)
+            wait_for_membership_state(node, "${nodeC.peerId}", "revoked")
             wait_for_dns_status(node, "${nodeC.hostname}", "nxdomain")
             wait_for_dns_status(node, node_c_fallback, "nxdomain")
             node.wait_until_succeeds(
@@ -666,11 +681,124 @@ pkgs.testers.nixosTest {
         node_a.wait_for_unit("p2p-vpn-${instance}.service")
         node_a.wait_for_unit("p2p-vpn-${instance}-resolved.service")
         node_a.wait_for_file("${socket}")
-        wait_for_three_records(node_a)
+        wait_for_record_count(node_a, 7)
+        wait_for_membership_state(node_a, "${nodeC.peerId}", "revoked")
         wait_for_dns_status(node_a, "${nodeC.hostname}", "nxdomain")
         wait_for_dns_status(node_a, node_c_fallback, "nxdomain")
         node_a.wait_until_succeeds(
             "! resolvectl query ${nodeC.hostname}.${zone}", timeout=120
+        )
+
+    with subtest("revoked member is re-admitted at a higher epoch"):
+        revoked_c = latest_membership_record(
+            node_a, "${nodeB.peerId}", "${nodeC.peerId}"
+        )["payload"]
+        pair_with_inviter(
+            node_a,
+            node_c,
+            "${nodeC.peerId}",
+            "${nodeC.hostname}",
+            "${nodeC.vpnIp}",
+            "readmit-c",
+        )
+        wait_for_records_everywhere(8)
+        for node in [node_a, node_b, node_c]:
+            wait_for_membership_state(
+                node,
+                "${nodeC.peerId}",
+                "active",
+                effective_inviter="${nodeA.peerId}",
+                original_inviter="${nodeB.peerId}",
+            )
+        readmitted_c = latest_membership_record(
+            node_a, "${nodeA.peerId}", "${nodeC.peerId}"
+        )["payload"]
+        assert (
+            readmitted_c["membership_epoch"]
+            == revoked_c["membership_epoch"] + 1
+        )
+        wait_for_dns(node_b, "${nodeC.hostname}", "${nodeC.vpnIp}")
+
+    with subtest("member C revokes inviter B without cascading to C"):
+        node_c.succeed(
+            "p2p-vpn membership revoke ${nodeB.peerId} --instance ${instance}"
+        )
+        for node in [node_a, node_c]:
+            wait_for_record_count(node, 9)
+            wait_for_membership_state(node, "${nodeB.peerId}", "revoked")
+            wait_for_membership_state(
+                node,
+                "${nodeC.peerId}",
+                "active",
+                effective_inviter="${nodeA.peerId}",
+                original_inviter="${nodeB.peerId}",
+            )
+            wait_for_dns(node, "${nodeC.hostname}", "${nodeC.vpnIp}")
+        node_a.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeC.hostname}", timeout=120
+        )
+
+    with subtest("remaining member C re-admits B and preserves original inviter"):
+        revoked_b = latest_membership_record(
+            node_c, "${nodeC.peerId}", "${nodeB.peerId}"
+        )["payload"]
+        pair_with_inviter(
+            node_c,
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeB.hostname}",
+            "${nodeB.vpnIp}",
+            "readmit-b-by-c",
+        )
+        wait_for_records_everywhere(10)
+        for node in [node_a, node_b, node_c]:
+            wait_for_membership_state(
+                node,
+                "${nodeB.peerId}",
+                "active",
+                effective_inviter="${nodeC.peerId}",
+                original_inviter="${nodeA.peerId}",
+            )
+        readmitted_b = latest_membership_record(
+            node_c, "${nodeC.peerId}", "${nodeB.peerId}"
+        )["payload"]
+        assert (
+            readmitted_b["membership_epoch"]
+            == revoked_b["membership_epoch"] + 1
+        )
+
+    with subtest("self-resignation is global and does not stop the network"):
+        node_b.succeed("p2p-vpn membership resign --instance ${instance}")
+        wait_for_records_everywhere(11)
+        for node in [node_a, node_c]:
+            wait_for_membership_state(node, "${nodeB.peerId}", "revoked")
+            wait_for_membership_state(node, "${nodeC.peerId}", "active")
+            wait_for_dns(node, "${nodeC.hostname}", "${nodeC.vpnIp}")
+        node_a.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeC.hostname}.${zone}", timeout=120
+        )
+
+    with subtest("resigned member can pair again at the next epoch"):
+        pair_with_inviter(
+            node_a,
+            node_b,
+            "${nodeB.peerId}",
+            "${nodeB.hostname}",
+            "${nodeB.vpnIp}",
+            "readmit-b-after-resign",
+        )
+        wait_for_records_everywhere(12)
+        for node in [node_a, node_b, node_c]:
+            wait_for_membership_state(
+                node,
+                "${nodeB.peerId}",
+                "active",
+                effective_inviter="${nodeA.peerId}",
+                original_inviter="${nodeA.peerId}",
+            )
+            wait_for_dns(node, "${nodeB.hostname}", "${nodeB.vpnIp}")
+        node_c.wait_until_succeeds(
+            "ping -4 -I pv0 -c 5 -W 2 ${nodeB.hostname}", timeout=120
         )
   '';
 }
