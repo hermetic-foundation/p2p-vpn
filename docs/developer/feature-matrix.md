@@ -40,7 +40,8 @@ Status is conservative.
 | Network-wide membership convergence | Operational | Delegated-admission four-VM full-mesh proof. |
 | Bounded path recovery | Operational | Coalesced dials, tracked DHT queries, and relay-pressure VM assertions. |
 | Durable learned membership | Operational | Offline restart and owner-only state tests. |
-| Membership conflict, expiry, revocation | Operational | Trust-graph and restart-safe history unit tests. |
+| Ownerless membership governance | Operational | Any-member revoke, self-resign, non-cascading inviter revoke, and re-admission VM proof. |
+| Membership conflict, clock skew, expiry, revocation | Operational | Deterministic ledger and restart-safe history tests. |
 | Public DCUtR proof | Partial | Needs non-LAN topology evidence. |
 | Underlay candidate hygiene | Operational | `cargo test overlay`, forced-relay VM proof. |
 | Membership key | Operational | Config and control validation tests. |
@@ -83,6 +84,7 @@ Status is conservative.
 | 2026-08-30 | Android autonomous recovery E2E | Wi-Fi, total loss, cellular, and Wi-Fi return recovered without runtime restart. |
 | 2026-09-01 | Android multi-network E2E | Two networks, eight traffic directions, overlap, isolation, process, update, lockdown, and reboot passed. |
 | 2026-09-02 | Android physical app workflow | API 37 arm64 install, nested UI, switch lifecycle, peers, update, autonomous boot restoration, and bidirectional dual-stack traffic passed. |
+| 2026-09-03 | Ownerless membership convergence VM | Arbitrary revoke, inviter survival, self-resign, and deliberate re-admission converged across three edge nodes. |
 
 ## Main Remaining Gaps
 

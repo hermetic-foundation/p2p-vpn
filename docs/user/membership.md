@@ -57,16 +57,30 @@ An overlay starts from a signed self-record that acts as a trust root.
 
 That record identifies the network history. It does not remain an owner account.
 
+The default governance policy is `any-member`.
+
 | Role | Authority |
 | --- | --- |
 | `overlay_member` | Join the overlay, admit members, revoke members, and resign. |
 | `route_authority` | Originate the routes listed in the signed record. |
+
+| `any-member` Action | Allowed Actor |
+| --- | --- |
+| Admit a peer | Any active signed member. |
+| Revoke a peer | Any active signed member. |
+| Resign | The active local member. |
+| Re-admit a peer | Any active signed member, at a higher epoch. |
 
 An admitted member can pair a later node without returning to the original root.
 
 Each admission remains valid after its inviter leaves.
 
 Inviter identity is retained as audit provenance, not ongoing authority.
+
+This policy has no permanent owner or administrator account.
+
+A compromised active member can admit or revoke peers. Revoke that identity and
+rotate any shared membership key after recovering control from another member.
 
 ## Automatic Convergence
 
@@ -108,6 +122,8 @@ Each member has a network-wide effective state selected by:
 | Identical version, different payload | Rejected as equivocation. |
 | Invalid signature or network | Rejected. |
 | Untrusted issuer | Rejected. |
+| Issue time up to 60 seconds ahead | Retained, then activated at its signed time. |
+| Issue time over 60 seconds ahead | Rejected. |
 
 The same result is used after restart and regardless of arrival order.
 
@@ -137,6 +153,12 @@ A member can leave without deleting the network:
 ```sh
 sudo p2p-vpn membership resign --instance lab
 ```
+
+The daemon first offers the signed resignation to members connected at command
+time. It stops packet and route authorization immediately.
+
+An isolated member cannot publish while it has no path to another member.
+Reconnect it before resigning when immediate network-wide convergence matters.
 
 On Android, use **Revoke** in a peer row or **Resign membership** in network
 details.
@@ -207,6 +229,13 @@ The service state directory stores records learned after that artifact was gener
 | State format mismatch | Fails closed instead of discarding authority. |
 | Lost learned state | Relearns from reachable members after startup. |
 | Lost identity | Creates a different peer and requires new admission. |
+
+| Existing Input | Upgrade Behavior |
+| --- | --- |
+| Version 1 membership state | Loads with no mutable hostname records, then writes version 2. |
+| Older issuer-based history | Keeps configured issuers as compatibility roots. |
+| History with an explicit self-record | Uses strict flat-ledger authorization. |
+| Existing Nix or JSON member records | Remains valid; no manual rewrite is required. |
 
 Back up the identity and imported pairing Nix together.
 
@@ -279,6 +308,7 @@ The record limit counts retained admission, update, and revocation history.
 | Restart loses a learned route | `--membership-state`, file mode, and load events. |
 | State load stops the service | Journal reason, local peer, network, and file version. |
 | Same-version records disagree | Replace them with one higher-version authoritative record. |
+| Record is rejected as future-dated | Synchronize system time; accepted skew is 60 seconds. |
 | Revoked member remains reachable | Remove any declarative `peers` entry, then confirm the tombstone converged. |
 | Inviter was revoked but invitees remain | Expected; admissions are independent. |
 | Public relay is connected but unauthorized | Expected; relay membership is separate from reachability. |

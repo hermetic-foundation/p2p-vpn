@@ -15,6 +15,7 @@ User behavior is documented in [Network Membership](../user/membership.md).
 | Equivocation fails closed | Equal version with unequal payload is rejected. |
 | Revocation survives restart | Newer tombstones remain in signed history. |
 | Membership is ownerless | A creator may resign without disabling later members. |
+| Governance defaults to `any-member` | Every active member may admit or revoke any identity. |
 | Provenance is not authority | Revoking an inviter does not revoke its invitees. |
 | Dissemination is bounded | Record, page, snapshot, concurrency, and rate limits apply. |
 
@@ -51,6 +52,9 @@ It does not grant permanent owner powers.
 
 Every active member may issue a later admission or revocation event.
 
+This is the `any-member` governance policy. No peer gains durable owner status
+from creating the root record or admitting another member.
+
 Event authorization uses the issuer's state at the event's signed issue time.
 
 Removing an issuer later does not invalidate events accepted while it was active.
@@ -64,6 +68,14 @@ For those histories, configured issuers remain trust roots as a compatibility ru
 Once any explicit self-record exists, only explicit roots anchor trust.
 
 Receiver-side pairing rejects implicit multi-issuer migration into that strict mode.
+
+### Security Consequence
+
+Compromise of one active member grants network-wide admission and revocation
+authority. It does not expose another member's private identity key.
+
+Recovery requires another active member to revoke the compromised identity.
+Shared membership keys must be rotated separately when their secrecy is in doubt.
 
 ## Ledger Merge
 
@@ -94,6 +106,21 @@ The forwarder commits routes, peers, and authorization only after validation suc
 | Issuer was inactive at issue time | Reject incoming authority. |
 
 Concurrent target events use revoked-first safety and stable signer/signature tie-breaks.
+
+### Signed Time
+
+Authorization is evaluated at each event's signed issue time.
+
+| Incoming Time | Handling |
+| --- | --- |
+| At or before local time | Validate and apply normally. |
+| Up to 60 seconds ahead | Validate against the bounded horizon and retain. |
+| Retained but not yet due | Exclude from effective membership until local time reaches it. |
+| More than 60 seconds ahead | Reject with `IssuedInFuture`. |
+
+The runtime revision advances when a retained event becomes effective.
+
+This refreshes forwarding, DNS, routes, and capabilities without another merge.
 
 ## Expiry and Revocation
 
@@ -169,6 +196,23 @@ capability snapshot differs
 Partial pages never mutate membership.
 
 A snapshot change restarts from cursor zero up to the configured bound.
+
+Self-resignation needs one final control-plane exchange after local data-plane
+authorization is removed:
+
+```text
+capture connected active members
+  -> commit and persist the local tombstone
+  -> advertise the new snapshot to captured members
+  -> serve bounded pages to active ledger members
+  -> reject the departed peer after receivers retain its tombstone
+```
+
+The page exception authorizes only active identities in the signed ledger.
+
+It does not restore packet, route, service, pairing, or mutation authority to the
+resigned node. A fully isolated resignation remains durable but cannot converge
+until another member becomes reachable.
 
 | Bound | Value |
 | --- | --- |
@@ -284,6 +328,11 @@ Building it from already-restored membership would skip required route commands.
 
 Version 1 remains readable and loads with no mutable hostname records.
 
+Legacy histories without a self-record retain their configured issuer anchors.
+
+No migration rewrites signed payloads. The first explicit self-record switches
+the history to strict explicit-root validation.
+
 The persistence revision changes when retained membership or hostname records
 change.
 
@@ -356,7 +405,7 @@ Secrets are never included in membership events.
 | Runner unit tests | Atomic merge, sync retry, persistence, route restore. |
 | Pairing tests | Authorization proofs, departed creators, and receiver anchor checks. |
 | Nix evaluation | Native records and durable state wiring. |
-| Four-VM convergence | Independent pairing, full mesh, restart, relay, movement. |
+| Four-VM convergence | Delegated admission, arbitrary revocation, inviter survival, resignation, re-admission, restart, relay, and movement. |
 
 Run the convergence proof:
 

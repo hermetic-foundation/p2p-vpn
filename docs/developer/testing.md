@@ -563,6 +563,10 @@ Coverage:
 | DNS convergence | Short and canonical names resolve on every edge node. |
 | Indirect DNS traffic | Never-paired `A` and `C` ping one another by name. |
 | DNS lifecycle | Expiry, conflict, rename, revocation, and restart fail closed. |
+| Any-member governance | `C` revokes former inviter `B` without losing its own authority. |
+| Re-admission | Revoked identities return only through a higher membership epoch. |
+| Self-resignation | `B` publishes its own tombstone and the remaining mesh stays operational. |
+| Provenance | Effective and original inviter fields survive revocation and re-admission. |
 
 The test compares generated config hashes before and after movement.
 
