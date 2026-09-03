@@ -461,6 +461,17 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
             }
 
             @Override
+            public void revokeMember(
+                    P2pVpnService.NetworkSnapshot network, PeerSnapshot.Peer peer) {
+                confirmRevokeMember(network, peer);
+            }
+
+            @Override
+            public void resignMembership(P2pVpnService.NetworkSnapshot network) {
+                confirmResignMembership(network);
+            }
+
+            @Override
             public void removeNetwork(P2pVpnService.NetworkSnapshot network) {
                 confirmRemoveNetwork(network);
             }
@@ -586,6 +597,38 @@ public final class MainActivity extends Activity implements P2pVpnService.Listen
                         (dialog, which) -> {
                             if (binder != null) {
                                 binder.removeNetwork(network.id);
+                            }
+                        })
+                .show();
+    }
+
+    private void confirmRevokeMember(
+            P2pVpnService.NetworkSnapshot network, PeerSnapshot.Peer peer) {
+        String name = peer.hostnames.isEmpty() ? peer.peerId : peer.hostnames.get(0);
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.revoke_member_title, name))
+                .setMessage(R.string.revoke_member_warning)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.revoke_member,
+                        (dialog, which) -> {
+                            if (binder != null) {
+                                binder.revokeMember(network.id, peer.peerId);
+                            }
+                        })
+                .show();
+    }
+
+    private void confirmResignMembership(P2pVpnService.NetworkSnapshot network) {
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.resign_membership_title, network.name))
+                .setMessage(R.string.resign_membership_warning)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(
+                        R.string.resign_membership,
+                        (dialog, which) -> {
+                            if (binder != null) {
+                                binder.resignMembership(network.id);
                             }
                         })
                 .show();

@@ -928,8 +928,8 @@ mod android {
     use p2p_vpn::pairing_code::PairingCode;
     use p2p_vpn::runtime::{
         control_socket::{
-            PairRpcRequest, PairRpcResponseEnvelope, RuntimeControlHandle, RuntimeNetworkChange,
-            runtime_control_channel,
+            MembershipMutationResult, PairRpcRequest, PairRpcResponseEnvelope,
+            RuntimeControlHandle, RuntimeNetworkChange, runtime_control_channel,
         },
         pairing_bootstrap::{PairingBootstrapOptions, join_by_code_v2},
         runner::{RuntimePlatform, ShutdownReason, run_config_until_with_runtime_platform},
@@ -1505,6 +1505,32 @@ mod android {
         _class: JClass,
     ) -> jstring {
         jni_response(&mut env, |_| network_changed())
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeRevokeMember(
+        mut env: JNIEnv,
+        _class: JClass,
+        network_id: JString,
+        member_peer: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let network_id = read_string(env, &network_id)?;
+            let member_peer = read_string(env, &member_peer)?;
+            membership_mutation(&network_id, Some(member_peer))
+        })
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_hermeticfoundation_p2pvpn_NativeBridge_nativeResignMembership(
+        mut env: JNIEnv,
+        _class: JClass,
+        network_id: JString,
+    ) -> jstring {
+        jni_response(&mut env, |env| {
+            let network_id = read_string(env, &network_id)?;
+            membership_mutation(&network_id, None)
+        })
     }
 
     #[unsafe(no_mangle)]
@@ -2379,6 +2405,25 @@ mod android {
         block_on_control(control.pair_rpc(request))
     }
 
+    fn membership_mutation(
+        network_id: &str,
+        member_peer: Option<String>,
+    ) -> Result<MembershipMutationResult, String> {
+        let runtime = RUNTIME.lock().unwrap_or_else(|error| error.into_inner());
+        let instance = runtime
+            .as_ref()
+            .ok_or_else(|| "p2p-vpn is not connected".to_owned())?;
+        let network = instance
+            .networks
+            .get(network_id)
+            .ok_or_else(|| "requested p2p-vpn network is not active".to_owned())?;
+        let control = network.control().ok_or_else(|| {
+            "requested p2p-vpn network is temporarily unavailable while recovering".to_owned()
+        })?;
+        drop(runtime);
+        block_on_control(control.revoke_member(member_peer))
+    }
+
     fn network_changed() -> Result<AndroidRuntimeNetworkChange, String> {
         let networks = RUNTIME
             .lock()
@@ -2561,9 +2606,9 @@ mod tests {
             issue_named_membership_record_for_subject_at,
         },
         network_peer::{
-            NETWORK_PEER_SNAPSHOT_SCHEMA_VERSION, NetworkPeerConnectionState,
-            NetworkPeerMembershipSource, NetworkPeerPathKind, NetworkPeerPathOrigin,
-            NetworkPeerSnapshotPeer,
+            NETWORK_PEER_SNAPSHOT_SCHEMA_VERSION, NetworkPeerConnectionState, NetworkPeerInviter,
+            NetworkPeerMembership, NetworkPeerMembershipSource, NetworkPeerMembershipState,
+            NetworkPeerPathKind, NetworkPeerPathOrigin, NetworkPeerSnapshotPeer,
         },
         pairing::{
             PairingOfferOptions, PairingResponseOptions, build_pairing_response_at,
@@ -2610,6 +2655,20 @@ mod tests {
                     ipv4: vec![Ipv4Addr::new(10, 42, 0, 2)],
                     ipv6: Vec::new(),
                     local: false,
+                    membership: Some(NetworkPeerMembership {
+                        state: NetworkPeerMembershipState::Active,
+                        effective_inviter: Some(NetworkPeerInviter {
+                            peer_id: "12D3KooWInviter".to_owned(),
+                            hostname: Some("inviter".to_owned()),
+                        }),
+                        original_inviter: Some(NetworkPeerInviter {
+                            peer_id: "12D3KooWInviter".to_owned(),
+                            hostname: Some("inviter".to_owned()),
+                        }),
+                        admitted_at_unix_seconds: Some(1_788_290_000),
+                        original_admitted_at_unix_seconds: Some(1_788_290_000),
+                        state_changed_at_unix_seconds: Some(1_788_290_000),
+                    }),
                     membership_sources: vec![NetworkPeerMembershipSource::SignedMembership],
                     connection_state: NetworkPeerConnectionState::Connected,
                     selected_path: Some(NetworkPeerPathKind::DirectQuicStream),
@@ -2628,6 +2687,10 @@ mod tests {
         assert_eq!(
             encoded["peer_snapshot"]["peers"][0]["selected_path"],
             "direct_quic_stream"
+        );
+        assert_eq!(
+            encoded["peer_snapshot"]["peers"][0]["membership"]["effective_inviter"]["hostname"],
+            "inviter"
         );
         assert!(
             encoded["peer_snapshot"]["peers"][0]

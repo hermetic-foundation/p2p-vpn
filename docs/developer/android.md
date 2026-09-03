@@ -542,6 +542,30 @@ Application and acknowledgment resume after reconnect.
 The received `membership.key` must be a regular file at the managed runtime
 path. Rust unlinks it before reading and embedding it in the encrypted profile.
 
+## Membership Governance
+
+Android uses the platform-neutral `RuntimeControlHandle` for membership
+mutations. No Android-specific wire record exists.
+
+```text
+confirmed UI action
+  -> serialized service worker operation
+  -> network-scoped JNI request
+  -> runtime revoke transaction
+  -> atomic membership-state persistence
+  -> capability and Kademlia propagation
+  -> refreshed bounded peer snapshot
+```
+
+| Action | Runtime request |
+| --- | --- |
+| Revoke peer | `revoke_member(Some(peer_id))` |
+| Resign local identity | `revoke_member(None)` |
+| Delete local profile | No ledger mutation |
+
+The service records only action names in diagnostics. It does not log peer IDs,
+raw member records, signatures, or private state.
+
 ## Route Installation
 
 Rust derives the local addresses and effective route set from the profile.

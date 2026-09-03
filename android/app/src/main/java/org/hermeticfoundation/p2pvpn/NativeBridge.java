@@ -40,6 +40,10 @@ final class NativeBridge {
 
     static native String nativeNetworkChanged();
 
+    static native String nativeRevokeMember(String networkId, String memberPeer);
+
+    static native String nativeResignMembership(String networkId);
+
     static native String nativePairRpc(String requestJson);
 
     static native String nativePairRpcForNetwork(String networkId, String requestJson);

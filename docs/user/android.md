@@ -225,12 +225,29 @@ reports when additional peers were omitted.
 
 After re-admission, **Originally invited by** preserves the first inviter.
 
+### Membership Governance
+
+Membership changes require the network to be enabled and running.
+
+| Action | Result |
+| --- | --- |
+| **Revoke** on a peer | Publishes a signed tombstone for that member. |
+| **Resign membership** | Publishes a signed tombstone for this Android identity. |
+| **Remove network** | Deletes local state only; it does not publish a tombstone. |
+
+Revoking an inviter does not revoke members they admitted.
+
+Any remaining active member can re-admit a revoked identity by pairing again.
+
 ### Remove
 
 Open the network details, select **Remove network**, and confirm the warning.
 
+Remove a network only after resigning when other members must learn that this
+identity left.
+
 Removing the final network returns the app to the empty **Networks** screen.
-This operation permanently deletes that network's private identity.
+It permanently deletes that network's private identity.
 
 ### Rename Network
 

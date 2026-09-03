@@ -1404,6 +1404,61 @@ public final class P2pVpnService extends VpnService {
         }
     }
 
+    private void revokeMember(String networkId, String memberPeer) {
+        if (!beginNetworkMutation("Revoking member")) {
+            return;
+        }
+        boolean mutationSucceeded = false;
+        try {
+            requireRunningNetwork(networkId);
+            MembershipMutation.revoke(networkId, memberPeer);
+            recordDiagnosticEvent("membership_revoked");
+            connectionDetail = "Membership revoked";
+            mutationSucceeded = true;
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+            if (mutationSucceeded && connected) {
+                scheduleStatusPoll();
+            }
+        }
+    }
+
+    private void resignMembership(String networkId) {
+        if (!beginNetworkMutation("Resigning membership")) {
+            return;
+        }
+        boolean mutationSucceeded = false;
+        try {
+            requireRunningNetwork(networkId);
+            MembershipMutation.resign(networkId);
+            recordDiagnosticEvent("membership_resigned");
+            connectionDetail = "Membership resigned";
+            mutationSucceeded = true;
+        } catch (P2pVpnException | RuntimeException | LinkageError error) {
+            connectionDetail = failureMessage(error);
+        } finally {
+            operationInProgress = false;
+            publishSnapshot();
+            if (mutationSucceeded && connected) {
+                scheduleStatusPoll();
+            }
+        }
+    }
+
+    private void requireRunningNetwork(String networkId) throws P2pVpnException {
+        if (!connected || profileCollection == null) {
+            throw new P2pVpnException("Connect the p2p-vpn network before changing membership");
+        }
+        String normalized = ProfileCollection.Entry.normalizeNetworkId(networkId);
+        ProfileCollection.Entry network = profileCollection.find(normalized);
+        if (network == null || !network.enabled || !activeNetworkIds.contains(normalized)) {
+            throw new P2pVpnException("The selected p2p-vpn network is not running");
+        }
+    }
+
     private void reconcileEnabledNetworks() {
         refreshVpnMode(false);
         NetworkActivationPolicy.Outcome outcome =
@@ -2706,6 +2761,14 @@ public final class P2pVpnService extends VpnService {
 
         void renameNetwork(String networkId, String hostname) {
             worker.execute(() -> P2pVpnService.this.renameNetwork(networkId, hostname));
+        }
+
+        void revokeMember(String networkId, String memberPeer) {
+            worker.execute(() -> P2pVpnService.this.revokeMember(networkId, memberPeer));
+        }
+
+        void resignMembership(String networkId) {
+            worker.execute(() -> P2pVpnService.this.resignMembership(networkId));
         }
 
         void removeNetwork(String networkId) {

@@ -14,7 +14,7 @@
     <string name="disable_network_named">Disable %1$s</string>
     <string name="remove_network">Remove network</string>
     <string name="remove_network_title">Remove %1$s?</string>
-    <string name="remove_network_warning">This permanently removes this network identity and membership from the device.</string>
+    <string name="remove_network_warning">This permanently deletes the local identity and network data. It does not revoke the identity from other members.</string>
     <string name="identity_title">Identity</string>
     <string name="hostname_label">Hostname</string>
     <string name="save_hostname">Save</string>
@@ -48,6 +48,12 @@
     <string name="peer_invited_by">Invited by: %1$s</string>
     <string name="peer_originally_invited_by">Originally invited by: %1$s</string>
     <string name="peer_inviter_genesis">Genesis member</string>
+    <string name="revoke_member">Revoke</string>
+    <string name="revoke_member_title">Revoke %1$s?</string>
+    <string name="revoke_member_warning">This removes the member after the signed update converges. Members they invited remain active.</string>
+    <string name="resign_membership">Resign membership</string>
+    <string name="resign_membership_title">Resign from %1$s?</string>
+    <string name="resign_membership_warning">This publishes a network-wide resignation. The network and its other members continue.</string>
     <string name="peer_path_udp">UDP datagram</string>
     <string name="peer_path_quic_datagram">QUIC datagram</string>
     <string name="peer_path_quic_stream">QUIC stream</string>

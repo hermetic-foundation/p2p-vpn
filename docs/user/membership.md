@@ -138,6 +138,9 @@ A member can leave without deleting the network:
 sudo p2p-vpn membership resign --instance lab
 ```
 
+On Android, use **Revoke** in a peer row or **Resign membership** in network
+details.
+
 Pair the peer again to readmit it. Re-admission advances the membership epoch.
 
 The daemon stays available for re-pairing but stops authorizing signed peers.
