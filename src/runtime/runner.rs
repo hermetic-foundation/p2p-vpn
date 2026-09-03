@@ -2031,6 +2031,12 @@ where
                         member_peer,
                         respond_to,
                     } => {
+                        let membership_mutation_recipients = node
+                            .swarm
+                            .connected_peers()
+                            .copied()
+                            .filter(|peer| forwarder.is_configured_transport_peer(*peer))
+                            .collect::<Vec<_>>();
                         let response = apply_local_membership_revocation(
                             &mut forwarder,
                             &mut membership,
@@ -2041,12 +2047,23 @@ where
                             member_peer.as_deref(),
                         );
                         if let Ok(result) = &response {
-                            send_control_capabilities_to_connected_peers(
-                                &mut node.swarm,
-                                &forwarder,
-                                &local_capabilities,
-                                &metrics,
-                            );
+                            let advertised_to = if result.resigned {
+                                send_membership_departure_to_connected_members(
+                                    &mut node.swarm,
+                                    &forwarder,
+                                    &local_capabilities,
+                                    &metrics,
+                                    &membership_mutation_recipients,
+                                )
+                            } else {
+                                send_control_capabilities_to_connected_peers(
+                                    &mut node.swarm,
+                                    &forwarder,
+                                    &local_capabilities,
+                                    &metrics,
+                                );
+                                0
+                            };
                             reconcile_runtime_kademlia_scope(
                                 &mut node,
                                 &local_capabilities,
@@ -2081,6 +2098,17 @@ where
                                     ("issuer", &result.issuer_peer),
                                 ],
                             );
+                            if result.resigned {
+                                log_runtime_event(
+                                    if advertised_to == 0 {
+                                        LogLevel::Warn
+                                    } else {
+                                        LogLevel::Info
+                                    },
+                                    "membership_resignation_advertised",
+                                    &[("recipients", &advertised_to.to_string())],
+                                );
+                            }
                             if !result.resigned
                                 && let Ok(peer) = result.member_peer.parse::<Libp2pPeerId>()
                             {
@@ -12918,7 +12946,7 @@ async fn handle_control_request(
             context
                 .metrics
                 .record_membership_record_page_request_received();
-            let response = if !context.forwarder.is_configured_transport_peer(peer) {
+            let response = if !membership_record_sync_is_authorized(context.forwarder, peer) {
                 Err(MembershipRecordsRejectionReason::UnauthorizedPeer)
             } else if !context
                 .membership_page_rate_limiters
@@ -17604,6 +17632,46 @@ fn send_control_capabilities_to_connected_peers(
     for peer in peers {
         send_control_capabilities(swarm, forwarder, peer, local_capabilities, metrics);
     }
+}
+
+fn send_membership_departure_to_connected_members(
+    swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
+    local_capabilities: &ControlCapabilities,
+    metrics: &RuntimeMetrics,
+    recipients: &[Libp2pPeerId],
+) -> usize {
+    let capabilities = refreshed_local_capabilities_for_swarm(swarm, local_capabilities, forwarder);
+    let mut sent = 0;
+    for peer in recipients {
+        if !swarm.is_connected(peer) {
+            continue;
+        }
+        swarm
+            .behaviour_mut()
+            .control
+            .send_request(peer, ControlRequest::Capabilities(capabilities.clone()));
+        metrics.record_control_request_sent();
+        sent += 1;
+    }
+    sent
+}
+
+fn membership_record_sync_is_authorized(forwarder: &Forwarder, peer: Libp2pPeerId) -> bool {
+    if forwarder.is_configured_transport_peer(peer) {
+        return true;
+    }
+
+    effective_membership_at(
+        forwarder.member_records(),
+        &forwarder.config().network.name,
+        current_unix_seconds_lossy(),
+    )
+    .is_ok_and(|membership| {
+        membership
+            .overlay_members()
+            .any(|member| member.transport_peer == peer)
+    })
 }
 
 fn update_observed_packet_plane_endpoints(
@@ -22601,6 +22669,8 @@ mod tests {
         let creator = NodeIdentity::generate_ed25519().expect("creator identity");
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let target = NodeIdentity::generate_ed25519().expect("target identity");
+        let creator_peer = creator.peer_id.parse().expect("creator peer");
+        let target_peer = target.peer_id.parse().expect("target peer");
         let mut config = config_with_peer(
             &local,
             target.peer_id.parse().expect("target transport peer"),
@@ -22685,6 +22755,14 @@ mod tests {
         assert!(resigned.resigned);
         assert_eq!(forwarder.configured_transport_peers().count(), 0);
         assert_eq!(membership.len(), 1);
+        assert!(membership_record_sync_is_authorized(
+            &forwarder,
+            creator_peer,
+        ));
+        assert!(!membership_record_sync_is_authorized(
+            &forwarder,
+            target_peer,
+        ));
         assert!(matches!(
             issue_local_membership_revocation_at(
                 &forwarder,
@@ -22694,6 +22772,88 @@ mod tests {
             ),
             Err(error) if error.contains("local peer is not an active")
         ));
+    }
+
+    #[test]
+    fn capability_response_retains_sender_self_resignation_before_rejecting_sender() {
+        let local = NodeIdentity::generate_ed25519().expect("local identity");
+        let remote = NodeIdentity::generate_ed25519().expect("remote identity");
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let now = current_unix_seconds_lossy();
+        let root = issue_membership_record_at(
+            &local,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: local.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now.saturating_sub(2),
+        )
+        .expect("root record");
+        let grant = issue_membership_record_at(
+            &local,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: remote.clone(),
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now.saturating_sub(1),
+        )
+        .expect("remote grant");
+        let resignation = issue_membership_record_for_subject_at(
+            &remote,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&remote).expect("remote subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            now,
+        )
+        .expect("remote resignation");
+        let mut config = config_with_peer(&local, remote_peer);
+        config.peers.clear();
+        config.network.member_records = vec![root.clone(), grant.clone()];
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let remote_capabilities = ControlCapabilities::local("lab", None, 1_280)
+            .with_member_records(vec![root, grant, resignation]);
+        let local_capabilities = ControlCapabilities::local("lab", None, 1_280);
+
+        let (response, membership_changed) =
+            capability_response_for_peer_with_membership_records_result(
+                &mut forwarder,
+                &mut membership,
+                remote_peer,
+                &remote_capabilities,
+                &local_capabilities,
+                &[],
+            );
+
+        assert!(membership_changed);
+        assert_eq!(
+            response,
+            ControlResponse::CapabilitiesRejected(ControlRejectionReason::UnauthorizedPeer)
+        );
+        assert_eq!(forwarder.member_record_count(), 3);
+        assert!(!membership.allows(remote_peer));
+        assert!(forwarder.member_records().iter().any(|record| {
+            record.payload.issuer_peer == remote.peer_id
+                && record.payload.member_peer == remote.peer_id
+                && record.payload.revoked
+        }));
     }
 
     #[test]
