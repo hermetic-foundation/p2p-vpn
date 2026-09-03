@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title desc">
+  <title id="title">P2P mesh VPN logo</title>
+  <desc id="desc">Symmetric white six-node mesh symbol on a dark rounded-square app tile.</desc>
+
+  <defs>
+    <radialGradient id="tile" cx="50%" cy="46%" r="72%">
+      <stop offset="0" stop-color="#1b1b1d"/>
+      <stop offset="1" stop-color="#141416"/>
+    </radialGradient>
+  </defs>
+
+  <!-- App tile, matched to the generated square icon proportions -->
+  <rect x="61" y="60" width="1132" height="1132" rx="181" fill="url(#tile)"/>
+
+  <!-- Mesh links. Drawn beneath the peer nodes. -->
+  <g fill="none" stroke="#fff" stroke-width="17" stroke-linecap="butt" stroke-linejoin="miter">
+    <!-- outer hexagon -->
+    <path d="M627 275 L323 462 L323 809 L627 979 L931 809 L931 462 Z"/>
+
+    <!-- center vertical route -->
+    <path d="M627 275 L627 979"/>
+
+    <!-- crossing peer routes -->
+    <path d="M323 462 L931 809"/>
+    <path d="M931 462 L323 809"/>
+  </g>
+
+  <!-- Peer nodes, sized and positioned from the generated raster -->
+  <g fill="#fff">
+    <rect x="580" y="227" width="94" height="97"/>
+    <rect x="277" y="415" width="93" height="94"/>
+    <rect x="885" y="415" width="93" height="94"/>
+    <rect x="277" y="762" width="93" height="95"/>
+    <rect x="885" y="762" width="93" height="95"/>
+    <rect x="580" y="933" width="94" height="95"/>
+  </g>
+</svg>

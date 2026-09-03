@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/p2p-vpn-logo.svg" alt="p2p-vpn mesh logo" width="180">
+</p>
+
 # p2p-vpn
 
 `p2p-vpn` is a Rust, libp2p-native mesh VPN for Linux, NixOS, and Android.
