@@ -127,6 +127,39 @@ Each member has a network-wide effective state selected by:
 
 The same result is used after restart and regardless of arrival order.
 
+## Security Limits
+
+Signed membership records authenticate an identity and exact payload.
+
+They do not provide a trusted timestamp service.
+
+| Time Rule | Guarantee |
+| --- | --- |
+| Up to 60 seconds ahead | Allows bounded clock skew. |
+| More than 60 seconds ahead | Rejects obvious forward dating. |
+| Older signed time | Cannot prove when the signer created the record. |
+
+A compromised member key can create a new record with an older claimed time.
+Revoking that member cannot prove that a newly discovered record was made later.
+
+The default `any-member` policy is intended for networks whose active members
+are trusted to govern the whole membership set.
+
+### Compromise Recovery
+
+1. Revoke the compromised Peer ID.
+2. Remove any static `peers` authorization for it.
+3. Rotate the optional shared membership key.
+4. Review `membership-record-list` output from the compromised issuer.
+5. Revoke unwanted admissions or issue corrective higher-epoch records.
+
+Rotating the shared key blocks its old discovery scope.
+
+It does not remove signed records that nodes already accepted.
+
+Networks that require administrator roles, quorum approval, or trusted event
+ordering need a stronger governance protocol than `any-member`.
+
 ## Revocation and Expiry
 
 A revocation is a newer member-state record with `revoked = true`.

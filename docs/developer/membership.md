@@ -122,6 +122,52 @@ The runtime revision advances when a retained event becomes effective.
 
 This refreshes forwarding, DNS, routes, and capabilities without another merge.
 
+### Signed-Time Threat Model
+
+A signature authenticates the signer and payload. It does not prove when the
+signer created that payload.
+
+`issued_at_unix_seconds` is signer-controlled. The 60-second future bound limits
+clock skew and forward dating, but it cannot detect backdating.
+
+Example:
+
+1. Peer `P` is active at time `T1`.
+2. Another member revokes `P` at time `T2`.
+3. The holder of `P`'s key later signs an event that claims time `T1`.
+4. A receiver sees the event for the first time after `T2`.
+5. The receiver may accept it because `P` was active at the claimed time.
+
+This follows from three protocol properties:
+
+| Property | Consequence |
+| --- | --- |
+| Offline merge | A node can validate history without an online authority. |
+| Partition tolerance | Events may arrive long after their claimed issue time. |
+| Deterministic replay | Arrival order does not define authorization. |
+
+The `any-member` policy therefore assumes cooperative active identities.
+Compromise of one active identity can disrupt network-wide membership.
+
+Recovery requires all applicable actions:
+
+1. Revoke the compromised identity and remove any static authorization.
+2. Rotate the shared membership key to cut off old discovery scope.
+3. Inspect retained records for admissions and revocations from that identity.
+4. Issue corrective records at higher target epochs where required.
+
+Membership-key rotation does not erase malicious records already accepted into
+the signed ledger.
+
+Stronger creation-time guarantees require another protocol component:
+
+| Option | Added Requirement |
+| --- | --- |
+| Witnessed hash chain | Peers agree on observed event frontiers. |
+| Transparency log | An append-only service provides inclusion ordering. |
+| Quorum authorization | Multiple active identities approve each change. |
+| Forward-secure keys | Old signing periods cannot be recreated later. |
+
 ## Expiry and Revocation
 
 Expiry removes a record from the effective graph without deleting signed history.
