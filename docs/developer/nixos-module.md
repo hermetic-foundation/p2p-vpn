@@ -207,10 +207,15 @@ Before normal runtime processing, the daemon:
 
 1. Loads and authenticates encrypted pairing state.
 2. Revalidates every durable enrollment.
-3. Applies prepared forwarding and TUN updates.
-4. Loads network- and identity-bound membership history.
-5. Reconstructs effective members and kernel routes.
-6. Persists finalized signed history atomically.
+3. Compacts incompatible applied enrollments against the current declarative authority.
+4. Applies prepared forwarding and TUN updates.
+5. Loads network- and identity-bound membership history.
+6. Reconstructs effective members and kernel routes.
+7. Persists finalized signed history atomically.
+
+Prepared enrollments still fail startup when they cannot be recovered safely. An
+incompatible enrollment that was already applied is reduced to its replay-safe
+receipt instead of preventing the declarative network from starting.
 
 Incoming unknown peers are provisional membership probes.
 

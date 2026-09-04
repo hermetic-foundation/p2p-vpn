@@ -259,6 +259,7 @@ The service state directory stores records learned after that artifact was gener
 | --- | --- |
 | `nixos-rebuild switch` | Keeps identity, pairing state, and learned membership. |
 | Daemon restart | Restores members and routes before normal network processing. |
+| Superseded applied enrollment | Compacts to a receipt and keeps current declarative authority. |
 | State format mismatch | Fails closed instead of discarding authority. |
 | Lost learned state | Relearns from reachable members after startup. |
 | Lost identity | Creates a different peer and requires new admission. |

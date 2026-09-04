@@ -2699,6 +2699,7 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     }
 
     let mut next_config = forwarder.config().clone();
+    let mut incompatible_applied = Vec::new();
     for enrollment in &enrollments {
         let expected_local = match enrollment.role {
             PairingEnrollmentRole::Inviter => &enrollment.response.payload.inviter_peer,
@@ -2716,13 +2717,24 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
                 "pairing enrollment is missing its signed offer".to_owned(),
             )
         })?;
-        next_config = apply_pairing_response_to_config_at(
+        let replayed = apply_pairing_response_to_config_at(
             &next_config,
             offer,
             &enrollment.response,
             identity,
             enrollment.response.payload.issued_at_unix_seconds,
-        )?;
+        );
+        match replayed {
+            Ok(config) => next_config = config,
+            Err(error) if enrollment.state == PairingEnrollmentState::Applied => {
+                incompatible_applied.push((
+                    enrollment.operation_id.clone(),
+                    enrollment.transcript_sha256.clone(),
+                    format!("{error:?}"),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
 
     let now = current_unix_seconds_lossy();
@@ -2750,6 +2762,18 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
         sessions.mark_enrollment_applied_at(&enrollment.operation_id, now)?;
         finalized += 1;
     }
+    for (operation_id, transcript_sha256, reason) in &incompatible_applied {
+        sessions.acknowledge_enrollment(operation_id, transcript_sha256, now)?;
+        log_runtime_event(
+            LogLevel::Warn,
+            "pairing_applied_enrollment_compacted",
+            &[
+                ("operation_id", operation_id),
+                ("reason", reason),
+                ("action", "use_current_declarative_authority"),
+            ],
+        );
+    }
     if let Err(error) = persist_code_pairing_sessions(store, sessions, &network_name) {
         log_pairing_persistence_failure("restart_reconciliation", &error);
     }
@@ -2760,6 +2784,10 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
             ("total", &enrollments.len().to_string()),
             ("prepared", &prepared.len().to_string()),
             ("finalized", &finalized.to_string()),
+            (
+                "compacted_incompatible",
+                &incompatible_applied.len().to_string(),
+            ),
         ],
     );
     Ok(())
@@ -22031,6 +22059,118 @@ mod tests {
         assert_eq!(membership, before_membership);
         assert_eq!(tun_runtime, before_tun_runtime);
         assert!(!forwarder.is_configured_transport_peer(joiner_peer));
+    }
+
+    #[tokio::test]
+    async fn incompatible_applied_enrollment_compacts_against_declarative_authority() {
+        let (mut config, inviter, joiner, offer, request, response) =
+            code_pairing_runtime_fixture();
+        let operation_id = crate::runtime::pairing_sessions::fresh_pairing_operation_id();
+        let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
+        let mut sessions = CodePairingSessions::new();
+        sessions
+            .open_with_id(operation_id.clone(), "lab", 600, 1_000, Instant::now())
+            .expect("open pairing");
+        let approval = PendingApproval::new(operation_id.clone(), joiner_peer, 1_600, request)
+            .expect("pending approval");
+        let approval_id = approval.approval_id.clone();
+        let transcript_sha256 = approval.transcript_sha256.clone();
+        sessions
+            .set_pending_approval(approval)
+            .expect("set pending approval");
+        sessions
+            .prepare_enrollment(
+                "lab",
+                PairingEnrollmentPreparation {
+                    operation_id: operation_id.clone(),
+                    role: PairingEnrollmentRole::Inviter,
+                    approval_id: Some(approval_id.clone()),
+                    offer: Some(offer),
+                    response: response.clone(),
+                    transcript_sha256: transcript_sha256.clone(),
+                    membership_key_preconfigured: None,
+                },
+            )
+            .expect("prepare enrollment");
+        sessions
+            .complete_open(&operation_id, &approval_id, response)
+            .expect("complete pairing");
+        sessions
+            .mark_enrollment_applied_at(&operation_id, 1_010)
+            .expect("mark enrollment applied");
+
+        let declarative_root = NodeIdentity::generate_ed25519().expect("declarative root");
+        let root_record = issue_membership_record_at(
+            &declarative_root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: declarative_root.clone(),
+                membership_epoch: 1,
+                sequence: 1_020,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_020,
+        )
+        .expect("declarative root record");
+        let inviter_record = issue_membership_record_at(
+            &declarative_root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: inviter.clone(),
+                membership_epoch: 1,
+                sequence: 1_021,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_021,
+        )
+        .expect("declarative inviter record");
+        config.network.member_records = vec![root_record, inviter_record];
+        config.validate_runtime().expect("declarative config");
+
+        let state_path = test_pairing_state_path("incompatible-applied");
+        let store = PairingStateStore::new(&state_path);
+        persist_code_pairing_sessions(Some(&store), &sessions, "lab")
+            .expect("persist incompatible enrollment");
+        let mut node = pairing_test_node(&inviter);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
+        let mut commands = Vec::new();
+
+        reconcile_persisted_pairing_enrollments_with(
+            &mut node.swarm,
+            &mut sessions,
+            Some(&store),
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+            &inviter,
+            |command| {
+                commands.push(command.to_string());
+                Ok(())
+            },
+        )
+        .expect("compact incompatible applied enrollment");
+
+        assert!(commands.is_empty());
+        assert_eq!(forwarder.config(), &config);
+        assert!(sessions.enrollment(&operation_id).is_none());
+        assert!(sessions.receipt(&operation_id).is_some());
+        let restored = CodePairingSessions::restore_persisted(
+            &store.load().expect("load state").expect("state bytes"),
+            "lab",
+            1_022,
+            Instant::now(),
+        )
+        .expect("restore compacted state");
+        assert!(restored.enrollment(&operation_id).is_none());
+        assert!(restored.receipt(&operation_id).is_some());
+        fs::remove_dir_all(state_path.parent().expect("state directory"))
+            .expect("remove test state");
     }
 
     #[tokio::test]
