@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
 import java.util.Optional;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -64,6 +65,36 @@ public final class PeerSnapshotTest {
         assertEquals(Optional.of(1_788_290_900L), membership.admittedAtUnixSeconds);
         assertEquals(
                 Optional.of(1_788_290_000L), membership.originalAdmittedAtUnixSeconds);
+    }
+
+    @Test
+    public void currentPeersHideHistoricalMembersEvenWhenStaticallyConfigured() throws Exception {
+        JSONObject active = withMembershipState(disconnectedPeer("activePeer", "active"), "active");
+        active.getJSONArray("membership_sources").put("peer_configuration");
+        JSONObject configured = disconnectedPeer("configuredPeer", "configured");
+        configured.put("membership_sources", strings("peer_configuration"));
+        configured.put("membership", new JSONObject().put("state", "configured"));
+        JSONObject revoked = withMembershipState(disconnectedPeer("revokedPeer", "revoked"), "revoked");
+        revoked.getJSONArray("membership_sources").put("peer_configuration");
+        JSONObject expired = withMembershipState(disconnectedPeer("expiredPeer", "expired"), "expired");
+        JSONObject inactive = withMembershipState(disconnectedPeer("inactivePeer", "inactive"), "inactive");
+        JSONArray peers =
+                new JSONArray()
+                        .put(localPeer("localPeer", "local"))
+                        .put(active)
+                        .put(configured)
+                        .put(revoked)
+                        .put(expired)
+                        .put(inactive);
+
+        List<PeerSnapshot.Peer> current = parse(snapshot(peers, 6, 6, false)).currentPeers();
+
+        assertEquals(3, current.size());
+        assertEquals("localPeer", current.get(0).peerId);
+        assertEquals("activePeer", current.get(1).peerId);
+        assertEquals("configuredPeer", current.get(2).peerId);
+        assertTrue(NetworkDetailScreen.isRevocableSignedMember(current.get(1)));
+        assertThrows(UnsupportedOperationException.class, () -> current.add(current.get(0)));
     }
 
     @Test
@@ -401,6 +432,10 @@ public final class PeerSnapshotTest {
                 .put("connection_state", "connected")
                 .put("selected_path", "direct_quic_stream")
                 .put("path_origin", "mdns");
+    }
+
+    private static JSONObject withMembershipState(JSONObject peer, String state) throws Exception {
+        return peer.put("membership", new JSONObject().put("state", state));
     }
 
     private static JSONObject basePeer(String peerId, String hostname) throws Exception {

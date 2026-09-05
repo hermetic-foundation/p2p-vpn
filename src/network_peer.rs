@@ -439,16 +439,25 @@ struct NetworkPeerInventoryEntry {
 
 impl NetworkPeerInventoryEntry {
     fn operationally_authorized(&self) -> bool {
-        self.peer.local
-            || self
+        if self.peer.local {
+            return true;
+        }
+        match self
+            .peer
+            .membership
+            .as_ref()
+            .map(|membership| membership.state)
+        {
+            Some(NetworkPeerMembershipState::Active) => true,
+            Some(
+                NetworkPeerMembershipState::Revoked
+                | NetworkPeerMembershipState::Expired
+                | NetworkPeerMembershipState::Inactive,
+            ) => false,
+            Some(NetworkPeerMembershipState::Configured) | None => self
                 .membership_sources
-                .contains(&NetworkPeerMembershipSource::PeerConfiguration)
-            || self.peer.membership.as_ref().is_some_and(|membership| {
-                matches!(
-                    membership.state,
-                    NetworkPeerMembershipState::Configured | NetworkPeerMembershipState::Active
-                )
-            })
+                .contains(&NetworkPeerMembershipSource::PeerConfiguration),
+        }
     }
 }
 
@@ -582,12 +591,7 @@ fn insert_membership_audit(
         entry
             .membership_sources
             .insert(NetworkPeerMembershipSource::SignedMembership);
-        if member.state != MembershipState::Active
-            && !entry.local
-            && !entry
-                .membership_sources
-                .contains(&NetworkPeerMembershipSource::PeerConfiguration)
-        {
+        if member.state != MembershipState::Active && !entry.local {
             entry.ipv4.clear();
             entry.ipv6.clear();
         }
@@ -845,6 +849,14 @@ mod tests {
             "peers": []
         }))
         .expect("config");
+        config.peers.push(crate::config::PeerConfig {
+            id: member.peer_id.clone(),
+            name: Some("departed-node".to_owned()),
+            ip: None,
+            vpn_ip: Some("10.42.0.9".to_owned()),
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
         let root = issue_named_membership_record_for_subject_at(
             &local,
             MembershipRecordIssueOptions {

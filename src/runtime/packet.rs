@@ -163,9 +163,19 @@ impl AuthorizedPeers {
     }
 
     pub fn try_from_config(config: &Config) -> Result<Self, ConfigError> {
-        let mut authorized = Self::from_config(config);
-        for member in config.effective_membership()?.overlay_members() {
-            authorized.peers.insert(member.transport_peer);
+        let effective = config.effective_membership()?;
+        let mut authorized = Self::default();
+        if effective.authorizes_configured_peer(config.local_peer_id()?) {
+            for peer in &config.peers {
+                if effective.authorizes_configured_peer(peer.peer_id()?) {
+                    authorized
+                        .peers
+                        .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
+                }
+            }
+            for member in effective.overlay_members() {
+                authorized.peers.insert(member.transport_peer);
+            }
         }
         Ok(authorized)
     }
@@ -282,7 +292,10 @@ mod tests {
     use crate::{
         config::{Config, InterfaceConfig, NetworkConfig, PeerConfig, QueueConfig, ResourceConfig},
         identity::NodeIdentity,
-        membership::{MembershipRecordOptions, MembershipRole, issue_membership_record_at},
+        membership::{
+            MembershipRecordIssueOptions, MembershipRecordOptions, MembershipRecordSubject,
+            MembershipRole, issue_membership_record_at, issue_membership_record_for_subject_at,
+        },
         wire::PayloadType,
     };
 
@@ -424,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn authorized_peers_include_member_record_overlay_members() {
+    fn authorized_peers_follow_signed_membership_for_configured_members() {
         let issuer = NodeIdentity::generate_ed25519().expect("issuer");
         let member = NodeIdentity::generate_ed25519().expect("member");
         let remote = member.peer_id.parse().expect("member peer");
@@ -467,7 +480,7 @@ mod tests {
                 &issuer,
                 MembershipRecordOptions {
                     network_name: "lab".to_owned(),
-                    member,
+                    member: member.clone(),
                     membership_epoch: 1,
                     sequence: 1,
                     roles: vec![MembershipRole::OverlayMember],
@@ -483,5 +496,35 @@ mod tests {
 
         assert!(authorized.allows(&remote));
         assert!(!authorized.allows(&other));
+
+        config.peers.push(PeerConfig {
+            id: member.peer_id.clone(),
+            name: Some("configured-member".to_owned()),
+            ip: None,
+            vpn_ip: None,
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
+        config.network.member_records.push(
+            issue_membership_record_for_subject_at(
+                &issuer,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&member)
+                        .expect("member subject"),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    revoked: true,
+                    roles: Vec::new(),
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_001,
+            )
+            .expect("member revocation"),
+        );
+
+        let revoked = AuthorizedPeers::try_from_config(&config).expect("revoked peers");
+        assert!(!revoked.allows(&remote));
     }
 }

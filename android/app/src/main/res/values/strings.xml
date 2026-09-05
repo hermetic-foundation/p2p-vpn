@@ -24,7 +24,7 @@
     <string name="peers_unavailable">Peer details unavailable</string>
     <string name="peers_enable_network">Enable this network to load peers</string>
     <string name="peers_loading">Waiting for live peer data</string>
-    <string name="peers_truncated">Showing %1$d of %2$d peers</string>
+    <string name="peers_truncated">Showing %1$d current peers from %2$d inventory entries</string>
     <plurals name="peer_count">
         <item quantity="one">%d peer</item>
         <item quantity="other">%d peers</item>

@@ -116,56 +116,64 @@ impl Config {
             })?;
         }
 
-        for peer in &self.peers {
-            let owner = peer.peer_id()?;
-            table.insert_authorized(Route {
-                owner,
-                prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(owner)), 32)?,
-                metric: 0,
-            })?;
-            table.insert_authorized(Route {
-                owner,
-                prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(owner)), 128)?,
-                metric: 0,
-            })?;
-
-            if let Some(vpn_ip) = &peer.vpn_ip {
-                table.insert_authorized(Route {
-                    owner,
-                    prefix: vpn_ip_host_route(vpn_ip)?,
-                    metric: 0,
-                })?;
-            }
-            for route in &peer.routes {
-                table.insert_authorized(Route {
-                    owner,
-                    prefix: route.prefix()?,
-                    metric: route.metric,
-                })?;
-            }
-        }
-
         let effective_membership =
             effective_membership_at(member_records, &self.network.name, now_unix_seconds)?;
-        for member in effective_membership.overlay_members() {
-            table.insert_authorized(Route {
-                owner: member.peer,
-                prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(member.peer)), 32)?,
-                metric: 0,
-            })?;
-            table.insert_authorized(Route {
-                owner: member.peer,
-                prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(member.peer)), 128)?,
-                metric: 0,
-            })?;
+        let local_is_active = effective_membership.authorizes_configured_peer(local_peer);
+        if local_is_active {
+            for peer in &self.peers {
+                let owner = peer.peer_id()?;
+                if !effective_membership.authorizes_configured_peer(owner) {
+                    continue;
+                }
+                table.insert_authorized(Route {
+                    owner,
+                    prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(owner)), 32)?,
+                    metric: 0,
+                })?;
+                table.insert_authorized(Route {
+                    owner,
+                    prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(owner)), 128)?,
+                    metric: 0,
+                })?;
 
-            if member.has_role(MembershipRole::RouteAuthority) {
-                for route in &member.route_grants {
+                if let Some(vpn_ip) = &peer.vpn_ip {
                     table.insert_authorized(Route {
-                        owner: member.peer,
+                        owner,
+                        prefix: vpn_ip_host_route(vpn_ip)?,
+                        metric: 0,
+                    })?;
+                }
+                for route in &peer.routes {
+                    table.insert_authorized(Route {
+                        owner,
                         prefix: route.prefix()?,
                         metric: route.metric,
                     })?;
+                }
+            }
+        }
+
+        if local_is_active {
+            for member in effective_membership.overlay_members() {
+                table.insert_authorized(Route {
+                    owner: member.peer,
+                    prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(member.peer)), 32)?,
+                    metric: 0,
+                })?;
+                table.insert_authorized(Route {
+                    owner: member.peer,
+                    prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(member.peer)), 128)?,
+                    metric: 0,
+                })?;
+
+                if member.has_role(MembershipRole::RouteAuthority) {
+                    for route in &member.route_grants {
+                        table.insert_authorized(Route {
+                            owner: member.peer,
+                            prefix: route.prefix()?,
+                            metric: route.metric,
+                        })?;
+                    }
                 }
             }
         }
@@ -2266,6 +2274,58 @@ mod tests {
             member_peer,
             IpCidr::new(IpAddr::V6(builtin_ipv6(member_peer)), 128).expect("cidr")
         ));
+    }
+
+    #[test]
+    fn compile_routes_lets_signed_revocation_override_configured_peer_routes() {
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let member = NodeIdentity::generate_ed25519().expect("member");
+        let member_peer = PeerId::from_str(&member.peer_id).expect("member peer");
+        let grant = signed_member_record_for(&issuer, member.clone(), "lab");
+        let revocation = crate::membership::issue_membership_record_for_subject_at(
+            &issuer,
+            crate::membership::MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: crate::membership::MembershipRecordSubject::from_identity(&member)
+                    .expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_001,
+        )
+        .expect("revocation");
+        let mut config =
+            runtime_config_for_identity(NodeIdentity::generate_ed25519().expect("local"));
+        config.peers.push(PeerConfig {
+            id: member.peer_id,
+            name: Some("revoked-peer".to_owned()),
+            ip: None,
+            vpn_ip: None,
+            addresses: Vec::new(),
+            routes: vec![RouteConfig {
+                prefix: "10.77.0.0/24".to_owned(),
+                metric: 0,
+            }],
+        });
+        config.network.member_records = vec![grant, revocation];
+
+        let routes = config.compile_routes().expect("routes");
+
+        assert!(!routes.authorizes_route(
+            member_peer,
+            IpCidr::new(IpAddr::V4(builtin_ipv4(member_peer)), 32).expect("cidr")
+        ));
+        assert!(
+            !routes.authorizes_route(
+                member_peer,
+                IpCidr::new("10.77.0.0".parse().expect("configured route address"), 24,)
+                    .expect("configured route")
+            )
+        );
     }
 
     #[test]

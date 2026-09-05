@@ -415,9 +415,19 @@ Learned records remain mutable service state and never rewrite the Nix source.
 
 This preserves Nix evaluation purity while supporting offline restart recovery.
 
-Declarative `peers` remain separate static authorization.
+Declarative `peers` authorize legacy identities with no signed history.
 
-A signed revoke refuses targets still authorized through that option.
+Once an identity has signed history, effective ledger state takes precedence:
+
+| Signed State | Static Peer Result |
+| --- | --- |
+| Active overlay grant | Authorized. |
+| Revoked | Denied. |
+| Expired | Denied. |
+| Inactive | Denied. |
+
+This precedence is shared by forwarding, routes, DNS, and runtime admission.
+Static address metadata does not bypass a tombstone.
 
 ## Observability
 

@@ -399,7 +399,13 @@ pub fn effective_membership_at(
     let evaluation = evaluate_membership_ledger_at(records, &anchors, now_unix_seconds)?;
 
     let mut members = HashMap::new();
+    let mut governed_peers = HashSet::new();
     for state in evaluation.states.values() {
+        let state_transport_peer = records[state.record_index]
+            .payload
+            .member_peer
+            .parse::<Libp2pPeerId>()?;
+        governed_peers.insert(PeerId::from_libp2p(state_transport_peer));
         if !state.active {
             continue;
         }
@@ -417,7 +423,10 @@ pub fn effective_membership_at(
         members.insert(candidate.peer, candidate);
     }
 
-    Ok(EffectiveMembership { members })
+    Ok(EffectiveMembership {
+        members,
+        governed_peers,
+    })
 }
 
 pub fn membership_audit_at(
@@ -827,6 +836,7 @@ fn conflicting_record_version(record: &SignedMembershipRecord) -> MembershipReco
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EffectiveMembership {
     members: HashMap<PeerId, EffectiveMember>,
+    governed_peers: HashSet<PeerId>,
 }
 
 impl EffectiveMembership {
@@ -834,6 +844,17 @@ impl EffectiveMembership {
         self.members
             .values()
             .filter(|member| member.has_role(MembershipRole::OverlayMember))
+    }
+
+    /// Static configuration remains authoritative until a peer has signed ledger history.
+    /// Once governed by the ledger, only an active overlay grant authorizes that peer.
+    #[must_use]
+    pub fn authorizes_configured_peer(&self, peer: PeerId) -> bool {
+        !self.governed_peers.contains(&peer)
+            || self
+                .members
+                .get(&peer)
+                .is_some_and(|member| member.has_role(MembershipRole::OverlayMember))
     }
 }
 

@@ -48,6 +48,16 @@ final class PeerSnapshot {
         this.peers = immutableCopy(peers);
     }
 
+    List<Peer> currentPeers() {
+        List<Peer> current = new ArrayList<>();
+        for (Peer peer : peers) {
+            if (peer.isCurrentMember()) {
+                current.add(peer);
+            }
+        }
+        return immutableCopy(current);
+    }
+
     static Optional<PeerSnapshot> parseOptional(JSONObject parent, String fieldName)
             throws P2pVpnException {
         if (parent == null || fieldName == null || fieldName.isEmpty()) {
@@ -499,6 +509,17 @@ final class PeerSnapshot {
             this.connectionState = connectionState;
             this.selectedPath = Optional.ofNullable(selectedPath);
             this.pathOrigin = Optional.ofNullable(pathOrigin);
+        }
+
+        private boolean isCurrentMember() {
+            if (local) {
+                return true;
+            }
+            if (membership.isPresent()) {
+                MembershipState state = membership.get().state;
+                return state == MembershipState.CONFIGURED || state == MembershipState.ACTIVE;
+            }
+            return membershipSources.contains(MembershipSource.PEER_CONFIGURATION);
         }
 
         private static Peer parse(JSONObject value) throws JSONException, P2pVpnException {

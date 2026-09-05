@@ -563,6 +563,12 @@ confirmed UI action
 | Resign local identity | `revoke_member(None)` |
 | Delete local profile | No ledger mutation |
 
+The detail screen renders only current members. Revoked, expired, and inactive
+records remain in the native snapshot for audit but are not rendered as peers.
+
+An active signed peer remains revocable when the Android profile also contains
+pairing-generated static peer metadata.
+
 The service records only action names in diagnostics. It does not log peer IDs,
 raw member records, signatures, or private state.
 

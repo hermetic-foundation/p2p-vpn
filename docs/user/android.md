@@ -215,11 +215,14 @@ The switch shows desired state. The text status shows observed connectivity.
 | --- | --- |
 | Identity | Editable hostname, overlay IPv4/IPv6 addresses, and peer ID. |
 | Pair | Create and copy a code; review and approve incoming requests. |
-| Peers | Hostnames, addresses, path, membership state, and inviter provenance. |
+| Peers | Current member hostnames, addresses, paths, and inviter provenance. |
 | Removal | Confirmed deletion of identity, membership, and runtime state. |
 
-Peer data is live only while the network is enabled. The list is bounded and
-reports when additional peers were omitted.
+Peer data is live only while the network is enabled. The app reports when its
+bounded inventory omits entries.
+
+Revoked, expired, and inactive identities leave this current-member list.
+Their signed records remain in the network audit history.
 
 **Invited by** is the effective inviter for the current admission.
 

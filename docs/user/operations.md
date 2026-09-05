@@ -131,8 +131,8 @@ sudo p2p-vpn peers \
 
 Revoked, expired, and inactive signed members remain visible for audit.
 
-Their derived addresses are omitted unless declarative configuration still
-authorizes them independently.
+Their derived addresses are omitted. A signed inactive state overrides a
+matching declarative peer entry.
 
 Legacy config inspection remains available:
 

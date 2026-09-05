@@ -9288,22 +9288,18 @@ impl OverlayMembership {
             .local_peer()?
             .parse()
             .map_err(ConfigError::Libp2pPeerId)?;
+        let local_overlay_peer = PeerId::from_libp2p(local_peer);
         peers.insert(local_peer);
-
-        for peer in &config.peers {
-            peers.insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
-        }
 
         let effective =
             effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
-        let local_has_record = member_records
-            .iter()
-            .any(|record| record.payload.member_peer == local_peer.to_string());
-        let local_is_active = !local_has_record
-            || effective
-                .overlay_members()
-                .any(|member| member.transport_peer == local_peer);
-        if local_is_active {
+        if effective.authorizes_configured_peer(local_overlay_peer) {
+            for peer in &config.peers {
+                let transport_peer = peer.id.parse().map_err(ConfigError::Libp2pPeerId)?;
+                if effective.authorizes_configured_peer(PeerId::from_libp2p(transport_peer)) {
+                    peers.insert(transport_peer);
+                }
+            }
             for member in effective.overlay_members() {
                 peers.insert(member.transport_peer);
             }
@@ -15478,23 +15474,6 @@ fn issue_local_membership_revocation_at(
             "peer {member_peer} is not an active signed network member"
         ));
     }
-    if forwarder
-        .config()
-        .peers
-        .iter()
-        .any(|peer| peer.id == member_peer)
-    {
-        return Err(format!(
-            "peer {member_peer} is authorized by declarative peer configuration; remove that entry before revoking membership"
-        ));
-    }
-    if member_peer == identity.peer_id && !forwarder.config().peers.is_empty() {
-        return Err(
-            "local peer has declarative peer authorization; remove those entries before resigning"
-                .to_owned(),
-        );
-    }
-
     let latest = forwarder
         .member_records()
         .iter()
@@ -22901,7 +22880,7 @@ mod tests {
     }
 
     #[test]
-    fn local_active_member_issues_global_revocation_and_can_resign() {
+    fn local_active_member_revokes_configured_signed_peer_and_can_resign() {
         let creator = NodeIdentity::generate_ed25519().expect("creator identity");
         let local = NodeIdentity::generate_ed25519().expect("local identity");
         let target = NodeIdentity::generate_ed25519().expect("target identity");
@@ -22911,7 +22890,6 @@ mod tests {
             &local,
             target.peer_id.parse().expect("target transport peer"),
         );
-        config.peers.clear();
         config.network.member_records = vec![
             issue_membership_record_at(
                 &creator,
@@ -22961,6 +22939,8 @@ mod tests {
         let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
         let mut route_controller = PreconfiguredTunRoutes;
         let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
+        assert!(membership.allows(target_peer));
+        assert!(forwarder.is_configured_transport_peer(target_peer));
 
         let revoked = apply_local_membership_revocation(
             &mut forwarder,
@@ -22975,7 +22955,15 @@ mod tests {
         assert_eq!(revoked.issuer_peer, local.peer_id);
         assert_eq!(revoked.member_peer, target.peer_id);
         assert!(!revoked.resigned);
-        assert!(!membership.allows(target.peer_id.parse().expect("target peer")));
+        assert!(
+            forwarder
+                .config()
+                .peers
+                .iter()
+                .any(|peer| peer.id == target.peer_id)
+        );
+        assert!(!membership.allows(target_peer));
+        assert!(!forwarder.is_configured_transport_peer(target_peer));
 
         let resigned = apply_local_membership_revocation(
             &mut forwarder,
@@ -22991,6 +22979,7 @@ mod tests {
         assert!(resigned.resigned);
         assert_eq!(forwarder.configured_transport_peers().count(), 0);
         assert_eq!(membership.len(), 1);
+        assert!(tun_runtime.routes.is_empty());
         assert!(membership_record_sync_is_authorized(
             &forwarder,
             creator_peer,

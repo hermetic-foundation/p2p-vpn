@@ -148,10 +148,10 @@ are trusted to govern the whole membership set.
 ### Compromise Recovery
 
 1. Revoke the compromised Peer ID.
-2. Remove any static `peers` authorization for it.
-3. Rotate the optional shared membership key.
-4. Review `membership-record-list` output from the compromised issuer.
-5. Revoke unwanted admissions or issue corrective higher-epoch records.
+2. Rotate the optional shared membership key.
+3. Review `membership-record-list` output from the compromised issuer.
+4. Revoke unwanted admissions or issue corrective higher-epoch records.
+5. Remove obsolete static peer metadata during later configuration cleanup.
 
 Rotating the shared key blocks its old discovery scope.
 
@@ -176,6 +176,8 @@ It remains valid if an older admission is no longer present in retained history.
 | Grant expiry | Deactivates the grant at its deadline. |
 | Newer expired grant | Does not revive an older grant after restart. |
 | Admission history compacted | Retained tombstone still prevents stale re-admission. |
+| Static peer with no signed history | Static configuration authorizes the peer. |
+| Static peer with signed history | The effective signed state decides authorization. |
 
 Any active signed member can revoke another signed member:
 
@@ -202,9 +204,11 @@ Pair the peer again to readmit it. Re-admission advances the membership epoch.
 
 The daemon stays available for re-pairing but stops authorizing signed peers.
 
-Declarative `peers` entries remain independent authorization.
+A valid signed tombstone overrides a matching declarative `peers` entry.
+No Nix or JSON edit is required before revocation or resignation.
 
-Remove such entries from Nix or JSON before revoking or resigning.
+Static entries remain authoritative for legacy peers with no signed history.
+They can remain as audit or address metadata after a signed revocation.
 
 Removing a record from one config is not a network-wide revocation.
 
@@ -273,6 +277,7 @@ The service state directory stores records learned after that artifact was gener
 | Older delegated pairing profile | Restores its signed genesis proof from protected state. |
 | History with an explicit self-record | Uses strict flat-ledger authorization. |
 | Existing Nix or JSON member records | Remains valid; no manual rewrite is required. |
+| Static peer with inactive signed history | Stops bypassing the signed state after upgrade. |
 
 Genesis recovery applies only while loading the local owner-only state file.
 Records received from the network cannot nominate a new trust root.
@@ -349,6 +354,6 @@ The record limit counts retained admission, update, and revocation history.
 | State load stops the service | Journal reason, local peer, network, and file version. |
 | Same-version records disagree | Replace them with one higher-version authoritative record. |
 | Record is rejected as future-dated | Synchronize system time; accepted skew is 60 seconds. |
-| Revoked member remains reachable | Remove any declarative `peers` entry, then confirm the tombstone converged. |
+| Revoked member remains reachable | Confirm the tombstone converged and all nodes run a version where signed state overrides static peers. |
 | Inviter was revoked but invitees remain | Expected; admissions are independent. |
 | Public relay is connected but unauthorized | Expected; relay membership is separate from reachability. |

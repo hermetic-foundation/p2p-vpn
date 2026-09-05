@@ -286,8 +286,18 @@ impl DnsZone {
             )?;
         }
 
+        let effective = crate::membership::effective_membership_at(
+            member_records,
+            &config.network.name,
+            now_unix_seconds,
+        )
+        .map_err(DnsZoneError::Membership)?;
+        let local_is_active = effective.authorizes_configured_peer(local_peer);
         for peer in &config.peers {
             let overlay_peer = peer.peer_id().map_err(DnsZoneError::Config)?;
+            if !local_is_active || !effective.authorizes_configured_peer(overlay_peer) {
+                continue;
+            }
             let addresses = peers
                 .entry(overlay_peer)
                 .or_insert_with(|| PeerAddresses::new(peer.id.clone(), overlay_peer));
@@ -307,25 +317,21 @@ impl DnsZone {
             }
         }
 
-        let effective = crate::membership::effective_membership_at(
-            member_records,
-            &config.network.name,
-            now_unix_seconds,
-        )
-        .map_err(DnsZoneError::Membership)?;
-        for member in effective.overlay_members() {
-            let addresses = peers.entry(member.peer).or_insert_with(|| {
-                PeerAddresses::new(member.transport_peer.to_string(), member.peer)
-            });
-            add_host_routes(addresses, &member.route_grants)?;
-            if !hostname_records.contains_key(&member.peer) {
-                for hostname in &member.hostnames {
-                    insert_name(
-                        &mut names,
-                        hostname,
-                        member.peer,
-                        DnsNameSource::SignedMembership,
-                    )?;
+        if local_is_active {
+            for member in effective.overlay_members() {
+                let addresses = peers.entry(member.peer).or_insert_with(|| {
+                    PeerAddresses::new(member.transport_peer.to_string(), member.peer)
+                });
+                add_host_routes(addresses, &member.route_grants)?;
+                if !hostname_records.contains_key(&member.peer) {
+                    for hostname in &member.hostnames {
+                        insert_name(
+                            &mut names,
+                            hostname,
+                            member.peer,
+                            DnsNameSource::SignedMembership,
+                        )?;
+                    }
                 }
             }
         }
@@ -634,8 +640,8 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            DiscoveryConfig, InterfaceConfig, NetworkConfig, PacketPlaneConfig, QueueConfig,
-            RelayConfig, ResourceConfig,
+            DiscoveryConfig, InterfaceConfig, NetworkConfig, PacketPlaneConfig, PeerConfig,
+            QueueConfig, RelayConfig, ResourceConfig,
         },
         hostname::{effective_hostname_records, issue_hostname_record_at},
         identity::NodeIdentity,
@@ -866,6 +872,14 @@ mod tests {
         let root = NodeIdentity::generate_ed25519().expect("root");
         let member = NodeIdentity::generate_ed25519().expect("member");
         let mut config = config_with_dns(&root, "root");
+        config.peers.push(PeerConfig {
+            id: member.peer_id.clone(),
+            name: Some("configured-ephemeral".to_owned()),
+            ip: None,
+            vpn_ip: None,
+            addresses: Vec::new(),
+            routes: Vec::new(),
+        });
         let subject = MembershipRecordSubject::from_identity(&member).expect("subject");
         config.network.member_records = vec![
             issue_named_membership_record_for_subject_at(
@@ -905,6 +919,11 @@ mod tests {
             .expect("zone after expiry");
         assert_eq!(after.next_refresh_unix_seconds(), None);
         assert!(after.record("ephemeral.runners.p2p-vpn.internal").is_none());
+        assert!(
+            after
+                .record("configured-ephemeral.runners.p2p-vpn.internal")
+                .is_none()
+        );
 
         config.network.member_records.push(
             issue_named_membership_record_for_subject_at(
@@ -929,6 +948,11 @@ mod tests {
         assert!(
             revoked
                 .record("ephemeral.runners.p2p-vpn.internal")
+                .is_none()
+        );
+        assert!(
+            revoked
+                .record("configured-ephemeral.runners.p2p-vpn.internal")
                 .is_none()
         );
     }

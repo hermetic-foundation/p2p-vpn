@@ -60,7 +60,7 @@ final class NetworkDetailScreen {
     private final Button remove;
     private String displayedCandidatePeer;
     private String displayedPeerNetworkId;
-    private long displayedPeerSnapshotTime = -1;
+    private PeerSnapshot displayedPeerSnapshot;
     private boolean displayedPeerActionsEnabled;
     private P2pVpnService.NetworkSnapshot displayedNetwork;
 
@@ -209,32 +209,30 @@ final class NetworkDetailScreen {
             return;
         }
 
+        List<PeerSnapshot.Peer> currentPeers = snapshot.currentPeers();
+        int currentPeerCount = currentPeers.size();
         if (snapshot.truncated) {
             peersStatus.setText(
                     activity.getString(
-                            R.string.peers_truncated,
-                            snapshot.returnedPeers,
-                            snapshot.totalPeers));
+                            R.string.peers_truncated, currentPeerCount, snapshot.totalPeers));
         } else {
             peersStatus.setText(
                     activity.getResources()
                             .getQuantityString(
-                                    R.plurals.peer_count,
-                                    snapshot.returnedPeers,
-                                    snapshot.returnedPeers));
+                                    R.plurals.peer_count, currentPeerCount, currentPeerCount));
         }
         if (network.id.equals(displayedPeerNetworkId)
-                && snapshot.observedAtUnixSeconds == displayedPeerSnapshotTime
+                && snapshot == displayedPeerSnapshot
                 && actionsEnabled == displayedPeerActionsEnabled) {
             return;
         }
 
         peers.removeAllViews();
         displayedPeerNetworkId = network.id;
-        displayedPeerSnapshotTime = snapshot.observedAtUnixSeconds;
+        displayedPeerSnapshot = snapshot;
         displayedPeerActionsEnabled = actionsEnabled;
         LayoutInflater inflater = LayoutInflater.from(activity);
-        for (PeerSnapshot.Peer peer : snapshot.peers) {
+        for (PeerSnapshot.Peer peer : currentPeers) {
             View row = inflater.inflate(R.layout.row_peer, peers, false);
             ((TextView) row.findViewById(R.id.peer_name)).setText(peerName(peer));
             ((TextView) row.findViewById(R.id.peer_state)).setText(peerState(peer));
@@ -261,17 +259,15 @@ final class NetworkDetailScreen {
             peers.removeAllViews();
         }
         displayedPeerNetworkId = null;
-        displayedPeerSnapshotTime = -1;
+        displayedPeerSnapshot = null;
         displayedPeerActionsEnabled = false;
     }
 
-    private static boolean isRevocableSignedMember(PeerSnapshot.Peer peer) {
+    static boolean isRevocableSignedMember(PeerSnapshot.Peer peer) {
         return !peer.local
                 && peer.membership.isPresent()
                 && peer.membership.get().state == PeerSnapshot.MembershipState.ACTIVE
-                && peer.membershipSources.contains(PeerSnapshot.MembershipSource.SIGNED_MEMBERSHIP)
-                && !peer.membershipSources.contains(
-                        PeerSnapshot.MembershipSource.PEER_CONFIGURATION);
+                && peer.membershipSources.contains(PeerSnapshot.MembershipSource.SIGNED_MEMBERSHIP);
     }
 
     private static boolean hasActiveLocalMembership(P2pVpnService.NetworkSnapshot network) {
