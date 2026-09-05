@@ -240,26 +240,59 @@ impl Forwarder {
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
     ) -> Result<MembershipRecordMergeStats, ForwardError> {
-        let mut member_records = self.member_records.clone();
-        let mut trusted_issuers = membership_trust_anchors(
-            &self.config.network.member_records,
-            &self.config.network.name,
-        )?;
+        let mut trusted_issuers =
+            membership_trust_anchors(&self.member_records, &self.config.network.name)?;
         let has_explicit_root_record = self
-            .config
-            .network
             .member_records
             .iter()
             .any(|record| record.payload.issuer_peer == record.payload.member_peer);
         if trusted_issuers.is_empty() && !has_explicit_root_record {
             trusted_issuers.insert(self.config.local_peer()?);
         }
+        self.merge_membership_records_with_trusted_issuers(
+            records,
+            now_unix_seconds,
+            &trusted_issuers,
+        )
+    }
+
+    pub(crate) fn restore_persisted_membership_records(
+        &mut self,
+        records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+    ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        let mut anchor_records = self.member_records.clone();
+        anchor_records.extend(
+            records
+                .iter()
+                .filter(|record| record.payload.issuer_peer == record.payload.member_peer)
+                .cloned(),
+        );
+        let mut trusted_issuers =
+            membership_trust_anchors(&anchor_records, &self.config.network.name)?;
+        if trusted_issuers.is_empty() {
+            trusted_issuers.insert(self.config.local_peer()?);
+        }
+        self.merge_membership_records_with_trusted_issuers(
+            records,
+            now_unix_seconds,
+            &trusted_issuers,
+        )
+    }
+
+    fn merge_membership_records_with_trusted_issuers(
+        &mut self,
+        records: &[SignedMembershipRecord],
+        now_unix_seconds: u64,
+        trusted_issuers: &crate::membership::TrustedMembershipIssuers,
+    ) -> Result<MembershipRecordMergeStats, ForwardError> {
+        let mut member_records = self.member_records.clone();
         let stats = merge_membership_records_at(
             &mut member_records,
             records,
             &self.config.network.name,
             now_unix_seconds,
-            &trusted_issuers,
+            trusted_issuers,
             MAX_RETAINED_MEMBERSHIP_RECORDS,
         )?;
         let routes = self

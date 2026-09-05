@@ -165,6 +165,7 @@ ordering need a stronger governance protocol than `any-member`.
 A revocation is a newer member-state record with `revoked = true`.
 
 It carries no roles, routes, or expiry and remains as a non-expiring tombstone.
+It remains valid if an older admission is no longer present in retained history.
 
 | Event | Effective Result |
 | --- | --- |
@@ -174,6 +175,7 @@ It carries no roles, routes, or expiry and remains as a non-expiring tombstone.
 | Self-resignation | Removes only the resigning member. |
 | Grant expiry | Deactivates the grant at its deadline. |
 | Newer expired grant | Does not revive an older grant after restart. |
+| Admission history compacted | Retained tombstone still prevents stale re-admission. |
 
 Any active signed member can revoke another signed member:
 
@@ -268,8 +270,12 @@ The service state directory stores records learned after that artifact was gener
 | --- | --- |
 | Version 1 membership state | Loads with no mutable hostname records, then writes version 2. |
 | Older issuer-based history | Keeps configured issuers as compatibility roots. |
+| Older delegated pairing profile | Restores its signed genesis proof from protected state. |
 | History with an explicit self-record | Uses strict flat-ledger authorization. |
 | Existing Nix or JSON member records | Remains valid; no manual rewrite is required. |
+
+Genesis recovery applies only while loading the local owner-only state file.
+Records received from the network cannot nominate a new trust root.
 
 Back up the identity and imported pairing Nix together.
 

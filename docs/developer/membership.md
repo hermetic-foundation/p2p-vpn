@@ -104,6 +104,7 @@ The forwarder commits routes, peers, and authorization only after validation suc
 | Version matches, payload differs | Return `ConflictingRecordVersion`. |
 | Record exceeds bounds | Reject the full merge. |
 | Issuer was inactive at issue time | Reject incoming authority. |
+| Active issuer revokes an absent target | Accept and retain the orphan tombstone. |
 
 Concurrent target events use revoked-first safety and stable signer/signature tie-breaks.
 
@@ -186,6 +187,9 @@ Revocation records must have:
 Revocation changes only the target member's effective state.
 
 Previously admitted descendants remain active.
+
+An authorized revocation remains valid without the target's older admission record.
+This permits bounded history to retain the security-relevant tombstone alone.
 
 Re-admission requires a membership epoch above the revoked or expired epoch.
 
@@ -367,6 +371,7 @@ Building it from already-restored membership would skip required route commands.
 | Size | Bounded from record limits plus a 64 KiB envelope allowance. |
 | Scope | Network name and local peer must match. |
 | Records | Full history validates before return. |
+| Trust recovery | Signed self-roots may extend anchors only during local state restore. |
 | Hostnames | Latest peer-signed mutable name per identity validates before return. |
 | Replacement | Owner-only temporary file, fsync, atomic rename. |
 | Directory durability | Parent directory is synced after rename. |
@@ -378,6 +383,12 @@ Legacy histories without a self-record retain their configured issuer anchors.
 
 No migration rewrites signed payloads. The first explicit self-record switches
 the history to strict explicit-root validation.
+
+Older delegated pairing profiles may contain only the inviter-issued local grant.
+Their protected state cache can contain the previously accepted genesis proof.
+
+Startup restores those signed self-roots before merging the cached ledger.
+Ordinary network merges cannot introduce a self-root through this recovery path.
 
 The persistence revision changes when retained membership or hostname records
 change.
@@ -395,7 +406,10 @@ The module always supplies these native-instance paths:
 
 Read-only module outputs expose both resolved paths for evaluation tests.
 
-Declarative `memberRecords` supply trust anchors after rebuild or deployment.
+Declarative `memberRecords` supply the initial trust anchors after deployment.
+
+Protected persisted state can restore an accepted explicit genesis omitted by an
+older minimal pairing artifact.
 
 Learned records remain mutable service state and never rewrite the Nix source.
 

@@ -2520,14 +2520,17 @@ fn load_persisted_membership_records(
             return Err(error.into());
         }
     };
-    let Some(state) = records else {
+    let Some(persisted_state) = records else {
         return Ok(());
     };
 
     let now_unix_seconds = current_unix_seconds_lossy();
-    let stats = forwarder.merge_membership_records(&state.records, now_unix_seconds)?;
-    let hostname_stats = forwarder.merge_hostname_records(&state.hostname_records)?;
-    let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
+    let membership_stats = forwarder
+        .restore_persisted_membership_records(&persisted_state.records, now_unix_seconds)?;
+    let hostname_stats = forwarder.merge_hostname_records(&persisted_state.hostname_records)?;
+    let changed = membership_stats.accepted > 0
+        || membership_stats.removed_expired > 0
+        || membership_stats.removed_untrusted > 0;
     if changed {
         membership.replace_record_members(
             forwarder.config(),
@@ -2539,18 +2542,24 @@ fn load_persisted_membership_records(
         LogLevel::Info,
         "membership_state_loaded",
         &[
-            ("records", &state.records.len().to_string()),
+            ("records", &persisted_state.records.len().to_string()),
             (
                 "hostname_records",
-                &state.hostname_records.len().to_string(),
+                &persisted_state.hostname_records.len().to_string(),
             ),
-            ("accepted", &stats.accepted.to_string()),
+            ("accepted", &membership_stats.accepted.to_string()),
             (
                 "ignored_stale_or_equal",
-                &stats.ignored_stale_or_equal.to_string(),
+                &membership_stats.ignored_stale_or_equal.to_string(),
             ),
-            ("removed_expired", &stats.removed_expired.to_string()),
-            ("removed_untrusted", &stats.removed_untrusted.to_string()),
+            (
+                "removed_expired",
+                &membership_stats.removed_expired.to_string(),
+            ),
+            (
+                "removed_untrusted",
+                &membership_stats.removed_untrusted.to_string(),
+            ),
         ],
     );
     if hostname_stats.accepted > 0 {
@@ -2560,7 +2569,7 @@ fn load_persisted_membership_records(
             &[("accepted", &hostname_stats.accepted.to_string())],
         );
     }
-    metrics.record_membership_state_loaded(state.records.len());
+    metrics.record_membership_state_loaded(persisted_state.records.len());
     Ok(())
 }
 
@@ -32583,6 +32592,138 @@ mod tests {
                 .iter()
                 .any(|route| route.prefix.to_string() == "10.88.0.2/32")
         );
+
+        fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
+    }
+
+    #[test]
+    fn persisted_membership_state_restores_a_legacy_delegated_ledger() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let local = NodeIdentity::generate_ed25519().expect("local member");
+        let remote = NodeIdentity::generate_ed25519().expect("remote member");
+        let departed = NodeIdentity::generate_ed25519().expect("departed member");
+        let records = vec![
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: inviter.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_000,
+            )
+            .expect("inviter admission"),
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: root.clone(),
+                    membership_epoch: 1,
+                    sequence: 2,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_100,
+            )
+            .expect("late explicit genesis"),
+            issue_membership_record_at(
+                &inviter,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: local.clone(),
+                    membership_epoch: 1,
+                    sequence: 3,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_200,
+            )
+            .expect("local admission"),
+            issue_membership_record_at(
+                &root,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: remote.clone(),
+                    membership_epoch: 1,
+                    sequence: 4,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_201,
+            )
+            .expect("remote admission"),
+            issue_membership_record_for_subject_at(
+                &root,
+                MembershipRecordIssueOptions {
+                    network_name: "lab".to_owned(),
+                    member: MembershipRecordSubject::from_identity(&departed)
+                        .expect("departed member subject"),
+                    membership_epoch: 1,
+                    sequence: 5,
+                    revoked: true,
+                    roles: Vec::new(),
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                1_202,
+            )
+            .expect("orphan revocation tombstone"),
+        ];
+        let local_record = records[2].clone();
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let mut config = config_with_peer(&local, remote_peer);
+        config.peers.clear();
+        config.network.member_records = vec![local_record];
+        let mut forwarder = Forwarder::from_config(&config).expect("legacy profile forwarder");
+        let mut membership = OverlayMembership::from_config(&config).expect("legacy membership");
+        let path = test_pairing_state_path("membership-genesis-migration")
+            .with_file_name("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        store
+            .save(&config.network.name, &local.peer_id, &records, &[])
+            .expect("persist prior accepted ledger");
+
+        load_persisted_membership_records(
+            Some(&store),
+            &mut forwarder,
+            &mut membership,
+            &local.peer_id,
+            &RuntimeMetrics::default(),
+        )
+        .expect("restore explicit genesis from trusted local state");
+
+        assert_eq!(forwarder.member_record_count(), records.len());
+        assert!(forwarder.is_configured_transport_peer(remote_peer));
+        assert!(membership.allows(remote_peer));
+
+        let later_member = NodeIdentity::generate_ed25519().expect("later member");
+        let later_peer = later_member.peer_id.parse().expect("later peer");
+        let later_record = issue_membership_record_at(
+            &root,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: later_member,
+                membership_epoch: 1,
+                sequence: 6,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_203,
+        )
+        .expect("later admission");
+        forwarder
+            .merge_membership_records(&[later_record], 1_203)
+            .expect("restored genesis authorizes later live records");
+        assert!(forwarder.is_configured_transport_peer(later_peer));
 
         fs::remove_dir_all(path.parent().expect("state parent")).expect("remove state directory");
     }

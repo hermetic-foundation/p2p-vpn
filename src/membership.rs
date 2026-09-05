@@ -594,6 +594,7 @@ fn evaluate_membership_ledger_at(
             });
         }
 
+        // A tombstone remains authoritative when the target's older grant is unavailable.
         let authorized_revocations = group
             .iter()
             .copied()
@@ -601,10 +602,6 @@ fn evaluate_membership_ledger_at(
             .filter(|index| {
                 let payload = &records[*index].payload;
                 issuer_is_active(payload, &evaluation.states, trusted_roots)
-                    && evaluation
-                        .states
-                        .get(&payload.member_peer)
-                        .is_some_and(|state| state.active)
             })
             .collect::<Vec<_>>();
         for index in authorized_revocations {
@@ -2024,6 +2021,85 @@ mod tests {
             .collect::<HashSet<_>>();
         assert!(!peers.contains(&member_a.peer_id));
         assert!(peers.contains(&member_b.peer_id));
+    }
+
+    #[test]
+    fn active_member_can_publish_an_orphan_revocation_tombstone() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let issuer = NodeIdentity::generate_ed25519().expect("issuer");
+        let departed = NodeIdentity::generate_ed25519().expect("departed member");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let issuer_record = overlay_record(&root, &issuer, 2, 1_000, None);
+        let revocation = issue_membership_record_for_subject_at(
+            &issuer,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&departed).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("orphan revocation");
+        let mut records = vec![root_record, issuer_record];
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_000)
+            .expect("trusted membership issuers");
+
+        let stats =
+            merge_membership_records_at(&mut records, &[revocation], "lab", 1_100, &trusted, 8)
+                .expect("orphan revocation tombstone");
+
+        assert_eq!(stats.accepted, 1);
+        assert!(records.last().is_some_and(|record| record.payload.revoked));
+        let effective = effective_membership_at(&records, "lab", 1_100).expect("effective");
+        assert!(!effective.members.contains_key(&PeerId::from_libp2p(
+            departed.peer_id.parse().expect("departed peer")
+        )));
+    }
+
+    #[test]
+    fn inactive_peer_cannot_publish_an_orphan_revocation_tombstone() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let outsider = NodeIdentity::generate_ed25519().expect("outsider");
+        let target = NodeIdentity::generate_ed25519().expect("target");
+        let root_record = overlay_record(&root, &root, 1, 1_000, None);
+        let revocation = issue_membership_record_for_subject_at(
+            &outsider,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&target).expect("member subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("untrusted orphan revocation");
+        let mut records = vec![root_record];
+        let original = records.clone();
+        let trusted = trusted_membership_issuers_at(&records, "lab", 1_000)
+            .expect("trusted membership issuers");
+
+        assert!(matches!(
+            merge_membership_records_at(
+                &mut records,
+                &[revocation],
+                "lab",
+                1_100,
+                &trusted,
+                8,
+            ),
+            Err(MembershipRecordError::UntrustedIssuer { issuer })
+                if issuer == outsider.peer_id
+        ));
+        assert_eq!(records, original);
     }
 
     #[test]
