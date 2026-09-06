@@ -387,7 +387,9 @@ The expiry path consumes its pending-change flag before installing routes, but
 the caller exits on error. Source inspection does not establish a stale-authority
 retry defect: no in-process retry occurs on that path today.
 
-### Next Recovery Review Target: Address Retention
+### Address Retention: Confirmed Growth
+
+Priority: P2. Status: reproduced through admission at `909a9482`; not fixed.
 
 `DiscoveredPeerAddresses::insert_at` (`runner.rs:8899` at this milestone) appends
 each distinct peer/address pair without an entry cap. Entries have a one-hour
@@ -400,10 +402,50 @@ but that does not bound repeated address changes from an authorized peer.
 | Recovery discovery queries | Explicit total and concurrent maxima |
 | Retained discovered addresses | TTL only; no total or per-peer entry limit found |
 
-Next: reproduce repeated-address growth through admission, then design bounded
-retention that preserves fresh LAN candidates and relay recovery. Include address
-bytes, per-peer fairness, rejection metrics, and downstream Kademlia/AutoNAT effects.
-This is source-review evidence, not a measured memory-exhaustion reproduction.
+#### Admission Measurement
+
+The opt-in `measure_discovered_address_retention_through_admission` diagnostic
+supplies distinct public TCP addresses through `learn_peer_address`. It never
+polls the swarm and does not send network traffic. Production limits are unchanged.
+
+| Peer Authorization | Supplied | Runtime Entries | Runtime Address Bytes | Additional Kademlia Entries |
+| --- | ---: | ---: | ---: | ---: |
+| Authorized | 32 | 32 | 256 | 32 |
+| Authorized | 128 | 128 | 1,024 | 128 |
+| Authorized | 512 | 512 | 4,096 | 512 |
+| Not authorized for overlay | 512 | 0 | 0 | 512 |
+
+After advancing the expiry timestamp beyond the one-hour TTL, all 512 authorized
+runtime entries disappeared. All 512 additional Kademlia entries remained.
+The fixture starts with five Kademlia addresses; totals therefore reach 517.
+
+This proves cumulative retained-state growth, not process memory exhaustion or a
+measured idle-CPU regression. Byte counts cover encoded runtime multiaddresses
+only, excluding allocation overhead, peer IDs, downstream copies, and dial state.
+
+| Downstream Store | Pinned Implementation | Implication |
+| --- | --- | --- |
+| Kademlia `Addresses` | Distinct values appended to `SmallVec`; no per-peer entry cap | Runtime eviction alone cannot bound this copy. |
+| AutoNAT request-response addresses | `PeerAddresses` LRU: 100 peers, 10 addresses each | Entry count is bounded independently; encoded address bytes still need admission limits. |
+| AutoNAT server removal | Removes server eligibility, not its request-response addresses | Do not assume removal clears retained address memory. |
+
+#### Ownership Plan
+
+1. Introduce one bounded discovered-address owner with explicit admission,
+   refresh, eviction, expiry, and authorization-removal effects.
+2. Bound encoded address size, entries per peer, and total retained entries.
+   Reserve capacity across peers and keep fresh LAN and relay alternatives usable.
+3. Apply admission before downstream insertion, including public infrastructure
+   peers that are intentionally not authorized overlay members.
+4. Reconcile Kademlia copies on replacement and expiry without removing explicitly
+   configured bootstrap addresses or active paths owned by another source.
+5. Preserve retry quarantine on repeated announcements. Report capacity rejection
+   and eviction separately from invalid-address rejection.
+
+Acceptance requires deterministic overflow, refresh, source-ownership, expiry,
+and revocation tests, followed by minimal-config namespace recovery scenarios.
+Repeat this diagnostic after implementation; a passing diagnostic alone is not
+evidence that a security bound exists. This finding remains open.
 
 ## Verification and Resource Plan
 

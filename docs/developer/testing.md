@@ -881,6 +881,19 @@ Validate the checker itself:
 nix build .#checks.x86_64-linux.public-vpn-move-evidence-check
 ```
 
+## Address Retention Diagnostic
+
+```sh
+cargo test --lib measure_discovered_address_retention_through_admission -- --ignored --nocapture
+```
+
+| Property | Scope |
+| --- | --- |
+| Input | Up to 512 distinct public TCP addresses per peer, authorized and infrastructure cases |
+| Network | Swarm is not polled; no external traffic |
+| Output | Runtime entries, encoded address bytes, Kademlia entries, cumulative elapsed time, and expiry result |
+| Interpretation | A measurement, not an assertion that retention is bounded or a process-memory benchmark |
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

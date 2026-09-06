@@ -30320,6 +30320,106 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "opt-in address-retention measurement; does not assert a security bound"]
+    async fn measure_discovered_address_retention_through_admission() {
+        let kad_address_count = |swarm: &mut Swarm<Behaviour>| -> usize {
+            swarm
+                .behaviour_mut()
+                .kad
+                .kbuckets()
+                .map(|bucket| {
+                    bucket
+                        .iter()
+                        .map(|entry| entry.node.value.len())
+                        .sum::<usize>()
+                })
+                .sum()
+        };
+        for authorized in [true, false] {
+            let identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
+            let configured = peer_id();
+            let remote = if authorized { configured } else { peer_id() };
+            let config = config_with_peer(&identity, configured);
+            let discovery = DiscoveryConfig::default();
+            let mut node = build_node(&HostConfig {
+                identity,
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: discovery.clone(),
+            })
+            .expect("node");
+            let forwarder = Forwarder::from_config(&config).expect("forwarder");
+            let mut discovered = DiscoveredPeerAddresses::default();
+            let paths = PathSet::new();
+            let metrics = RuntimeMetrics::default();
+            let initial_kad_addresses = kad_address_count(&mut node.swarm);
+            eprintln!(
+                "retention_baseline authorized={authorized} kad_entries={initial_kad_addresses}"
+            );
+            let started = Instant::now();
+            // Do not poll the swarm: exercise admission without external network I/O.
+            for count in 1..=512_u16 {
+                let address = format!("/ip4/11.252.0.2/tcp/{}", 4000 + count)
+                    .parse()
+                    .expect("address");
+                learn_peer_address(
+                    &mut node.swarm,
+                    &forwarder,
+                    &mut discovered,
+                    &paths,
+                    &metrics,
+                    remote,
+                    address,
+                    &discovery,
+                    DiscoveredPeerAddressSource::PublicDiscovery,
+                );
+                if [32, 128, 512].contains(&count) {
+                    let runtime_bytes: usize = discovered
+                        .addresses
+                        .iter()
+                        .map(|entry| entry.address.len())
+                        .sum();
+                    let kad_addresses = kad_address_count(&mut node.swarm);
+                    eprintln!(
+                        "retention authorized={authorized} supplied={count} runtime_entries={} runtime_address_bytes={runtime_bytes} kad_entries={kad_addresses} elapsed_us={}",
+                        discovered.addresses.len(),
+                        started.elapsed().as_micros(),
+                    );
+                }
+            }
+            if !authorized {
+                assert!(discovered.addresses.is_empty());
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .discovered_addresses_accepted,
+                    0
+                );
+            }
+            let expired = discovered.drop_expired(
+                Instant::now() + DISCOVERED_ADDRESS_TTL + Duration::from_secs(1),
+                DISCOVERED_ADDRESS_TTL,
+            );
+            let kad_addresses = kad_address_count(&mut node.swarm);
+            eprintln!(
+                "retention_after_expiry authorized={authorized} expired={expired} runtime_entries={} kad_entries={kad_addresses}",
+                discovered.addresses.len(),
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn learn_peer_address_records_accepted_address_and_dial_attempt() {
         let local_identity = crate::identity::NodeIdentity::generate_ed25519().expect("identity");
         let configured = peer_id();
