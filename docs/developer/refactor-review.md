@@ -492,7 +492,9 @@ Android device and NixOS VM validation remain in the acceptance map.
 
 The [bounded source review](membership-sync-review.md) identifies wrong-type
 response dispatch, authorization-driven retirement, and history-retention cases.
-Their regression tests and fixes remain required; they are not approved deferrals.
+Wrong-type dispatch is reproduced and fixed through a control-event regression.
+Authorization retirement, history bounds, and stale-connection ordering remain
+required work; they are not approved deferrals.
 
 The [Android multi-network run](android-multi-network-review.md) validates normal
 traffic and lifecycle behavior at `f026342f`, not those hostile-response cases.

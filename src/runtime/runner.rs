@@ -12116,12 +12116,16 @@ async fn handle_control_event(
                 },
             ..
         } => {
-            if matches!(
-                &response,
-                ControlResponse::PacketPlaneAccepted(_) | ControlResponse::PacketPlaneRejected(_)
-            ) && !context
-                .packet_plane_negotiator
-                .owns_request(PeerId::from_libp2p(peer), request_id)
+            // Wrong-type replies must reach the request owner so it can retire the sync.
+            if !context.membership_record_syncs.contains(request_id)
+                && matches!(
+                    &response,
+                    ControlResponse::PacketPlaneAccepted(_)
+                        | ControlResponse::PacketPlaneRejected(_)
+                )
+                && !context
+                    .packet_plane_negotiator
+                    .owns_request(PeerId::from_libp2p(peer), request_id)
             {
                 log_runtime_event(
                     LogLevel::Info,
@@ -34217,6 +34221,183 @@ mod tests {
         assert_eq!(snapshot.membership_state_persist_failures, 1);
         assert_eq!(snapshot.membership_state_loads, 0);
         assert_eq!(snapshot.membership_state_persists, 0);
+    }
+
+    async fn dispatch_membership_sync_test_response(
+        node: &mut P2pNode,
+        forwarder: &mut Forwarder,
+        syncs: &mut MembershipRecordSyncs,
+        metrics: &RuntimeMetrics,
+        peer: Libp2pPeerId,
+        request_id: request_response::OutboundRequestId,
+        response: ControlResponse,
+    ) {
+        struct UnusedPacketIo;
+        impl crate::runtime::tun::PacketRead for UnusedPacketIo {
+            fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("control response must not read packets");
+            }
+        }
+        impl crate::runtime::tun::PacketWrite for UnusedPacketIo {
+            fn write_packet(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                panic!("control response must not write packets");
+            }
+        }
+        let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
+        let mut membership =
+            OverlayMembership::from_config(forwarder.config()).expect("membership");
+        let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config()).expect("TUN");
+        let mut local_capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        let connection_id = ConnectionId::new_unchecked(1);
+        let mut connection_epochs = ConnectionEpochs::default();
+        assert!(connection_epochs.record_established(connection_id));
+        handle_control_event(
+            &mut node.swarm,
+            &mut SwarmEventContext {
+                forwarder,
+                membership: &mut membership,
+                tun_runtime: &mut tun_runtime,
+                route_controller: &mut PreconfiguredTunRoutes,
+                infrastructure_peers: &mut InfrastructurePeers::default(),
+                routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                writer: &mut writer,
+                paths: &mut PathSet::new(),
+                peer_capabilities: &mut PeerCapabilities::default(),
+                relay_readiness: &mut RelayReadiness::default(),
+                auto_relay: &mut AutoRelayState::default(),
+                public_discovery_backoff: &mut PublicDiscoveryBackoff::default(),
+                public_discovery_holdoff_active: false,
+                relay_addresses: &[],
+                configured_peer_addresses: &[],
+                configured_relay_reservation_listeners: &mut HashSet::new(),
+                retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
+                relay_server_enabled: false,
+                discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
+                packet_in_flight: &mut PacketInFlight::new(1),
+                inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
+                pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
+                membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
+                membership_record_syncs: syncs,
+                pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, Instant::now()),
+                metrics,
+                local_capabilities: &mut local_capabilities,
+                persistent_packet_endpoint_candidates: &[],
+                persistent_packet_plane_quic_endpoint_candidates: &[],
+                previous_membership_tags: &[],
+                discovery: &DiscoveryConfig::default(),
+                identity: &node.identity,
+                packet_plane: &mut PacketPlaneRuntime::disabled(),
+                packet_plane_quic: None,
+                packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
+                path_probe_tracker: &mut PathProbeTracker::default(),
+                packet_plane_session_ttl: Duration::from_secs(60),
+                packet_plane_replay_windows_per_session: 1,
+                pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                code_pairing_sessions: &mut CodePairingSessions::new(),
+                pairing_state_store: None,
+                active_connections: &mut HashMap::new(),
+                connection_epochs: &mut connection_epochs,
+                membership_probe_connections: &mut MembershipProbeConnections::default(),
+                kademlia_maintenance: &mut KademliaMaintenance::new(Instant::now()),
+            },
+            request_response::Event::Message {
+                peer,
+                connection_id,
+                message: Message::Response {
+                    request_id,
+                    response,
+                },
+            },
+        )
+        .await
+        .expect("dispatch control response");
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_wrong_response_releases_owner_and_preserves_retry() {
+        let (local, remote, records) = membership_record_sync_records(3);
+        let remote_peer = remote.peer_id.parse().expect("remote peer");
+        let config = config_with_peer(&local, remote_peer);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut node = build_node(&HostConfig {
+            identity: local,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node");
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(&records);
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        let pending = PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities);
+        send_membership_record_sync_request(&mut node.swarm, &mut syncs, &metrics, pending);
+        let request_id = *syncs.pending.keys().next().expect("pending request");
+        dispatch_membership_sync_test_response(
+            &mut node,
+            &mut forwarder,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            request_id,
+            ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath),
+        )
+        .await;
+        assert!(
+            syncs.pending.is_empty(),
+            "wrong-type reply must release its owner"
+        );
+        assert!(syncs.active_by_peer.is_empty());
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_sync_failures,
+            1
+        );
+        let retry_at = syncs.retry_after[&remote_peer];
+        assert!(!syncs.can_start(
+            remote_peer,
+            "new-snapshot",
+            retry_at - Duration::from_nanos(1)
+        ));
+        assert!(syncs.can_start(remote_peer, "new-snapshot", retry_at));
+
+        let pending = PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities);
+        send_membership_record_sync_request(&mut node.swarm, &mut syncs, &metrics, pending);
+        let newer_request = *syncs.pending.keys().next().expect("new request");
+        assert_ne!(newer_request, request_id);
+        dispatch_membership_sync_test_response(
+            &mut node,
+            &mut forwarder,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            request_id,
+            ControlResponse::PacketPlaneRejected(ControlRejectionReason::UnsupportedPreferredPath),
+        )
+        .await;
+        assert!(syncs.contains(newer_request));
+        assert_eq!(syncs.active_by_peer.get(&remote_peer), Some(&newer_request));
+        assert_eq!(syncs.retry_after[&remote_peer], retry_at);
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_sync_failures,
+            1
+        );
+        assert!(forwarder.member_records().is_empty());
     }
 
     #[tokio::test]
