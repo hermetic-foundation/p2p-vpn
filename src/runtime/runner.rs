@@ -12341,6 +12341,16 @@ fn handle_packet_event(
     event: request_response::Event<crate::wire::Frame, crate::runtime::packet::PacketResponse>,
 ) -> Result<(), RunnerError> {
     if !request_response_message_is_usable(context.connection_epochs, &event, "packet") {
+        // Terminal replies release their window even when path effects are stale.
+        if let request_response::Event::Message {
+            message: Message::Response { request_id, .. },
+            ..
+        } = &event
+        {
+            context
+                .packet_in_flight
+                .complete(PacketInFlightId::RequestResponse(*request_id));
+        }
         return Ok(());
     }
     match event {
@@ -12424,6 +12434,11 @@ fn handle_pinned_packet_stream_event(
         && !context.connection_epochs.is_usable(connection_id)
     {
         log_stale_connection_event("pinned_packet_stream", connection_id);
+        if let pinned_packet_stream::Event::OutboundResponse { request_id, .. } = &event {
+            context
+                .packet_in_flight
+                .complete(PacketInFlightId::PinnedPacketStream(*request_id));
+        }
         return Ok(());
     }
     match event {
@@ -32834,6 +32849,171 @@ mod tests {
         assert_eq!(snapshot.outbound_failures, 1);
         assert_eq!(snapshot.outbound_dropped_packets, 1);
         assert_eq!(snapshot.outbound_drop_packet_too_large_packets, 1);
+    }
+
+    #[tokio::test]
+    async fn stale_packet_responses_release_only_their_own_window_without_path_effects() {
+        struct UnusedPacketIo;
+        impl crate::runtime::tun::PacketRead for UnusedPacketIo {
+            fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("stale response must not read packets");
+            }
+        }
+        impl crate::runtime::tun::PacketWrite for UnusedPacketIo {
+            fn write_packet(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                panic!("stale response must not write packets");
+            }
+        }
+        for pinned in [true, false] {
+            for stale_state in ["closed", "retiring", "previous_epoch"] {
+                for response in [
+                    PacketResponse::Accepted,
+                    PacketResponse::Rejected(PacketRejectionReason::RateLimited),
+                ] {
+                    let identity = NodeIdentity::generate_ed25519().unwrap();
+                    let remote = peer_id();
+                    let overlay = PeerId::from_libp2p(remote);
+                    let config = config_with_peer(&identity, remote);
+                    let mut forwarder = Forwarder::from_config(&config).unwrap();
+                    let mut node = membership_sync_test_node(identity);
+                    let connection_id = ConnectionId::new_unchecked(41);
+                    let mut epochs = ConnectionEpochs::default();
+                    assert!(epochs.record_established(connection_id));
+                    match stale_state {
+                        "closed" => epochs.remove(connection_id),
+                        "retiring" => {
+                            epochs.mark_retiring(connection_id);
+                        }
+                        _ => {
+                            epochs.advance();
+                        }
+                    }
+                    let mut paths = PathSet::new();
+                    paths.record_established(overlay, PathKind::DirectTcpStream);
+                    let path_before = paths.best_for(overlay).unwrap();
+                    let mut packet_in_flight = PacketInFlight::new(2);
+                    let mut requests = Vec::new();
+                    for _ in 0..2 {
+                        let frame = Frame::packet(1, 1, vec![0x45; 20]).unwrap();
+                        let request = if pinned {
+                            PacketInFlightId::PinnedPacketStream(
+                                node.swarm
+                                    .behaviour_mut()
+                                    .pinned_packet_stream
+                                    .send_request_on_connection(remote, connection_id, frame),
+                            )
+                        } else {
+                            PacketInFlightId::RequestResponse(
+                                node.swarm
+                                    .behaviour_mut()
+                                    .packet
+                                    .send_request(&remote, frame),
+                            )
+                        };
+                        packet_in_flight.record_path_probe(overlay, request, path_before);
+                        requests.push(request);
+                    }
+                    assert!(!packet_in_flight.can_send(overlay));
+                    let metrics = RuntimeMetrics::default();
+                    let mut membership = OverlayMembership::from_config(&config).unwrap();
+                    let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
+                    let mut local_capabilities = ControlCapabilities::local("lab", None, 1280);
+                    let (_, mut writer) = PacketIo::new(UnusedPacketIo, UnusedPacketIo).split();
+                    let mut context = SwarmEventContext {
+                        forwarder: &mut forwarder,
+                        membership: &mut membership,
+                        tun_runtime: &mut tun_runtime,
+                        route_controller: &mut PreconfiguredTunRoutes,
+                        infrastructure_peers: &mut InfrastructurePeers::default(),
+                        routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                        writer: &mut writer,
+                        paths: &mut paths,
+                        peer_capabilities: &mut PeerCapabilities::default(),
+                        relay_readiness: &mut RelayReadiness::default(),
+                        auto_relay: &mut AutoRelayState::default(),
+                        public_discovery_backoff: &mut PublicDiscoveryBackoff::default(),
+                        public_discovery_holdoff_active: false,
+                        relay_addresses: &[],
+                        configured_peer_addresses: &[],
+                        configured_relay_reservation_listeners: &mut HashSet::new(),
+                        retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
+                        relay_server_enabled: false,
+                        discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
+                        packet_in_flight: &mut packet_in_flight,
+                        inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
+                        pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
+                        membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
+                        membership_record_syncs: &mut MembershipRecordSyncs::default(),
+                        pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(
+                            1,
+                            Instant::now(),
+                        ),
+                        metrics: &metrics,
+                        local_capabilities: &mut local_capabilities,
+                        persistent_packet_endpoint_candidates: &[],
+                        persistent_packet_plane_quic_endpoint_candidates: &[],
+                        previous_membership_tags: &[],
+                        discovery: &DiscoveryConfig::default(),
+                        identity: &node.identity,
+                        packet_plane: &mut PacketPlaneRuntime::disabled(),
+                        packet_plane_quic: None,
+                        packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
+                        path_probe_tracker: &mut PathProbeTracker::default(),
+                        packet_plane_session_ttl: Duration::from_secs(60),
+                        packet_plane_replay_windows_per_session: 1,
+                        pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                        code_pairing_sessions: &mut CodePairingSessions::new(),
+                        pairing_state_store: None,
+                        active_connections: &mut HashMap::new(),
+                        connection_epochs: &mut epochs,
+                        membership_probe_connections: &mut MembershipProbeConnections::default(),
+                        kademlia_maintenance: &mut KademliaMaintenance::new(Instant::now()),
+                    };
+                    for _ in 0..2 {
+                        match requests[0] {
+                            PacketInFlightId::PinnedPacketStream(request_id) => {
+                                handle_pinned_packet_stream_event(
+                                    &mut node.swarm,
+                                    &mut context,
+                                    pinned_packet_stream::Event::OutboundResponse {
+                                        peer: remote,
+                                        connection_id,
+                                        request_id,
+                                        response,
+                                    },
+                                )
+                                .unwrap()
+                            }
+                            PacketInFlightId::RequestResponse(request_id) => handle_packet_event(
+                                &mut node.swarm,
+                                &mut context,
+                                request_response::Event::Message {
+                                    peer: remote,
+                                    connection_id,
+                                    message: Message::Response {
+                                        request_id,
+                                        response,
+                                    },
+                                },
+                            )
+                            .unwrap(),
+                        }
+                        assert_eq!(
+                            context.packet_in_flight.in_flight_for(overlay),
+                            1,
+                            "{pinned:?} {stale_state}: terminal stale reply stranded its slot"
+                        );
+                        assert!(!context.packet_in_flight.requests.contains_key(&requests[0]));
+                        assert!(context.packet_in_flight.requests.contains_key(&requests[1]));
+                        assert!(context.packet_in_flight.can_send(overlay));
+                        assert_eq!(context.paths.best_for(overlay), Some(path_before));
+                        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+                        assert_eq!(snapshot.outbound_failures, 0);
+                        assert_eq!(snapshot.outbound_dropped_packets, 0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

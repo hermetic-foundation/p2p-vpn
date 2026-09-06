@@ -12,6 +12,30 @@ inspection. These findings do not establish the cause of the retained Android
 | --- | --- | --- |
 | P2 | Direct-TCP dispatch ignored selected connection; reproduced and corrected | Original: `src/runtime/runner.rs:9904`, `src/runtime/forward.rs:280` |
 | P2 | Pinned-stream connection closure lacked terminal request events; corrected with lifecycle regressions | Original: `src/runtime/pinned_packet_stream.rs:165`, `:234` |
+| P2 | Stale terminal packet replies stranded runtime window slots; corrected in both stream handlers | `handle_pinned_packet_stream_event`, `handle_packet_event` |
+
+### Stale Response Accounting
+
+Both packet handlers previously discarded stale-connection responses before
+completing their `PacketInFlight` entries. A terminal reply queued before closure
+could therefore retain its peer/shard slot until the ordinary request timeout.
+
+Stale terminal responses now release their own request ID before returning.
+They still cannot update RTT, promote paths, inject packets, or record response
+rejections against the current path. No packet is requeued or retransmitted.
+
+The regression dispatches accepted and rejected replies through both handlers
+after closure, retirement, and network-epoch advancement. Repeated old replies
+must leave a newer request intact, free capacity, and preserve paths and metrics.
+
+- Before the fix, the closed pinned case retained two slots instead of one.
+- Events and connection retirement are injected; this is not socket race-frequency evidence.
+- Transport-level exact-owner validation remains separate from runtime accounting.
+- All 12 stale-response combinations pass, including duplicate delivery and newer-request isolation.
+- Workspace: 1,225 passed, 18 opt-in tests ignored; required Clippy groups, changed-file formatting, and Nix source parity pass.
+- Non-fatal style warnings remain, including the new regression's function length.
+- Namespace rerun: all 11 pass after correcting [relay-LAN test isolation](testing.md#namespace-e2e); retain the original 10/11 result separately.
+- Logs: `/tmp/p2p-vpn-review-stale-packet-*`.
 
 ### Direct TCP Selection
 
@@ -154,10 +178,9 @@ and event compatibility separately before consolidating the default inbound owne
 
 #### Remaining Evidence
 
-1. Verify stale response filtering releases runtime in-flight accounting without promoting closed paths.
-2. Measure sustained queue/ownership retention and recovery under saturation.
-3. Rerun rebuilt Android recovery; retain earlier packet-loss evidence.
-4. Resolve duplicate inbound protocol ownership without silently changing supported event consumers.
+1. Measure sustained queue/ownership retention and recovery under saturation.
+2. Repeat affected platform checks after further runtime changes; retain earlier packet-loss evidence.
+3. Resolve duplicate inbound protocol ownership without silently changing supported event consumers.
 
 #### Verification
 
@@ -167,7 +190,7 @@ and event compatibility separately before consolidating the default inbound owne
 - All 11 namespace scenarios passed with the default host, including network move and relay promotion.
 - Logs: `/tmp/p2p-vpn-review-stream-bounds-*`.
 - Rebuilt Android and fixture passed the [68-step multi-network run](android-multi-network-review.md#latest-attempt) at `643d798e`.
-- Sustained-overload recovery and targeted stale-completion accounting remain separate gates.
+- The later stale-response accounting regression passes; sustained-overload recovery remains a separate gate.
 
 These limits bound admitted payload/stream work, not arbitrary accumulation of
 terminal events by an embedding caller that never polls the public behaviour.
