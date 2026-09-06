@@ -293,6 +293,9 @@ Cancel an unfinished local operation:
 sudo p2p-vpn pair cancel OPERATION --instance runners
 ```
 
+Cancelling a completed operation leaves its result unchanged. To remove an admitted
+peer, revoke its membership instead.
+
 Operations and applied enrollments survive daemon restarts.
 
 The state is encrypted and bound to the local identity and network.

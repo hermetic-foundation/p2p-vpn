@@ -45,13 +45,17 @@ bounded lifecycle.
 | `pair_status` | Read operation phase and diagnostics. |
 | `pair_approve` | Issue and apply an authorized grant. |
 | `pair_reject` | Terminate a pending candidate. |
-| `pair_cancel` | Terminate a local operation. |
+| `pair_cancel` | Terminate an unfinished local operation; completed operations remain unchanged. |
 | `pair_artifacts` | Return the applied enrollment as native Nix. |
 | `pair_acknowledge` | Compact the enrollment into a receipt. |
 
 Mutation methods fail when the daemon has no durable pairing-state path.
 
 `Debug` output redacts the code and secret response material.
+
+Completed cancellation preserves the enrollment, completion artifacts, and accepted
+polling receipt. It does not revoke membership. See the
+[transaction review](pairing-transaction-review.md) for persistence evidence and open cases.
 
 ## Code and Locator
 

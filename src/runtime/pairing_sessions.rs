@@ -812,22 +812,28 @@ impl CodePairingSessions {
         &mut self,
         operation_id: &str,
     ) -> Result<PairingExpiryActions, CodePairingSessionError> {
-        if self
+        if let Some(operation) = self
             .open
             .as_ref()
-            .is_some_and(|operation| operation.id == operation_id)
+            .filter(|operation| operation.id == operation_id)
         {
+            if operation.completed.is_some() {
+                return Ok(PairingExpiryActions::default());
+            }
             if let Some(ticket) = self.inbound_ticket.as_mut() {
                 ticket.outcome =
                     InboundTicketOutcome::Rejected(PairingCodeRejectionReason::Unavailable);
             }
             return Ok(self.deactivate_open(TerminalStatus::Cancelled));
         }
-        if self
+        if let Some(operation) = self
             .join
             .as_ref()
-            .is_some_and(|operation| operation.id == operation_id)
+            .filter(|operation| operation.id == operation_id)
         {
+            if operation.completed.is_some() {
+                return Ok(PairingExpiryActions::default());
+            }
             self.deactivate_join(TerminalStatus::Cancelled);
             return Ok(PairingExpiryActions::default());
         }
@@ -5448,6 +5454,90 @@ mod tests {
                 &enrollment.response,
             ))
         );
+    }
+
+    #[test]
+    fn completed_open_ignores_late_cancel_and_remains_restorable() {
+        let (mut sessions, enrollment, ticket, joiner, now) = prepared_open_fixture(60);
+        sessions
+            .complete_open(
+                &enrollment.operation_id,
+                enrollment.approval_id.as_deref().unwrap(),
+                enrollment.response.clone(),
+            )
+            .unwrap();
+        sessions
+            .mark_enrollment_applied_at(&enrollment.operation_id, 1_001)
+            .unwrap();
+        for _ in 0..2 {
+            let before = sessions.encode_persisted("runners").unwrap();
+            assert_eq!(
+                sessions.cancel(&enrollment.operation_id).unwrap(),
+                PairingExpiryActions::default()
+            );
+            let after = sessions.encode_persisted("runners").unwrap();
+            sessions = CodePairingSessions::restore_persisted(
+                &after,
+                "runners",
+                1_002,
+                now + Duration::from_secs(2),
+            )
+            .expect("completed inviter survives late cancellation");
+            assert_eq!(before, after, "cancellation must not mutate completion");
+            assert_eq!(
+                sessions.open_status(&enrollment.operation_id).unwrap(),
+                PairingOpenStatus::Completed
+            );
+            assert_eq!(
+                sessions.open_completion(&enrollment.operation_id),
+                Some(&enrollment.response)
+            );
+            assert_eq!(
+                sessions.poll_response(joiner, &ticket, 1_002),
+                PairingCodeResponse::Accepted {
+                    response: Box::new(enrollment.response.clone()),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn completed_join_ignores_late_cancel_and_remains_restorable() {
+        let (mut sessions, enrollment, now) = prepared_join_fixture(60);
+        sessions
+            .complete_join(
+                &enrollment.operation_id,
+                enrollment.offer.clone().unwrap(),
+                enrollment.response.clone(),
+            )
+            .unwrap();
+        sessions
+            .mark_enrollment_applied_at(&enrollment.operation_id, 1_001)
+            .unwrap();
+        for _ in 0..2 {
+            let before = sessions.encode_persisted("runners").unwrap();
+            assert_eq!(
+                sessions.cancel(&enrollment.operation_id).unwrap(),
+                PairingExpiryActions::default()
+            );
+            let after = sessions.encode_persisted("runners").unwrap();
+            sessions = CodePairingSessions::restore_persisted(
+                &after,
+                "runners",
+                1_002,
+                now + Duration::from_secs(2),
+            )
+            .expect("completed joiner survives late cancellation");
+            assert_eq!(before, after, "cancellation must not mutate completion");
+            assert_eq!(
+                sessions.join_status(&enrollment.operation_id).unwrap(),
+                PairingJoinStatus::Completed
+            );
+            assert_eq!(
+                sessions.join_completion(&enrollment.operation_id),
+                Some((enrollment.offer.as_ref().unwrap(), &enrollment.response,))
+            );
+        }
     }
 
     #[test]
