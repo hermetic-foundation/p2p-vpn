@@ -2435,6 +2435,25 @@ diagnostic_report_is_valid() {
   ' "$report_file" >/dev/null
 }
 
+summarize_android_connectivity() {
+  jq -Rs '
+    if contains("Current Networks:") then
+      [split("\n")[] | select(test("^\\s*NetworkAgentInfo\\{")) |
+        {
+          kind: (if contains("Transports: WIFI") then "wifi"
+            elif contains("Transports: CELLULAR") then "cellular"
+            elif contains("Transports: ETHERNET") then "ethernet"
+            elif contains("Transports: VPN") then "vpn"
+            else "other" end),
+          validated: test("Capabilities: [^]]*\\bVALIDATED\\b"),
+          internet: test("Capabilities: [^]]*\\bINTERNET\\b"),
+          not_vpn: test("Capabilities: [^]]*\\bNOT_VPN\\b")
+        }
+      ] | {status: "parsed", networks: .}
+    else {status: "unsupported", networks: null} end
+  '
+}
+
 collect_android_diagnostics() {
   [[ -n "$emulator_serial" && ${#adb[@]} -gt 0 ]] || return 0
   local adb_timeout_seconds="$cleanup_adb_timeout_seconds"
@@ -2444,6 +2463,16 @@ collect_android_diagnostics() {
 
   adb_run logcat -d -v epoch -s 'p2p-vpn:I' '*:S' \
     > "$android_log" 2>&1 || true
+
+  local os_underlay="$output_dir/.os-underlay.json"
+  if adb_run shell dumpsys connectivity 2>/dev/null \
+    | summarize_android_connectivity > "$os_underlay"; then
+    jq --slurpfile os_underlay "$os_underlay" \
+      '.diagnostics = ((.diagnostics // {}) + {os_underlay: $os_underlay[0]})' \
+      "$device_file" > "$device_file.updated"
+    mv -f "$device_file.updated" "$device_file"
+  fi
+  rm -f "$os_underlay"
 
   local final_status="$output_dir/.final-status.json"
   local coarse_status="$output_dir/.coarse-final-status.json"

@@ -446,6 +446,14 @@
                 shellcheck ${./scripts/android-e2e.sh}
                 shellcheck ${./scripts/android-e2e-nix.sh}
 
+                source <(sed -n '/^summarize_android_connectivity() {$/,/^}$/p' ${./scripts/android-e2e.sh})
+                printf '%s\n' 'Unrecognized connectivity output: private.example' \
+                  | summarize_android_connectivity \
+                  | jq -e '. == {status: "unsupported", networks: null}' >/dev/null
+                printf '%s\n' 'Current Networks:' \
+                  | summarize_android_connectivity \
+                  | jq -e '. == {status: "parsed", networks: []}' >/dev/null
+
                 test_root="$TMPDIR/android-e2e-test"
                 mkdir -p \
                   "$test_root/bin" \
@@ -904,6 +912,13 @@
                     ;;
                   'shell dumpsys activity activities')
                     printf 'org.hermeticfoundation.p2pvpn.MainActivity\n'
+                    ;;
+                  'shell dumpsys connectivity')
+                    printf '%s\n' \
+                      'Current Networks:' \
+                      '  NetworkAgentInfo{network{100} ni{WIFI CONNECTED} lp{192.0.2.44 private.example} nc{[ Transports: WIFI Capabilities: INTERNET&NOT_VPN&VALIDATED]}}' \
+                      '  NetworkAgentInfo{network{101} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET&NOT_VPN]}}' \
+                      '  NetworkOffer [ Transports: WIFI Capabilities: INTERNET&VALIDATED ]'
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command status')
                     if [[ -n "$pairing_state" && -f "$pairing_state" ]]; then
@@ -1490,6 +1505,13 @@
                   local diagnostic_size
                   jq -e --argjson expected_connected "$expected_connected" '
                     .cleanup.diagnostic_report_redacted and
+                    .device.diagnostics.os_underlay == {
+                      status: "parsed",
+                      networks: [
+                        {kind: "wifi", validated: true, internet: true, not_vpn: true},
+                        {kind: "cellular", validated: false, internet: true, not_vpn: true}
+                      ]
+                    } and
                     (.device.diagnostics.export |
                       .schema_version == 1 and
                       .kind == "p2p-vpn-android-diagnostics" and

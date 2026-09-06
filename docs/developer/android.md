@@ -902,6 +902,15 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 `evidence.json` records preflight checks, the device contract, scenario steps,
 the validated diagnostic report, and cleanup results.
 
+Cleanup also records `device.diagnostics.os_underlay` from Android's connectivity
+service, independently of the app tracker. It includes only coarse network kinds
+and validated, internet, and non-VPN capability flags; addresses are excluded.
+
+- `status=parsed`: `networks` contains the active agents, possibly none.
+- `status=unsupported`: the dump format was not recognized; availability is unknown.
+- Missing field: ADB collection failed or no emulator was available for cleanup.
+- This final snapshot does not replace transition-time observations or packet tests.
+
 Non-boot scenarios install `P2P_VPN_ANDROID_APK` before testing, even when a cached
 emulator launcher preinstalls another build. The `selected_apk` step records this
 installation. Boot-smoke checks the launcher's package without replacing it.
