@@ -1453,7 +1453,8 @@
                     printf '1 packet transmitted, 1 packet received, 0%% packet loss\n'
                     ;;
                   'shell am force-stop org.hermeticfoundation.p2pvpn.debug') ;;
-                  'shell am start -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity')
+                  'shell am start -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity' | \
+                    'shell am start -W -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity')
                     printf 'Starting: Intent\n'
                     ;;
                   install\ -r\ *)
@@ -1599,6 +1600,8 @@
                 jq -e '
                   .scenario == "profile-persistence" and
                   .status == "passed" and
+                  ([.steps[] | select(.name == "selected_apk" and .status == "passed")] | length == 1) and
+                  (([.steps[].name] | index("selected_apk")) < ([.steps[].name] | index("profile_creation"))) and
                   .device.profile_persistence.process_death and
                   .device.profile_persistence.update_install and
                   .device.profile_persistence.replacement_reinstall and

@@ -3341,6 +3341,19 @@ fi
 record_step emulator_start passed "Emulator reported an ADB serial"
 
 adb=("$adb_command" -s "$emulator_serial")
+
+# A cached launcher may preinstall a different APK than the selected test artifact.
+if [[ "$scenario" != boot-smoke ]]; then
+  if ! adb_run install -r "$android_apk" >/dev/null \
+    || ! adb_run shell am start -W \
+      -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.MainActivity >/dev/null; then
+    outcome=failed
+    outcome_detail="The selected APK could not be installed and launched"
+    record_step selected_apk failed "$outcome_detail"
+    exit 1
+  fi
+  record_step selected_apk passed "Installed and launched the selected APK before scenario checks"
+fi
 if [[ "$(adb_run get-state)" != device ]]; then
   outcome=failed
   outcome_detail="ADB did not report the emulator as a device"

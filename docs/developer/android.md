@@ -889,6 +889,10 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 `evidence.json` records preflight checks, the device contract, scenario steps,
 the validated diagnostic report, and cleanup results.
 
+Non-boot scenarios install `P2P_VPN_ANDROID_APK` before testing, even when a cached
+emulator launcher preinstalls another build. The `selected_apk` step records this
+installation. Boot-smoke checks the launcher's package without replacing it.
+
 `android.log`, `emulator.log`, and `fixture.log` are capped at 1 MiB each.
 
 Runtime logs are redacted before evidence validation.
