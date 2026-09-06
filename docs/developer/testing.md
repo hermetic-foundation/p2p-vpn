@@ -885,6 +885,16 @@ nix build .#checks.x86_64-linux.public-vpn-move-evidence-check
 
 These tests require Linux namespace and TUN support.
 
+| Harness Behavior | Bound |
+| --- | --- |
+| Child diagnostics | Drain stdout and stderr concurrently; retain at most 1 MiB per stream plus a truncation marker. |
+| Node ownership | Kill and reap namespace children when the orchestrator unwinds after an assertion. |
+| Capability evidence | Check the structured `control_capabilities_accepted` event. |
+| Datagram evidence | Read sessions, healthy paths, and transmitted packets from `daemon-state`; read accepted inbound packets from `daemon-status`. |
+
+Do not rebuild the test executable while a namespace suite is running.
+Each orchestrator re-executes that executable; replacement invalidates later cases.
+
 Run preflight first:
 
 ```sh

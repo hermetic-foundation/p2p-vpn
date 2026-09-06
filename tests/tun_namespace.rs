@@ -3,7 +3,7 @@ use std::{
     fmt::Write as _,
     fs,
     fs::File,
-    io,
+    io::{self, Read as _, Write as _},
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::{Child, Command, Output},
@@ -270,7 +270,6 @@ fn packet_plane_datagram_state_evidence_is_backend_specific() {
         "healthy_direct_udp_datagram_paths 1".to_owned(),
         "healthy_direct_quic_datagram_paths 0".to_owned(),
         "outbound_quic_datagram_packets 1".to_owned(),
-        "inbound_accepted_packets 1".to_owned(),
     ];
     let quic_lines = vec![
         "packet_plane_sessions 0".to_owned(),
@@ -278,13 +277,11 @@ fn packet_plane_datagram_state_evidence_is_backend_specific() {
         "healthy_direct_udp_datagram_paths 0".to_owned(),
         "healthy_direct_quic_datagram_paths 1".to_owned(),
         "outbound_quic_datagram_packets 1".to_owned(),
-        "inbound_accepted_packets 1".to_owned(),
     ];
     let missing_packets = vec![
         "packet_plane_sessions 1".to_owned(),
         "healthy_direct_udp_datagram_paths 1".to_owned(),
         "outbound_quic_datagram_packets 0".to_owned(),
-        "inbound_accepted_packets 1".to_owned(),
     ];
 
     assert!(packet_plane_datagram_state_used(
@@ -523,7 +520,7 @@ fn run_mdns_orchestrator() {
     let initiator_log = read_log(&temp_dir.join("node-a.log"));
     let responder_log = read_log(&temp_dir.join("node-b.log"));
     assert!(
-        initiator_log.contains("control capabilities accepted")
+        initiator_log.contains("event=control_capabilities_accepted ")
             && initiator_log.contains("discovered_address_dial_attempts 1"),
         "node A did not discover and validate node B through mDNS\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
@@ -712,7 +709,7 @@ fn run_invite_relay_orchestrator() {
         "relay did not accept a circuit for invite-imported config\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     assert!(
-        initiator_log.contains("control capabilities accepted"),
+        initiator_log.contains("event=control_capabilities_accepted "),
         "invite-imported node did not exchange accepted capabilities\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     cleanup_temp_dir(temp_dir);
@@ -1038,7 +1035,7 @@ fn run_dht_orchestrator() {
     let bootstrap_log = read_log(&temp_dir.join("node-bootstrap.log"));
     assert!(
         initiator_log.contains("event=kademlia_query_progressed")
-            && initiator_log.contains("control capabilities accepted"),
+            && initiator_log.contains("event=control_capabilities_accepted "),
         "node A did not discover and validate node B through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
@@ -1895,6 +1892,13 @@ fn wait_for_packet_plane_datagrams_for_role(
         evidence.context(),
         |lines| packet_plane_datagram_state_used(lines, evidence),
     );
+    wait_for_daemon_status_metric(
+        temp_dir,
+        role,
+        scaled_wait_timeout(Duration::from_secs(8)),
+        "inbound_accepted_packets",
+        1,
+    );
 }
 
 fn wait_for_daemon_running(temp_dir: &Path, role: &str) {
@@ -2260,7 +2264,6 @@ fn packet_plane_datagram_state_used(
         && state_metric_count(lines, evidence.healthy_path_metric()).is_some_and(|count| count >= 1)
         && state_metric_count(lines, "outbound_quic_datagram_packets")
             .is_some_and(|count| count >= 1)
-        && state_metric_count(lines, "inbound_accepted_packets").is_some_and(|count| count >= 1)
 }
 
 fn packet_plane_datagrams_used(log: &str) -> bool {
@@ -2298,6 +2301,40 @@ fn log_tail(log: &str, lines: usize) -> String {
     tail.join("\n")
 }
 
+struct NamespaceChild {
+    child: Child,
+}
+
+impl NamespaceChild {
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+}
+
+impl Drop for NamespaceChild {
+    fn drop(&mut self) {
+        stop_child(self);
+    }
+}
+
+#[test]
+fn namespace_child_is_reaped_when_the_orchestrator_unwinds() {
+    let child = NamespaceChild {
+        child: Command::new("sleep").arg("60").spawn().expect("child"),
+    };
+    let process = PathBuf::from(format!("/proc/{}", child.id()));
+    assert!(process.exists());
+    let result = std::panic::catch_unwind(move || {
+        let _child = child;
+        panic!("simulated assertion failure");
+    });
+    assert!(result.is_err());
+    assert!(
+        !process.exists(),
+        "child must be killed and reaped on unwind"
+    );
+}
+
 fn spawn_node(
     test_name: &str,
     role: &str,
@@ -2306,7 +2343,7 @@ fn spawn_node(
     relay: Option<&NodeIdentity>,
     temp_dir: &Path,
     start_file: &Path,
-) -> Child {
+) -> NamespaceChild {
     let current_exe = env::current_exe().expect("current test binary");
     let log = File::create(temp_dir.join(format!("node-{role}.log"))).expect("create node log");
     let log_err = log.try_clone().expect("clone node log");
@@ -2332,12 +2369,13 @@ fn spawn_node(
     if let Some(relay) = relay {
         command.env("P2P_VPN_TUN_E2E_RELAY_PEER", &relay.peer_id);
     }
-    command
+    let child = command
         .stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log_err)
         .spawn()
-        .expect("spawn node namespace")
+        .expect("spawn node namespace");
+    NamespaceChild { child }
 }
 
 fn wait_for_child_namespace(pid: u32) {
@@ -3508,16 +3546,76 @@ fn command_output(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    thread::scope(|scope| {
+        let stdout = scope.spawn(|| read_command_output(stdout));
+        let stderr = scope.spawn(|| read_command_output(stderr));
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                break child.wait()?;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        Ok(Output {
+            status,
+            stdout: stdout
+                .join()
+                .map_err(|_| io::Error::other("stdout reader panicked"))??,
+            stderr: stderr
+                .join()
+                .map_err(|_| io::Error::other("stderr reader panicked"))??,
+        })
+    })
+}
+
+const MAX_CAPTURED_COMMAND_BYTES: usize = 1024 * 1024;
+
+fn read_command_output(mut reader: impl io::Read) -> io::Result<Vec<u8>> {
+    let mut captured = Vec::new();
+    reader
+        .by_ref()
+        .take(MAX_CAPTURED_COMMAND_BYTES as u64)
+        .read_to_end(&mut captured)?;
+    // Continue draining after the capture limit so diagnostics cannot block child exit.
+    if io::copy(&mut reader, &mut io::sink())? > 0 {
+        captured.extend_from_slice(b"\n[command output truncated]\n");
+    }
+    Ok(captured)
+}
+
+#[test]
+fn command_capture_drains_both_pipes_with_bounded_memory() {
+    const CHILD: &str = "P2P_VPN_CAPTURE_TEST_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let bytes = [b'x'; 8192];
+        for _ in 0..256 {
+            io::stdout().write_all(&bytes).expect("stdout");
+            io::stderr().write_all(&bytes).expect("stderr");
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            return child.wait_with_output();
-        }
-        thread::sleep(Duration::from_millis(50));
+        return;
+    }
+    let binary = env::current_exe().expect("test binary");
+    let output = command_output(
+        binary.to_str().expect("binary path"),
+        &[
+            "--exact",
+            "command_capture_drains_both_pipes_with_bounded_memory",
+            "--nocapture",
+        ],
+        &[(CHILD, "1")],
+        Duration::from_secs(10),
+    )
+    .expect("capture child");
+    assert!(output.status.success(), "capture child timed out");
+    for stream in [&output.stdout, &output.stderr] {
+        assert!(stream.len() <= MAX_CAPTURED_COMMAND_BYTES + 64);
+        assert!(stream.ends_with(b"[command output truncated]\n"));
     }
 }
 
@@ -3525,9 +3623,9 @@ fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| panic!("{name} is required"))
 }
 
-fn stop_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+fn stop_child(child: &mut NamespaceChild) {
+    let _ = child.child.kill();
+    let _ = child.child.wait();
 }
 
 fn read_log(path: &Path) -> String {
