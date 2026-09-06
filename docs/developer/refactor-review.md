@@ -361,7 +361,8 @@ Neither result is an Android device or JNI end-to-end reproduction.
 The [Android lifecycle review](android-lifecycle-review.md) records source references,
 reproduction steps, and the process-wide ownership implementation. Five owner tests
 cover teardown ordering, replacement isolation, retired admission, and timer cleanup.
-Android framework/JNI lifecycle validation remains outstanding.
+The current-source API 35 emulator passed always-on ownership, APK replacement,
+lockdown stop, and recovery. Same-process replacement with stalled JNI remains outstanding.
 
 ### NixOS Membership VM Evidence
 

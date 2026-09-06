@@ -1,7 +1,8 @@
 # Android Lifecycle Review
 
 Originally reviewed against `bb0c164b` on 2026-09-06. The service now uses a
-process-wide scoped dispatcher. Device lifecycle validation remains outstanding.
+process-wide scoped dispatcher. Current-source emulator always-on validation passed;
+same-process replacement with stalled JNI remains outstanding.
 
 ## R11: Lost Cleanup
 
@@ -92,8 +93,8 @@ The complete Android Java unit suite and lint passed with cached dependencies.
 Debug APK assembly also passed; this local Gradle build had no JNI libraries,
 so it is Java/resource packaging evidence, not a deployable native VPN validation.
 
-These are real owner tests, not Android framework or JNI lifecycle tests.
-Destroy/recreate, always-on recovery, and network transitions remain to be exercised.
+These owner tests are separate from the current-source always-on emulator run below.
+Same-process destroy/recreate with stalled JNI and network transitions remain to be exercised.
 
 ## Validation Sequence
 
@@ -148,3 +149,49 @@ enabled and does not establish that those inputs must be built from source.
 Before lifecycle E2E, obtain a bounded current-source JNI build and package it with
 the current Java code. Verify artifact provenance; the cached harness points to
 older APK and fixture outputs and cannot certify the new service owner unchanged.
+
+## Current-Source Always-On Run
+
+Passed on API 35 x86_64 from 12:55:11 to 12:56:56 UTC, 2026-09-06.
+Application sources were `bb973229`; the harness additionally installed the selected
+APK before scenario checks instead of trusting the cached launcher's older APK.
+
+| Scenario | Result |
+| --- | --- |
+| Encrypted profile creation and manual native connection | Passed |
+| Always-on ownership and ignored manual disconnect | Passed |
+| APK replacement starts a fresh process with the same identity | Passed |
+| Unsupported lockdown stops the native runtime | Passed |
+| Removing lockdown autonomously restores the runtime | Passed |
+| Clear always-on settings, stop emulator, remove private state | Passed |
+
+Evidence: `/tmp/p2p-vpn-review-android-always-on-current/evidence.json`.
+This peerless scenario does not prove packet transport, underlay recovery, or
+same-process service replacement while JNI is deliberately stalled.
+
+### Build Provenance
+
+- Rust 1.97.1, installed Nix Rust sources and NDK 28.2.13676358, Android API 26 linker.
+- Offline `build-std=std,panic_abort`, locked dependencies, two jobs, no debug symbols.
+- Reused `/tmp/p2p-vpn-android-target`; 1.4 GiB after the build, no downloads.
+- Offline Gradle assembly used current Java plus only the new x86_64 JNI library.
+- This is a development APK, not verification of the dual-ABI Nix release derivation.
+
+The evaluated `android-e2e-structure` check body also passed using installed tools
+outside the Nix sandbox. It includes the selected-APK ordering assertion and mocked
+transport cases; those mocks are not additional real-network transport evidence.
+
+ShellCheck and Bash syntax checks passed. `nixfmt --check flake.nix` failed on both
+the working file and its committed parent; unrelated formatting was left unchanged.
+
+SHA-256 of the JNI library before Gradle stripping:
+
+```text
+6078db6d37d457c146e789b279bf199011390251a4df2ee2442911d10beb2b26
+```
+
+SHA-256 of the tested APK:
+
+```text
+d5959da94fe859220da702f5b608817dc3d26b81e491189e45141064a5d77df1
+```
