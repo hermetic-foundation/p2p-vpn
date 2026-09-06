@@ -3669,6 +3669,9 @@ fn handle_pair_rpc_request(
                 pairing_offer_and_response_for_request_with_grants_and_hostname(
                     forwarder.config(),
                     forwarder.member_records(),
+                    &forwarder
+                        .effective_hostname_records()
+                        .map_err(|error| runner_error_pair_rpc(error.into()))?,
                     identity,
                     consumed_code_pairing_tokens,
                     approval.peer,
@@ -13601,11 +13604,13 @@ fn handle_pairing_code_v2_submit(
         send_pairing_code_v2_unavailable(swarm, channel);
         return Ok(());
     };
+    let hostname_records = context.forwarder.effective_hostname_records()?;
     let valid =
         verify_pairing_request_code_authentication(&request, &inbound.session).and_then(|()| {
             pairing_response_for_request_with_mode_and_records(
                 context.forwarder.config(),
                 context.forwarder.member_records(),
+                &hostname_records,
                 context.identity,
                 &mut context.pairing_replay_tokens.code_approval,
                 peer,
@@ -13909,11 +13914,13 @@ fn handle_pairing_code_request(
             else {
                 return send_pairing_code_unavailable(swarm, channel);
             };
+            let hostname_records = context.forwarder.effective_hostname_records()?;
             let valid = verify_pairing_request_code_authentication(&request, &inbound.session)
                 .and_then(|()| {
                     pairing_response_for_request_with_mode_and_records(
                         context.forwarder.config(),
                         context.forwarder.member_records(),
+                        &hostname_records,
                         context.identity,
                         &mut context.pairing_replay_tokens.code_approval,
                         peer,
@@ -14531,6 +14538,7 @@ fn handle_pairing_request_event(
     match pairing_response_for_request_with_records(
         context.forwarder.config(),
         context.forwarder.member_records(),
+        &context.forwarder.effective_hostname_records()?,
         context.identity,
         &mut context.pairing_replay_tokens.file_bearer,
         peer,
@@ -15072,6 +15080,7 @@ fn pairing_response_for_request(
     pairing_response_for_request_with_records(
         config,
         &config.network.member_records,
+        &HashMap::new(),
         identity,
         consumed_tokens,
         transport_peer,
@@ -15083,6 +15092,7 @@ fn pairing_response_for_request(
 fn pairing_response_for_request_with_records(
     config: &Config,
     member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -15092,6 +15102,7 @@ fn pairing_response_for_request_with_records(
     pairing_response_for_request_with_mode_and_records(
         config,
         member_records,
+        hostname_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -15105,6 +15116,7 @@ fn pairing_response_for_request_with_records(
 fn pairing_response_for_request_with_mode_and_records(
     config: &Config,
     member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -15115,6 +15127,7 @@ fn pairing_response_for_request_with_mode_and_records(
     pairing_offer_and_response_for_request_with_grants(
         config,
         member_records,
+        hostname_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -15143,6 +15156,7 @@ fn pairing_response_for_request_with_grants(
     pairing_offer_and_response_for_request_with_grants(
         config,
         &config.network.member_records,
+        &HashMap::new(),
         identity,
         consumed_tokens,
         transport_peer,
@@ -15159,6 +15173,7 @@ fn pairing_response_for_request_with_grants(
 fn pairing_offer_and_response_for_request_with_grants(
     config: &Config,
     current_member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -15171,6 +15186,7 @@ fn pairing_offer_and_response_for_request_with_grants(
     pairing_offer_and_response_for_request_with_grants_and_hostname(
         config,
         current_member_records,
+        hostname_records,
         identity,
         consumed_tokens,
         transport_peer,
@@ -15187,6 +15203,7 @@ fn pairing_offer_and_response_for_request_with_grants(
 fn pairing_offer_and_response_for_request_with_grants_and_hostname(
     config: &Config,
     current_member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     identity: &NodeIdentity,
     consumed_tokens: &mut HashSet<String>,
     transport_peer: Libp2pPeerId,
@@ -15263,6 +15280,7 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
     validate_pairing_hostname_available(
         config,
         current_member_records,
+        hostname_records,
         &request.payload.joiner_peer,
         assigned_hostname.as_deref(),
         now_unix_seconds,
@@ -15353,6 +15371,7 @@ fn pairing_offer_and_response_for_request_with_grants_and_hostname(
 fn validate_pairing_hostname_available(
     config: &Config,
     current_member_records: &[SignedMembershipRecord],
+    hostname_records: &HashMap<PeerId, String>,
     joiner_peer: &str,
     assigned_hostname: Option<&str>,
     now_unix_seconds: u64,
@@ -15360,36 +15379,19 @@ fn validate_pairing_hostname_available(
     let Some(assigned_hostname) = assigned_hostname else {
         return Ok(());
     };
-    let local_peer = config.local_peer()?;
-    if local_peer != joiner_peer
-        && config
-            .network
-            .dns
-            .hostname
-            .as_deref()
-            .and_then(|hostname| canonical_dns_label(hostname).ok())
-            .is_some_and(|hostname| hostname == assigned_hostname)
-    {
-        return Err(crate::pairing::PairingError::HostnameConflict {
-            hostname: assigned_hostname.to_owned(),
-            owner: local_peer,
-        });
-    }
     let membership = effective_membership_at(
         current_member_records,
         &config.network.name,
         now_unix_seconds,
     )?;
-    if let Some(owner) = membership.overlay_members().find(|member| {
-        member.transport_peer.to_string() != joiner_peer
-            && member
-                .hostnames
-                .iter()
-                .any(|hostname| hostname == assigned_hostname)
+    let names = crate::dns::effective_peer_names(config, &membership, hostname_records)?;
+    if let Some(owner) = names.iter().find(|claim| {
+        claim.transport_peer != joiner_peer
+            && canonical_dns_label(&claim.label).ok().as_deref() == Some(assigned_hostname)
     }) {
         return Err(crate::pairing::PairingError::HostnameConflict {
             hostname: assigned_hostname.to_owned(),
-            owner: owner.transport_peer.to_string(),
+            owner: owner.transport_peer.clone(),
         });
     }
     Ok(())
@@ -21682,6 +21684,7 @@ mod tests {
         let (_, response) = pairing_offer_and_response_for_request_with_grants(
             &config,
             &config.network.member_records,
+            &HashMap::new(),
             &inviter,
             &mut HashSet::new(),
             joiner_peer,
@@ -21913,6 +21916,7 @@ mod tests {
         let (_, response) = pairing_offer_and_response_for_request_with_grants(
             &config,
             forwarder.member_records(),
+            &forwarder.effective_hostname_records().expect("hostnames"),
             &inviter,
             &mut HashSet::new(),
             joiner_peer,
@@ -22512,6 +22516,7 @@ mod tests {
         let (_, overridden) = pairing_offer_and_response_for_request_with_grants_and_hostname(
             &config,
             &config.network.member_records,
+            &HashMap::new(),
             &inviter,
             &mut HashSet::new(),
             joiner_peer,
@@ -22655,6 +22660,7 @@ mod tests {
             validate_pairing_hostname_available(
                 &config,
                 std::slice::from_ref(&existing_record),
+                &HashMap::new(),
                 &joiner.peer_id,
                 Some("inviter-host"),
                 1_001,
@@ -22666,6 +22672,7 @@ mod tests {
             validate_pairing_hostname_available(
                 &config,
                 std::slice::from_ref(&existing_record),
+                &HashMap::new(),
                 &joiner.peer_id,
                 Some("existing-host"),
                 1_001,
@@ -22676,11 +22683,140 @@ mod tests {
         validate_pairing_hostname_available(
             &config,
             &[existing_record],
+            &HashMap::new(),
             &existing.peer_id,
             Some("existing-host"),
             1_001,
         )
         .expect("same member may retain hostname");
+    }
+
+    #[test]
+    fn pairing_hostname_assignment_rejects_configured_owner_without_dns_listener() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let existing = NodeIdentity::generate_ed25519().expect("existing");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let mut config = config_with_peer(&inviter, existing.peer_id.parse().expect("peer"));
+        config.peers[0].name = Some("occupied".to_owned());
+        assert!(!config.network.dns.enabled);
+
+        assert!(matches!(
+            validate_pairing_hostname_available(
+                &config,
+                &[],
+                &HashMap::new(),
+                &joiner.peer_id,
+                Some("occupied"),
+                1_001,
+            ),
+            Err(crate::pairing::PairingError::HostnameConflict { hostname, owner })
+                if hostname == "occupied" && owner == existing.peer_id
+        ));
+    }
+
+    #[test]
+    fn pairing_and_dns_share_renamed_expired_and_revoked_name_ownership() {
+        let inviter = NodeIdentity::generate_ed25519().expect("inviter");
+        let existing = NodeIdentity::generate_ed25519().expect("existing");
+        let joiner = NodeIdentity::generate_ed25519().expect("joiner");
+        let mut config = config_with_peer(&inviter, existing.peer_id.parse().expect("peer"));
+        config.network.dns.hostname = Some("inviter".to_owned());
+        config.peers[0].name = Some("configured".to_owned());
+        let grant = issue_named_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&existing).expect("subject"),
+                membership_epoch: 1,
+                sequence: 1,
+                revoked: false,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: Some(2_000),
+            },
+            Some("original"),
+            1_000,
+        )
+        .expect("grant");
+        let rename =
+            crate::hostname::issue_hostname_record_at(&existing, "lab", "renamed", 1, 1_001)
+                .expect("rename");
+        let hostnames =
+            crate::hostname::effective_hostname_records(&[rename], "lab").expect("effective names");
+        let revocation = issue_named_membership_record_for_subject_at(
+            &inviter,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&existing).expect("subject"),
+                membership_epoch: 1,
+                sequence: 2,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            None,
+            1_003,
+        )
+        .expect("revoke");
+
+        for (records, now, active) in [
+            (vec![grant.clone()], 1_002, true),
+            (vec![grant.clone()], 2_001, false),
+            (vec![grant, revocation], 1_004, false),
+        ] {
+            config.network.member_records = records;
+            config.network.dns.enabled = false;
+            let offer = export_pairing_offer_at(&config, PairingOfferOptions::default(), now)
+                .expect("offer");
+            for name in ["original", "configured", "renamed"] {
+                let request = build_named_pairing_request_at(
+                    &offer,
+                    PairingRequestOptions {
+                        identity: joiner.clone(),
+                        requested_vpn_ip: None,
+                        requested_routes: Vec::new(),
+                    },
+                    Some(name),
+                    now,
+                )
+                .expect("request");
+                let response = pairing_response_for_request_with_records(
+                    &config,
+                    &config.network.member_records,
+                    &hostnames,
+                    &inviter,
+                    &mut HashSet::new(),
+                    joiner.peer_id.parse().expect("joiner peer"),
+                    &request,
+                    now,
+                );
+                let occupied = name == "renamed" && active;
+                if occupied {
+                    assert!(matches!(response,
+                        Err(crate::pairing::PairingError::HostnameConflict { owner, .. })
+                            if owner == existing.peer_id
+                    ));
+                } else {
+                    response.expect("released name can be assigned");
+                }
+
+                let mut dns_config = config.clone();
+                dns_config.network.dns.enabled = true;
+                let zone = crate::dns::DnsZone::from_config_with_hostname_records_at(
+                    &dns_config,
+                    &config.network.member_records,
+                    &hostnames,
+                    now,
+                )
+                .expect("DNS zone");
+                assert_eq!(
+                    zone.record(&format!("{name}.lab.p2p-vpn.internal"))
+                        .is_some(),
+                    occupied
+                );
+            }
+        }
     }
 
     #[test]

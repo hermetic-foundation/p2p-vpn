@@ -165,6 +165,88 @@ impl DnsNameSource {
     }
 }
 
+pub(crate) struct EffectivePeerName {
+    pub peer: PeerId,
+    pub transport_peer: String,
+    pub label: String,
+    pub source: DnsNameSource,
+}
+
+/// Name ownership exists independently of whether this host runs a DNS listener.
+pub(crate) fn effective_peer_names(
+    config: &Config,
+    membership: &crate::membership::EffectiveMembership,
+    hostname_records: &HashMap<PeerId, String>,
+) -> Result<Vec<EffectivePeerName>, ConfigError> {
+    let local_peer = config.local_peer_id()?;
+    let mut owners = HashMap::from([(local_peer, config.local_peer()?)]);
+    let mut names = Vec::new();
+    let mut claim = |peer, transport_peer: &str, label: &str, source| {
+        if !hostname_records.contains_key(&peer) {
+            names.push(EffectivePeerName {
+                peer,
+                transport_peer: transport_peer.to_owned(),
+                label: label.to_owned(),
+                source,
+            });
+        }
+    };
+    if let Some(name) = config.network.dns.hostname.as_deref() {
+        claim(
+            local_peer,
+            &config.local_peer()?,
+            name,
+            DnsNameSource::LocalConfiguration,
+        );
+    }
+    if membership.authorizes_configured_peer(local_peer) {
+        for configured in &config.peers {
+            let peer = configured.peer_id()?;
+            if membership.authorizes_configured_peer(peer) {
+                owners.insert(peer, configured.id.clone());
+                if let Some(name) = configured.name.as_deref() {
+                    claim(peer, &configured.id, name, DnsNameSource::PeerConfiguration);
+                }
+            }
+        }
+        for member in membership.overlay_members() {
+            let transport_peer = member.transport_peer.to_string();
+            owners.insert(member.peer, transport_peer.clone());
+            for name in &member.hostnames {
+                claim(
+                    member.peer,
+                    &transport_peer,
+                    name,
+                    DnsNameSource::SignedMembership,
+                );
+            }
+        }
+    }
+    for (peer, transport_peer) in owners {
+        if let Some(name) = hostname_records.get(&peer) {
+            names.push(EffectivePeerName {
+                peer,
+                transport_peer: transport_peer.clone(),
+                label: name.clone(),
+                source: DnsNameSource::SignedHostname,
+            });
+        }
+        names.push(EffectivePeerName {
+            peer,
+            transport_peer,
+            label: peer_fallback_label(peer),
+            source: DnsNameSource::PeerIdFallback,
+        });
+    }
+    names.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.transport_peer.cmp(&right.transport_peer))
+            .then_with(|| left.source.cmp(&right.source))
+    });
+    Ok(names)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DnsRecordSet {
     pub label: String,
@@ -272,26 +354,17 @@ impl DnsZone {
         )?;
 
         let mut names = HashMap::<String, HashMap<PeerId, BTreeSet<DnsNameSource>>>::new();
-        if !hostname_records.contains_key(&local_peer) {
-            insert_name(
-                &mut names,
-                config
-                    .network
-                    .dns
-                    .hostname
-                    .as_deref()
-                    .expect("enabled DNS has a validated hostname"),
-                local_peer,
-                DnsNameSource::LocalConfiguration,
-            )?;
-        }
-
         let effective = crate::membership::effective_membership_at(
             member_records,
             &config.network.name,
             now_unix_seconds,
         )
         .map_err(DnsZoneError::Membership)?;
+        for claim in effective_peer_names(config, &effective, hostname_records)
+            .map_err(DnsZoneError::Config)?
+        {
+            insert_name(&mut names, &claim.label, claim.peer, claim.source)?;
+        }
         let local_is_active = effective.authorizes_configured_peer(local_peer);
         for peer in &config.peers {
             let overlay_peer = peer.peer_id().map_err(DnsZoneError::Config)?;
@@ -305,16 +378,6 @@ impl DnsZone {
                 addresses.insert_ip(parse_explicit_ip(vpn_ip)?);
             }
             add_host_routes(addresses, &peer.routes)?;
-            if let Some(name) = peer.name.as_deref()
-                && !hostname_records.contains_key(&overlay_peer)
-            {
-                insert_name(
-                    &mut names,
-                    name,
-                    overlay_peer,
-                    DnsNameSource::PeerConfiguration,
-                )?;
-            }
         }
 
         if local_is_active {
@@ -323,22 +386,6 @@ impl DnsZone {
                     PeerAddresses::new(member.transport_peer.to_string(), member.peer)
                 });
                 add_host_routes(addresses, &member.route_grants)?;
-                if !hostname_records.contains_key(&member.peer) {
-                    for hostname in &member.hostnames {
-                        insert_name(
-                            &mut names,
-                            hostname,
-                            member.peer,
-                            DnsNameSource::SignedMembership,
-                        )?;
-                    }
-                }
-            }
-        }
-
-        for (peer, hostname) in hostname_records {
-            if peers.contains_key(peer) {
-                insert_name(&mut names, hostname, *peer, DnsNameSource::SignedHostname)?;
             }
         }
 
@@ -359,15 +406,6 @@ impl DnsZone {
                 actual: address_count,
                 max: MAX_DNS_ADDRESSES,
             });
-        }
-
-        for peer in peers.keys().copied().collect::<Vec<_>>() {
-            insert_name(
-                &mut names,
-                &peer_fallback_label(peer),
-                peer,
-                DnsNameSource::PeerIdFallback,
-            )?;
         }
 
         let mut records = Vec::new();

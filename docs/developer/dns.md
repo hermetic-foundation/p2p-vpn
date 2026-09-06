@@ -58,6 +58,13 @@ Multiple peers for one label create a conflict and no forward record.
 A hostname record overrides static and membership names for the same Peer ID.
 It has no effect unless that Peer ID is already an effective member.
 
+`effective_peer_names` calculates ownership for both DNS snapshots and pairing.
+It includes fallback labels and retains source provenance without requiring a
+DNS listener or parsing address assignments.
+
+Code submission, approval, and file pairing use the forwarder's current signed
+hostname records. A departed member's audit history does not reserve its name.
+
 ## Mutable Hostname Records
 
 The payload binds these fields under a versioned signature domain:

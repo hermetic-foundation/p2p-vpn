@@ -23,7 +23,7 @@ with user agreement. Refactoring alone does not satisfy these criteria.
 
 ### R1: Pairing and DNS Disagree About Name Ownership
 
-Priority: P2. Status: confirmed decision-path mismatch; regression pending.
+Priority: P2. Status: reproduced and fixed; Rust validation passed.
 
 `validate_pairing_hostname_available` checks local configuration and names in
 effective membership grants. It receives no signed hostname updates and does
@@ -46,6 +46,18 @@ Required regression cases:
 - Configured member: reject an occupied name while it remains authorized.
 - Revoked member: do not retain name ownership through static metadata.
 - DNS disabled: pairing must still enforce effective name ownership.
+
+Implemented `dns::effective_peer_names` for DNS and pairing. Both code protocol
+versions, approval, and file pairing pass current signed hostname state.
+Fallback labels are also reserved while their owner remains authorized.
+
+The configured-owner test failed before the fix. All 147 pairing-filtered
+library tests pass afterward, including response-generation comparisons with
+DNS across rename, expiry, and revocation. Workspace validation passed 1,142
+tests with 14 ignored; required Clippy groups and formatting passed. Peerless
+code pairing and relayed file pairing passed isolated namespace tests.
+
+Direct file pairing exposed R5 below. Full operational gates remain pending.
 
 ### R2: Effective Authorization Is Rebuilt Independently
 
@@ -97,6 +109,28 @@ flat any-member governance with non-cascading revocation and legacy restoration.
 
 Update these descriptions with the implementation changes and retain explicit
 migration information in the membership reference.
+
+### R5: Identify Can Disconnect a File-Pairing Probe
+
+Priority: P1. Status: observed on changed code and unchanged baseline; fix pending.
+
+`handle_identify_received` exempts active code-pairing sessions from non-relay
+infrastructure rejection, but does not preserve a bounded file-pairing probe.
+Identify can therefore disconnect an admitted probe before its pairing response.
+
+| Evidence | Observation |
+| --- | --- |
+| Changed direct namespace run | Timed out after repeated connection closures |
+| Baseline `25aa73a3`, three runs | Passed eventually; retained trace confirms the same disconnect race |
+| Baseline inviter trace | `identified_non_relay_peer`, then `pairing_response_dropped` and `ConnectionClosed` |
+| Decision point | `handle_identify_received`, baseline `src/runtime/runner.rs:19497` |
+
+The baseline's eventual success does not establish stable behavior. Preserve
+pairing-capable probes only within their existing admission and expiry bounds;
+protocol advertisement must never grant overlay membership or infrastructure status.
+
+Add an event-order regression where Identify precedes pairing completion, then
+verify direct, relayed, malformed, and expired probe behavior.
 
 ## Review Coverage Still Required
 
@@ -159,3 +193,17 @@ This is not evidence that the deployed binary matches the review baseline.
 
 These are single service-cgroup observations, not an idle benchmark. Record
 binary identity, duration, topology, workload, and counter deltas for comparisons.
+
+### Validation Environment Recovery
+
+The development shell could not be realized on 2026-09-06: missing dependencies
+triggered source builds, and the Bash source fetch failed with HTTP 502.
+No complete Nix-shell or package verification is claimed from that attempt.
+
+Focused validation uses installed Nix Rust 1.97.1 and matching Cargo, Clippy, and
+rustfmt binaries downloaded from the Nix cache with a 1,200 KiB/s limit. Archive
+hashes are checked against cache metadata. Cargo dependencies are offline.
+
+The fallback must retain `RUST_MIN_STACK=8388608` from the flake. Omitting it
+caused a CLI test-thread stack overflow; library tests had passed. The complete
+workspace subsequently passed with the intended setting.

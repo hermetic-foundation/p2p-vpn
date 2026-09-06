@@ -133,7 +133,11 @@ sudo p2p-vpn pair approve \
 
 The requested VPN IP is accepted unless `--vpn-ip` overrides it.
 
-The requested hostname is accepted unless `--hostname` overrides it.
+The requested hostname is used unless `--hostname` overrides it. Pairing rejects
+names already owned by another authorized peer, including current signed names
+and peer-ID fallback names, even when the local DNS listener is disabled.
+
+Renamed, revoked, or expired peers release names they no longer own.
 
 Requested routes require explicit grants:
 
