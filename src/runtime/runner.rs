@@ -35167,6 +35167,37 @@ mod tests {
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 0);
         assert_eq!(inbound.peer, Some(local_overlay));
         assert_eq!(inbound.frame.payload, packet);
+
+        // Keep the encrypted session and path alive while withdrawing authority.
+        forwarder
+            .enqueue_tun_packet(&mut queues, packet)
+            .expect("queued before removal");
+        let mut without_peer = config.clone();
+        without_peer.peers.clear();
+        let update = forwarder
+            .prepare_reconfigure(without_peer, 1_000)
+            .expect("remove peer");
+        forwarder.commit_reconfigure(update);
+        let mut context = queue_drain_context(
+            &mut paths,
+            &peer_capabilities,
+            &mut packet_in_flight,
+            &metrics,
+        );
+        context.packet_plane = Some(&sender_packet_plane);
+        drain_outbound_queue(&mut node.swarm, &forwarder, &mut queues, &mut context).await;
+        let snapshot = metrics.snapshot(queues.total_stats());
+        assert_eq!(snapshot.outbound_sent_packets, 1);
+        assert_eq!(snapshot.outbound_drop_no_transport_peer_packets, 1);
+        assert_eq!(snapshot.queue.queued_packets, 0);
+        assert!(
+            timeout(
+                TokioDuration::from_millis(100),
+                receiver_packet_plane.recv_frame_from_peer(local_overlay)
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]

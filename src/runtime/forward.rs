@@ -225,6 +225,9 @@ impl Forwarder {
         packet: &Packet,
         peer_mtu: u16,
     ) -> Result<Frame, ForwardError> {
+        if !self.authorization.peers.contains_key(&packet.peer()) {
+            return Err(ForwardError::NoTransportPeer(packet.peer()));
+        }
         let max = self.mtu.min(usize::from(peer_mtu));
         if packet.payload().len() > max {
             return Err(ForwardError::PacketTooLarge {
@@ -233,6 +236,17 @@ impl Forwarder {
             });
         }
 
+        // Queue admission can precede membership or route changes.
+        self.authorize_local_source(packet_source(packet.payload())?)?;
+        let destination = packet_destination(packet.payload())?;
+        let route = self
+            .authorization
+            .routes
+            .resolve(destination)
+            .ok_or(ForwardError::NoRoute(destination))?;
+        if route.owner != packet.peer() {
+            return Err(ForwardError::NoRoute(destination));
+        }
         self.packet_frame(packet)
     }
 
@@ -1748,7 +1762,14 @@ mod tests {
             let advertised = [ControlRoute::new(format!("{remote_ip}/32"), 0)];
             assert!(forwarder.authorizes_advertised_routes(transport, &advertised));
             let outbound = ipv4_packet(local_ipv4(&config), remote_ip);
-            assert!(forwarder.prepare_tun_packet(outbound.clone()).is_ok());
+            let queued = forwarder
+                .prepare_tun_packet(outbound.clone())
+                .expect("queued before expiry");
+            assert!(
+                forwarder
+                    .queued_packet_frame_with_mtu(&queued, 1280)
+                    .is_ok()
+            );
             let frame =
                 Frame::packet(1, 1, ipv4_packet(remote_ip, local_ipv4(&config))).expect("frame");
             assert!(forwarder.accept_inbound_packet(transport, &frame).is_ok());
@@ -1758,6 +1779,10 @@ mod tests {
             assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
             assert_eq!(forwarder.member_records(), config.network.member_records);
             assert!(!forwarder.is_configured_transport_peer(transport));
+            assert!(matches!(
+                forwarder.queued_packet_frame_with_mtu(&queued, 1280),
+                Err(ForwardError::NoTransportPeer(_))
+            ));
             assert!(!forwarder.authorizes_advertised_routes(transport, &advertised));
             assert!(matches!(
                 forwarder.prepare_tun_packet(outbound),
@@ -1776,6 +1801,89 @@ mod tests {
             );
             assert_eq!(forwarder.membership_revision(), revision.wrapping_add(1));
         }
+    }
+
+    #[test]
+    fn queued_packets_revalidate_withdrawn_source_and_destination_routes() {
+        for withdraw_source in [true, false] {
+            let remote = Keypair::generate_ed25519().public().to_peer_id();
+            let mut config = config_for(remote);
+            config.network.routes.push(RouteConfig {
+                prefix: "192.168.50.0/24".to_owned(),
+                metric: 0,
+            });
+            config.peers[0].routes.push(RouteConfig {
+                prefix: "192.168.60.0/24".to_owned(),
+                metric: 0,
+            });
+            let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+            let queued = forwarder
+                .prepare_tun_packet(ipv4_packet(
+                    "192.168.50.2".parse().unwrap(),
+                    "192.168.60.2".parse().unwrap(),
+                ))
+                .expect("queued");
+            assert!(
+                forwarder
+                    .queued_packet_frame_with_mtu(&queued, 1280)
+                    .is_ok()
+            );
+            if withdraw_source {
+                config.network.routes.clear();
+            } else {
+                config.peers[0].routes.clear();
+            }
+            let update = forwarder
+                .prepare_reconfigure(config, 1_000)
+                .expect("withdraw route");
+            forwarder.commit_reconfigure(update);
+            assert!(forwarder.is_configured_transport_peer(remote));
+            assert!(
+                forwarder
+                    .queued_packet_frame_with_mtu(&queued, 1280)
+                    .is_err(),
+                "queueing must not preserve withdrawn route authority"
+            );
+        }
+    }
+
+    #[test]
+    fn queued_packet_is_not_sent_to_a_previous_route_owner() {
+        let remote = Keypair::generate_ed25519().public().to_peer_id();
+        let replacement = Keypair::generate_ed25519().public().to_peer_id();
+        let mut config = config_for(remote);
+        config.peers[0].routes.push(RouteConfig {
+            prefix: "192.168.60.0/24".to_owned(),
+            metric: 0,
+        });
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let destination = "192.168.60.2".parse().unwrap();
+        let queued = forwarder
+            .prepare_tun_packet(ipv4_packet(local_ipv4(&config), destination))
+            .expect("queued");
+        let mut next_owner = config.peers[0].clone();
+        next_owner.id = replacement.to_string();
+        next_owner.name = Some("replacement".to_owned());
+        config.peers[0].routes.clear();
+        config.peers.push(next_owner);
+        let update = forwarder
+            .prepare_reconfigure(config, 1_000)
+            .expect("transfer route");
+        forwarder.commit_reconfigure(update);
+        assert!(forwarder.is_configured_transport_peer(remote));
+        assert!(forwarder.is_configured_transport_peer(replacement));
+        assert!(
+            matches!(forwarder.queued_packet_frame_with_mtu(&queued, 1280),
+            Err(ForwardError::NoRoute(target)) if target == IpAddr::V4(destination))
+        );
+        let source = local_ipv4(forwarder.config());
+        assert_eq!(
+            forwarder
+                .prepare_tun_packet(ipv4_packet(source, destination))
+                .expect("new owner route")
+                .peer(),
+            PeerId::from_libp2p(replacement)
+        );
     }
 
     #[test]

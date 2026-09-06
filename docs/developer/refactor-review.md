@@ -172,6 +172,49 @@ policy and fails closed on invalid input.
 Coverage checks active signed members, revoked configured peers, malformed peer IDs,
 invalid signatures, and cross-consumer agreement after local resignation.
 
+### R7: Queued Datagram Sends Retain Stale Authorization
+
+Priority: P1. Status: reproduced and fixed; workspace and namespace checks passed.
+
+`Forwarder::queued_packet_frame_with_mtu` (`forward.rs:223` at `c832134a`) only
+checked size before constructing a frame. Owned datagram sends called it directly,
+unlike stream requests, which also checked the current transport-peer map.
+
+A queued packet could therefore retain authority after membership expiry or route
+withdrawal while its old packet-plane session remained installed. Queue admission
+is not sufficient authorization for a later send.
+
+| Regression | Evidence |
+| --- | --- |
+| Membership expires after queueing | New assertion failed before the fix; local and remote expiry are covered. |
+| Source or destination route is withdrawn | New regression failed before the fix while the peer remained configured. |
+| Destination changes owner | The old queued owner is rejected even when both peers remain authorized. |
+| UDP session remains installed | Queue-drain test withdraws peer authority after a successful transfer and requires no second datagram. |
+
+The shared frame boundary now checks current peer authorization, local source
+ownership, and the resolved destination owner. Stale packets are dropped rather
+than silently reassigned to another peer. MTU checks remain in place.
+
+Destination-owner changes use the existing `NoRoute(destination)` error and
+outbound no-route counter. A fresh packet can use the new owner; the old queued
+packet cannot. Configuration, wire formats, and the public error enum are unchanged.
+
+| Validation | Result |
+| --- | --- |
+| Offline workspace tests | 1,163 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 208.00 seconds. |
+| Live UDP regression | First transfer succeeds; queued transfer after authority withdrawal is dropped with no receiver frame. |
+| Format, whitespace, and required Clippy groups | Passed; non-fatal style warnings remain. |
+
+This adds route checks at dequeue time. Hot-path performance measurement remains
+part of the broader resource review. Authorization-driven session, discovery,
+retry, and queue cleanup is still open; this fix does not depend on that cleanup.
+
+Receive-side inspection found an existing current-peer check before payload
+dispatch in `handle_packet_plane_received`. Installed UDP sessions expire by
+establishment age, not received activity. Remaining teardown work should not be
+described as a demonstrated inbound TUN-authorization bypass.
+
 ## Review Coverage Still Required
 
 ### Namespace Verification Findings

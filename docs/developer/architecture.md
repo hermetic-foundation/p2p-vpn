@@ -213,6 +213,11 @@ They are bounded by packet count, bytes, and age.
 | Packet too old | Drop. |
 | No supported path | Retain only inside queue limits. |
 | Stream fallback busy | Keep same flow shard queued. |
+| Peer or route authority changed | Revalidate before framing; drop stale queued packets. |
+
+All backend sends through the queued-frame boundary require an authorized peer,
+an authorized local source, and the same current destination owner. An installed
+encrypted session does not authorize sending a packet queued under an older policy.
 
 ## Path Selection
 
