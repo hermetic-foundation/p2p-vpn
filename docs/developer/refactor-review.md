@@ -5,6 +5,10 @@
 Started 2026-09-06 against `560754de`. This is an evolving review, not a completed
 security audit. Source inspection is distinguished from reproduced behavior.
 
+See [current verification coverage](review-verification.md) for the latest
+evidence, exported check inventory, and outstanding acceptance work. Milestone
+sections below retain historical failures and their subsequent fixes.
+
 ## Completion Criteria
 
 | Requirement | Required Evidence | Status |
@@ -88,8 +92,9 @@ inventory ordering now use its local eligibility and static/signed precedence.
 Forwarding derives the packet allowlist from its transport-peer map, eliminating
 one repeated ledger evaluation per construction, merge, and configuration update.
 Forwarding now also shares one evaluated ledger between route compilation and
-transport admission. Other runtime consumers still evaluate independently;
-cross-runtime snapshot ownership remains part of the review.
+transport admission. Internal post-commit runtime membership refreshes now copy
+that snapshot. Prepared reconfiguration, TUN, DNS, and inventory ownership remain
+part of the review; public record-based constructors are preserved.
 
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
@@ -577,10 +582,10 @@ Retained local evidence:
 - `/tmp/p2p-vpn-network-move-tun-e2e-712261`: changed full-suite failure and daemon snapshots.
 - `/tmp/p2p-vpn-network-move-tun-e2e-717537`: unchanged-baseline timeout and node logs.
 
-This is an unresolved, reproduced recovery-test failure, not a waived gate or
-proof of a production outage. The fixture forces three-second session lifetimes;
-probe scheduling and handshake retry ownership need deterministic investigation.
-Do not increase deadlines merely to conceal this behavior.
+This was a reproduced recovery-test failure, not a waived gate or proof of a
+production outage. The fixture forces three-second session lifetimes. The
+following handshake-timeout work fixed the missing retry without increasing
+deadlines; subsequent namespace runs include passing network-move coverage.
 
 ### Handshake Timeout Follow-up
 
@@ -608,7 +613,8 @@ before link loss, over relay fallback, and after direct-path restoration.
 The complete namespace run was still 10/11: relay promotion established healthy
 direct TCP and UDP paths but failed its explicit DCUtR-success assertion. Node B
 reported `AttemptsExceeded(3)`; neither node reported success. This is not evidence
-of successful hole punching and remains an open verification issue.
+of successful hole punching. The following deduplication work resolved this
+failure; the latest complete namespace run also passes relay promotion.
 
 Retained failure: `/tmp/p2p-vpn-relay-promotion-tun-e2e-732272`. Neither the new
 timeout-retry branch nor stale-response branch ran in that failure trace.
@@ -784,7 +790,8 @@ only, excluding allocation overhead, peer IDs, downstream copies, and dial state
 Acceptance requires deterministic overflow, refresh, source-ownership, expiry,
 and revocation tests, followed by minimal-config namespace recovery scenarios.
 Repeat this diagnostic after implementation; a passing diagnostic alone is not
-evidence that a security bound exists. This finding remains open.
+evidence that a security bound exists. Bounded admission below resolves the
+reproduced entry growth; the broader downstream-source audit remains open.
 
 #### Bounded Admission Implementation
 
