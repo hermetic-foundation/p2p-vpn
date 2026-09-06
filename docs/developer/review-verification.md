@@ -2,7 +2,8 @@
 
 ## Scope
 
-Audited against `0acbd725` on 2026-09-06. This is the current acceptance map for
+Audited on 2026-09-06, including the public-pairing address-admission follow-up.
+This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
 
@@ -10,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | 1,182 enabled tests pass; 15 opt-in tests ignored. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 explicit scenarios pass in 190.05 seconds. | Controlled local topology, not public NAT traversal. |
+| Workspace | 1,183 enabled tests pass; 15 opt-in tests ignored. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 passed at `0acbd725`; pairing and DHT cases pass after the admission fix. | Other nine not repeated after that fix; controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -45,7 +46,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | Direct execution of all 11 namespace scenarios passes; derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 passed at `0acbd725`; two affected cases repeated after admission fix. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Earlier offline native/Gradle validation; current derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -65,7 +66,7 @@ was started. This is not an estimate of work required with available binary subs
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
-| Address resources | Audit internal Kademlia insertion and the separate public-pairing DHT; admission limits alone are insufficient. |
+| Address resources | Identify admission is bounded in both DHT modes. Audit internal/query-driven insertion; admission limits alone are insufficient. |
 | Resource comparison | Evaluate signed-ledger scale and affected hot paths; distinguish measured changes from inference. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |

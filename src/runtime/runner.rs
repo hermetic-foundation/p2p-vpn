@@ -1345,6 +1345,13 @@ where
             .retention
             .protect(*peer, address.clone());
     }
+    for configured in public_ipfs_bootstrap_peer_configs() {
+        let (peer, address) = configured.peer_address()?;
+        queue_runtime
+            .discovered_peer_addresses
+            .retention
+            .protect(peer, address);
+    }
     let mut inbound_packet_rate_limiters =
         PeerRateLimiters::new(resources.inbound_packet_rate_limit());
     let mut pairing_request_rate_limiters =
@@ -19512,7 +19519,13 @@ fn handle_identify_received(
         && !context.forwarder.is_configured_transport_peer(peer_id);
     for address in accepted_listen_addresses {
         if pairing_routing_only {
-            public_pairing_kad_mut(swarm.behaviour_mut()).add_address(&peer_id, address.clone());
+            learn_public_pairing_address(
+                swarm,
+                context.discovered_peer_addresses,
+                context.metrics,
+                peer_id,
+                address.clone(),
+            );
         } else {
             learn_peer_address(
                 swarm,
@@ -20397,6 +20410,21 @@ fn record_relay_client_event(
     }
 }
 
+fn learn_public_pairing_address(
+    swarm: &mut Swarm<Behaviour>,
+    discovered: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: Multiaddr,
+) {
+    if peer != *swarm.local_peer_id()
+        && address_targets_peer(peer, &address)
+        && retain_discovered_address(swarm, discovered, metrics, peer, &address, false)
+    {
+        public_pairing_kad_mut(swarm.behaviour_mut()).add_address(&peer, address);
+    }
+}
+
 fn remove_retained_discovery_address(
     swarm: &mut Swarm<Behaviour>,
     discovered: &mut DiscoveredPeerAddresses,
@@ -20408,6 +20436,9 @@ fn remove_retained_discovery_address(
         .retain(|entry| entry.peer != peer || entry.canonical_address != *address);
     if !discovered.retention.is_protected(peer, address) {
         swarm.behaviour_mut().kad.remove_address(&peer, address);
+        if let Some(pairing_kad) = swarm.behaviour_mut().pairing_kad.as_mut() {
+            pairing_kad.remove_address(&peer, address);
+        }
     }
 }
 
@@ -30644,6 +30675,87 @@ mod tests {
     #[tokio::test]
     async fn discovered_address_admission_is_bounded_and_expires_downstream() {
         exercise_discovered_address_retention(true);
+    }
+
+    #[tokio::test]
+    async fn public_pairing_address_admission_is_bounded_in_both_dht_modes() {
+        for separate in [false, true] {
+            let mut discovery = DiscoveryConfig::default();
+            if separate {
+                discovery.kademlia_protocol = crate::config::PRIVATE_KADEMLIA_PROTOCOL.to_owned();
+            }
+            let mut node = build_node(&HostConfig {
+                identity: NodeIdentity::generate_ed25519().expect("identity"),
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: ResourceConfig::default(),
+                discovery,
+            })
+            .expect("node");
+            assert_eq!(node.swarm.behaviour().pairing_kad.is_enabled(), separate);
+            let count = |swarm: &mut Swarm<Behaviour>| {
+                public_pairing_kad_mut(swarm.behaviour_mut())
+                    .kbuckets()
+                    .map(|bucket| {
+                        bucket
+                            .iter()
+                            .map(|entry| entry.node.value.len())
+                            .sum::<usize>()
+                    })
+                    .sum::<usize>()
+            };
+            let initial = count(&mut node.swarm);
+            let remote = peer_id();
+            let mut discovered = DiscoveredPeerAddresses::default();
+            let metrics = RuntimeMetrics::default();
+            for configured in public_ipfs_bootstrap_peer_configs() {
+                let (peer, address) = configured.peer_address().expect("bootstrap address");
+                discovered.retention.protect(peer, address.clone());
+                learn_public_pairing_address(
+                    &mut node.swarm,
+                    &mut discovered,
+                    &metrics,
+                    peer,
+                    address,
+                );
+            }
+            for port in 4000..4512 {
+                learn_public_pairing_address(
+                    &mut node.swarm,
+                    &mut discovered,
+                    &metrics,
+                    remote,
+                    format!("/ip4/11.252.0.2/tcp/{port}")
+                        .parse()
+                        .expect("address"),
+                );
+            }
+            assert!(
+                count(&mut node.swarm)
+                    <= initial + super::super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER
+            );
+            assert!(
+                discovered.addresses.is_empty(),
+                "public routing is not overlay membership"
+            );
+            expire_discovered_peer_addresses(
+                &mut node.swarm,
+                &mut discovered,
+                &metrics,
+                Instant::now() + DISCOVERED_ADDRESS_TTL + Duration::from_secs(1),
+            );
+            assert_eq!(count(&mut node.swarm), initial);
+        }
     }
 
     fn exercise_discovered_address_retention(enforce_bounds: bool) {

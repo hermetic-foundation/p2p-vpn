@@ -850,6 +850,35 @@ Remaining: inspect addresses inserted internally by Kademlia, the separate publi
 pairing Kademlia path, and authorization-removal lifecycle. These are not proven
 bounded by tests of `learn_peer_address`; do not treat this as a global memory bound.
 
+#### Public-Pairing Identify Admission Plan
+
+`handle_identify_received` directly inserts public-pairing-only routing addresses,
+bypassing `learn_peer_address` and its retention owner. This applies to the primary
+public DHT and to a separate public DHT alongside a private overlay DHT.
+
+1. Extract this insertion boundary and reproduce cumulative address growth.
+2. Apply the existing infrastructure retention budget before insertion.
+3. Remove expired/evicted copies from both DHTs without closing active connections.
+4. Protect default public bootstrap seeds alongside explicit configured addresses.
+5. Test both DHT modes, downstream expiry, and protected-address preservation.
+
+The regression failed against the extracted direct-insertion branch. Public-pairing
+Identify now uses bounded infrastructure admission, and expiry/eviction removes
+unprotected copies from both DHTs. Default public bootstrap seeds are protected.
+
+The regression passes with 512 advertisements in each DHT mode, checks the
+64-address per-peer limit, and verifies that expiry returns the DHT to its seeded
+address count. No overlay discovery entries are created for these routing peers.
+
+This closes the demonstrated Identify bypass, not internal libp2p insertion.
+The separate DHT's query-driven address lifecycle still requires review.
+
+Post-fix workspace validation: 1,183 passed, 15 opt-in tests ignored. Explicit
+peerless code-pairing and DHT-discovery namespace cases both passed in 25.37 seconds.
+The other namespace scenarios and Android/VM gates were not repeated for this fix.
+Required Clippy groups, Rust formatting, and Nix test-source parity pass. Existing
+style warnings remain; no new public-network result is claimed.
+
 ## Verification and Resource Plan
 
 | Layer | Approach |
