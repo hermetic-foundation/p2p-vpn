@@ -638,6 +638,25 @@ The expiry path consumes its pending-change flag before installing routes, but
 the caller exits on error. Source inspection does not establish a stale-authority
 retry defect: no in-process retry occurs on that path today.
 
+### Persistence Failure Boundaries
+
+The store audit adds three tests in `src/runtime/membership_store.rs` without
+changing runtime behavior or the persisted format.
+
+| Boundary | Verified Behavior |
+| --- | --- |
+| Invalid replacement history | Save rejects the records; previous bytes remain unchanged and loadable. |
+| Directory sync fails after rename | Save reports failure; the replacement is visible and loadable, with no temporary file left behind. A subsequent save succeeds. |
+| Unsupported directory sync | Only `InvalidInput` and `Unsupported` are tolerated; permission and other I/O errors propagate. |
+
+All nine store tests pass using the cached Nix Rust toolchain, offline, with two
+build jobs. The injected sync error tests visibility and error propagation, not
+power-loss durability or filesystem crash recovery.
+
+Source inspection of `persist_membership_records_if_changed` confirms that a
+failed save returns before advancing the persisted revision. Runtime consumers
+must still propagate that error; this store test does not prove every caller.
+
 ### Address Retention: Confirmed Growth
 
 Priority: P2. Status: reproduced through admission at `909a9482`; admission fix

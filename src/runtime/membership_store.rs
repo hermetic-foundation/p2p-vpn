@@ -380,6 +380,90 @@ mod tests {
     }
 
     #[test]
+    fn membership_state_reports_directory_sync_failure_after_atomic_replacement() {
+        let directory = test_directory("directory-sync-failure");
+        let path = directory.join("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        store
+            .save("lab", "local-peer", &[], &[])
+            .expect("initial state");
+        let records = vec![membership_record()];
+        let bytes = serde_json::to_vec(&PersistedMembershipState {
+            version: MEMBERSHIP_STATE_VERSION,
+            network_name: "lab",
+            local_peer: "local-peer",
+            records: &records,
+            hostname_records: &[],
+        })
+        .expect("replacement state");
+
+        let result = store.save_with_parent_sync(&bytes, |parent| {
+            assert_eq!(parent, directory);
+            assert_eq!(fs::read(&path).expect("renamed state"), bytes);
+            Err(io::Error::other("injected directory sync failure"))
+        });
+        assert!(matches!(result, Err(MembershipStateStoreError::Io(error))
+            if error.kind() == io::ErrorKind::Other));
+        // Rename has committed visibility, not crash durability, before directory sync.
+        assert_eq!(
+            store
+                .load("lab", "local-peer")
+                .expect("visible replacement"),
+            Some(PersistedMembershipStateData {
+                records: records.clone(),
+                hostname_records: Vec::new(),
+            })
+        );
+        assert_eq!(fs::read_dir(&directory).expect("directory").count(), 1);
+        store
+            .save("lab", "local-peer", &records, &[])
+            .expect("retry save");
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn membership_state_rejects_invalid_replacement_without_changing_saved_state() {
+        let directory = test_directory("invalid-replacement");
+        let path = directory.join("membership-state.json");
+        let store = MembershipStateStore::new(&path);
+        let records = vec![membership_record()];
+        store
+            .save("lab", "local-peer", &records, &[])
+            .expect("initial state");
+        let before = fs::read(&path).expect("saved bytes");
+
+        assert!(matches!(
+            store.save("other-network", "local-peer", &records, &[]),
+            Err(MembershipStateStoreError::Membership(_))
+        ));
+        assert_eq!(fs::read(&path).expect("unchanged bytes"), before);
+        assert_eq!(fs::read_dir(&directory).expect("directory").count(), 1);
+        assert_eq!(
+            store.load("lab", "local-peer").expect("original state"),
+            Some(PersistedMembershipStateData {
+                records,
+                hostname_records: Vec::new(),
+            })
+        );
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn directory_sync_only_tolerates_unsupported_operations() {
+        for kind in [io::ErrorKind::InvalidInput, io::ErrorKind::Unsupported] {
+            assert!(handle_directory_sync_error(io::Error::from(kind)).is_ok());
+        }
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            assert_eq!(
+                handle_directory_sync_error(io::Error::from(kind))
+                    .expect_err("real durability failure")
+                    .kind(),
+                kind
+            );
+        }
+    }
+
+    #[test]
     fn membership_state_round_trips_with_owner_only_permissions() {
         let directory = test_directory("round-trip");
         let path = directory.join("membership-state.json");
