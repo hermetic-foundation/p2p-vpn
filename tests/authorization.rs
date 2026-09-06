@@ -60,6 +60,7 @@ fn authorization_consumers_agree_on_remote_revocation_and_local_resignation() {
         }
         let routes = config.compile_routes().expect("routes");
         let packets = AuthorizedPeers::try_from_config(&config).expect("packet admission");
+        assert_eq!(AuthorizedPeers::from_config(&config), packets);
         let forwarder = Forwarder::from_config(&config).expect("forwarder");
         let runtime = OverlayMembership::from_config(&config).expect("runtime membership");
         let dns =

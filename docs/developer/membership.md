@@ -450,6 +450,10 @@ an active audit row does not imply the local node can communicate with that memb
 The forwarder derives its packet allowlist from its evaluated transport-peer map.
 It does not independently replay the ledger to build that second allowlist.
 
+Both `AuthorizedPeers` configuration constructors evaluate signed history and local
+eligibility. `try_from_config` returns validation errors; `from_config` preserves
+its infallible signature but returns an empty allowlist for invalid input.
+
 ## Observability
 
 ### Status Views

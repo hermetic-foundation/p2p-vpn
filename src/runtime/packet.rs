@@ -152,14 +152,11 @@ pub struct AuthorizedPeers {
 }
 
 impl AuthorizedPeers {
+    /// Evaluate current authorization, denying every peer if configuration is invalid.
+    /// Use `try_from_config` when the caller needs the validation error.
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
-        let peers = config
-            .peers
-            .iter()
-            .filter_map(|peer| peer.id.parse::<Libp2pPeerId>().ok())
-            .collect();
-        Self { peers }
+        Self::try_from_config(config).unwrap_or_default()
     }
 
     pub fn try_from_config(config: &Config) -> Result<Self, ConfigError> {
@@ -495,6 +492,7 @@ mod tests {
 
         assert!(authorized.allows(&remote));
         assert!(!authorized.allows(&other));
+        assert_eq!(AuthorizedPeers::from_config(&config), authorized);
 
         config.peers.push(PeerConfig {
             id: member.peer_id.clone(),
@@ -525,5 +523,22 @@ mod tests {
 
         let revoked = AuthorizedPeers::try_from_config(&config).expect("revoked peers");
         assert!(!revoked.allows(&remote));
+        assert!(
+            !AuthorizedPeers::from_config(&config).allows(&remote),
+            "the infallible constructor must also enforce signed revocation",
+        );
+        for invalid_signature in [false, true] {
+            let mut invalid = config.clone();
+            if invalid_signature {
+                invalid.network.member_records[0].signature.clear();
+            } else {
+                invalid.peers[0].id = "invalid-peer-id".to_owned();
+            }
+            assert!(AuthorizedPeers::try_from_config(&invalid).is_err());
+            assert_eq!(
+                AuthorizedPeers::from_config(&invalid),
+                AuthorizedPeers::default()
+            );
+        }
     }
 }

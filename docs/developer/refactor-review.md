@@ -158,15 +158,18 @@ Clippy correctness, suspicious, and performance checks passed; style warnings re
 
 ### R6: Legacy Packet Allowlist Constructor Ignores Signed History
 
-Priority: P2 API risk. Status: source-confirmed; regression and fix pending.
+Priority: P2 API risk. Status: reproduced and fixed.
 
 `AuthorizedPeers::from_config` in `src/runtime/packet.rs` collects static peer IDs
 without evaluating signed history. Current production callers use the fallible
 constructor or the forwarder's evaluated map; no live runtime bypass is established.
 
-The exported infallible constructor can nevertheless authorize a revoked configured
-peer for a library caller. Preserve its signature, delegate to the shared policy,
-and fail closed on invalid input. Test both constructors against signed revocation.
+The added regression demonstrated that the exported infallible constructor allowed
+a revoked configured peer. It now retains its signature but delegates to the shared
+policy and fails closed on invalid input.
+
+Coverage checks active signed members, revoked configured peers, malformed peer IDs,
+invalid signatures, and cross-consumer agreement after local resignation.
 
 ## Review Coverage Still Required
 
@@ -191,7 +194,7 @@ Both direct UDP and owned QUIC passed with the shared authorization view as well
 The default workspace suite passes 1,148 tests, with 14 ignored; required Clippy
 groups and formatting pass. Style warnings remain; operational coverage is incomplete.
 
-The DHT fixture uses `10.252.0.0/24` and no prior peer address. Public-discovery
+The DHT fixture used `10.252.0.0/24` and no prior peer address. Public-discovery
 address admission deliberately rejects third-party private transports. Check fixture
 scope against that security boundary before considering any production-policy change.
 
@@ -200,10 +203,32 @@ transmitted packets, and five accepted inbound packets, but no datagram transmis
 Check whether the fixed ping burst precedes path promotion: session existence alone
 does not prove a usable datagram path. Preserve traffic evidence when repairing the test.
 
-Final namespace run for this increment: 8 passed, 3 failed in 229 seconds.
+Authorization-policy increment's namespace run: 8 passed, 3 failed in 229 seconds.
 The open failures are DHT discovery, mDNS datagram evidence, and relay promotion.
 Direct UDP, owned QUIC, relay forwarding, file/code pairing, invite import, and
 network-move recovery passed. No full-suite or production-readiness claim follows.
+
+The fixture follow-up uses simulated public addresses in isolated namespaces and
+explicit external listeners because fixture AutoNAT is disabled. Public-discovery
+validation is unchanged. Datagram pings wait for path selection, not just session creation.
+
+An additional mDNS run exposed simultaneous first-handshake failure. The 15-second
+startup budget could expire before a 10-second failure backoff and the next 10-second
+retry tick. The fixture now allows 30 seconds for that bounded recovery cycle.
+
+Capability evidence now checks accepted-capability counters, including inbound
+requests. Receiving capabilities without acceptance still fails the regression.
+Previously, the outbound-response-only log assertion rejected valid inbound handshakes.
+
+After these corrections, all 11 namespace scenarios passed together in 184.51 seconds.
+Three additional mDNS runs passed. These checks retain actual packet traffic,
+datagram counters, route ownership, and relay-promotion assertions.
+
+The final workspace run passed 1,149 tests with 14 ignored, including the repaired
+infallible allowlist and cross-consumer authorization regression.
+
+Required Clippy groups and formatting pass. The broader VM, Android, persistence,
+and resource-comparison gates remain open; the ownership work is not complete.
 
 | Area | Evidence Inspected | Next Check |
 | --- | --- | --- |
@@ -228,6 +253,21 @@ No absence-of-bug claim follows from these partial inspections.
 
 Each change must have one reviewable purpose and an atomic Conventional Commit.
 Push each verified commit to `main`; preserve user changes and wire/config formats.
+
+### Next Ownership Milestone
+
+Consolidate the evaluated membership snapshot before extracting more runtime handlers.
+
+| Boundary | Required Work |
+| --- | --- |
+| Evaluation | Share one ledger evaluation and timestamp across route compilation and transport authorization. |
+| Forwarder state | Group derived routes, transport IDs, and packet admission into one replaceable snapshot. |
+| Prepared updates | Audit `ForwarderUpdate` provenance and stale-update behavior before changing commit semantics. |
+| Revision handling | Distinguish ledger changes from expiry-driven effective changes and configuration updates. |
+| Regression tests | Failed preparation preserves the old snapshot; expiry and revocation change every derived view together. |
+
+Keep existing public constructors and serialized contracts. Do not equate an audit
+entry with operational authority or erase history to simplify the snapshot.
 
 ## Verification and Resource Plan
 
