@@ -389,14 +389,15 @@ retry defect: no in-process retry occurs on that path today.
 
 ### Address Retention: Confirmed Growth
 
-Priority: P2. Status: reproduced through admission at `909a9482`; not fixed.
+Priority: P2. Status: reproduced through admission at `909a9482`; admission fix
+implemented, broader source-ownership review still open.
 
 `DiscoveredPeerAddresses::insert_at` (`runner.rs:8899` at this milestone) appends
 each distinct peer/address pair without an entry cap. Entries have a one-hour
 TTL. The admission path restricts retained entries to authorized overlay peers,
 but that does not bound repeated address changes from an authorized peer.
 
-| State | Current Bound |
+| State | Bound Before This Fix |
 | --- | --- |
 | Recovery dial attempts | Explicit maximum and periodic pruning |
 | Recovery discovery queries | Explicit total and concurrent maxima |
@@ -446,6 +447,63 @@ Acceptance requires deterministic overflow, refresh, source-ownership, expiry,
 and revocation tests, followed by minimal-config namespace recovery scenarios.
 Repeat this diagnostic after implementation; a passing diagnostic alone is not
 evidence that a security bound exists. This finding remains open.
+
+#### Bounded Admission Implementation
+
+`runtime/address_retention.rs` now owns discovered-address admission, refresh,
+budget partitioning, and eviction/expiry effects. The runner applies those effects
+to its recovery metadata and primary Kademlia address copies.
+
+| Limit | Value |
+| --- | ---: |
+| Canonical encoded address, including destination peer ID | 2,048 bytes |
+| Addresses per peer, across both budgets | 64 |
+| Overlay-discovery budget | 4,096 addresses |
+| Public-infrastructure budget | 512 addresses |
+
+Within a peer's budget, churn replaces an older address in the incoming category
+when possible: private direct, public direct, or relay. Across peers, an existing
+peer first rotates its own allocation. New peers can displace the oldest entry.
+
+Explicit bootstrap, configured-peer, and relay addresses are protected from
+downstream removal. Eviction does not close active connections. Repeated addresses
+with and without a destination suffix share retention and retry-quarantine state.
+
+Capacity evictions and oversized-address rejections have distinct, sampled log
+events. Oversized addresses also increment the existing rejection counter. No
+additional configuration is required, and limits do not allocate capacity upfront.
+
+Deterministic coverage includes independent infrastructure/overlay budgets,
+promotion into a full budget, preserved LAN/relay alternatives, expiry, and
+configured-address protection through real admission.
+
+| Verification | Result |
+| --- | --- |
+| Offline workspace tests | 1,161 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 188.21 seconds. |
+| Final library rerun after category caching | 913 passed; 3 intentionally ignored. |
+| Formatting and required Clippy groups | Passed; non-fatal style warnings remain. |
+| Build storage | Reused target directory remains approximately 1.2 GiB. |
+
+Repeated diagnostic, after 512 supplied addresses:
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Authorized runtime entries | 512 | 64 |
+| Raw runtime address bytes | 4,096 | 512 |
+| Additional Kademlia entries, either peer class | 512 | 64 |
+| Additional Kademlia entries after expiry | 512 | 0 |
+| Authorized admission elapsed time | 27.1 ms | 28.5 ms |
+| Infrastructure admission elapsed time | 10.1 ms | 14.7 ms |
+
+Times are single unoptimized diagnostic runs, including logging and cleanup, not
+statistical throughput or idle-CPU claims. Caching address categories eliminated
+repeated parsing during victim selection; the initial uncached version took
+148 ms for authorized admission and 133 ms for infrastructure admission.
+
+Remaining: inspect addresses inserted internally by Kademlia, the separate public
+pairing Kademlia path, and authorization-removal lifecycle. These are not proven
+bounded by tests of `learn_peer_address`; do not treat this as a global memory bound.
 
 ## Verification and Resource Plan
 

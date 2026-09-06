@@ -285,6 +285,23 @@ Recovery tries direct underlay candidates before relayed paths.
 This keeps LAN return and LAN-first rediscovery from being masked by an older
 relay address.
 
+Discovered-address retention is separate from active connections and explicit
+configuration. The retention owner emits eviction and expiry effects; the runner
+removes discovered recovery metadata and unprotected primary Kademlia copies.
+
+| Admission Budget | Limit |
+| --- | ---: |
+| Canonical address size, including destination ID | 2,048 bytes |
+| Per peer | 64 addresses |
+| Overlay discoveries | 4,096 addresses |
+| Public-infrastructure discoveries | 512 addresses |
+
+The two discovery budgets are independent. Same-peer replacement prefers an older
+address in the incoming LAN, public-direct, or relay category. Explicit bootstrap,
+peer, and relay addresses remain protected; eviction does not close active paths.
+
+These limits cover `learn_peer_address`, not every internal libp2p address store.
+
 ## Relay Behavior
 
 Circuit relay is a fallback path.

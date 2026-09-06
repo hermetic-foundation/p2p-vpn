@@ -894,6 +894,10 @@ cargo test --lib measure_discovered_address_retention_through_admission -- --ign
 | Output | Runtime entries, encoded address bytes, Kademlia entries, cumulative elapsed time, and expiry result |
 | Interpretation | A measurement, not an assertion that retention is bounded or a process-memory benchmark |
 
+The ordinary library suite separately runs
+`discovered_address_admission_is_bounded_and_expires_downstream`. It checks the
+admission limit and expiry cleanup while preserving an explicitly protected address.
+
 ## Namespace E2E
 
 These tests require Linux namespace and TUN support.

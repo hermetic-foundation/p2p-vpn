@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use super::address_retention::{
+    AddressRetention, Admission, canonical as canonical_discovered_address,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt as _;
 use libp2p::{
@@ -1329,6 +1332,17 @@ where
     let mut infrastructure_peers = InfrastructurePeers::default();
     let mut routing_infrastructure_peers = RoutingInfrastructurePeers::default();
     let mut queue_runtime = QueueRuntimeState::new(resources.packet_stream_limit());
+    for (peer, address) in node
+        .bootstrap_peer_addresses
+        .iter()
+        .chain(node.configured_peer_addresses.iter())
+        .chain(node.relay_peer_addresses.iter())
+    {
+        queue_runtime
+            .discovered_peer_addresses
+            .retention
+            .protect(*peer, address.clone());
+    }
     let mut inbound_packet_rate_limiters =
         PeerRateLimiters::new(resources.inbound_packet_rate_limit());
     let mut pairing_request_rate_limiters =
@@ -5920,7 +5934,12 @@ fn handle_redial_tick(
     public_discovery_quiet: bool,
     metrics: &RuntimeMetrics,
 ) {
-    expire_discovered_peer_addresses(discovered_peer_addresses, metrics);
+    expire_discovered_peer_addresses(
+        &mut node.swarm,
+        discovered_peer_addresses,
+        metrics,
+        Instant::now(),
+    );
     retry_configured_relay_reservations(
         &mut node.swarm,
         &node.relay_reservation_addresses,
@@ -6300,11 +6319,22 @@ fn expire_outbound_queue(queues: &mut PeerQueues, metrics: &RuntimeMetrics) {
 }
 
 fn expire_discovered_peer_addresses(
+    swarm: &mut Swarm<Behaviour>,
     discovered_peer_addresses: &mut DiscoveredPeerAddresses,
     metrics: &RuntimeMetrics,
+    now: Instant,
 ) {
-    let expired = discovered_peer_addresses.drop_expired(Instant::now(), DISCOVERED_ADDRESS_TTL);
-    metrics.record_discovered_address_expired(expired);
+    let before = discovered_peer_addresses.addresses.len();
+    discovered_peer_addresses.drop_expired(now, DISCOVERED_ADDRESS_TTL);
+    for (peer, address) in discovered_peer_addresses
+        .retention
+        .expire(now, DISCOVERED_ADDRESS_TTL)
+    {
+        remove_retained_discovery_address(swarm, discovered_peer_addresses, peer, &address);
+    }
+    metrics.record_discovered_address_expired(
+        (before - discovered_peer_addresses.addresses.len()) as u64,
+    );
 }
 
 struct KademliaRefreshContext<'a> {
@@ -8776,6 +8806,9 @@ struct RedialTargets {
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct DiscoveredPeerAddresses {
+    retention: AddressRetention,
+    retention_evictions: u64,
+    retention_rejections: u64,
     addresses: Vec<DiscoveredPeerAddress>,
     recovery_dial_attempts: HashMap<(Libp2pPeerId, RecoveryDialTarget), RecoveryDialAttempt>,
     last_recovery_dial_prune: Option<Instant>,
@@ -8787,6 +8820,7 @@ struct DiscoveredPeerAddresses {
 struct DiscoveredPeerAddress {
     peer: Libp2pPeerId,
     address: Multiaddr,
+    canonical_address: Multiaddr,
     last_seen: Instant,
     failure_count: u8,
     quarantined_until: Option<Instant>,
@@ -8901,10 +8935,11 @@ impl DiscoveredPeerAddresses {
     }
 
     fn insert_at(&mut self, peer: Libp2pPeerId, address: Multiaddr, now: Instant) {
+        let canonical_address = canonical_discovered_address(peer, address.clone());
         if let Some(entry) = self
             .addresses
             .iter_mut()
-            .find(|entry| entry.peer == peer && entry.address == address)
+            .find(|entry| entry.peer == peer && entry.canonical_address == canonical_address)
         {
             entry.last_seen = now;
             return;
@@ -8913,6 +8948,7 @@ impl DiscoveredPeerAddresses {
         self.addresses.push(DiscoveredPeerAddress {
             peer,
             address,
+            canonical_address,
             last_seen: now,
             failure_count: 0,
             quarantined_until: None,
@@ -8931,9 +8967,10 @@ impl DiscoveredPeerAddresses {
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
+        let canonical_address = canonical_discovered_address(peer, address.clone());
         let original_len = self.addresses.len();
         self.addresses
-            .retain(|entry| entry.peer != peer || &entry.address != address);
+            .retain(|entry| entry.peer != peer || entry.canonical_address != canonical_address);
         self.addresses.len() != original_len
     }
 
@@ -8950,10 +8987,11 @@ impl DiscoveredPeerAddresses {
     }
 
     fn record_failure_at(&mut self, peer: Libp2pPeerId, address: &Multiaddr, now: Instant) -> bool {
+        let canonical_address = canonical_discovered_address(peer, address.clone());
         let Some(entry) = self
             .addresses
             .iter_mut()
-            .find(|entry| entry.peer == peer && &entry.address == address)
+            .find(|entry| entry.peer == peer && entry.canonical_address == canonical_address)
         else {
             return false;
         };
@@ -8964,9 +9002,10 @@ impl DiscoveredPeerAddresses {
     }
 
     fn is_ready_at(&self, peer: Libp2pPeerId, address: &Multiaddr, now: Instant) -> bool {
+        let canonical_address = canonical_discovered_address(peer, address.clone());
         self.addresses
             .iter()
-            .find(|entry| entry.peer == peer && &entry.address == address)
+            .find(|entry| entry.peer == peer && entry.canonical_address == canonical_address)
             .is_none_or(|entry| entry.quarantined_until.is_none_or(|until| until <= now))
     }
 
@@ -20358,6 +20397,62 @@ fn record_relay_client_event(
     }
 }
 
+fn remove_retained_discovery_address(
+    swarm: &mut Swarm<Behaviour>,
+    discovered: &mut DiscoveredPeerAddresses,
+    peer: Libp2pPeerId,
+    address: &Multiaddr,
+) {
+    discovered
+        .addresses
+        .retain(|entry| entry.peer != peer || entry.canonical_address != *address);
+    if !discovered.retention.is_protected(peer, address) {
+        swarm.behaviour_mut().kad.remove_address(&peer, address);
+    }
+}
+
+fn retain_discovered_address(
+    swarm: &mut Swarm<Behaviour>,
+    discovered: &mut DiscoveredPeerAddresses,
+    metrics: &RuntimeMetrics,
+    peer: Libp2pPeerId,
+    address: &Multiaddr,
+    overlay: bool,
+) -> bool {
+    let (accepted, event, total) =
+        match discovered
+            .retention
+            .admit(peer, address.clone(), overlay, Instant::now())
+        {
+            Admission::Retained { evicted } if evicted.is_empty() => return true,
+            Admission::Retained { evicted } => {
+                for (peer, address) in evicted {
+                    remove_retained_discovery_address(swarm, discovered, peer, &address);
+                    discovered.retention_evictions =
+                        discovered.retention_evictions.saturating_add(1);
+                }
+                (
+                    true,
+                    "discovered_address_capacity_eviction",
+                    discovered.retention_evictions,
+                )
+            }
+            Admission::RejectedTooLarge => {
+                metrics.record_discovered_address_rejected();
+                discovered.retention_rejections = discovered.retention_rejections.saturating_add(1);
+                (
+                    false,
+                    "discovered_address_size_rejection",
+                    discovered.retention_rejections,
+                )
+            }
+        };
+    if total.is_power_of_two() {
+        log_runtime_event(LogLevel::Info, event, &[("total", &total.to_string())]);
+    }
+    accepted
+}
+
 #[allow(clippy::too_many_arguments)]
 fn learn_peer_address(
     swarm: &mut Swarm<Behaviour>,
@@ -20378,7 +20473,17 @@ fn learn_peer_address(
         return;
     }
     if !forwarder.is_configured_transport_peer(peer) {
-        if discovery.kademlia && address_targets_peer(peer, &address) {
+        if discovery.kademlia
+            && address_targets_peer(peer, &address)
+            && retain_discovered_address(
+                swarm,
+                discovered_peer_addresses,
+                metrics,
+                peer,
+                &address,
+                false,
+            )
+        {
             swarm
                 .behaviour_mut()
                 .kad
@@ -20431,6 +20536,16 @@ fn learn_peer_address(
         );
     }
 
+    if !retain_discovered_address(
+        swarm,
+        discovered_peer_addresses,
+        metrics,
+        peer,
+        &address,
+        true,
+    ) {
+        return;
+    }
     if discovery.kademlia {
         swarm
             .behaviour_mut()
@@ -29359,6 +29474,10 @@ mod tests {
         discovered.insert_at(peer, address.clone(), now);
         assert!(discovered.record_failure_at(peer, &address, now));
         discovered.insert_at(peer, address.clone(), now + Duration::from_secs(1));
+        let suffixed = address.clone().with(Protocol::P2p(peer));
+        discovered.insert_at(peer, suffixed.clone(), now + Duration::from_secs(1));
+        assert_eq!(discovered.as_vec().len(), 1);
+        assert!(!discovered.is_ready_at(peer, &suffixed, now + Duration::from_secs(1)));
 
         assert!(!discovered.is_ready_at(peer, &address, now + Duration::from_secs(1)));
         assert!(discovered.is_ready_at(
@@ -30322,6 +30441,15 @@ mod tests {
     #[tokio::test]
     #[ignore = "opt-in address-retention measurement; does not assert a security bound"]
     async fn measure_discovered_address_retention_through_admission() {
+        exercise_discovered_address_retention(false);
+    }
+
+    #[tokio::test]
+    async fn discovered_address_admission_is_bounded_and_expires_downstream() {
+        exercise_discovered_address_retention(true);
+    }
+
+    fn exercise_discovered_address_retention(enforce_bounds: bool) {
         let kad_address_count = |swarm: &mut Swarm<Behaviour>| -> usize {
             swarm
                 .behaviour_mut()
@@ -30363,6 +30491,16 @@ mod tests {
             let mut discovered = DiscoveredPeerAddresses::default();
             let paths = PathSet::new();
             let metrics = RuntimeMetrics::default();
+            if enforce_bounds {
+                let configured_address: Multiaddr = "/ip4/11.252.0.2/tcp/4001".parse().unwrap();
+                discovered
+                    .retention
+                    .protect(remote, configured_address.clone());
+                node.swarm
+                    .behaviour_mut()
+                    .kad
+                    .add_address(&remote, configured_address);
+            }
             let initial_kad_addresses = kad_address_count(&mut node.swarm);
             eprintln!(
                 "retention_baseline authorized={authorized} kad_entries={initial_kad_addresses}"
@@ -30391,6 +30529,12 @@ mod tests {
                         .map(|entry| entry.address.len())
                         .sum();
                     let kad_addresses = kad_address_count(&mut node.swarm);
+                    if enforce_bounds {
+                        let limit =
+                            super::super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER;
+                        assert!(discovered.addresses.len() <= limit);
+                        assert!(kad_addresses <= initial_kad_addresses + limit);
+                    }
                     eprintln!(
                         "retention authorized={authorized} supplied={count} runtime_entries={} runtime_address_bytes={runtime_bytes} kad_entries={kad_addresses} elapsed_us={}",
                         discovered.addresses.len(),
@@ -30407,11 +30551,20 @@ mod tests {
                     0
                 );
             }
-            let expired = discovered.drop_expired(
+            expire_discovered_peer_addresses(
+                &mut node.swarm,
+                &mut discovered,
+                &metrics,
                 Instant::now() + DISCOVERED_ADDRESS_TTL + Duration::from_secs(1),
-                DISCOVERED_ADDRESS_TTL,
             );
+            let expired = metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .discovered_addresses_expired;
             let kad_addresses = kad_address_count(&mut node.swarm);
+            if enforce_bounds {
+                assert!(discovered.addresses.is_empty());
+                assert_eq!(kad_addresses, initial_kad_addresses);
+            }
             eprintln!(
                 "retention_after_expiry authorized={authorized} expired={expired} runtime_entries={} kad_entries={kad_addresses}",
                 discovered.addresses.len(),
