@@ -323,9 +323,16 @@ Invalid bundles increment rejection metrics and do not partially merge.
 An accepted record update changes four runtime surfaces:
 
 1. `Forwarder` recomputes transport peers and authorized routes.
-2. `OverlayMembership` recomputes connection authorization.
+2. Post-commit `OverlayMembership` refreshes copy the forwarder's authorized peer set.
 3. `TunRuntimeConfig` reconciles kernel routes transactionally.
 4. Local control capabilities publish the new snapshot digest.
+
+Post-commit refreshes include restore, pairing-response installation, capability
+updates, DHT updates, paged sync, and expiry. They retain local identity inclusion
+and independently derive the configured infrastructure allowlist.
+
+Record-based public constructors and prepared reconfiguration still evaluate
+membership from records. Copying a committed snapshot does not change those APIs.
 
 Kernel route commands have inverse operations for rollback.
 

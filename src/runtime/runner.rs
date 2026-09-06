@@ -2575,11 +2575,7 @@ fn load_persisted_membership_records(
         || membership_stats.removed_expired > 0
         || membership_stats.removed_untrusted > 0;
     if changed {
-        membership.replace_record_members(
-            forwarder.config(),
-            forwarder.member_records(),
-            now_unix_seconds,
-        )?;
+        membership.replace_from_forwarder(forwarder)?;
     }
     log_runtime_event(
         LogLevel::Info,
@@ -9248,7 +9244,6 @@ impl OverlayMembership {
         now_unix_seconds: u64,
     ) -> Result<Self, ConfigError> {
         let mut peers = HashSet::new();
-        let mut configured_infrastructure_peers = HashSet::new();
         let local_peer: Libp2pPeerId = config
             .local_peer()?
             .parse()
@@ -9269,6 +9264,14 @@ impl OverlayMembership {
             peers.insert(member.transport_peer);
         }
 
+        Ok(Self {
+            peers,
+            configured_infrastructure_peers: Self::infrastructure_peers(config)?,
+        })
+    }
+
+    fn infrastructure_peers(config: &Config) -> Result<HashSet<Libp2pPeerId>, ConfigError> {
+        let mut configured_infrastructure_peers = HashSet::new();
         for peer in &config.network.bootstrap_peers {
             configured_infrastructure_peers
                 .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
@@ -9286,10 +9289,23 @@ impl OverlayMembership {
             }
         }
 
-        Ok(Self {
-            peers,
-            configured_infrastructure_peers,
-        })
+        Ok(configured_infrastructure_peers)
+    }
+
+    fn replace_from_forwarder(&mut self, forwarder: &Forwarder) -> Result<(), ConfigError> {
+        let config = forwarder.config();
+        let local_peer = config
+            .local_peer()?
+            .parse()
+            .map_err(ConfigError::Libp2pPeerId)?;
+        let mut peers = forwarder
+            .configured_transport_peers()
+            .collect::<HashSet<_>>();
+        peers.insert(local_peer);
+        let configured_infrastructure_peers = Self::infrastructure_peers(config)?;
+        self.peers = peers;
+        self.configured_infrastructure_peers = configured_infrastructure_peers;
+        Ok(())
     }
 
     #[must_use]
@@ -14621,11 +14637,7 @@ fn install_pairing_response_membership(
         return Ok(());
     }
 
-    membership.replace_record_members(
-        forwarder.config(),
-        forwarder.member_records(),
-        now_unix_seconds,
-    )?;
+    membership.replace_from_forwarder(forwarder)?;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
     sync_live_tun_routes_at(forwarder, tun_runtime, route_controller, now_unix_seconds)?;
     let accepted = stats.accepted.to_string();
@@ -16044,11 +16056,7 @@ fn learn_membership_records_from_capabilities(
         forwarder.merge_membership_records(&capabilities.member_records, now_unix_seconds)?;
     let changed = stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
     if changed {
-        membership.replace_record_members(
-            forwarder.config(),
-            forwarder.member_records(),
-            now_unix_seconds,
-        )?;
+        membership.replace_from_forwarder(forwarder)?;
         let accepted = stats.accepted.to_string();
         let ignored = stats.ignored_stale_or_equal.to_string();
         let removed_expired = stats.removed_expired.to_string();
@@ -16163,11 +16171,7 @@ fn learn_membership_records_from_kademlia_value(
     let changed = membership_changed || hostname_stats.accepted > 0;
     if membership_changed {
         membership
-            .replace_record_members(
-                forwarder.config(),
-                forwarder.member_records(),
-                now_unix_seconds,
-            )
+            .replace_from_forwarder(forwarder)
             .map_err(ForwardError::from)
             .map_err(|error| KademliaMembershipRecordError::InvalidRecord(format!("{error:?}")))?;
         let accepted = stats.accepted.to_string();
@@ -16219,11 +16223,7 @@ fn prune_expired_membership_records(
         return Ok(false);
     }
 
-    membership.replace_record_members(
-        forwarder.config(),
-        forwarder.member_records(),
-        now_unix_seconds,
-    )?;
+    membership.replace_from_forwarder(forwarder)?;
     *local_capabilities = refreshed_local_capabilities(local_capabilities, forwarder);
     let removed_untrusted = stats.removed_untrusted.to_string();
     log_runtime_event(
@@ -18507,11 +18507,7 @@ fn handle_membership_record_sync_response(
     let membership_changed =
         stats.accepted > 0 || stats.removed_expired > 0 || stats.removed_untrusted > 0;
     if membership_changed {
-        if let Err(error) = membership.replace_record_members(
-            forwarder.config(),
-            forwarder.member_records(),
-            now_unix_seconds,
-        ) {
+        if let Err(error) = membership.replace_from_forwarder(forwarder) {
             fail_membership_record_sync(syncs, metrics, peer, "membership_rebuild_failed");
             log_runtime_event(
                 LogLevel::Warn,
@@ -29785,6 +29781,21 @@ mod tests {
         assert!(membership.allows_configured_infrastructure(relay));
         assert!(membership.allows_configured_infrastructure(peer_address_relay));
         assert!(!membership.allows(peer_id()));
+
+        let forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let mut from_snapshot = OverlayMembership::from_config(&config_with_peer(
+            &NodeIdentity::generate_ed25519().expect("old identity"),
+            peer_id(),
+        ))
+        .expect("old membership");
+        from_snapshot
+            .replace_from_forwarder(&forwarder)
+            .expect("snapshot membership");
+        assert_eq!(from_snapshot.peers, membership.peers);
+        assert_eq!(
+            from_snapshot.configured_infrastructure_peers,
+            membership.configured_infrastructure_peers
+        );
     }
 
     #[test]
@@ -33144,8 +33155,15 @@ mod tests {
             .refresh_membership_records(after_expiry)
             .expect("refreshed member records");
         membership
-            .replace_record_members(forwarder.config(), forwarder.member_records(), after_expiry)
+            .replace_from_forwarder(&forwarder)
             .expect("membership rebuilt");
+        let record_based = OverlayMembership::from_config_with_member_records(
+            forwarder.config(),
+            forwarder.member_records(),
+            after_expiry,
+        )
+        .expect("record-based compatibility constructor");
+        assert_eq!(membership.peers, record_based.peers);
         let installed_before = tun_runtime.clone();
         let mut failed_runtime = tun_runtime.clone();
         assert!(

@@ -531,6 +531,31 @@ coverage rather than silently ignoring updates in this refactor.
 Remaining ownership work includes sharing evaluation with TUN/runtime membership,
 reviewing revision consumers, and extracting recovery decisions and timer effects.
 
+### Runtime Membership Snapshot Plan
+
+1. Preserve public record-based membership constructors and replacement APIs.
+2. Let internal post-commit refreshes copy authorized peers from the forwarder.
+3. Keep local identity inclusion and configured infrastructure admission separate.
+4. Verify existing membership, expiry, revocation, and namespace behavior.
+
+This removes independent ledger evaluation after a forwarding commit. Prepared
+reconfiguration and TUN route derivation remain separate boundaries to review.
+
+Implemented `OverlayMembership::replace_from_forwarder` for all six internal
+post-commit refresh paths. Public record-based APIs remain unchanged. Both paths
+share infrastructure extraction, and replacement validates before mutating either set.
+
+Compatibility comparisons cover static peers, local identity replacement,
+bootstrap/relay isolation, and a committed expiry timestamp ahead of wall clock.
+The last case ensures copying cannot reactivate a grant by re-evaluating it earlier.
+
+Workspace validation passed 1,182 enabled tests, with 15 opt-in tests ignored.
+All 11 explicit serial namespace scenarios passed in 190.05 seconds, including
+network movement and relay promotion. Android and full NixOS VM validation have
+not been repeated for this snapshot-copy change.
+Required Clippy groups, Rust formatting, and Nix test-source parity pass; existing
+style warnings remain. No throughput or memory improvement is claimed from these checks.
+
 ### Snapshot Validation and Recovery Finding
 
 | Check | Result |
