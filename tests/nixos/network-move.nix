@@ -159,6 +159,23 @@ pkgs.testers.nixosTest {
   };
 
   testScript = ''
+    def invocation(machine, name):
+        value = machine.succeed(
+            f"systemctl show p2p-vpn-{name}.service -p InvocationID --value"
+        ).strip()
+        assert value, f"{name}: missing service invocation ID"
+        return value
+
+    def relay_packets(machine, name):
+        output = machine.succeed(
+            f"p2p-vpn daemon-state --socket /run/p2p-vpn-{name}/control.sock"
+        )
+        for line in output.splitlines():
+            fields = line.split()
+            if fields and fields[0] == "outbound_relay_stream_fallback_packets":
+                return int(fields[1])
+        raise AssertionError(f"{name}: missing relay packet counter")
+
     start_all()
 
     relay.wait_for_unit("multi-user.target")
@@ -203,6 +220,7 @@ pkgs.testers.nixosTest {
         node_a.wait_until_succeeds("${state "node-a"} | grep -q 'selected_path direct_'", timeout=90)
         node_a.wait_until_succeeds("${state "node-a"} | awk '/auto_relay_active_reservations/ { found = 1; reservations = $2 } END { exit found && reservations > 0 ? 0 : 1 }'", timeout=90)
         node_b.wait_until_succeeds("${state "node-b"} | awk '/auto_relay_active_reservations/ { found = 1; reservations = $2 } END { exit found && reservations > 0 ? 0 : 1 }'", timeout=90)
+        original_invocations = [invocation(node_a, "node-a"), invocation(node_b, "node-b")]
 
     with subtest("moved peer recovers through relay without config changes"):
         node_b.succeed("ip link set eth2 up")
@@ -211,8 +229,14 @@ pkgs.testers.nixosTest {
         node_b.succeed("ping -c 1 -W 1 ${relay.vlanMoved}")
         node_a.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}", timeout=120)
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=120)
-        node_a.wait_until_succeeds("${state "node-a"} | tee /tmp/node-a-moved-state | grep -q 'relay_paths 1'", timeout=90)
-        node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-moved-state | grep -q 'relay_paths 1'", timeout=90)
+        node_a.wait_until_succeeds("${state "node-a"} | tee /tmp/node-a-moved-state | grep -E 'peer state: [^ ]+ transport ${nodeB.peerId} .*selected_path circuit_relay .*relay_paths [1-9][0-9]*($| )'", timeout=90)
+        node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-moved-state | grep -E 'peer state: [^ ]+ transport ${nodeA.peerId} .*selected_path circuit_relay .*relay_paths [1-9][0-9]*($| )'", timeout=90)
+        before = [relay_packets(node_a, "node-a"), relay_packets(node_b, "node-b")]
+        node_a.succeed("ping -I pv0 -c 5 -W 2 ${nodeB.vpnIp}")
+        node_b.succeed("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}")
+        assert relay_packets(node_a, "node-a") > before[0], "node-a did not send relay payloads"
+        assert relay_packets(node_b, "node-b") > before[1], "node-b did not send relay payloads"
+        assert [invocation(node_a, "node-a"), invocation(node_b, "node-b")] == original_invocations, "VPN restarted during relay recovery"
         node_a.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-a-moved-state")
         node_b.succeed("awk '/relay_outbound_circuits_established|relay_inbound_circuits_established/ { total += $2 } END { exit total > 0 ? 0 : 1 }' /tmp/node-b-moved-state")
         node_a.succeed(
@@ -231,6 +255,7 @@ pkgs.testers.nixosTest {
         node_b.wait_until_succeeds("ping -I pv0 -c 5 -W 2 ${nodeA.vpnIp}", timeout=120)
         node_a.wait_until_succeeds("${state "node-a"} | tee /tmp/node-a-returned-state | grep -q 'selected_path direct_'", timeout=120)
         node_b.wait_until_succeeds("${state "node-b"} | tee /tmp/node-b-returned-state | grep -q 'selected_path direct_'", timeout=120)
+        assert [invocation(node_a, "node-a"), invocation(node_b, "node-b")] == original_invocations, "VPN restarted during LAN recovery"
         node_a.succeed(
             "test \"$(sha256sum /run/p2p-vpn-node-a/config.json | awk '{print $1}')\" "
             "= \"$(cat /tmp/node-a-config.sha256)\""

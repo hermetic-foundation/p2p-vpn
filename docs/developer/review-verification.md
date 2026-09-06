@@ -4,6 +4,10 @@
 
 Audited on 2026-09-06, including NixOS lifecycle/LAN/pairing checks at `cf18fb51`,
 membership convergence at `4bb8ff1e`, and Android recovery at `643d798e`.
+
+Transport checks at `859b29d5` and the subsequent movement-test repair are
+recorded in the [transport report](nixos-transport-review.md).
+
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -21,6 +25,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Membership VM | [Exported four-node check built at `4bb8ff1e`](nixos-membership-review.md): all 18 subtests pass in 349.04 seconds. Current packaged runtime and NixOS module; no runtime override. | Controlled VLAN/relay topology; IPv4/A-record assertions. Not public NAT, IPv6, sustained-load, or other VM-gate evidence. |
 | NixOS workflows | [Four exported VM checks pass at `cf18fb51`](nixos-workflow-review.md): lifecycle, smoke, minimal LAN, and URI pairing. | Pairing evaluates generated Nix but runs its resulting JSON, not a rebuild/switch. Controlled IPv4 LAN, not public WAN or sustained load. |
 | Storage repair VM | Full lifecycle check passes at `cf18fb51`; automatic service/DNS recovery after permission repair preserves identity and membership bytes. | Permission failure, not ENOSPC, interrupted writes, power loss, or OS reboot. |
+| Transport VMs | QUIC-stream, QUIC-datagram, and forced-relay checks pass at `859b29d5`. Strengthened movement test passes twice with selected relay payloads, unchanged invocation IDs/configs, and direct LAN return. | Fixed an invalid exact-one relay-path assertion after a two-path failure. Corrected runs had one path; controlled IPv4 fixtures, not public NAT or saturation evidence. |
 | Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass at `643d798e`; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; sustained overload remains unverified. |
 | Resources | Historical debug comparison plus two current release-profile idle captures at `89709e4f`: 0.133-0.167% of one core per node. | Small static topology; current-only release results are not a release baseline comparison. Connection and drop increments remain visible in [measurement limits](idle-resource-comparison.md#release-profile-follow-up). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
@@ -65,8 +70,9 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-membership-convergence` | Built offline at `4bb8ff1e`; all 18 subtests pass. [Exact artifacts and limits](nixos-membership-review.md). |
 | `nixos-vm-pairing` | Built at `cf18fb51`; all 8 subtests pass. Native Nix generation/evaluation, not rebuild/switch activation. |
 | `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
-| `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
-| `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
+| `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Built at `859b29d5`; each passes 2 subtests. Datagram preference and stream-only traffic confirmed by path/session/payload counters. |
+| `nixos-vm-forced-relay` | Built at `859b29d5`; all 5 subtests pass. Controlled VLANs and explicit fixture relay. |
+| `nixos-vm-network-move` | Original pass followed by an exact-one-count failure. Corrected, stronger test passes twice. [Logs, hashes, and limits](nixos-transport-review.md). |
 | `namespace-smoke-preflighted` | All 11 pass with pinned resource bounds. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
@@ -159,7 +165,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
-| Platform validation | Membership VM passes at `4bb8ff1e`; lifecycle, smoke, LAN, and URI pairing at `cf18fb51`. Complete remaining VM gates, actual generated-Nix activation, and final shared-runtime Android validation. |
+| Platform validation | Membership, lifecycle, smoke, LAN, URI pairing, and transport/movement VMs pass with limits above. Complete code-pairing VM gates, actual generated-Nix activation, and final shared-runtime Android validation. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |

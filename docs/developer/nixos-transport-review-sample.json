@@ -1,0 +1,82 @@
+{
+  "date": "2026-09-06",
+  "base_revision": "859b29d5",
+  "runtime_evidence": "nixos-workflow-review-sample.json",
+  "source_sha256": {
+    "tests/nixos/quic-stream.nix": "0dd953c0dc26ef036d8ca484b901f0c1e08172e2d586c7162521fc38fd82065d",
+    "tests/nixos/quic-datagram.nix": "b27336057ed3fd0ed093c21bf7639d69500882f7095b750b2691c78ea12bdd86",
+    "tests/nixos/forced-relay.nix": "137a955b1670e6c80286a29e574fe998f5443383dab0383e7c027ce2f6b716b0",
+    "tests/nixos/network-move.nix": "ee1a9c7c10aa38460fab6ee33c89a6914abd445c22e054eff8cf40f52f6a4198"
+  },
+  "initial_movement_source_sha256": "a5a63ce00a54e1a93c6a6047f9003b908ec82c297c138cdc4e8f65448269e253",
+  "initial_checks": [
+    {
+      "check": "nixos-vm-quic-stream",
+      "result": "passed",
+      "derivation": "/nix/store/94lyx2650w2hbnbfc9r59vsl08xs41j0-vm-test-run-p2p-vpn-nixos-vm-quic-stream.drv",
+      "output": "/nix/store/yhq1hh07dygyhiypp6q2v1hv9mfgv133-vm-test-run-p2p-vpn-nixos-vm-quic-stream",
+      "log": "/nix/var/log/nix/drvs/94/lyx2650w2hbnbfc9r59vsl08xs41j0-vm-test-run-p2p-vpn-nixos-vm-quic-stream.drv.bz2",
+      "log_sha256": "29671013d5dd4dd9f21bbcae555e29354dad9c9fa4dbaa3933f572bc274c0034",
+      "script_seconds": 20.24
+    },
+    {
+      "check": "nixos-vm-quic-datagram",
+      "result": "passed",
+      "derivation": "/nix/store/agnn6pvci9jjfil4qpm2h8asanhlyhnn-vm-test-run-p2p-vpn-nixos-vm-quic-datagram.drv",
+      "output": "/nix/store/5bgxf3sz6qa0lpb2jr0mfl8z47gb6d17-vm-test-run-p2p-vpn-nixos-vm-quic-datagram",
+      "log": "/nix/var/log/nix/drvs/ag/nn6pvci9jjfil4qpm2h8asanhlyhnn-vm-test-run-p2p-vpn-nixos-vm-quic-datagram.drv.bz2",
+      "log_sha256": "91a352ab9be83cea9bd6079660e2e799f349c2b352d8951ce65d601cc239a23e",
+      "script_seconds": 23.69
+    },
+    {
+      "check": "nixos-vm-forced-relay",
+      "result": "passed",
+      "derivation": "/nix/store/pcn4wwsi463kicb1grfdbi7k9lj4sa2s-vm-test-run-p2p-vpn-nixos-vm-forced-relay.drv",
+      "output": "/nix/store/w09qsky5l1a3kib1r6sc7vpvcxi9ixa9-vm-test-run-p2p-vpn-nixos-vm-forced-relay",
+      "log": "/nix/var/log/nix/drvs/pc/n4wwsi463kicb1grfdbi7k9lj4sa2s-vm-test-run-p2p-vpn-nixos-vm-forced-relay.drv.bz2",
+      "log_sha256": "34ba968461c7aef9596725d4f69bf1c7dba97e73326a2a763d54163ef8894792",
+      "script_seconds": 20.51
+    },
+    {
+      "check": "nixos-vm-network-move",
+      "result": "passed",
+      "derivation": "/nix/store/mkq5qbwz6xyyv56fd8gys568q54g200j-vm-test-run-p2p-vpn-nixos-vm-network-move.drv",
+      "output": "/nix/store/x9rz2y3v6k19av2kx2fkyw97zs4f250x-vm-test-run-p2p-vpn-nixos-vm-network-move",
+      "log": "/nix/var/log/nix/drvs/mk/q5qbwz6xyyv56fd8gys568q54g200j-vm-test-run-p2p-vpn-nixos-vm-network-move.drv.bz2",
+      "log_sha256": "13ea2c607590bbc4e9f714502d6f9fda69d0c407f702c117324486fb1560c9f4",
+      "script_seconds": 126.86
+    }
+  ],
+  "movement_exact_one_failure": {
+    "check": "nixos-vm-network-move",
+    "result": "failed",
+    "derivation": "/nix/store/mhxj6bcccnxhs2sv05xa2jhkcv3q6idx-vm-test-run-p2p-vpn-nixos-vm-network-move.drv",
+    "output": null,
+    "log": "/nix/var/log/nix/drvs/mh/xj6bcccnxhs2sv05xa2jhkcv3q6idx-vm-test-run-p2p-vpn-nixos-vm-network-move.drv.bz2",
+    "log_sha256": "34a2769d06b71536168851f5c81d508875c560975a4b7089ba8c1d0b8c43235e",
+    "script_seconds": null,
+    "reason": "Exact-one relay_paths assertion timed out with two healthy relay paths and recovered pings.",
+    "test_sha256": "77b33fef308d7e9794cbda3715f92d75b227586003aa49df272f6f096480f4a3"
+  },
+  "corrected_movement_runs": [
+    {
+      "check": "nixos-vm-network-move",
+      "result": "passed",
+      "derivation": "/nix/store/qsnai658905a4l1s4vj0w8aq7nmbx0j8-vm-test-run-p2p-vpn-nixos-vm-network-move.drv",
+      "output": "/nix/store/zr68sh4ymq1q2vfdbjih6864kdpi3w4k-vm-test-run-p2p-vpn-nixos-vm-network-move",
+      "log": "/tmp/p2p-vpn-review-move-assertions-fixed-first.log.bz2",
+      "log_sha256": "387bec03154d799cc81124f0e0a05fbd77d9183dbd91f82d05393c7b35b8b983",
+      "script_seconds": 73.09
+    },
+    {
+      "check": "nixos-vm-network-move",
+      "result": "passed",
+      "derivation": "/nix/store/qsnai658905a4l1s4vj0w8aq7nmbx0j8-vm-test-run-p2p-vpn-nixos-vm-network-move.drv",
+      "output": "/nix/store/zr68sh4ymq1q2vfdbjih6864kdpi3w4k-vm-test-run-p2p-vpn-nixos-vm-network-move",
+      "log": "/nix/var/log/nix/drvs/qs/nai658905a4l1s4vj0w8aq7nmbx0j8-vm-test-run-p2p-vpn-nixos-vm-network-move.drv.bz2",
+      "log_sha256": "8a0ddd60e8435684d61e80bd39d079c5636bb4b582a69544bcf526302813c7ce",
+      "script_seconds": 71.83
+    }
+  ],
+  "limitations_document": "nixos-transport-review.md"
+}
