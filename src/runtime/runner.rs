@@ -2793,8 +2793,16 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     }
 
     let now = current_unix_seconds_lossy();
-    let next_membership = OverlayMembership::from_config(&next_config)?;
-    let next_tun = TunRuntimeConfig::from_config(&next_config)?;
+    let next_membership = OverlayMembership::from_config_with_member_records(
+        &next_config,
+        &next_config.network.member_records,
+        now,
+    )?;
+    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
+        &next_config,
+        &next_config.network.member_records,
+        now,
+    )?;
     let tun_update = next_tun.additive_update_from(tun_runtime)?;
     let update = forwarder.prepare_reconfigure(next_config, now)?;
     apply(tun_runtime, &next_tun, &tun_update)?;
@@ -14703,9 +14711,21 @@ fn prepare_pairing_runtime_enrollment(
             .parse::<Libp2pPeerId>()
             .map_err(crate::pairing::PairingError::from)?
     };
-    let membership = OverlayMembership::from_config(&next_config)?;
-    let current_tun = TunRuntimeConfig::from_config(&current_config)?;
-    let next_tun = TunRuntimeConfig::from_config(&next_config)?;
+    let membership = OverlayMembership::from_config_with_member_records(
+        &next_config,
+        &next_config.network.member_records,
+        now_unix_seconds,
+    )?;
+    let current_tun = TunRuntimeConfig::from_config_with_member_records_at(
+        &current_config,
+        &current_config.network.member_records,
+        now_unix_seconds,
+    )?;
+    let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
+        &next_config,
+        &next_config.network.member_records,
+        now_unix_seconds,
+    )?;
     let tun_update = next_tun.additive_update_from(&current_tun)?;
     let membership_tag = next_config.membership_tag()?;
     let update = forwarder.prepare_reconfigure(next_config, now_unix_seconds)?;
@@ -21875,6 +21895,20 @@ mod tests {
         PairingRequest,
         PairingResponse,
     ) {
+        code_pairing_runtime_fixture_at(membership_key, 1_000)
+    }
+
+    fn code_pairing_runtime_fixture_at(
+        membership_key: Option<String>,
+        now: u64,
+    ) -> (
+        Config,
+        NodeIdentity,
+        NodeIdentity,
+        PairingOffer,
+        PairingRequest,
+        PairingResponse,
+    ) {
         let inviter = NodeIdentity::generate_ed25519().expect("inviter identity");
         let joiner = NodeIdentity::generate_ed25519().expect("joiner identity");
         let joiner_peer = joiner.peer_id.parse().expect("joiner peer");
@@ -21887,7 +21921,7 @@ mod tests {
                 expires_in_seconds: 600,
                 rendezvous_token: None,
             },
-            1_000,
+            now,
         )
         .expect("code pairing offer");
         let request = build_pairing_request_at(
@@ -21897,7 +21931,7 @@ mod tests {
                 requested_vpn_ip: Some("10.42.0.2".to_owned()),
                 requested_routes: Vec::new(),
             },
-            1_001,
+            now + 1,
         )
         .expect("pairing request");
         let (_, response) = pairing_offer_and_response_for_request_with_grants(
@@ -21908,13 +21942,35 @@ mod tests {
             &mut HashSet::new(),
             joiner_peer,
             &request,
-            1_010,
+            now + 10,
             PairingAcceptanceMode::CodeApproval,
             Some("10.42.0.2".to_owned()),
             Some(Vec::new()),
         )
         .expect("pairing response");
         (config, inviter, joiner, offer, request, response)
+    }
+
+    #[test]
+    fn pairing_preparation_uses_one_authorization_timestamp() {
+        let now = current_unix_seconds_lossy() + 3_600;
+        let (config, inviter, joiner, offer, _, response) =
+            code_pairing_runtime_fixture_at(None, now);
+        let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
+        let prepared =
+            prepare_pairing_runtime_enrollment(&forwarder, &offer, &response, &inviter, now + 11)
+                .expect("prepared enrollment");
+        let joiner = joiner.peer_id.parse().unwrap();
+        assert!(prepared.membership.allows(joiner));
+        assert!(
+            prepared
+                .tun_runtime
+                .routes
+                .iter()
+                .any(|route| { route.owner == PeerId::from_libp2p(joiner) })
+        );
+        forwarder.commit_reconfigure(prepared.forwarder);
+        assert!(forwarder.is_configured_transport_peer(joiner));
     }
 
     fn pairing_test_node(identity: &NodeIdentity) -> P2pNode {

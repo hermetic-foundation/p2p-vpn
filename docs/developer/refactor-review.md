@@ -101,6 +101,20 @@ and local expiry/resignation without erasing surviving network membership.
 The cross-consumer integration test exercises minimal configuration, remote
 revocation, local resignation, and retained audit state through public constructors.
 
+#### Pairing Transaction Clock Consistency
+
+The follow-up found a behavioral defect in `prepare_pairing_runtime_enrollment`:
+forwarding used the supplied transaction time, while membership and TUN constructors
+read wall-clock time again. Persisted-enrollment recovery also mixed clock reads.
+
+- A future-time fixture reproduced successful preparation with the joiner absent from membership.
+- Both paths now pass one captured timestamp to membership, TUN, and forwarding evaluation.
+- The regression checks joiner membership, TUN routes, and committed transport authorization.
+
+This fixes inconsistent evaluation times, not repeated ledger evaluation. Deriving
+all prepared consumers from one immutable authorization snapshot remains outstanding.
+No clock-skew exploit or physical network failure is claimed from this unit reproduction.
+
 ### R3: Recovery State Has Distributed Ownership
 
 Priority: architectural. Status: confirmed coupling; behavioral audit pending.

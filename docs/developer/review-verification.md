@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including the public-pairing address-admission follow-up.
+Audited on 2026-09-06, including pairing transaction clock consistency.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,183 passed, 15 opt-in tests ignored. New retention diagnostic runs separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 passed at `0acbd725`; pairing and DHT cases pass after the admission fix. | Other nine not repeated after that fix; controlled topology, not public NAT traversal. |
+| Workspace | Last full run: 1,184 passed, 16 opt-in tests ignored. Retention diagnostic runs separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | Three code/direct/relayed pairing cases pass after the clock fix; all 11 passed at `0acbd725`. | Other eight not repeated after the clock fix; controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -48,7 +48,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 passed at `0acbd725`; two affected cases repeated after admission fix. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 passed at `0acbd725`; three affected pairing cases repeated after clock fix. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Earlier offline native/Gradle validation; current derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
