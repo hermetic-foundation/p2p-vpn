@@ -22955,6 +22955,21 @@ mod tests {
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
+        let retained = fail_prepared_restart_route_update(
+            &mut node,
+            &mut restored,
+            &store,
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+        );
+        restored = CodePairingSessions::restore_persisted(
+            &retained,
+            "lab",
+            1_020,
+            now + Duration::from_secs(20),
+        )
+        .expect("reload Prepared enrollment after route and rollback failure");
         let mut commands = Vec::new();
         reconcile_persisted_pairing_enrollments_with(
             &mut node.swarm,
@@ -23096,6 +23111,21 @@ mod tests {
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut tun_runtime = TunRuntimeConfig::from_config(&config).expect("TUN runtime");
+        let retained = fail_prepared_restart_route_update(
+            &mut node,
+            &mut restored,
+            &store,
+            &mut forwarder,
+            &mut membership,
+            &mut tun_runtime,
+        );
+        restored = CodePairingSessions::restore_persisted(
+            &retained,
+            "lab",
+            1_020,
+            now + Duration::from_secs(20),
+        )
+        .expect("reload Prepared enrollment after route and rollback failure");
         let mut commands = Vec::new();
         reconcile_persisted_pairing_enrollments_with(
             &mut node.swarm,
@@ -23147,8 +23177,80 @@ mod tests {
         )
         .expect("idempotent reconciliation");
         assert_eq!(commands.len(), command_count);
+        let persisted = CodePairingSessions::restore_persisted(
+            &store.load().unwrap().unwrap(),
+            "lab",
+            1_020,
+            now + Duration::from_secs(20),
+        )
+        .expect("restore durable joiner completion");
+        assert_eq!(
+            persisted.enrollment(&operation_id).unwrap().state,
+            PairingEnrollmentState::Applied
+        );
+        assert!(matches!(
+            persisted.join_status(&operation_id),
+            Ok(PairingJoinStatus::Completed)
+        ));
         fs::remove_dir_all(state_path.parent().expect("state directory"))
             .expect("remove test state");
+    }
+
+    fn fail_prepared_restart_route_update(
+        node: &mut P2pNode,
+        sessions: &mut CodePairingSessions,
+        store: &PairingStateStore,
+        forwarder: &mut Forwarder,
+        membership: &mut OverlayMembership,
+        tun_runtime: &mut TunRuntimeConfig,
+    ) -> Vec<u8> {
+        let persisted_before = store.load().unwrap().unwrap();
+        let sessions_before = sessions.encode_persisted("lab").unwrap();
+        let config_before = forwarder.config().clone();
+        let membership_before = membership.clone();
+        let tun_before = tun_runtime.clone();
+        let mut commands = Vec::new();
+        let result = reconcile_persisted_pairing_enrollments_with(
+            &mut node.swarm,
+            sessions,
+            Some(store),
+            forwarder,
+            membership,
+            tun_runtime,
+            &node.identity,
+            |command| {
+                commands.push(command.clone());
+                match commands.len() {
+                    1 => Ok(()),
+                    2 => Err(RunnerError::ControlSocket(io::Error::other(
+                        "restart apply failure",
+                    ))),
+                    3 => Err(RunnerError::ControlSocket(io::Error::other(
+                        "restart rollback failure",
+                    ))),
+                    _ => panic!("only one successful step may be rolled back"),
+                }
+            },
+        );
+        let Err(RunnerError::ControlSocket(error)) = result else {
+            panic!("partial restart application must fail");
+        };
+        assert_eq!(error.to_string(), "restart apply failure");
+        assert_eq!(
+            commands.len(),
+            3,
+            "must attempt rollback after partial application"
+        );
+        assert_eq!(forwarder.config(), &config_before);
+        assert_eq!(membership, &membership_before);
+        assert_eq!(tun_runtime, &tun_before);
+        assert_eq!(sessions.encode_persisted("lab").unwrap(), sessions_before);
+        let retained = store.load().unwrap().unwrap();
+        assert_eq!(
+            retained, persisted_before,
+            "failed restart changed the durable ledger"
+        );
+        retained
     }
 
     #[test]

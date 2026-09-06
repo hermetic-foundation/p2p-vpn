@@ -11,7 +11,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,226 passed, 18 opt-in tests ignored, including partial route failure and repaired pairing commit. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,226 passed, 18 opt-in tests ignored, including persisted pairing restart after partial route and rollback failure. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass with stale-response cleanup and isolated relay-LAN endpoint ports. Logs: `/tmp/p2p-vpn-review-stale-packet-isolated-namespace.log`. | Earlier 10/11 run exposed a direct hole-punch bypass in the fixture; see [isolation evidence](testing.md#namespace-e2e). Controlled topology, not public NAT or saturation evidence. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -33,6 +33,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Pairing cancellation | Both roles preserve completion and persisted state across late cancellation and restore; all 48 session tests pass. | Preventive fix, not repair of existing invalid snapshots; [transaction review](pairing-transaction-review.md) remains open. |
 | Acceptance retry | Four response-dispatch cases cover Submit/Poll persistence and route failures; bounded retry eligibility is restored. | Injected local errors, not partial rollback, restart recovery, or physical retry delivery. |
 | Partial route retry | Successful and failed rollback after partial application preserve logical state; repaired runtime commit replays the full update and authorizes the peer. | Injected command results, not kernel state, durable finalization, or automatic retry delivery. |
+| Persisted restart repair | Both roles retain saved Prepared bytes after partial route/rollback failure, reload, complete reconciliation, and persist Applied state; repeated reconciliation emits no route commands. | Real state store and startup function with injected command results; not a restarted OS process, power loss, or live response retry. |
 | Live join expiry | Prepared remote approval survives expiry/checkpoint/restore; unprepared expiry still clears it. All 50 session tests pass. | Session-state evidence; cancellation and replacement can still invalidate recovery. |
 | Historical enrollments | Both roles retain acknowledgement and native artifacts after replacement/restore; RPC status shares session-owned readiness. | Session/RPC evidence, not physical sequential pairing or incompatible-authority startup compaction. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |

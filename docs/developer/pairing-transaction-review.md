@@ -62,8 +62,8 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 1. Inject failure after Prepared persistence and before runtime commit; exercise
    cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Extend response-dispatch and restart coverage through successful continuation
-   after repair; lower-level partial application and rollback retry now pass.
+2. Extend response-dispatch coverage through successful continuation after repair;
+   lower-level runtime retry and persisted restart reconciliation now pass.
 3. Extend historical acknowledgement coverage through daemon startup compaction
    under incompatible declarative authority and multiple sequential pairings.
 4. Reconcile old invalid snapshots without silently dropping committed membership
@@ -127,12 +127,35 @@ injected: this checks transaction ordering and logical publication, not actual
 kernel state, crash recovery, durable finalization, or automatic retry delivery.
 
 The separate accepted-response test still checks retry eligibility only.
-Combining that path with persisted Prepared state and repair remains open.
+Automatic live response retries through completion remain open; persisted restart
+reconciliation is covered below.
 Log: `/tmp/p2p-vpn-review-pairing-partial-routes.log`.
 
 The full workspace passed with 1,226 tests and 18 opt-in tests ignored.
 No runtime implementation changed, so device and namespace deployment tests
 were not repeated for this coverage-only addition.
+
+### Persisted Restart Repair
+
+The existing inviter and joiner expired-restart tests now inject failure of the
+second route command and its rollback during startup reconciliation. Both roles
+retain the original application error and leave their logical state unchanged.
+
+| Stage | Evidence |
+| --- | --- |
+| Failed restart | Config, membership, TUN snapshot, session encoding, and saved bytes remain unchanged |
+| Reload after repair | A new session owner decodes the retained Prepared state from the real store |
+| Successful reconciliation | Enrollment becomes Applied and the peer is authorized |
+| Repeated reconciliation | No additional route commands are issued |
+| Durable completion | Loading the saved state again retains Applied enrollment; joiner status remains Completed |
+
+Both role tests pass without changing production code. The route executor is
+injected, so residual kernel changes and power loss are not modeled. This is
+startup-function coverage, not a rebooted daemon or physical-network retry.
+
+Log: `/tmp/p2p-vpn-review-pairing-restart-repair.log`.
+Cancellation/replacement policy and recovery of previously invalid snapshots
+remain separate, unresolved work.
 
 ## Live Join Expiry
 
