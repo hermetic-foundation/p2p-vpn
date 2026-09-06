@@ -136,11 +136,15 @@ use crate::runtime::tun::IpCommand;
 #[cfg(target_os = "linux")]
 use crate::runtime::tun::TunDevice;
 
+use super::recovery_queries::RecoveryQueries;
+#[cfg(test)]
+use super::recovery_queries::{
+    BACKOFF_BASE as RECOVERY_DISCOVERY_BACKOFF_BASE,
+    QUERY_TIMEOUT as RECOVERY_DISCOVERY_QUERY_TIMEOUT,
+};
+
 const TUN_READ_CHANNEL: usize = 1024;
 const REDIAL_INTERVAL: Duration = Duration::from_secs(10);
-const RECOVERY_DISCOVERY_QUERY_TIMEOUT: Duration = Duration::from_mins(1);
-const RECOVERY_DISCOVERY_BACKOFF_BASE: Duration = Duration::from_secs(30);
-const RECOVERY_DISCOVERY_BACKOFF_MAX: Duration = Duration::from_mins(60);
 const BLOCKED_QUEUE_REDIAL_INTERVAL: Duration = Duration::from_secs(2);
 const PAIRING_GLOBAL_RATE_MULTIPLIER: u32 = 8;
 const MEMBERSHIP_PAGE_REQUESTS_PER_SECOND: u32 = 256;
@@ -186,8 +190,6 @@ const KADEMLIA_PEER_ADDRESS_RECORD_TTL: u64 = 30 * 60;
 const KADEMLIA_PEER_ADDRESS_RECORD_STALE_GRACE: u64 = 60 * 60;
 const MAX_RECOVERY_DIAL_ATTEMPTS: usize =
     MAX_MEMBERSHIP_RECORDS * MAX_KADEMLIA_PEER_ADDRESS_RECORD_ADDRESSES;
-const MAX_RECOVERY_DISCOVERY_QUERIES: usize = MAX_MEMBERSHIP_RECORDS;
-const MAX_CONCURRENT_RECOVERY_DISCOVERY_QUERIES: usize = 1;
 const AUTO_RELAY_MAX_INFRASTRUCTURE_PEERS: usize = 64;
 const KADEMLIA_ROUTING_PEER_CAPACITY: usize = 32;
 const KADEMLIA_BOOTSTRAP_MIN_ROUTING_PEERS: usize = 8;
@@ -8841,8 +8843,7 @@ struct DiscoveredPeerAddresses {
     addresses: Vec<DiscoveredPeerAddress>,
     recovery_dial_attempts: HashMap<(Libp2pPeerId, RecoveryDialTarget), RecoveryDialAttempt>,
     last_recovery_dial_prune: Option<Instant>,
-    recovery_discovery_queries: HashMap<Libp2pPeerId, RecoveryDiscoveryQuery>,
-    recovery_discovery_query_peers: HashMap<kad::QueryId, Libp2pPeerId>,
+    recovery_queries: RecoveryQueries,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -8860,14 +8861,6 @@ struct RecoveryDialAttempt {
     last_attempt: Instant,
     retry_after: Instant,
     failure_count: u8,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct RecoveryDiscoveryQuery {
-    last_query: Instant,
-    pending_queries: usize,
-    attempt_count: u8,
-    retry_after: Instant,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -8953,24 +8946,13 @@ fn record_public_discovery_address_rejected(
 impl DiscoveredPeerAddresses {
     fn retain_recovery_discovery_peers(
         &mut self,
-        mut authorized: impl FnMut(Libp2pPeerId) -> bool,
+        authorized: impl FnMut(Libp2pPeerId) -> bool,
     ) -> Vec<kad::QueryId> {
-        self.recovery_discovery_queries
-            .retain(|peer, _| authorized(*peer));
-        let mut cancelled = Vec::new();
-        self.recovery_discovery_query_peers.retain(|query, peer| {
-            if self.recovery_discovery_queries.contains_key(peer) {
-                true
-            } else {
-                cancelled.push(*query);
-                false
-            }
-        });
-        cancelled
+        self.recovery_queries.retain_peers(authorized)
     }
 
     fn has_pending_recovery_discovery_query(&self) -> bool {
-        !self.recovery_discovery_query_peers.is_empty()
+        self.recovery_queries.has_pending()
     }
 
     fn peer_ids(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
@@ -9009,8 +8991,7 @@ impl DiscoveredPeerAddresses {
         }
         self.recovery_dial_attempts.clear();
         self.last_recovery_dial_prune = None;
-        self.cancel_recovery_discovery_queries(kademlia, Instant::now());
-        self.recovery_discovery_queries.clear();
+        finish_targeted_recovery_queries(kademlia, self.recovery_queries.reset());
     }
 
     fn remove(&mut self, peer: Libp2pPeerId, address: &Multiaddr) -> bool {
@@ -9161,53 +9142,11 @@ impl DiscoveredPeerAddresses {
             attempt.failure_count = 0;
             attempt.retry_after = now + REDIAL_INTERVAL;
         }
-        if let Some(query) = self.recovery_discovery_queries.get_mut(&peer) {
-            query.attempt_count = 0;
-            query.retry_after = now + REDIAL_INTERVAL;
-        }
+        self.recovery_queries.connected(peer, now);
     }
 
     fn should_query_recovery_discovery_at(&mut self, peer: Libp2pPeerId, now: Instant) -> bool {
-        let stale_peers = self
-            .recovery_discovery_queries
-            .iter()
-            .filter_map(|(candidate, query)| {
-                let age = now.saturating_duration_since(query.last_query);
-                (query.pending_queries == 0 && age >= RECOVERY_DIAL_STATE_TTL).then_some(*candidate)
-            })
-            .collect::<HashSet<_>>();
-        if !stale_peers.is_empty() {
-            self.recovery_discovery_queries
-                .retain(|candidate, _| !stale_peers.contains(candidate));
-            self.recovery_discovery_query_peers
-                .retain(|_, candidate| !stale_peers.contains(candidate));
-        }
-        if let Some(query) = self.recovery_discovery_queries.get_mut(&peer) {
-            if query.pending_queries > 0 {
-                return false;
-            }
-            if now < query.retry_after {
-                return false;
-            }
-        } else {
-            if self.recovery_discovery_queries.len() >= MAX_RECOVERY_DISCOVERY_QUERIES {
-                return false;
-            }
-            self.recovery_discovery_queries.insert(
-                peer,
-                RecoveryDiscoveryQuery {
-                    last_query: now,
-                    pending_queries: 0,
-                    attempt_count: 0,
-                    retry_after: now,
-                },
-            );
-        }
-
-        if self.recovery_discovery_query_peers.len() >= MAX_CONCURRENT_RECOVERY_DISCOVERY_QUERIES {
-            return false;
-        }
-        true
+        self.recovery_queries.should_query(peer, now)
     }
 
     fn record_recovery_discovery_queries(
@@ -9216,33 +9155,11 @@ impl DiscoveredPeerAddresses {
         queries: impl IntoIterator<Item = kad::QueryId>,
         now: Instant,
     ) {
-        let Some(state) = self.recovery_discovery_queries.get_mut(&peer) else {
-            return;
-        };
-        state.last_query = now;
-        state.attempt_count = state.attempt_count.saturating_add(1);
-        state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
-        for query in queries {
-            if self
-                .recovery_discovery_query_peers
-                .insert(query, peer)
-                .is_none()
-            {
-                state.pending_queries += 1;
-            }
-        }
+        self.recovery_queries.record(peer, queries, now);
     }
 
     fn finish_recovery_discovery_query(&mut self, query: kad::QueryId, now: Instant) {
-        let Some(peer) = self.recovery_discovery_query_peers.remove(&query) else {
-            return;
-        };
-        if let Some(state) = self.recovery_discovery_queries.get_mut(&peer) {
-            state.pending_queries = state.pending_queries.saturating_sub(1);
-            if state.pending_queries == 0 {
-                state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
-            }
-        }
+        self.recovery_queries.finished(query, now);
     }
 
     fn expire_recovery_discovery_queries(
@@ -9250,41 +9167,7 @@ impl DiscoveredPeerAddresses {
         kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
         now: Instant,
     ) -> usize {
-        let expired_peers = self
-            .recovery_discovery_queries
-            .iter()
-            .filter_map(|(peer, query)| {
-                (query.pending_queries > 0
-                    && now.saturating_duration_since(query.last_query)
-                        >= RECOVERY_DISCOVERY_QUERY_TIMEOUT)
-                    .then_some(*peer)
-            })
-            .collect::<HashSet<_>>();
-        if expired_peers.is_empty() {
-            return 0;
-        }
-
-        let expired_queries = self
-            .recovery_discovery_query_peers
-            .iter()
-            .filter_map(|(query, peer)| expired_peers.contains(peer).then_some((*query, *peer)))
-            .collect::<Vec<_>>();
-        for (query, peer) in &expired_queries {
-            if let Some(mut pending) = kademlia.query_mut(query) {
-                pending.finish();
-            }
-            self.recovery_discovery_query_peers.remove(query);
-            if let Some(state) = self.recovery_discovery_queries.get_mut(peer) {
-                state.pending_queries = state.pending_queries.saturating_sub(1);
-            }
-        }
-        for peer in expired_peers {
-            if let Some(state) = self.recovery_discovery_queries.get_mut(&peer) {
-                state.pending_queries = 0;
-                state.retry_after = now + recovery_discovery_failure_backoff(state.attempt_count);
-            }
-        }
-        expired_queries.len()
+        finish_targeted_recovery_queries(kademlia, self.recovery_queries.expire(now))
     }
 
     fn cancel_recovery_discovery_queries(
@@ -9292,23 +9175,7 @@ impl DiscoveredPeerAddresses {
         kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
         now: Instant,
     ) -> usize {
-        let queries = self
-            .recovery_discovery_query_peers
-            .drain()
-            .collect::<Vec<_>>();
-        for (query, peer) in &queries {
-            if let Some(mut pending) = kademlia.query_mut(query) {
-                pending.finish();
-            }
-            if let Some(state) = self.recovery_discovery_queries.get_mut(peer) {
-                state.pending_queries = state.pending_queries.saturating_sub(1);
-                if state.pending_queries == 0 {
-                    state.retry_after =
-                        now + recovery_discovery_failure_backoff(state.attempt_count);
-                }
-            }
-        }
-        queries.len()
+        finish_targeted_recovery_queries(kademlia, self.recovery_queries.cancel(now))
     }
 
     fn make_recovery_dial_room(
@@ -9348,11 +9215,16 @@ fn discovered_address_failure_backoff(failure_count: u8) -> Duration {
         .min(DISCOVERED_ADDRESS_FAILURE_BACKOFF_MAX)
 }
 
-fn recovery_discovery_failure_backoff(failure_count: u8) -> Duration {
-    let exponent = u32::from(failure_count.saturating_sub(1)).min(8);
-    RECOVERY_DISCOVERY_BACKOFF_BASE
-        .saturating_mul(1_u32 << exponent)
-        .min(RECOVERY_DISCOVERY_BACKOFF_MAX)
+fn finish_targeted_recovery_queries(
+    kademlia: &mut kad::Behaviour<kad::store::MemoryStore>,
+    queries: Vec<kad::QueryId>,
+) -> usize {
+    for query in &queries {
+        if let Some(mut pending) = kademlia.query_mut(query) {
+            pending.finish();
+        }
+    }
+    queries.len()
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -17544,19 +17416,15 @@ fn reconcile_recovery_query_authorization(
 ) -> usize {
     let cancelled = recovery
         .retain_recovery_discovery_peers(|peer| forwarder.is_configured_transport_peer(peer));
-    for query in &cancelled {
-        if let Some(mut pending) = kademlia.query_mut(query) {
-            pending.finish();
-        }
-    }
-    if !cancelled.is_empty() {
+    let cancelled_count = finish_targeted_recovery_queries(kademlia, cancelled);
+    if cancelled_count > 0 {
         log_runtime_event(
             LogLevel::Info,
             "peer_recovery_discovery_authorization_removed",
-            &[("cancelled_queries", &cancelled.len().to_string())],
+            &[("cancelled_queries", &cancelled_count.to_string())],
         );
     }
-    cancelled.len()
+    cancelled_count
 }
 
 fn reconcile_packet_cache_authorization(
@@ -27517,15 +27385,11 @@ mod tests {
             "duplicate",
         ));
         let query_started_at = recovery_state
-            .recovery_discovery_queries
-            .get(&remote)
+            .recovery_queries
+            .state(&remote)
             .expect("recovery query state")
             .last_query;
-        let query_ids = recovery_state
-            .recovery_discovery_query_peers
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
+        let query_ids = recovery_state.recovery_queries.query_ids();
         assert_eq!(query_ids.len(), 1);
         assert!(
             !recovery_state
@@ -27537,8 +27401,8 @@ mod tests {
         }
         assert_eq!(
             recovery_state
-                .recovery_discovery_queries
-                .get(&remote)
+                .recovery_queries
+                .state(&remote)
                 .expect("completed query cooldown")
                 .pending_queries,
             0
@@ -27610,11 +27474,7 @@ mod tests {
             0
         );
         assert!(!recovery.should_query_recovery_discovery_at(allowed, now));
-        assert!(
-            !recovery
-                .recovery_discovery_queries
-                .contains_key(&cooldown_peer)
-        );
+        assert!(recovery.recovery_queries.state(&cooldown_peer).is_none());
 
         let removed_config = config.peers.pop().unwrap();
         forwarder.commit_reconfigure(
@@ -27628,7 +27488,7 @@ mod tests {
         );
         assert!(kad.query(&removed_query).is_none());
         assert!(kad.query(&unrelated_query).is_some());
-        assert!(!recovery.recovery_discovery_queries.contains_key(&removed));
+        assert!(recovery.recovery_queries.state(&removed).is_none());
         assert!(recovery.should_query_recovery_discovery_at(allowed, now));
         assert!(!recovery.should_attempt_recovery_dial_at(infrastructure, &address, now));
         assert_eq!(recovery.recovery_dial_attempts.len(), 1);
@@ -27642,10 +27502,14 @@ mod tests {
         );
         assert!(kad.query(&allowed_query).is_some());
         assert_eq!(
-            recovery.recovery_discovery_queries[&allowed].pending_queries,
+            recovery
+                .recovery_queries
+                .state(&allowed)
+                .unwrap()
+                .pending_queries,
             1
         );
-        assert!(!recovery.recovery_discovery_queries.contains_key(&removed));
+        assert!(recovery.recovery_queries.state(&removed).is_none());
 
         config.peers.push(removed_config);
         forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_000).unwrap());
@@ -27653,7 +27517,11 @@ mod tests {
         recovery.finish_recovery_discovery_query(allowed_query, now);
         assert!(recovery.should_query_recovery_discovery_at(removed, now));
         assert_eq!(
-            recovery.recovery_discovery_queries[&removed].attempt_count,
+            recovery
+                .recovery_queries
+                .state(&removed)
+                .unwrap()
+                .attempt_count,
             0
         );
         kad.query_mut(&unrelated_query).unwrap().finish();
@@ -27697,8 +27565,8 @@ mod tests {
             "test",
         ));
         let started_at = recovery_state
-            .recovery_discovery_queries
-            .get(&first)
+            .recovery_queries
+            .state(&first)
             .expect("first recovery state")
             .last_query;
         assert!(!recovery_state.should_query_recovery_discovery_at(second, started_at));
@@ -27711,7 +27579,7 @@ mod tests {
             ),
             1
         );
-        assert!(recovery_state.recovery_discovery_query_peers.is_empty());
+        assert!(recovery_state.recovery_queries.query_ids().is_empty());
         assert!(!recovery_state.should_query_recovery_discovery_at(
             first,
             expired_at + RECOVERY_DISCOVERY_BACKOFF_BASE - Duration::from_millis(1),

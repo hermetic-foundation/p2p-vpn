@@ -12,7 +12,7 @@ security audit. Source inspection is distinguished from reproduced behavior.
 | Correctness review | Findings with source references and disposition | In progress |
 | Authorization consistency | Shared policy and cross-consumer regression tests | In progress |
 | Runtime ownership | Cohesive state owners and testable recovery decisions | In progress |
-| Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | Pending |
+| Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | In progress |
 | Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | Pending |
 | Documentation | Architecture and user instructions match verified behavior | Pending |
 
@@ -453,6 +453,38 @@ No absence-of-bug claim follows from these partial inspections.
 
 Each change must have one reviewable purpose and an atomic Conventional Commit.
 Push each verified commit to `main`; preserve user changes and wire/config formats.
+
+### Targeted Recovery Query Ownership Plan
+
+Extract targeted overlay query state from `DiscoveredPeerAddresses` into a private
+owner. Keep public infrastructure dial history and address retention independent.
+
+1. Preserve query limits, stale-state eviction, and retry timings.
+2. Return query IDs for timeout, suppression, authorization loss, and reset;
+   apply Kademlia cancellation only in the runner.
+3. Test deadline boundaries, late completion, cancellation, and fresh reset.
+4. Retain integration coverage proving unrelated Kademlia queries survive.
+
+No wire, configuration, CLI, or persistence format changes are intended.
+
+Implemented the private `RecoveryQueries` owner with no Kademlia behavior handle.
+All cancellation paths return owned IDs to the runner's effect adapter. Stale
+state pruning cannot silently remove pending query ownership.
+
+Focused validation: 25 recovery-filtered tests passed, including six new owner
+tests. Existing integration tests still prove actual Kademlia cancellation and
+preservation of unrelated infrastructure queries.
+
+| Query Owner Validation | Result |
+| --- | --- |
+| Workspace | 1,175 passed; 15 opt-in tests ignored. |
+| Serial namespace scenarios | All 11 passed in 188.46 seconds. |
+| Required Clippy groups and Rust formatting | Passed; unrelated style warnings remain. |
+| Nix integration-target source parity | Passed. |
+
+The earlier 18-subtest NixOS VM result predates this extraction. No new Android
+device or public-network result is claimed. Full runtime ownership and comparable
+idle-resource measurements remain required.
 
 ### Forwarding Snapshot Milestone
 

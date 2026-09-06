@@ -370,6 +370,21 @@ They are not VPN members and are not serialized into minimal configs.
 
 Application-scheduled public DHT work is serialized per network instance.
 
+`runtime/recovery_queries.rs` owns targeted overlay query IDs and peer cooldowns.
+It receives explicit timestamps and returns cancellation IDs; only the runner
+applies Kademlia effects. Address retention and infrastructure dial history remain
+separate from this owner.
+
+| Targeted Query Event | State Transition |
+| --- | --- |
+| Completion or one-minute timeout | Release capacity and begin failure cooldown. |
+| Healthy-path suppression | Cancel pending work but retain cooldown. |
+| Network reset | Cancel pending work and clear query history. |
+| Authorization removal | Remove that peer's pending work and cooldown. |
+| Completion after cancellation | Ignore an ID the owner no longer tracks. |
+
+This owner does not schedule routine bootstrap, relay discovery, or publication.
+
 | Work | Policy |
 | --- | --- |
 | Peer recovery | One signed address-record lookup at a time. |

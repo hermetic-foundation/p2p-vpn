@@ -14,6 +14,7 @@ pub mod pairing_code;
 pub mod pairing_sessions;
 pub mod pairing_store;
 pub mod pinned_packet_stream;
+mod recovery_queries;
 pub mod remote;
 pub mod runner;
 pub mod service;
