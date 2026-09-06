@@ -98,6 +98,10 @@ ledger and timestamp. Routes, transport IDs, and packet admission are replaced
 together only after validation succeeds. Retained history and packet replay state
 are owned separately; rejected preparation leaves live forwarding unchanged.
 
+The evaluated membership view is retained beside forwarding authority for DNS to borrow.
+It is excluded from routing-policy equality: provenance-only changes advance the
+membership-view revision, not packet authorization revision.
+
 | Comparison | Result |
 | --- | --- |
 | New distinct signed event | Retain as bounded audit history. |
@@ -324,12 +328,13 @@ Invalid bundles increment rejection metrics and do not partially merge.
 
 ## Runtime Reconciliation
 
-An accepted record update changes four runtime surfaces:
+An accepted record update changes these runtime surfaces:
 
 1. `Forwarder` recomputes transport peers and authorized routes.
 2. Post-commit `OverlayMembership` refreshes copy the forwarder's authorized peer set.
 3. `TunRuntimeConfig` copies committed forwarding routes and reconciles kernel routes transactionally.
 4. Local control capabilities publish the new snapshot digest.
+5. DNS borrows committed effective membership and publishes an immutable zone replacement.
 
 Post-commit refreshes include restore, pairing-response installation, capability
 updates, DHT updates, paged sync, and expiry. They retain local identity inclusion

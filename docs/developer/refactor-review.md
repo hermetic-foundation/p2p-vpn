@@ -94,11 +94,11 @@ one repeated ledger evaluation per construction, merge, and configuration update
 Forwarding now also shares one evaluated ledger between route compilation and
 transport admission. Internal prepared and post-commit runtime membership views
 now copy that snapshot. Live and prepared TUN views also copy forwarding routes.
-DNS and inventory ownership remain part of the review; public constructors are preserved.
+Daemon DNS now borrows retained effective membership; public constructors are preserved.
 
 Inventory now derives audit and effective views from one ledger evaluation per
-request. It retains revoked/expired provenance; this does not yet make DNS or
-live inventory consume the forwarder's committed evaluation timestamp.
+request. It retains revoked/expired provenance; live inventory observation timing
+relative to committed forwarding remains under review.
 The [bounded diagnostic](inventory-evaluation-measurement.md) records joint/separate
 evaluation timings and their limits; no daemon-level performance claim follows.
 
@@ -580,7 +580,7 @@ The public API does not prevent callers from committing a stale or foreign updat
 Runtime callers do not do this; changing that contract needs separate design and
 coverage rather than silently ignoring updates in this refactor.
 
-Remaining ownership work includes DNS/inventory evaluation, reviewing revision
+Remaining ownership work includes live inventory observation timing, reviewing revision
 consumers, and extracting recovery decisions and timer effects.
 
 ### Runtime Membership Snapshot Plan
@@ -634,6 +634,28 @@ earlier than the forwarding refresh, despite committed transport authorization b
 This aligns kernel route intent with committed forwarding policy. It does not make
 forwarding policy itself monotonic under system-clock changes, or prove a NAT/recovery fix.
 The later R12 follow-up covers prepared TUN snapshot and command-delta ownership.
+
+#### DNS Snapshot Follow-Up
+
+| Responsibility | Source |
+| --- | --- |
+| Retained evaluated membership | `src/runtime/forward.rs`: construction, merge, prepared commit |
+| Borrowed or record-based projection | `src/dns.rs`: `from_membership_source_at` |
+| Common publication and failure handling | `src/runtime/dns.rs`: `refresh_zone_at` |
+| Daemon integration | `src/runtime/runner.rs`: binding and `refresh_dns_zone_if_needed` |
+
+DNS borrows the same evaluated membership used for forwarding. Public record-based
+constructors still validate and evaluate their supplied records at their requested time.
+The shared projection preserves DNS validation order and signed hostname precedence.
+
+- A runtime test commits future expiry, then proves earlier-time DNS refresh cannot revive the peer.
+- A forced second refresh remains withdrawn; the record-based compatibility constructor stays time-specific.
+- Provenance-only future activation advances membership-view revision without packet-policy revision churn.
+- Existing DNS tests retain fail-closed publication, retry, UDP/TCP, and size-limit coverage.
+
+Retaining the evaluated member map adds memory beyond the prior transient projection.
+DNS borrows it without cloning, but signed-ledger RSS and final Android measurements
+remain outstanding. Do not infer a whole-daemon resource improvement from less evaluation.
 
 ### Snapshot Validation and Recovery Finding
 

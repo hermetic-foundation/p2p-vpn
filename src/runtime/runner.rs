@@ -1427,10 +1427,11 @@ where
     )?;
     let mut persisted_membership_revision = forwarder.membership_revision();
     let hostname_records = forwarder.effective_hostname_records()?;
-    let dns_runtime = DnsRuntime::bind_with_hostname_records_at(
+    let dns_runtime = DnsRuntime::bind_with_effective_membership_at(
         forwarder.config(),
         forwarder.member_records(),
         &hostname_records,
+        forwarder.effective_membership(),
         current_unix_seconds_lossy(),
     )
     .await?;
@@ -2397,10 +2398,11 @@ fn refresh_dns_zone_if_needed(
             return;
         }
     };
-    if let Err(error) = runtime.refresh_with_hostname_records_at(
+    if let Err(error) = runtime.refresh_with_effective_membership_at(
         forwarder.config(),
         forwarder.member_records(),
         &hostname_records,
+        forwarder.effective_membership(),
         now_unix_seconds,
     ) {
         log_runtime_event(
@@ -33334,6 +33336,85 @@ mod tests {
             ControlResponse::CapabilitiesRejected(ControlRejectionReason::InvalidMembershipRecord)
         );
         assert_eq!(forwarder.member_record_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn dns_refresh_uses_committed_membership_without_reactivating_expired_peers() {
+        let local = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let remote_peer = remote.peer_id.parse().unwrap();
+        let overlay_peer = PeerId::from_libp2p(remote_peer);
+        let now = current_unix_seconds_lossy();
+        let expires = now + 3_600;
+        let mut config = config_with_peer(&local, remote_peer);
+        config.network.dns.enabled = true;
+        config.network.dns.hostname = Some("local".to_owned());
+        config.network.dns.listen = "127.0.0.1:0".parse().unwrap();
+        config.network.member_records.push(
+            issue_membership_record_at(
+                &local,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: remote,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: Some(expires),
+                },
+                now,
+            )
+            .unwrap(),
+        );
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let revision = forwarder.authorization_revision();
+        forwarder.prune_membership_records(now + 1).unwrap();
+        assert_eq!(forwarder.authorization_revision(), revision);
+        assert_eq!(forwarder.membership_revision(), 0);
+        let runtime = DnsRuntime::bind_with_effective_membership_at(
+            &config,
+            forwarder.member_records(),
+            &HashMap::new(),
+            forwarder.effective_membership(),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            runtime
+                .zone()
+                .records()
+                .any(|record| record.peer == overlay_peer)
+        );
+
+        forwarder.prune_membership_records(expires).unwrap();
+        assert!(!forwarder.is_configured_transport_peer(remote_peer));
+        let record_based =
+            crate::dns::DnsZone::from_config_at(&config, forwarder.member_records(), now).unwrap();
+        assert!(
+            record_based
+                .records()
+                .any(|record| record.peer == overlay_peer)
+        );
+        let mut dns_revision = 0;
+        refresh_dns_zone_if_needed(Some(&runtime), &forwarder, &mut dns_revision, false);
+        assert_eq!(dns_revision, forwarder.membership_revision());
+        assert!(
+            !runtime
+                .zone()
+                .records()
+                .any(|record| record.peer == overlay_peer)
+        );
+        assert!(!runtime.refresh_due(now));
+        refresh_dns_zone_if_needed(Some(&runtime), &forwarder, &mut dns_revision, true);
+        assert!(
+            !runtime
+                .zone()
+                .records()
+                .any(|record| record.peer == overlay_peer)
+        );
+        assert_eq!(runtime.snapshot().zone_refreshes, 2);
     }
 
     #[test]

@@ -115,6 +115,28 @@ impl DnsRuntime {
         Self::bind_zone(listener, Arc::new(DnsZone::reserved_suffix_guard())).await
     }
 
+    pub(crate) async fn bind_with_effective_membership_at(
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &std::collections::HashMap<crate::PeerId, String>,
+        membership: &crate::membership::EffectiveMembership,
+        now_unix_seconds: u64,
+    ) -> Result<Option<Self>, DnsRuntimeError> {
+        if !config.network.dns.enabled {
+            return Ok(None);
+        }
+        let zone = DnsZone::from_config_with_effective_membership_at(
+            config,
+            member_records,
+            hostname_records,
+            membership,
+            now_unix_seconds,
+        )?;
+        Self::bind_zone(config.network.dns.listen, Arc::new(zone))
+            .await
+            .map(Some)
+    }
+
     async fn bind_zone(
         requested_listener: SocketAddr,
         zone: Arc<DnsZone>,
@@ -195,14 +217,43 @@ impl DnsRuntime {
         hostname_records: &std::collections::HashMap<crate::PeerId, String>,
         now_unix_seconds: u64,
     ) -> Result<(), DnsRuntimeError> {
+        self.refresh_zone_at(now_unix_seconds, || {
+            DnsZone::from_config_with_hostname_records_at(
+                config,
+                member_records,
+                hostname_records,
+                now_unix_seconds,
+            )
+        })
+    }
+
+    pub(crate) fn refresh_with_effective_membership_at(
+        &self,
+        config: &Config,
+        member_records: &[SignedMembershipRecord],
+        hostname_records: &std::collections::HashMap<crate::PeerId, String>,
+        membership: &crate::membership::EffectiveMembership,
+        now_unix_seconds: u64,
+    ) -> Result<(), DnsRuntimeError> {
+        self.refresh_zone_at(now_unix_seconds, || {
+            DnsZone::from_config_with_effective_membership_at(
+                config,
+                member_records,
+                hostname_records,
+                membership,
+                now_unix_seconds,
+            )
+        })
+    }
+
+    fn refresh_zone_at(
+        &self,
+        now_unix_seconds: u64,
+        build: impl FnOnce() -> Result<DnsZone, DnsZoneError>,
+    ) -> Result<(), DnsRuntimeError> {
         self.last_refresh_attempt_unix_seconds
             .store(now_unix_seconds, Ordering::Relaxed);
-        let zone = match DnsZone::from_config_with_hostname_records_at(
-            config,
-            member_records,
-            hostname_records,
-            now_unix_seconds,
-        ) {
+        let zone = match build() {
             Ok(zone) => zone,
             Err(error) => {
                 self.metrics

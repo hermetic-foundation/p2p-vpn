@@ -37,6 +37,7 @@ pub struct Forwarder {
     member_records: Vec<SignedMembershipRecord>,
     hostname_records: Vec<SignedHostnameRecord>,
     authorization: ForwardingAuthorization,
+    effective_membership: EffectiveMembership,
     membership_revision: u64,
     authorization_revision: u64,
     membership_effective_refresh_pending: bool,
@@ -53,6 +54,7 @@ pub struct ForwarderUpdate {
     config: Config,
     member_records: Vec<SignedMembershipRecord>,
     authorization: ForwardingAuthorization,
+    effective_membership: EffectiveMembership,
     mtu: usize,
 }
 
@@ -83,16 +85,19 @@ impl ForwardingAuthorization {
         config: &Config,
         records: &[SignedMembershipRecord],
         now_unix_seconds: u64,
-    ) -> Result<Self, ConfigError> {
+    ) -> Result<(Self, EffectiveMembership), ConfigError> {
         let membership = effective_membership_at(records, &config.network.name, now_unix_seconds)?;
         let routes = config.compile_routes_with_membership(&membership)?;
         let peers = transport_peers_from_membership(config, &membership)?;
         let authorized_peers = authorized_peers_from_transport_peers(&peers);
-        Ok(Self {
-            routes,
-            peers,
-            authorized_peers,
-        })
+        Ok((
+            Self {
+                routes,
+                peers,
+                authorized_peers,
+            },
+            membership,
+        ))
     }
 }
 
@@ -168,7 +173,7 @@ impl Forwarder {
         let now_unix_seconds = current_unix_seconds_lossy();
 
         let local_peer = config.local_peer_id()?;
-        let authorization =
+        let (authorization, effective_membership) =
             ForwardingAuthorization::from_records(config, &member_records, now_unix_seconds)?;
 
         Ok(Self {
@@ -177,6 +182,7 @@ impl Forwarder {
             member_records,
             hostname_records: Vec::new(),
             authorization,
+            effective_membership,
             membership_revision: 0,
             authorization_revision: 0,
             membership_effective_refresh_pending: false,
@@ -342,11 +348,12 @@ impl Forwarder {
             trusted_issuers,
             MAX_RETAINED_MEMBERSHIP_RECORDS,
         )?;
-        let authorization =
+        let (authorization, effective_membership) =
             ForwardingAuthorization::from_records(&self.config, &member_records, now_unix_seconds)?;
         let records_changed = member_records != self.member_records;
         let effective_changed = authorization != self.authorization;
-        if records_changed || effective_changed {
+        if records_changed || effective_changed || effective_membership != self.effective_membership
+        {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
         if effective_changed {
@@ -354,6 +361,7 @@ impl Forwarder {
         }
         self.membership_effective_refresh_pending |= effective_changed;
         self.authorization = authorization;
+        self.effective_membership = effective_membership;
         self.member_records = member_records;
         Ok(stats)
     }
@@ -425,7 +433,7 @@ impl Forwarder {
         }
 
         let member_records = config.network.member_records.clone();
-        let authorization =
+        let (authorization, effective_membership) =
             ForwardingAuthorization::from_records(&config, &member_records, now_unix_seconds)?;
         let mtu = usize::from(config.effective_packet_mtu());
 
@@ -433,6 +441,7 @@ impl Forwarder {
             config,
             member_records,
             authorization,
+            effective_membership,
             mtu,
         })
     }
@@ -441,12 +450,15 @@ impl Forwarder {
         if self.authorization != update.authorization {
             self.authorization_revision = self.authorization_revision.wrapping_add(1);
         }
-        if self.member_records != update.member_records {
+        if self.member_records != update.member_records
+            || self.effective_membership != update.effective_membership
+        {
             self.membership_revision = self.membership_revision.wrapping_add(1);
         }
         self.config = update.config;
         self.member_records = update.member_records;
         self.authorization = update.authorization;
+        self.effective_membership = update.effective_membership;
         self.membership_effective_refresh_pending = false;
         self.mtu = update.mtu;
     }
@@ -487,6 +499,10 @@ impl Forwarder {
 
     pub(crate) fn authorized_routes(&self) -> &[Route] {
         self.authorization.routes.routes()
+    }
+
+    pub(crate) fn effective_membership(&self) -> &EffectiveMembership {
+        &self.effective_membership
     }
 
     #[must_use]
@@ -1392,6 +1408,60 @@ mod tests {
         assert!(
             forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
+        );
+    }
+
+    #[test]
+    fn cached_membership_provenance_refresh_does_not_churn_packet_authorization() {
+        let issuer = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse().unwrap();
+        let grant = |member: &NodeIdentity, sequence, issued| {
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: member.clone(),
+                    membership_epoch: 1,
+                    sequence,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: None,
+                },
+                issued,
+            )
+            .unwrap()
+        };
+        let mut config = config_for(transport);
+        config.network.local_peer = issuer.peer_id.clone();
+        config.network.private_key = Some(issuer.private_key.clone());
+        config.network.member_records = vec![
+            grant(&issuer, 1, 900),
+            grant(&remote, 1, 900),
+            grant(&remote, 2, 1_001),
+        ];
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let packet_revision = forwarder.authorization_revision();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        assert_eq!(forwarder.membership_revision(), 1);
+        let view_revision = forwarder.membership_revision();
+        let (_, authority_changed) = forwarder.refresh_membership_records(1_001).unwrap();
+        assert!(!authority_changed);
+        assert_eq!(forwarder.authorization_revision(), packet_revision);
+        assert_eq!(forwarder.membership_revision(), view_revision + 1);
+        assert_eq!(forwarder.member_records(), config.network.member_records);
+        assert_eq!(
+            forwarder
+                .effective_membership()
+                .overlay_members()
+                .find(|member| member.transport_peer == transport)
+                .unwrap()
+                .sequence,
+            2
         );
     }
 

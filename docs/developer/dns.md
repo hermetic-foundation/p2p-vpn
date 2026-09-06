@@ -156,10 +156,18 @@ Refresh triggers:
 | Membership merge | Rebuild immediately |
 | Pairing enrollment | Rebuild immediately |
 | Revocation | Rebuild immediately |
-| Next claim expiry | Timed rebuild at the deadline |
+| Claim expiry | Forwarding retires authority; DNS follows the membership-view revision |
 | Invalid replacement | Publish an empty fail-closed zone and retry after 5 seconds |
 
 UDP and TCP tasks read the current `Arc<DnsZone>` without locking per record.
+
+Daemon binding and refresh borrow the forwarder's committed effective membership.
+They do not reevaluate signatures or independently advance authorization with another
+clock reading. Refresh scheduling and retry timestamps still use current wall time.
+
+Provenance/name-view changes advance the membership revision without advancing packet
+authorization revision. Public record-based DNS constructors retain their explicit
+timestamp behavior; both paths share validation and fail-closed publication logic.
 
 ## DNS Protocol
 

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
@@ -324,6 +325,49 @@ impl DnsZone {
         hostname_records: &HashMap<PeerId, String>,
         now_unix_seconds: u64,
     ) -> Result<Self, DnsZoneError> {
+        Self::from_membership_source_at(
+            config,
+            member_records,
+            hostname_records,
+            now_unix_seconds,
+            || {
+                crate::membership::effective_membership_at(
+                    member_records,
+                    &config.network.name,
+                    now_unix_seconds,
+                )
+                .map(Cow::Owned)
+            },
+        )
+    }
+
+    pub(crate) fn from_config_with_effective_membership_at(
+        config: &Config,
+        member_records: &[crate::membership::SignedMembershipRecord],
+        hostname_records: &HashMap<PeerId, String>,
+        membership: &crate::membership::EffectiveMembership,
+        now_unix_seconds: u64,
+    ) -> Result<Self, DnsZoneError> {
+        Self::from_membership_source_at(
+            config,
+            member_records,
+            hostname_records,
+            now_unix_seconds,
+            || Ok(Cow::Borrowed(membership)),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn from_membership_source_at<'a>(
+        config: &Config,
+        member_records: &[crate::membership::SignedMembershipRecord],
+        hostname_records: &HashMap<PeerId, String>,
+        now_unix_seconds: u64,
+        membership: impl FnOnce() -> Result<
+            Cow<'a, crate::membership::EffectiveMembership>,
+            crate::membership::MembershipRecordError,
+        >,
+    ) -> Result<Self, DnsZoneError> {
         config
             .network
             .dns
@@ -353,12 +397,7 @@ impl DnsZone {
         )?;
 
         let mut names = HashMap::<String, HashMap<PeerId, BTreeSet<DnsNameSource>>>::new();
-        let effective = crate::membership::effective_membership_at(
-            member_records,
-            &config.network.name,
-            now_unix_seconds,
-        )
-        .map_err(DnsZoneError::Membership)?;
+        let effective = membership().map_err(DnsZoneError::Membership)?;
         for claim in effective_peer_names(config, &effective, hostname_records)
             .map_err(DnsZoneError::Config)?
         {
