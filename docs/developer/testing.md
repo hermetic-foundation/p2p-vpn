@@ -52,6 +52,17 @@ This keeps CI stable across nixpkgs Clippy updates.
 nix flake check
 ```
 
+Check that packaging preserves Cargo's integration-test targets:
+
+```sh
+nix build .#checks.x86_64-linux.rust-test-sources
+```
+
+The check compares repository and packaged-source Cargo metadata without compiling.
+Rust test sources under `tests/` are included automatically; other fixture formats
+must be added to the source fileset when tests need them. The operational gate
+also runs this check.
+
 Focused VM checks use a release package with duplicate Rust tests disabled.
 
 Run `nix run .#check-fast` before the VM check. `nix flake check` still builds the

@@ -327,6 +327,50 @@ overlay/infrastructure dial backoff. The
 shared retry map includes infrastructure attempts and must not be cleared merely
 because a peer lacks overlay membership.
 
+### R10: Nix Packaging Omits the Authorization Integration Test
+
+Priority: P2 verification gap. Status: source omission reproduced and corrected;
+Nix source-parity check passed.
+
+The Rust source fileset explicitly listed `pair_cli.rs` and `tun_namespace.rs`.
+It omitted the newer `authorization.rs`, so a successful Nix package test phase
+would not prove the cross-consumer authorization regression passed.
+
+| Source Bundle | Cargo Integration Targets |
+| --- | --- |
+| Before correction | `pair_cli`, `tun_namespace` |
+| After correction | `authorization`, `pair_cli`, `tun_namespace` |
+
+The fileset now includes Rust files under `tests/` automatically. A new
+`rust-test-sources` check compares Cargo metadata from the repository and packaged
+source, and is included in the operational gate. Non-Rust test fixtures still
+require explicit fileset inclusion.
+
+### NixOS Membership VM Evidence
+
+The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.
+The test script took 412.30 seconds; package compilation is excluded.
+
+| Scenario | Result |
+| --- | --- |
+| Peerless configuration, delegated admission, indirect DNS and reachability | Passed |
+| Offline persisted membership restoration and simultaneous daemon restart | Passed |
+| Isolated VLAN relay fallback, cold restart, and return to direct LAN | Passed |
+| Recovery attempt bounds under failure pressure | Passed |
+| Signed DNS expiry and hostname precedence | Passed |
+| Revocation removes names and routes across restart | Passed |
+| Higher-epoch re-admission and inviter revocation without cascading | Passed |
+| Self-resignation and subsequent pairing | Passed |
+
+These are controlled VM results, not public-relay or Android evidence. Retry
+counter assertions do not replace comparable idle CPU and memory measurements.
+The focused VM package disables duplicate Rust tests; source parity verifies
+target inclusion, not execution of those tests by that package.
+
+The run used one Nix build job and two compile cores. Cache and source downloads
+were capped separately at 600 KiB/s, with one cache connection. Filesystem usage
+increased approximately 2 GiB; no additional Cargo target directory was created.
+
 ## Review Coverage Still Required
 
 ### Namespace Verification Findings

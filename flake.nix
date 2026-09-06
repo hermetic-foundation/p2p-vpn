@@ -51,8 +51,7 @@
             ./crates/p2p-vpn-android
             ./crates/p2p-vpn-android-e2e-fixture
             ./src
-            ./tests/pair_cli.rs
-            ./tests/tun_namespace.rs
+            (lib.fileset.fileFilter (file: file.hasExt "rs") ./tests)
           ];
         };
         package = pkgs.rustPlatform.buildRustPackage {
@@ -174,6 +173,7 @@
                         is_linux="${if pkgs.stdenv.hostPlatform.isLinux then "1" else "0"}"
                         checks=(
                           ".#checks.$system.package"
+                          ".#checks.$system.rust-test-sources"
                           ".#checks.$system.fmt"
                           ".#checks.$system.clippy"
                           ".#checks.$system.releaseArchiveSanity"
@@ -5757,6 +5757,27 @@
 
         checks = {
           package = package;
+          rust-test-sources =
+            pkgs.runCommand "p2p-vpn-rust-test-sources"
+              {
+                nativeBuildInputs = [
+                  cargo
+                  pkgs.jq
+                  pkgs.diffutils
+                ];
+              }
+              ''
+                export CARGO_HOME="$TMPDIR/cargo-home"
+                test_targets() {
+                  cargo metadata --offline --locked --no-deps --format-version 1 \
+                    --manifest-path "$1/Cargo.toml" | jq -S \
+                    '[.packages[] | {name, tests: ([.targets[] | select(.kind | index("test")) | .name] | sort)}] | sort_by(.name)'
+                }
+                test_targets ${self} > repository-tests.json
+                test_targets ${rustSource} > packaged-tests.json
+                diff -u repository-tests.json packaged-tests.json
+                touch "$out"
+              '';
           releaseArchive = self.packages.${system}.releaseArchive;
           releaseArchiveSanity =
             pkgs.runCommand "p2p-vpn-release-archive-sanity"
