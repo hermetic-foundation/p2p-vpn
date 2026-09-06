@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-09-06",
+  "source_revision": "4bb8ff1e",
+  "check": "checks.x86_64-linux.nixos-vm-membership-convergence",
+  "command": "nix build --offline --option substitute false --max-jobs 1 --cores 2 --no-link --print-out-paths .#checks.x86_64-linux.nixos-vm-membership-convergence",
+  "result": "passed",
+  "build_exit_code": 0,
+  "subtests_passed": 18,
+  "test_script_seconds": 349.04,
+  "cleanup_seconds": 0.35,
+  "test_derivation": "/nix/store/bwvz6wfyfqbv0wga5fajgpxw1iw85awk-vm-test-run-p2p-vpn-nixos-vm-membership-convergence.drv",
+  "test_output": "/nix/store/r2w2mc2f9sy7vyw9p12dlkcwgdq054sb-vm-test-run-p2p-vpn-nixos-vm-membership-convergence",
+  "driver": "/nix/store/ah3ddwrdjxgg2hwwm5l8gkdh57akms3z-nixos-test-driver-p2p-vpn-nixos-vm-membership-convergence",
+  "package": "/nix/store/vj4rdfdz14ifm7qz2n44px8mg8yxdaz1-p2p-vpn-0.1.0",
+  "sha256": {
+    "executable": "01ffef52ce8228e43bd7668c2e73be793eaf1558a92264af0176c2c5ae4f8149",
+    "generated_test_script": "e9ad91de1a16bdc69eb1050b46e126f7cbab989a1d0856733e868d2c7638e709",
+    "test_source": "63a17c048652cda0af1a96892e1f948b659e8485556a562bcf6417d32869ee2c",
+    "module_source": "98603ef2cae97c146213985a4dcdd8299bceec807c4e02abd0a181bc6181d236",
+    "cargo_lock": "99fa1d37cf043f53b7abbbc7eec120a803a5e428435a472298fa32992999d757",
+    "compressed_build_log": "f01e87f9e4d2b989d6866405d5187ea36c7b48a4fe73b230f204265093609926"
+  },
+  "compressed_build_log": "/nix/var/log/nix/drvs/bw/vz6wfyfqbv0wga5fajgpxw1iw85awk-vm-test-run-p2p-vpn-nixos-vm-membership-convergence.drv.bz2",
+  "invocation_log": "/tmp/p2p-vpn-review-membership-vm-current.log",
+  "vm_processes_remaining": 0,
+  "limits": [
+    "Controlled three edge nodes and one relay, not public NAT discovery.",
+    "IPv4 traffic and DNS A-record assertions, not IPv6 validation.",
+    "Fixture supplies relay endpoints and disables DCUtR/AutoNAT.",
+    "Retry counters do not bound cache bytes, CPU, or sustained packet load.",
+    "VM package skips duplicate unit tests; full native suite was run separately."
+  ],
+  "subtests": [
+    {
+      "name": "all edge configs are peerless and use durable state",
+      "duration_seconds": 0.29,
+      "result": "passed"
+    },
+    {
+      "name": "root A admits B, then delegated member B admits C",
+      "duration_seconds": 5.91,
+      "result": "passed"
+    },
+    {
+      "name": "A and C converge without pairwise pairing",
+      "duration_seconds": 46.49,
+      "result": "passed"
+    },
+    {
+      "name": "B restores C membership and route while every source is offline",
+      "duration_seconds": 2.58,
+      "result": "passed"
+    },
+    {
+      "name": "simultaneous recovery reconnects the full mesh",
+      "duration_seconds": 10.39,
+      "result": "passed"
+    },
+    {
+      "name": "moving C to an isolated VLAN falls back through the relay",
+      "duration_seconds": 84.23,
+      "result": "passed"
+    },
+    {
+      "name": "relay recovery survives a cold daemon restart",
+      "duration_seconds": 17.71,
+      "result": "passed"
+    },
+    {
+      "name": "returning C to LAN promotes the direct path without config changes",
+      "duration_seconds": 22.51,
+      "result": "passed"
+    },
+    {
+      "name": "relay and peer recovery stay bounded under failure pressure",
+      "duration_seconds": 0.45,
+      "result": "passed"
+    },
+    {
+      "name": "signed DNS claims disappear automatically after expiry",
+      "duration_seconds": 32.27,
+      "result": "passed"
+    },
+    {
+      "name": "dedicated hostname records override inviter membership claims",
+      "duration_seconds": 2.46,
+      "result": "passed"
+    },
+    {
+      "name": "later membership hostname leaves dedicated hostname authoritative",
+      "duration_seconds": 2.24,
+      "result": "passed"
+    },
+    {
+      "name": "runtime revocation removes names routes and fallback after restart",
+      "duration_seconds": 2.16,
+      "result": "passed"
+    },
+    {
+      "name": "revoked member is re-admitted at a higher epoch",
+      "duration_seconds": 4.64,
+      "result": "passed"
+    },
+    {
+      "name": "member C revokes inviter B without cascading to C",
+      "duration_seconds": 54.44,
+      "result": "passed"
+    },
+    {
+      "name": "remaining member C re-admits B and preserves original inviter",
+      "duration_seconds": 4.65,
+      "result": "passed"
+    },
+    {
+      "name": "self-resignation is global and does not stop the network",
+      "duration_seconds": 18.52,
+      "result": "passed"
+    },
+    {
+      "name": "resigned member can pair again at the next epoch",
+      "duration_seconds": 22.96,
+      "result": "passed"
+    }
+  ]
+}

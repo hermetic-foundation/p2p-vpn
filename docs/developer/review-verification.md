@@ -2,7 +2,8 @@
 
 ## Scope
 
-Audited on 2026-09-06, including Android multi-network recovery at `643d798e`.
+Audited on 2026-09-06, including current NixOS membership convergence at `4bb8ff1e`
+and Android multi-network recovery at `643d798e`.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -17,7 +18,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
-| Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
+| Membership VM | [Exported four-node check built at `4bb8ff1e`](nixos-membership-review.md): all 18 subtests pass in 349.04 seconds. Current packaged runtime and NixOS module; no runtime override. | Controlled VLAN/relay topology; IPv4/A-record assertions. Not public NAT, IPv6, sustained-load, or other VM-gate evidence. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
 | Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass at `643d798e`; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; sustained overload remains unverified. |
 | Resources | Historical debug comparison plus two current release-profile idle captures at `89709e4f`: 0.133-0.167% of one core per node. | Small static topology; current-only release results are not a release baseline comparison. Connection and drop increments remain visible in [measurement limits](idle-resource-comparison.md#release-profile-follow-up). |
@@ -60,7 +61,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-smoke` | Current result not verified. |
 | `nixos-vm-minimal-lan`, `nixos-vm-mesh` | Aliases of the same VM derivation; current result not verified. |
 | `nixos-vm-module-lifecycle` | Generated script compiles; focused cached-VM storage test passes. Full target unrun. |
-| `nixos-vm-membership-convergence` | Historical 18-subtest result; current rerun outstanding. |
+| `nixos-vm-membership-convergence` | Built offline at `4bb8ff1e`; all 18 subtests pass. [Exact artifacts and limits](nixos-membership-review.md). |
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
@@ -155,7 +156,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
-| Platform validation | Android multi-network passes at `643d798e`, targeted native health recovery at `4b90f3bc`; repeat affected VM and final shared-runtime gates. |
+| Platform validation | Membership-convergence VM passes at `4bb8ff1e`; Android multi-network at `643d798e` and native health recovery at `4b90f3bc`. Complete remaining affected VM and final shared-runtime gates. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |
