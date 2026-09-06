@@ -94,7 +94,8 @@ Debug APK assembly also passed; this local Gradle build had no JNI libraries,
 so it is Java/resource packaging evidence, not a deployable native VPN validation.
 
 These owner tests are separate from the current-source always-on emulator run below.
-Same-process destroy/recreate with stalled JNI and network transitions remain to be exercised.
+Same-process destroy/recreate with stalled JNI remains to be exercised. Current-source
+emulator network-transition evidence is recorded below.
 
 ## Validation Sequence
 
@@ -194,4 +195,47 @@ SHA-256 of the tested APK:
 
 ```text
 d5959da94fe859220da702f5b608817dc3d26b81e491189e45141064a5d77df1
+```
+
+## Current-Source Underlay Run
+
+Passed on API 35 x86_64 from 13:07:58 to 13:11:53 UTC, 2026-09-06.
+The APK above and Linux endpoints built from `5988c33d` used the local fixture's
+discovery bootstrap, without configured overlay peer addresses.
+
+| Transition | Convergence | Traffic After Recovery |
+| --- | ---: | --- |
+| Wi-Fi to emulator cellular | 25.670 s | IPv4/IPv6, both directions, 5/5 each |
+| Total outage | Detected in 1.080 s; held 5 s | No underlay available |
+| Restore cellular | 14.750 s | IPv4/IPv6, both directions, 5/5 each |
+| Restore Wi-Fi | 7.240 s | IPv4/IPv6, both directions, 5/5 each |
+
+Android and fixture processes remained continuous. Native runtime generation stayed
+at 2, and recovery signal failures stayed at zero. Emulator/fixture termination,
+private-state removal, and evidence redaction passed.
+
+Evidence: `/tmp/p2p-vpn-review-android-underlay-ready/evidence.json`.
+This is emulator underlay evidence, not a physical carrier-NAT or hotspot/VPN test.
+The measured transport was a direct TCP stream; other transports are not implied.
+
+### Readiness Regression
+
+The first run failed before transitions because the harness requested pairing
+while the selected network was `starting`, despite top-level `connected=true`.
+Android correctly rejected it with `The selected network is not running`.
+
+The harness now waits for the selected enabled network's `running` phase.
+Fake Android status deliberately reports `starting` before `running` and rejects
+premature pairing. The evaluated structure-check body passed with this regression.
+
+Failed-run evidence: `/tmp/p2p-vpn-review-android-underlay-current/evidence.json`.
+No peer hints or manual recovery were added to make the rerun pass.
+
+### Linux Artifact Hashes
+
+SHA-256, CLI followed by E2E fixture:
+
+```text
+be23fc0a459ac5cc9116abb933b142ca41002bc7698fc2797c85bb08f893bf14
+55bd4e26400ea8c25d7d97728684318807ce4fb68561012af36d2a4463e4ca26
 ```

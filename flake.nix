@@ -1000,8 +1000,17 @@
                           *) direct_tcp_stream=1 ;;
                         esac
                       fi
+                      network_phase=stopped
+                      if [[ "$connected" == true ]]; then
+                        network_phase=starting
+                        if [[ -s "$pairing_state.runtime-phase" ]]; then
+                          network_phase=running
+                        fi
+                        printf '%s\n' "$network_phase" > "$pairing_state.runtime-phase"
+                      fi
                       response="$(jq -cn \
                         --argjson connected "$connected" \
+                        --arg network_phase "$network_phase" \
                         --arg pairing_detail "$pairing_detail" \
                         --argjson connected_peers "$connected_peers" \
                         --argjson direct_quic_datagram "$direct_quic_datagram" \
@@ -1031,6 +1040,7 @@
                               profile_stored: true,
                               busy: false,
                               connected: $connected,
+                              networks: [{selected: true, enabled: true, phase: $network_phase}],
                               network_name: "android-e2e",
                               hostname: "android-0123456789abcdef",
                               peer_id: "12D3KooWFakeAndroidPeer",
@@ -1402,6 +1412,11 @@
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command join-pairing --es code '*)
                     : "''${pairing_state:?}"
+                    if [[ ! -s "$pairing_state.runtime-phase" \
+                      || "$(< "$pairing_state.runtime-phase")" != running ]]; then
+                      echo 'pairing was requested before the selected network was running' >&2
+                      exit 2
+                    fi
                     printf 'paired\n' > "$pairing_state"
                     response='{"schema_version":1,"ok":true,"value":{"accepted":true,"command":"join-pairing"}}'
                     printf 'Broadcast completed: result=-1, data="%s"\n' "$(printf '%s' "$response" | base64 -w 0)"

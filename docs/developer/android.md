@@ -893,6 +893,10 @@ Non-boot scenarios install `P2P_VPN_ANDROID_APK` before testing, even when a cac
 emulator launcher preinstalls another build. The `selected_apk` step records this
 installation. Boot-smoke checks the launcher's package without replacing it.
 
+Before pairing, the harness waits for the selected enabled network's `phase` to
+be `running`. The top-level `connected` flag describes the shared VPN runtime;
+it can be true while an individual network is still starting.
+
 `android.log`, `emulator.log`, and `fixture.log` are capped at 1 MiB each.
 
 Runtime logs are redacted before evidence validation.

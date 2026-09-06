@@ -3532,10 +3532,11 @@ if [[ "$pairing_scenario" -eq 1 ]]; then
   connected_status="$state_dir/status-connected.json"
   if ! wait_for_automation_status \
     "$connected_status" \
-    '.value.snapshot.connected and (.value.snapshot.busy | not)' \
+    '.value.snapshot.connected and (.value.snapshot.busy | not) and
+      (.value.snapshot.networks | any(.selected and .enabled and .phase == "running"))' \
     90; then
     outcome=failed
-    outcome_detail="Android VPN runtime did not connect"
+    outcome_detail="The selected Android VPN network did not become ready"
     record_step vpn_connect failed "$outcome_detail"
     exit 1
   fi
