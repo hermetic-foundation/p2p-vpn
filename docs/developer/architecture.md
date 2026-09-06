@@ -36,7 +36,7 @@ Membership sources are explicit:
 
 | Source | Use |
 | --- | --- |
-| Local config `peers[]` | Static overlay membership. |
+| Local config `peers[]` | Static membership until signed history governs that identity. |
 | `membership_key` | Shared overlay proof. |
 | `member_records` | Signed grants and revocations. |
 | Public bootstrap peers | Reachability only. |
@@ -54,7 +54,17 @@ Transport roles are independent from overlay authorization:
 Kademlia protocol support permits routing transport only. Application handlers
 still reject packets, routes, status, and membership pages from non-members.
 
-Signed records form a delegated trust graph.
+Signed records form an ownerless membership ledger with `any-member` governance.
+
+| Event | Result |
+| --- | --- |
+| Admission or revocation | Any active member may sign the event. |
+| Inviter departs | Its previously admitted members remain independent. |
+| Creator resigns | Surviving members can continue the network. |
+| Local identity is revoked or expires | Remote operational authorization stops; audit history remains. |
+
+Issuer authorization is evaluated at the event's signed issue time. Invitation
+provenance explains history; it is not a permanent ownership chain.
 
 Connected members exchange bounded snapshot pages and persist learned history.
 

@@ -131,6 +131,9 @@ impl Forwarder {
         let now_unix_seconds = current_unix_seconds_lossy();
 
         let local_peer = config.local_peer_id()?;
+        let peers =
+            transport_peers_from_config_and_records(config, &member_records, now_unix_seconds)?;
+        let authorized_peers = authorized_peers_from_transport_peers(&peers);
 
         Ok(Self {
             local_peer,
@@ -139,16 +142,8 @@ impl Forwarder {
             hostname_records: Vec::new(),
             routes: config
                 .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?,
-            peers: transport_peers_from_config_and_records(
-                config,
-                &member_records,
-                now_unix_seconds,
-            )?,
-            authorized_peers: authorized_peers_from_config_and_records(
-                config,
-                &member_records,
-                now_unix_seconds,
-            )?,
+            peers,
+            authorized_peers,
             membership_revision: 0,
             membership_effective_refresh_pending: false,
             replay_windows: HashMap::new(),
@@ -298,16 +293,12 @@ impl Forwarder {
         let routes = self
             .config
             .compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
-        let authorized_peers = authorized_peers_from_config_and_records(
-            &self.config,
-            &member_records,
-            now_unix_seconds,
-        )?;
         let peers = transport_peers_from_config_and_records(
             &self.config,
             &member_records,
             now_unix_seconds,
         )?;
+        let authorized_peers = authorized_peers_from_transport_peers(&peers);
         let records_changed = member_records != self.member_records;
         let effective_changed = routes != self.routes
             || peers != self.peers
@@ -394,8 +385,7 @@ impl Forwarder {
             config.compile_routes_with_member_records_at(&member_records, now_unix_seconds)?;
         let peers =
             transport_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
-        let authorized_peers =
-            authorized_peers_from_config_and_records(&config, &member_records, now_unix_seconds)?;
+        let authorized_peers = authorized_peers_from_transport_peers(&peers);
         let mtu = usize::from(config.effective_packet_mtu());
 
         Ok(ForwarderUpdate {
@@ -774,20 +764,18 @@ fn transport_peers_from_config_and_records(
     let effective =
         effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
     let mut peers = HashMap::new();
-    if !effective.authorizes_configured_peer(local_peer) {
-        return Ok(peers);
-    }
+    let authorization = effective.authorization_for(local_peer);
     for peer in &config.peers {
         let transport_peer = peer
             .id
             .parse::<Libp2pPeerId>()
             .map_err(ConfigError::Libp2pPeerId)?;
         let overlay_peer = PeerId::from_libp2p(transport_peer);
-        if effective.authorizes_configured_peer(overlay_peer) {
+        if authorization.authorizes_configured_peer(overlay_peer) {
             peers.insert(overlay_peer, transport_peer);
         }
     }
-    for member in effective.overlay_members() {
+    for member in authorization.overlay_members() {
         if member.peer != local_peer {
             peers.insert(member.peer, member.transport_peer);
         }
@@ -795,33 +783,12 @@ fn transport_peers_from_config_and_records(
     Ok(peers)
 }
 
-fn authorized_peers_from_config_and_records(
-    config: &Config,
-    member_records: &[SignedMembershipRecord],
-    now_unix_seconds: u64,
-) -> Result<AuthorizedPeers, ConfigError> {
-    let local_peer = config.local_peer_id()?;
-    let effective =
-        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+fn authorized_peers_from_transport_peers(peers: &HashMap<PeerId, Libp2pPeerId>) -> AuthorizedPeers {
     let mut authorized = AuthorizedPeers::default();
-    if !effective.authorizes_configured_peer(local_peer) {
-        return Ok(authorized);
+    for peer in peers.values() {
+        authorized.insert(*peer);
     }
-    for peer in &config.peers {
-        let transport_peer = peer
-            .id
-            .parse::<Libp2pPeerId>()
-            .map_err(ConfigError::Libp2pPeerId)?;
-        if effective.authorizes_configured_peer(PeerId::from_libp2p(transport_peer)) {
-            authorized.insert(transport_peer);
-        }
-    }
-    for member in effective.overlay_members() {
-        if member.peer != local_peer {
-            authorized.insert(member.transport_peer);
-        }
-    }
-    Ok(authorized)
+    authorized
 }
 
 fn current_unix_seconds_lossy() -> u64 {

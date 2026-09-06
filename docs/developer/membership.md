@@ -209,8 +209,8 @@ raw records.
 
 Revoked, expired, and inactive members remain in the inventory for audit.
 
-They have no derived routes unless static configuration authorizes them
-independently. Operationally authorized rows sort before inactive history.
+Their signed history overrides static configuration, so they have no derived
+remote routes. Operationally authorized rows sort before inactive history.
 
 ## Pairing Admission
 
@@ -428,6 +428,27 @@ Once an identity has signed history, effective ledger state takes precedence:
 
 This precedence is shared by forwarding, routes, DNS, and runtime admission.
 Static address metadata does not bypass a tombstone.
+
+### Local Operational View
+
+`EffectiveMembership::authorization_for` supplies the shared operational policy.
+It borrows evaluated signed membership without changing or discarding audit history.
+
+| Local State | Remote Operational Result |
+| --- | --- |
+| No signed history | Configured peers and active signed overlay members are eligible. |
+| Active overlay grant | Same static/signed precedence applies. |
+| Revoked, expired, or inactive | Neither configured nor signed remote peers are authorized. |
+
+Local addresses and self-identification remain available for administration.
+An unconfigured identity without an active signed overlay grant is not authorized.
+
+Routes, DNS names and addresses, packet admission, runtime membership, and inventory
+ordering use this view. Inventory still retains network-wide membership state;
+an active audit row does not imply the local node can communicate with that member.
+
+The forwarder derives its packet allowlist from its evaluated transport-peer map.
+It does not independently replay the ledger to build that second allowlist.
 
 ## Observability
 

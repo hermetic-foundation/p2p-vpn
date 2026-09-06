@@ -10,7 +10,7 @@ security audit. Source inspection is distinguished from reproduced behavior.
 | Requirement | Required Evidence | Status |
 | --- | --- | --- |
 | Correctness review | Findings with source references and disposition | In progress |
-| Authorization consistency | Shared policy and cross-consumer regression tests | Pending |
+| Authorization consistency | Shared policy and cross-consumer regression tests | In progress |
 | Runtime ownership | Cohesive state owners and testable recovery decisions | Pending |
 | Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | Pending |
 | Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | Pending |
@@ -81,6 +81,20 @@ Introduce an evaluated authorization view with explicit local eligibility,
 remote membership, and signed/static provenance. Preserve audit records without
 treating their presence as packet or route authority.
 
+Implemented the borrowed `EffectiveAuthorization` policy view in `membership.rs`.
+Routes, DNS, pairing name ownership, packet admission, runtime membership, and
+inventory ordering now use its local eligibility and static/signed precedence.
+
+Forwarding derives the packet allowlist from its transport-peer map, eliminating
+one repeated ledger evaluation per construction, merge, and configuration update.
+Record evaluation is still repeated between routes and other runtime consumers;
+consolidating the evaluated snapshot remains part of the ownership work.
+
+New policy tests cover unknown versus configured identities, exact grant expiry,
+and local expiry/resignation without erasing surviving network membership.
+The cross-consumer integration test exercises minimal configuration, remote
+revocation, local resignation, and retained audit state through public constructors.
+
 ### R3: Recovery State Has Distributed Ownership
 
 Priority: architectural. Status: confirmed coupling; behavioral audit pending.
@@ -101,7 +115,7 @@ holdoff, relay replacement, cancellation, and quiet-state retry bounds.
 
 ### R4: Architecture Documentation Contains Stale Governance Language
 
-Priority: documentation. Status: confirmed.
+Priority: documentation. Status: corrected.
 
 `architecture.md` describes signed records as a delegated trust graph and
 `README.md` indexes membership as a trust graph. The current ledger implements
@@ -109,6 +123,9 @@ flat any-member governance with non-cascading revocation and legacy restoration.
 
 Update these descriptions with the implementation changes and retain explicit
 migration information in the membership reference.
+
+Architecture and the developer index now describe ownerless governance, event-time
+authorization, non-cascading revocation, and the local operational boundary.
 
 ### R5: Identify Can Disconnect a File-Pairing Probe
 
@@ -139,7 +156,54 @@ Post-fix validation: 1,143 workspace tests passed, with 14 ignored in the defaul
 run. Peerless code pairing also passed separately. Formatting and the required
 Clippy correctness, suspicious, and performance checks passed; style warnings remain.
 
+### R6: Legacy Packet Allowlist Constructor Ignores Signed History
+
+Priority: P2 API risk. Status: source-confirmed; regression and fix pending.
+
+`AuthorizedPeers::from_config` in `src/runtime/packet.rs` collects static peer IDs
+without evaluating signed history. Current production callers use the fallible
+constructor or the forwarder's evaluated map; no live runtime bypass is established.
+
+The exported infallible constructor can nevertheless authorize a revoked configured
+peer for a library caller. Preserve its signature, delegate to the shared policy,
+and fail closed on invalid input. Test both constructors against signed revocation.
+
 ## Review Coverage Still Required
+
+### Namespace Verification Findings
+
+The expanded suite exposed stale capability-event assertions and a datagram wait
+for `inbound_accepted_packets` on `daemon-state`, which does not expose that metric.
+Use the structured event and query `daemon-status` for inbound evidence instead.
+
+The harness waited for process exit before draining piped diagnostics. A failed
+assertion could fill the pipe and appear as a 90-second timeout. Capture now drains
+both streams concurrently with a 1 MiB per-stream limit, and node guards reap
+children on assertion unwind. Focused capture and cleanup regressions pass.
+
+The pre-refactor runtime at `7300f55e` also failed the direct UDP namespace case
+with no packet-plane session. The changed runtime's expanded run had discovery,
+owned datagram, and relay-promotion failures; these are not waived operational gates.
+Separate stale evidence checks from runtime negotiation and discovery defects next.
+
+After correcting the metric surface, owned QUIC passed on the pre-refactor runtime.
+Both direct UDP and owned QUIC passed with the shared authorization view as well.
+The default workspace suite passes 1,148 tests, with 14 ignored; required Clippy
+groups and formatting pass. Style warnings remain; operational coverage is incomplete.
+
+The DHT fixture uses `10.252.0.0/24` and no prior peer address. Public-discovery
+address admission deliberately rejects third-party private transports. Check fixture
+scope against that security boundary before considering any production-policy change.
+
+The latest mDNS snapshot has one validated peer, one healthy UDP session, five
+transmitted packets, and five accepted inbound packets, but no datagram transmissions.
+Check whether the fixed ping burst precedes path promotion: session existence alone
+does not prove a usable datagram path. Preserve traffic evidence when repairing the test.
+
+Final namespace run for this increment: 8 passed, 3 failed in 229 seconds.
+The open failures are DHT discovery, mDNS datagram evidence, and relay promotion.
+Direct UDP, owned QUIC, relay forwarding, file/code pairing, invite import, and
+network-move recovery passed. No full-suite or production-readiness claim follows.
 
 | Area | Evidence Inspected | Next Check |
 | --- | --- | --- |

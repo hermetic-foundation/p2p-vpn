@@ -438,26 +438,18 @@ struct NetworkPeerInventoryEntry {
 }
 
 impl NetworkPeerInventoryEntry {
-    fn operationally_authorized(&self) -> bool {
+    fn operationally_authorized(
+        &self,
+        authorization: &crate::membership::EffectiveAuthorization<'_>,
+    ) -> bool {
         if self.peer.local {
             return true;
         }
-        match self
-            .peer
-            .membership
-            .as_ref()
-            .map(|membership| membership.state)
-        {
-            Some(NetworkPeerMembershipState::Active) => true,
-            Some(
-                NetworkPeerMembershipState::Revoked
-                | NetworkPeerMembershipState::Expired
-                | NetworkPeerMembershipState::Inactive,
-            ) => false,
-            Some(NetworkPeerMembershipState::Configured) | None => self
-                .membership_sources
+        authorization.allows_peer(
+            self.overlay_peer,
+            self.membership_sources
                 .contains(&NetworkPeerMembershipSource::PeerConfiguration),
-        }
+        )
     }
 }
 
@@ -504,9 +496,9 @@ fn network_peer_inventory_at(
         now_unix_seconds,
     )?;
 
-    for member in effective_membership_at(member_records, &config.network.name, now_unix_seconds)?
-        .overlay_members()
-    {
+    let effective =
+        effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
+    for member in effective.overlay_members() {
         let entry = peer_entry(&mut peers, member.peer, member.transport_peer.to_string());
         entry.peer_id = member.transport_peer.to_string();
         entry
@@ -550,12 +542,13 @@ fn network_peer_inventory_at(
         .into_iter()
         .map(|(overlay_peer, builder)| builder.finish(overlay_peer))
         .collect::<Vec<_>>();
+    let authorization = effective.authorization_for(local_peer);
     peers.sort_by(|left, right| {
         let left_name = left.peer.hostnames.first().map(String::as_str);
         let right_name = right.peer.hostnames.first().map(String::as_str);
         right
-            .operationally_authorized()
-            .cmp(&left.operationally_authorized())
+            .operationally_authorized(&authorization)
+            .cmp(&left.operationally_authorized(&authorization))
             .then_with(|| left_name.is_none().cmp(&right_name.is_none()))
             .then_with(|| left_name.cmp(&right_name))
             .then_with(|| left.peer.peer_id.cmp(&right.peer.peer_id))

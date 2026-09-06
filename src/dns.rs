@@ -179,6 +179,7 @@ pub(crate) fn effective_peer_names(
     hostname_records: &HashMap<PeerId, String>,
 ) -> Result<Vec<EffectivePeerName>, ConfigError> {
     let local_peer = config.local_peer_id()?;
+    let authorization = membership.authorization_for(local_peer);
     let mut owners = HashMap::from([(local_peer, config.local_peer()?)]);
     let mut names = Vec::new();
     let mut claim = |peer, transport_peer: &str, label: &str, source| {
@@ -199,27 +200,25 @@ pub(crate) fn effective_peer_names(
             DnsNameSource::LocalConfiguration,
         );
     }
-    if membership.authorizes_configured_peer(local_peer) {
-        for configured in &config.peers {
-            let peer = configured.peer_id()?;
-            if membership.authorizes_configured_peer(peer) {
-                owners.insert(peer, configured.id.clone());
-                if let Some(name) = configured.name.as_deref() {
-                    claim(peer, &configured.id, name, DnsNameSource::PeerConfiguration);
-                }
+    for configured in &config.peers {
+        let peer = configured.peer_id()?;
+        if authorization.authorizes_configured_peer(peer) {
+            owners.insert(peer, configured.id.clone());
+            if let Some(name) = configured.name.as_deref() {
+                claim(peer, &configured.id, name, DnsNameSource::PeerConfiguration);
             }
         }
-        for member in membership.overlay_members() {
-            let transport_peer = member.transport_peer.to_string();
-            owners.insert(member.peer, transport_peer.clone());
-            for name in &member.hostnames {
-                claim(
-                    member.peer,
-                    &transport_peer,
-                    name,
-                    DnsNameSource::SignedMembership,
-                );
-            }
+    }
+    for member in authorization.overlay_members() {
+        let transport_peer = member.transport_peer.to_string();
+        owners.insert(member.peer, transport_peer.clone());
+        for name in &member.hostnames {
+            claim(
+                member.peer,
+                &transport_peer,
+                name,
+                DnsNameSource::SignedMembership,
+            );
         }
     }
     for (peer, transport_peer) in owners {
@@ -365,10 +364,10 @@ impl DnsZone {
         {
             insert_name(&mut names, &claim.label, claim.peer, claim.source)?;
         }
-        let local_is_active = effective.authorizes_configured_peer(local_peer);
+        let authorization = effective.authorization_for(local_peer);
         for peer in &config.peers {
             let overlay_peer = peer.peer_id().map_err(DnsZoneError::Config)?;
-            if !local_is_active || !effective.authorizes_configured_peer(overlay_peer) {
+            if !authorization.authorizes_configured_peer(overlay_peer) {
                 continue;
             }
             let addresses = peers
@@ -380,13 +379,11 @@ impl DnsZone {
             add_host_routes(addresses, &peer.routes)?;
         }
 
-        if local_is_active {
-            for member in effective.overlay_members() {
-                let addresses = peers.entry(member.peer).or_insert_with(|| {
-                    PeerAddresses::new(member.transport_peer.to_string(), member.peer)
-                });
-                add_host_routes(addresses, &member.route_grants)?;
-            }
+        for member in authorization.overlay_members() {
+            let addresses = peers.entry(member.peer).or_insert_with(|| {
+                PeerAddresses::new(member.transport_peer.to_string(), member.peer)
+            });
+            add_host_routes(addresses, &member.route_grants)?;
         }
 
         let mut address_count = 0_usize;

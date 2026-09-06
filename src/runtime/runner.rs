@@ -9296,16 +9296,15 @@ impl OverlayMembership {
 
         let effective =
             effective_membership_at(member_records, &config.network.name, now_unix_seconds)?;
-        if effective.authorizes_configured_peer(local_overlay_peer) {
-            for peer in &config.peers {
-                let transport_peer = peer.id.parse().map_err(ConfigError::Libp2pPeerId)?;
-                if effective.authorizes_configured_peer(PeerId::from_libp2p(transport_peer)) {
-                    peers.insert(transport_peer);
-                }
+        let authorization = effective.authorization_for(local_overlay_peer);
+        for peer in &config.peers {
+            let transport_peer = peer.id.parse().map_err(ConfigError::Libp2pPeerId)?;
+            if authorization.authorizes_configured_peer(PeerId::from_libp2p(transport_peer)) {
+                peers.insert(transport_peer);
             }
-            for member in effective.overlay_members() {
-                peers.insert(member.transport_peer);
-            }
+        }
+        for member in authorization.overlay_members() {
+            peers.insert(member.transport_peer);
         }
 
         for peer in &config.network.bootstrap_peers {

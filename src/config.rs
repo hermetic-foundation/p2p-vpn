@@ -118,62 +118,57 @@ impl Config {
 
         let effective_membership =
             effective_membership_at(member_records, &self.network.name, now_unix_seconds)?;
-        let local_is_active = effective_membership.authorizes_configured_peer(local_peer);
-        if local_is_active {
-            for peer in &self.peers {
-                let owner = peer.peer_id()?;
-                if !effective_membership.authorizes_configured_peer(owner) {
-                    continue;
-                }
-                table.insert_authorized(Route {
-                    owner,
-                    prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(owner)), 32)?,
-                    metric: 0,
-                })?;
-                table.insert_authorized(Route {
-                    owner,
-                    prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(owner)), 128)?,
-                    metric: 0,
-                })?;
+        let authorization = effective_membership.authorization_for(local_peer);
+        for peer in &self.peers {
+            let owner = peer.peer_id()?;
+            if !authorization.authorizes_configured_peer(owner) {
+                continue;
+            }
+            table.insert_authorized(Route {
+                owner,
+                prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(owner)), 32)?,
+                metric: 0,
+            })?;
+            table.insert_authorized(Route {
+                owner,
+                prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(owner)), 128)?,
+                metric: 0,
+            })?;
 
-                if let Some(vpn_ip) = &peer.vpn_ip {
+            if let Some(vpn_ip) = &peer.vpn_ip {
+                table.insert_authorized(Route {
+                    owner,
+                    prefix: vpn_ip_host_route(vpn_ip)?,
+                    metric: 0,
+                })?;
+            }
+            for route in &peer.routes {
+                table.insert_authorized(Route {
+                    owner,
+                    prefix: route.prefix()?,
+                    metric: route.metric,
+                })?;
+            }
+        }
+        for member in authorization.overlay_members() {
+            table.insert_authorized(Route {
+                owner: member.peer,
+                prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(member.peer)), 32)?,
+                metric: 0,
+            })?;
+            table.insert_authorized(Route {
+                owner: member.peer,
+                prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(member.peer)), 128)?,
+                metric: 0,
+            })?;
+
+            if member.has_role(MembershipRole::RouteAuthority) {
+                for route in &member.route_grants {
                     table.insert_authorized(Route {
-                        owner,
-                        prefix: vpn_ip_host_route(vpn_ip)?,
-                        metric: 0,
-                    })?;
-                }
-                for route in &peer.routes {
-                    table.insert_authorized(Route {
-                        owner,
+                        owner: member.peer,
                         prefix: route.prefix()?,
                         metric: route.metric,
                     })?;
-                }
-            }
-        }
-
-        if local_is_active {
-            for member in effective_membership.overlay_members() {
-                table.insert_authorized(Route {
-                    owner: member.peer,
-                    prefix: IpCidr::new(IpAddr::V4(builtin_ipv4(member.peer)), 32)?,
-                    metric: 0,
-                })?;
-                table.insert_authorized(Route {
-                    owner: member.peer,
-                    prefix: IpCidr::new(IpAddr::V6(builtin_ipv6(member.peer)), 128)?,
-                    metric: 0,
-                })?;
-
-                if member.has_role(MembershipRole::RouteAuthority) {
-                    for route in &member.route_grants {
-                        table.insert_authorized(Route {
-                            owner: member.peer,
-                            prefix: route.prefix()?,
-                            metric: route.metric,
-                        })?;
-                    }
                 }
             }
         }

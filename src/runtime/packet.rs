@@ -164,18 +164,17 @@ impl AuthorizedPeers {
 
     pub fn try_from_config(config: &Config) -> Result<Self, ConfigError> {
         let effective = config.effective_membership()?;
+        let authorization = effective.authorization_for(config.local_peer_id()?);
         let mut authorized = Self::default();
-        if effective.authorizes_configured_peer(config.local_peer_id()?) {
-            for peer in &config.peers {
-                if effective.authorizes_configured_peer(peer.peer_id()?) {
-                    authorized
-                        .peers
-                        .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
-                }
+        for peer in &config.peers {
+            if authorization.authorizes_configured_peer(peer.peer_id()?) {
+                authorized
+                    .peers
+                    .insert(peer.id.parse().map_err(ConfigError::Libp2pPeerId)?);
             }
-            for member in effective.overlay_members() {
-                authorized.peers.insert(member.transport_peer);
-            }
+        }
+        for member in authorization.overlay_members() {
+            authorized.peers.insert(member.transport_peer);
         }
         Ok(authorized)
     }

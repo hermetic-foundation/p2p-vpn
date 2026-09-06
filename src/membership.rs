@@ -840,6 +840,15 @@ pub struct EffectiveMembership {
 }
 
 impl EffectiveMembership {
+    /// Operational policy for one local identity, distinct from network-wide audit state.
+    #[must_use]
+    pub(crate) fn authorization_for(&self, local_peer: PeerId) -> EffectiveAuthorization<'_> {
+        EffectiveAuthorization {
+            membership: self,
+            local_is_active: self.authorizes_configured_peer(local_peer),
+        }
+    }
+
     pub fn overlay_members(&self) -> impl Iterator<Item = &EffectiveMember> {
         self.members
             .values()
@@ -855,6 +864,35 @@ impl EffectiveMembership {
                 .members
                 .get(&peer)
                 .is_some_and(|member| member.has_role(MembershipRole::OverlayMember))
+    }
+}
+
+/// Local eligibility gates both configured peers and active signed grants.
+/// Local addresses and self-identification remain the caller's responsibility.
+pub(crate) struct EffectiveAuthorization<'a> {
+    membership: &'a EffectiveMembership,
+    local_is_active: bool,
+}
+
+impl EffectiveAuthorization<'_> {
+    pub(crate) fn authorizes_configured_peer(&self, peer: PeerId) -> bool {
+        self.allows_peer(peer, true)
+    }
+
+    pub(crate) fn allows_peer(&self, peer: PeerId, configured: bool) -> bool {
+        self.local_is_active
+            && ((configured && self.membership.authorizes_configured_peer(peer))
+                || self
+                    .membership
+                    .members
+                    .get(&peer)
+                    .is_some_and(|member| member.has_role(MembershipRole::OverlayMember)))
+    }
+
+    pub(crate) fn overlay_members(&self) -> impl Iterator<Item = &EffectiveMember> {
+        self.membership
+            .overlay_members()
+            .filter(|_| self.local_is_active)
     }
 }
 
@@ -1675,6 +1713,88 @@ mod tests {
         assert_eq!(members[0].sequence, 2);
         assert!(!members[0].has_role(MembershipRole::RouteAuthority));
         assert!(members[0].route_grants.is_empty());
+    }
+
+    #[test]
+    fn authorization_view_distinguishes_configured_peers_from_signed_history() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let remote = NodeIdentity::generate_ed25519().expect("remote");
+        let static_peer = NodeIdentity::generate_ed25519().expect("static peer");
+        let root_peer = PeerId::from_libp2p(root.peer_id.parse().expect("root peer"));
+        let remote_peer = PeerId::from_libp2p(remote.peer_id.parse().expect("remote peer"));
+        let static_peer = PeerId::from_libp2p(static_peer.peer_id.parse().expect("static peer"));
+        let records = vec![
+            overlay_record(&root, &root, 1, 1_000, None),
+            overlay_record(&root, &remote, 2, 1_000, Some(1_100)),
+        ];
+
+        for (now, remote_allowed) in [(1_000, true), (1_099, true), (1_100, false)] {
+            let effective = effective_membership_at(&records, "lab", now).expect("membership");
+            let authorization = effective.authorization_for(root_peer);
+            assert!(authorization.allows_peer(static_peer, true));
+            assert!(!authorization.allows_peer(static_peer, false));
+            for configured in [false, true] {
+                assert_eq!(
+                    authorization.allows_peer(remote_peer, configured),
+                    remote_allowed,
+                    "static configuration must not override expired signed history",
+                );
+            }
+            assert_eq!(
+                authorization
+                    .overlay_members()
+                    .any(|member| member.peer == remote_peer),
+                remote_allowed,
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_view_blocks_remote_access_after_local_departure_without_erasing_history() {
+        let root = NodeIdentity::generate_ed25519().expect("root");
+        let remote = NodeIdentity::generate_ed25519().expect("remote");
+        let static_peer = NodeIdentity::generate_ed25519().expect("static peer");
+        let root_peer = PeerId::from_libp2p(root.peer_id.parse().expect("root peer"));
+        let remote_peer = PeerId::from_libp2p(remote.peer_id.parse().expect("remote peer"));
+        let static_peer = PeerId::from_libp2p(static_peer.peer_id.parse().expect("static peer"));
+        let resignation = issue_membership_record_for_subject_at(
+            &root,
+            MembershipRecordIssueOptions {
+                network_name: "lab".to_owned(),
+                member: MembershipRecordSubject::from_identity(&root).expect("subject"),
+                membership_epoch: 1,
+                sequence: 3,
+                revoked: true,
+                roles: Vec::new(),
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: None,
+            },
+            1_100,
+        )
+        .expect("resignation");
+        for revoked in [false, true] {
+            let mut records = vec![
+                overlay_record(&root, &root, 1, 1_000, (!revoked).then_some(1_100)),
+                overlay_record(&root, &remote, 2, 1_000, None),
+            ];
+            if revoked {
+                records.push(resignation.clone());
+            }
+            let effective = effective_membership_at(&records, "lab", 1_100).expect("membership");
+            assert!(
+                effective
+                    .overlay_members()
+                    .any(|member| member.peer == remote_peer)
+            );
+            let authorization = effective.authorization_for(root_peer);
+            assert_eq!(authorization.overlay_members().count(), 0);
+            assert!(!authorization.allows_peer(static_peer, true));
+            assert!(!authorization.allows_peer(remote_peer, true));
+            assert!(!authorization.allows_peer(remote_peer, false));
+            let survivor = effective.authorization_for(remote_peer);
+            assert!(!survivor.allows_peer(root_peer, true));
+            assert!(survivor.allows_peer(remote_peer, false));
+        }
     }
 
     #[test]
