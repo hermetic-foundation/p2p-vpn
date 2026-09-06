@@ -4,7 +4,7 @@
 
 Source inspected at `be99de43` on 2026-09-06 by a read-only reviewer and parent
 inspection. These findings do not establish the cause of the retained Android
-[post-update packet loss](android-multi-network-review.md#latest-attempt).
+[post-update packet loss](android-multi-network-review.md#earlier-update-failure).
 
 ## Findings
 
@@ -166,7 +166,8 @@ and event compatibility separately before consolidating the default inbound owne
 - TCP and QUIC overload regression passed with isolated pinned receivers.
 - All 11 namespace scenarios passed with the default host, including network move and relay promotion.
 - Logs: `/tmp/p2p-vpn-review-stream-bounds-*`.
-- Android is not rebuilt for this change yet; sustained-overload recovery remains a separate gate.
+- Rebuilt Android and fixture passed the [68-step multi-network run](android-multi-network-review.md#latest-attempt) at `643d798e`.
+- Sustained-overload recovery and targeted stale-completion accounting remain separate gates.
 
 These limits bound admitted payload/stream work, not arbitrary accumulation of
 terminal events by an embedding caller that never polls the public behaviour.

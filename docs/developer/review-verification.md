@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including Android network workflow at `6dbb680c`.
+Audited on 2026-09-06, including Android multi-network recovery at `643d798e`.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -19,7 +19,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`. The latest [multi-network rerun](android-multi-network-review.md) passes 32 steps then receives 4/5 reverse IPv4 replies after APK replacement. | OS underlays were available in this run; cause of loss remains unresolved. Neither the earlier cellular failure nor the historical 68-step pass closes this gate. |
+| Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass with rebuilt APK and fixture at `643d798e`, including underlay transitions and reboot restoration. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; targeted native-failure health polling and sustained overload remain unverified. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -95,8 +95,10 @@ Historical build at `f026342f`, using cached Nix Rust/NDK tools and offline Grad
 The build pass started no device. The subsequent [multi-network run](android-multi-network-review.md)
 used this APK in one clean emulator and verified complete cleanup.
 
-The newer [network-workflow report](android-network-workflow-review.md) records
-current JNI/APK/fixture hashes and its separate scenario evidence at `6dbb680c`.
+The [network-workflow report](android-network-workflow-review.md) records separate
+scenario evidence at `6dbb680c`. The latest rebuilt APK, JNI, fixture, and CLI hashes
+are in the [multi-network report](android-multi-network-review.md#current-artifacts)
+at `643d798e`; the table below remains historical.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -118,9 +120,9 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
-| Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
-| Android underlay failure | Capture OS cellular availability/validation independently of the app tracker, then resolve and rerun the failed multi-network transition. |
-| Android update traffic | Investigate the retained 4/5 reverse IPv4 result after APK replacement, including packet timing and path changes. |
+| Platform validation | Android multi-network passes at `643d798e`; repeat affected VM gates and targeted Android health recovery on final shared-runtime code. |
+| Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
+| Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, and stream budgets](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, stale response accounting, sustained overload measurements, and final platform validation. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |

@@ -2,6 +2,62 @@
 
 ## Latest Attempt
 
+The rebuilt APK and Linux fixture at `643d798e` passed all 68 checks on
+2026-09-06. The run took 913 seconds, from 21:02:01Z through 21:17:14Z.
+No manual connection or service intervention occurred during the scenario.
+
+| Stage | Result |
+| --- | --- |
+| Pairing, migration, and concurrent traffic | Two isolated identities carried dual-stack traffic through the shared TUN |
+| Disable and APK replacement | Alpha stayed disabled; beta passed all four traffic directions/families |
+| Re-enable and overlap rejection | Both networks remained isolated and reachable |
+| Wi-Fi / emulated cellular / Wi-Fi | Both networks recovered without restarting the shared runtime |
+| Process death and APK replacement | Always-on restored both identities and traffic automatically |
+| Temporary lockdown | Expected rejection followed by automatic recovery |
+| Emulator reboot | Both networks restored and passed dual-stack traffic |
+| Alpha fixture termination | Beta traffic, Android process, and shared-runtime generation remained stable |
+
+Readiness checks retried before steady measurements. Alpha required four Linux
+IPv4 attempts after the cellular transition and ten after reboot. Each subsequent
+traffic measurement received 5/5 replies; this is not uninterrupted-delivery evidence.
+
+The new harness retained ping intervals and successful reply sequence numbers.
+This pass follows connection-selection, closure, and stream-budget fixes, but
+does not establish which change caused either earlier failure to disappear.
+
+- Original: `/tmp/p2p-vpn-review-transport-multi-network/evidence.json`.
+- Sanitized [current transport review sample](android-multi-network-transport-review-sample.json).
+- Cached Nix Rust/NDK rebuild and offline Gradle unit, lint, APK, and instrumentation assembly passed.
+- This run did not execute the separate native-failure health-poll instrumentation case.
+- Cleanup reported all six safeguards successful; no emulator or fixture process remained afterward.
+
+### Current Resource Samples
+
+| Sample | PSS (KiB) | Java Threads | Queued Packets / Bytes |
+| --- | ---: | ---: | --- |
+| Two networks after reboot | 74,514 | 7 | 0 / 0 |
+| After alpha fixture termination | 74,210 | 7 | 0 / 0 |
+
+Final diagnostics recorded 35 public routing peers, one direct TCP path, one
+expired queued packet, and 24 outbound drops after the failure-isolation stage.
+These debug snapshots do not prove battery efficiency, leak freedom, or zero loss.
+
+### Current Artifacts
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `197db0303e9e167aaf35fb6ad08b928145d3dda808f61f9da172cb696068530f` |
+| Unstripped x86_64 JNI | `5b26280db71d60997c2ef81ca713050e2591f25db4ffd13474af66c902d2ef7b` |
+| Stripped JNI / library extracted from APK | `6ab5fdb54a927728cfe3d1dad27892594d1d98ba02096dbbee9bd72761f301a6` |
+| Linux fixture | `17f6851bdd9112577c7a9d5f115e1215480f745b1149c70800bb55769dd7ba2e` |
+| Linux CLI | `be2a08a2be83d14454ba499d0bfea0662ff3da9b4ef67ff00d24e6ab69d43d2e` |
+
+This is an API 35 x86_64 emulator result. Physical cellular, carrier NAT, hotspot
+VPN, sustained saturation, and the targeted health-poll recovery case remain
+outside this run's evidence. Earlier failures remain below rather than being overwritten.
+
+## Earlier Update Failure
+
 The lifecycle-fixed APK (`39c2ecb6`) with diagnostic harness `2d4d06e7` failed
 on 2026-09-06 after 262 seconds. Thirty-two steps passed before Android-to-Linux
 IPv4 received 4/5 replies on beta after APK replacement with alpha disabled.
