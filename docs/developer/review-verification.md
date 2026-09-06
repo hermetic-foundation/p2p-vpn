@@ -2,8 +2,8 @@
 
 ## Scope
 
-Audited on 2026-09-06, including current NixOS membership convergence at `4bb8ff1e`
-and Android multi-network recovery at `643d798e`.
+Audited on 2026-09-06, including NixOS lifecycle/LAN/pairing checks at `cf18fb51`,
+membership convergence at `4bb8ff1e`, and Android recovery at `643d798e`.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -19,7 +19,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | [Exported four-node check built at `4bb8ff1e`](nixos-membership-review.md): all 18 subtests pass in 349.04 seconds. Current packaged runtime and NixOS module; no runtime override. | Controlled VLAN/relay topology; IPv4/A-record assertions. Not public NAT, IPv6, sustained-load, or other VM-gate evidence. |
-| Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
+| NixOS workflows | [Four exported VM checks pass at `cf18fb51`](nixos-workflow-review.md): lifecycle, smoke, minimal LAN, and URI pairing. | Pairing evaluates generated Nix but runs its resulting JSON, not a rebuild/switch. Controlled IPv4 LAN, not public WAN or sustained load. |
+| Storage repair VM | Full lifecycle check passes at `cf18fb51`; automatic service/DNS recovery after permission repair preserves identity and membership bytes. | Permission failure, not ENOSPC, interrupted writes, power loss, or OS reboot. |
 | Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass at `643d798e`; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; sustained overload remains unverified. |
 | Resources | Historical debug comparison plus two current release-profile idle captures at `89709e4f`: 0.133-0.167% of one core per node. | Small static topology; current-only release results are not a release baseline comparison. Connection and drop increments remain visible in [measurement limits](idle-resource-comparison.md#release-profile-follow-up). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
@@ -58,11 +59,12 @@ not imply that the corresponding Nix derivation was built successfully.
 | `releaseArchive`, `releaseArchiveSanity` | Current archive and sanity outputs not verified. |
 | `nixos-consumer-flake-eval` | Built offline; evaluates minimal upstream-module consumer contracts without realizing the OS closure. |
 | `nixos-module`, `nixos-consumer-flake` | Current full derivation results not verified. |
-| `nixos-vm-smoke` | Current result not verified. |
-| `nixos-vm-minimal-lan`, `nixos-vm-mesh` | Aliases of the same VM derivation; current result not verified. |
-| `nixos-vm-module-lifecycle` | Generated script compiles; focused cached-VM storage test passes. Full target unrun. |
+| `nixos-vm-smoke` | Built at `cf18fb51`; module readiness, status/metrics, and clean stop pass. [Workflow evidence](nixos-workflow-review.md). |
+| `nixos-vm-minimal-lan`, `nixos-vm-mesh` | Same derivation built at `cf18fb51`; all 4 subtests pass. Minimal config and bidirectional IPv4 LAN traffic. |
+| `nixos-vm-module-lifecycle` | Built at `cf18fb51`; all 12 subtests pass, including storage-permission recovery and independent instance/DNS lifecycle. |
 | `nixos-vm-membership-convergence` | Built offline at `4bb8ff1e`; all 18 subtests pass. [Exact artifacts and limits](nixos-membership-review.md). |
-| `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
+| `nixos-vm-pairing` | Built at `cf18fb51`; all 8 subtests pass. Native Nix generation/evaluation, not rebuild/switch activation. |
+| `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
 | `namespace-smoke-preflighted` | All 11 pass with pinned resource bounds. Derivation result not established. |
@@ -72,11 +74,11 @@ not imply that the corresponding Nix derivation was built successfully.
 | `debug-bundle-structure` | New process-argument privacy regression passed from working-tree and evaluated Nix source; full wrapper/derivation result remains unverified. |
 | `public-relay-repro-structure`, `public-vpn-capture-structure` | Current result not verified. |
 | `public-vpn-repro-structure`, `public-vpn-repro-evidence-structure` | Current result not verified. |
-| `public-vpn-evidence-check`, `public-vpn-move-evidence-check` | Synthetic verifier fixtures; current result not verified. Not live WAN tests. |
+| `public-vpn-evidence-check`, `public-vpn-move-evidence-check` | Both built at `cf18fb51`; positive and rejection fixtures pass. [Exact results](nixos-workflow-review.md). Synthetic reports, not live WAN tests. |
 
-An offline, substitution-disabled dry run for the two public-VPN verifier checks
-planned 967 derivations, including ShellCheck's source dependency chain. No build
-was started. This is not an estimate of work required with available binary substitutes.
+An earlier offline verifier dry run planned 967 derivations. Importing the exact
+signed ShellCheck binary-cache output reduced this to four derivations; both
+checks then built offline. [Transfer limits and evidence](nixos-workflow-review.md#build-resources).
 
 ### Tooling Follow-Up
 
@@ -106,9 +108,10 @@ The privacy test also passed from the Nix-evaluated source tree, and ShellCheck
 and shell syntax checks passed. Bundles still contain network/host information
 and optional command output; this is not a general anonymization guarantee.
 
-An offline debug-bundle derivation dry run planned 980 source builds. None were
-started. The complete wrapper/derivation remains unverified; the focused privacy
-regression does not substitute for that packaging result.
+The earlier debug-bundle dry run planned 980 source builds. After the ShellCheck
+import, a combined debug-bundle/verifier plan still required 96 derivations,
+including LLVM/toolchain sources; it was not started. The complete debug-bundle
+wrapper remains unverified; its focused privacy regression is not packaging proof.
 
 ### Lightweight Consumer Check
 
@@ -156,7 +159,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Debug and release signed-ledger samples cover 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish daemon/sustained-load impact. |
-| Platform validation | Membership-convergence VM passes at `4bb8ff1e`; Android multi-network at `643d798e` and native health recovery at `4b90f3bc`. Complete remaining affected VM and final shared-runtime gates. |
+| Platform validation | Membership VM passes at `4bb8ff1e`; lifecycle, smoke, LAN, and URI pairing at `cf18fb51`. Complete remaining VM gates, actual generated-Nix activation, and final shared-runtime Android validation. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |
