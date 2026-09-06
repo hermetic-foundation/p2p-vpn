@@ -199,3 +199,16 @@ User confirmation is pending; this policy has not been implemented.
 Deleting Prepared state alone is unsafe: runtime routes or membership may already
 have changed. A cancellable transaction would instead need durable abort state and
 verified rollback, including crash recovery.
+
+## Platform Follow-Up
+
+The [Android network workflow](android-network-workflow-review.md) passed at
+`6dbb680c`: join by code, persisted profile, switches, peer display, and dual-stack
+traffic. It does not inject the transaction failures reviewed here.
+
+Earlier per-fix notes above record which gates were unrun at those milestones.
+Multi-network lifecycle, targeted failure recovery, and full VM follow-up remain open.
+
+All 11 Linux namespace tests also passed at `6dbb680c` in 213.88 seconds,
+including pairing, discovery, QUIC packets, relay fallback, network move, and
+relay-to-direct promotion. Log: `/tmp/p2p-vpn-review-history-all-namespace.log`.

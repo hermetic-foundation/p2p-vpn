@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "kind": "p2p-vpn-review-android-network-workflow",
+  "runtime_revision": "6dbb680c",
+  "status": "passed",
+  "started_utc": "2026-09-06T18:49:37Z",
+  "finished_utc": "2026-09-06T18:51:53Z",
+  "completed_steps": 24,
+  "device": {
+    "api_level": "35",
+    "abi": "x86_64"
+  },
+  "workflow": {
+    "nested_navigation": true,
+    "profile_free_join": true,
+    "device_hostname": "managed-test-phone",
+    "detail_switch_activation": true,
+    "home_switch_disable": true,
+    "home_switch_reenable": true,
+    "system_theme": true,
+    "live_peer_display": true,
+    "bidirectional_dual_stack_traffic": true
+  },
+  "diagnostics": {
+    "schema_version": 1,
+    "kind": "p2p-vpn-android-diagnostics",
+    "generated_at": "2026-09-06T18:51:46.614042Z",
+    "app": {
+      "version": "0.1.0",
+      "android_api": 35
+    },
+    "lifecycle": {
+      "service_uptime_millis": 96880,
+      "profile_stored": true,
+      "profile_readable": true,
+      "connection_requested": true,
+      "connected": true,
+      "always_on": false,
+      "lockdown": false,
+      "busy": false,
+      "runtime_generation": 2
+    },
+    "underlay": {
+      "kind": "wifi",
+      "validated": true,
+      "available_networks": 1,
+      "selection_changes": 0,
+      "selected_losses": 0,
+      "recoveries": 0,
+      "runtime_recovery_requests": 0,
+      "runtime_recovery_failures": 0
+    },
+    "paths": {
+      "connected_peers": 1,
+      "peers_without_supported_path": 0,
+      "direct_udp_datagram": 0,
+      "direct_quic_datagram": 0,
+      "direct_quic_stream": 1,
+      "direct_tcp_stream": 1,
+      "relay": 0,
+      "public_routing_peers": 17,
+      "packet_plane_quic_sessions": 0,
+      "promotions_to_direct": 0
+    },
+    "queue": {
+      "queued_packets": 0,
+      "queued_bytes": 0,
+      "oldest_packet_age_millis": 0,
+      "blocked_no_supported_path_events": 0,
+      "blocked_packet_window_events": 0
+    },
+    "drops": {
+      "queue_packets": 0,
+      "queue_bytes": 0,
+      "expired_packets": 0,
+      "expired_bytes": 0,
+      "outbound_packets": 1,
+      "inbound_packets": 0,
+      "packet_plane_datagrams": 0,
+      "path_fallbacks_to_relay": 0,
+      "packet_plane_path_demotions": 0,
+      "stream_path_demotions": 0
+    },
+    "resources": {
+      "process_cpu_millis": 5398,
+      "total_pss_kib": 87606,
+      "private_dirty_kib": 36432,
+      "java_heap_used_bytes": 4275296,
+      "java_heap_max_bytes": 201326592,
+      "active_threads": 15
+    },
+    "pairing": {
+      "operation_active": false,
+      "candidate_pending": false
+    },
+    "events": {
+      "discarded": 0,
+      "items": [
+        {
+          "sequence": 1,
+          "since_service_start_millis": 0,
+          "name": "service_created"
+        },
+        {
+          "sequence": 2,
+          "since_service_start_millis": 7,
+          "name": "profile_absent"
+        },
+        {
+          "sequence": 3,
+          "since_service_start_millis": 15,
+          "name": "underlay_baseline_selected"
+        },
+        {
+          "sequence": 4,
+          "since_service_start_millis": 38379,
+          "name": "profile_joined"
+        },
+        {
+          "sequence": 5,
+          "since_service_start_millis": 45385,
+          "name": "network_enabled"
+        },
+        {
+          "sequence": 6,
+          "since_service_start_millis": 45388,
+          "name": "connection_requested"
+        },
+        {
+          "sequence": 7,
+          "since_service_start_millis": 45428,
+          "name": "runtime_started"
+        },
+        {
+          "sequence": 8,
+          "since_service_start_millis": 75444,
+          "name": "network_disabled"
+        },
+        {
+          "sequence": 9,
+          "since_service_start_millis": 75601,
+          "name": "runtime_stopped"
+        },
+        {
+          "sequence": 10,
+          "since_service_start_millis": 75607,
+          "name": "disconnect_requested"
+        },
+        {
+          "sequence": 11,
+          "since_service_start_millis": 82485,
+          "name": "network_enabled"
+        },
+        {
+          "sequence": 12,
+          "since_service_start_millis": 82489,
+          "name": "connection_requested"
+        },
+        {
+          "sequence": 13,
+          "since_service_start_millis": 82523,
+          "name": "runtime_started"
+        },
+        {
+          "sequence": 14,
+          "since_service_start_millis": 96880,
+          "name": "diagnostic_report_generated"
+        }
+      ]
+    },
+    "privacy": {
+      "identity_material": "excluded",
+      "peers": "excluded",
+      "pairing_secrets": "excluded",
+      "underlay_addresses": "excluded"
+    }
+  },
+  "cleanup": {
+    "emulator_stopped": true,
+    "fixture_stopped": true,
+    "private_state_removed": true,
+    "logs_redacted": true,
+    "diagnostic_report_redacted": true,
+    "always_on_cleared": true
+  },
+  "artifact_sha256": {
+    "native": "24eaaf840292c7c8cc2e3c690fdca64c7eaf5cea5158073e6523812aaf371c0d",
+    "stripped": "312496b6ff14342df9b3cd2abd206e5193b0e88d8a901ae1695c8618ee8ebd79",
+    "apk": "8aa794e2a6f80cc982dd43e9c8c90ac0fee1d5810287d73591b726babcd0d83c",
+    "fixture": "b77fa69e35ae249ab3dcbc7976df8e3ceb1e574e35dc236769f1f348720d94a4",
+    "cli": "58520e3ea49c40dc2d81c2bfdb0e3f290a586dfbca029ee638ff625e7c5ccd80"
+  }
+}

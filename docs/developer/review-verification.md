@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including historical enrollment readiness.
+Audited on 2026-09-06, including Android network workflow at `6dbb680c`.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -12,14 +12,14 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Area | Evidence | Limitation |
 | --- | --- | --- |
 | Workspace | Last full run: 1,216 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass after terminal stale-response cleanup, in 188.03 seconds. | Controlled topology, not public NAT traversal. |
+| Namespace integration | All 11 pass at `6dbb680c`, in 213.88 seconds, including network move and relay-to-direct promotion. | Controlled topology, not public NAT traversal; elapsed time is not a performance benchmark. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | JNI/Gradle checks and [68 completed multi-network steps](android-multi-network-review.md) pass at `f026342f`. | Predates the sync lifecycle fixes; API 35 x86_64 emulator, not physical cellular/NAT or battery evidence. |
+| Android | Current JNI/Gradle checks and [24 network-workflow steps](android-network-workflow-review.md) pass at `6dbb680c`; [68 multi-network steps](android-multi-network-review.md) remain historical at `f026342f`. | Current run is single-network with a controlled discovery hint, not multi-network, physical cellular/NAT, revocation, or battery evidence. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -62,7 +62,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass after terminal stale-response cleanup. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass at `6dbb680c`. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -91,9 +91,12 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 
 ## Android Startup Artifact
 
-Built with cached Nix Rust/NDK tools and offline Gradle after the startup handoff.
+Historical build at `f026342f`, using cached Nix Rust/NDK tools and offline Gradle.
 The build pass started no device. The subsequent [multi-network run](android-multi-network-review.md)
 used this APK in one clean emulator and verified complete cleanup.
+
+The newer [network-workflow report](android-network-workflow-review.md) records
+current JNI/APK/fixture hashes and its separate scenario evidence at `6dbb680c`.
 
 | Artifact | SHA-256 |
 | --- | --- |
