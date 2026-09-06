@@ -5,7 +5,8 @@
 Source reviewed at `6dbb680c` on 2026-09-06. A read-only reviewer identified
 the cases below; parent inspection checked the relevant control flow.
 The initial source review preceded regression work. A2 is now reproduced and
-fixed with JVM coverage. A3 is fixed with emulator instrumentation; A1 remains open.
+fixed with JVM coverage. A1 and A3 are fixed with emulator instrumentation.
+The health-poll native-failure scenario and broader platform gates remain open.
 
 Successful workflow tests do not exercise every event ordering. Unresolved cases
 remain open even when the [network workflow](android-network-workflow-review.md) or
@@ -35,6 +36,41 @@ same unversioned stop effect.
 Required regression: hold main callbacks, accept a newer start, then drain the
 old stop. Foreground and started-service ownership must remain with the newer request.
 Exercise manual disconnect and asynchronous pairing completion separately.
+
+#### Implemented Start Ownership
+
+Each main-thread `onStartCommand` admits a fresh identity and queues a worker
+marker before its command. Stop requests capture the processed worker identity;
+their main-thread effect is ignored if a newer start has been admitted.
+
+This separates accepted starts from processed starts. Reading the newest identity
+on the worker would incorrectly authorize an old stop emitted while the newer
+start is still queued. Service-scope retirement remains a separate check.
+
+Manual, pairing-completion, and missing-permission stops now share this check.
+No protocol, persisted profile, JNI signature, or configuration format changes.
+
+| API 35 x86_64 instrumentation | Result |
+| --- | --- |
+| Before fix | Old manual stop removed foreground ownership after newer connect admission |
+| Stop posted before admission | All three stop paths preserve the newer foreground service |
+| Start admitted before old worker posts | All three paths preserve the newer foreground service |
+| Current stop after each case | Foreground ownership is removed normally |
+| Combined lifecycle run | Deferred joins and occupied-worker replacement also pass |
+
+Instrumentation holds the main thread and invokes the real `onStartCommand`
+callback synchronously to control ordering. Android foreground state and native
+startup are real; this does not test delivery of a pending system Binder start.
+
+- Logs: `/tmp/p2p-vpn-review-stop-owner-{before,after}.txt`.
+- Final runner: `superseded_stop=passed`, `passed=true`, result code `-1`.
+- Unit tests, lint, debug APK, and instrumentation APK assembly passed offline.
+- Add `-e superseded_stop true` to the [lifecycle runner](android-lifecycle-review.md#run-it).
+
+| Tested artifact | SHA-256 |
+| --- | --- |
+| App APK | `846aaa646a4b2e67ecfbc6b3361d29bc808151a2ff6100aa6bc67443805d39a5` |
+| Instrumentation APK | `ab67464e44b27c6bb2482a2fad3c3e04b8a62fc635c5828bb67b9b02f0ce152d` |
 
 ### A2: Lost Health Timer
 

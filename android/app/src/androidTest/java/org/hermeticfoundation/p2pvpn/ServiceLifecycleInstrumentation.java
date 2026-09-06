@@ -1,6 +1,7 @@
 package org.hermeticfoundation.p2pvpn;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.Instrumentation;
 import android.content.ComponentName;
 import android.content.Context;
@@ -82,6 +83,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             }, 30, "profile creation");
             if ("true".equals(arguments.getString("deferred_join"))) {
                 exerciseDeferredJoin();
+            }
+            if ("true".equals(arguments.getString("superseded_stop"))) {
+                exerciseSupersededStop();
             }
             String peer = P2pVpnService.debugSnapshot().peerId;
             connect();
@@ -241,6 +245,75 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             }, 0, TimeUnit.SECONDS).get(30, TimeUnit.SECONDS);
         }
         sendStatus(2, message("deferred_join", "passed: failed join, withdrawn intent, successful disabled join"));
+    }
+
+    private void exerciseSupersededStop() throws Exception {
+        setVpnConsent(true);
+        onMain(() -> require(VpnService.prepare(getTargetContext()) == null,
+                "emulator VPN consent is required"));
+        Field instance = P2pVpnService.class.getDeclaredField("debugInstance");
+        instance.setAccessible(true);
+        P2pVpnService service = (P2pVpnService) instance.get(null);
+        Method disconnect = P2pVpnService.class.getDeclaredMethod("disconnectRequested", boolean.class);
+        disconnect.setAccessible(true);
+        String[] stopMethods = {"stopManualService", "finishPairingForegroundService", "stopForMissingLocalNetworkPermission"};
+        for (int variant = 0; variant < stopMethods.length * 2; variant++) {
+            String name = stopMethods[variant / 2];
+            boolean admitBeforePosting = variant % 2 != 0;
+            Method stop = P2pVpnService.class.getDeclaredMethod(name);
+            stop.setAccessible(true);
+            onMain(() -> {
+                CountDownLatch entered = new CountDownLatch(1);
+                CountDownLatch release = new CountDownLatch(1);
+                try {
+                    ScheduledFuture<?> pending = currentScope.schedule(() -> {
+                        try {
+                            entered.countDown();
+                            require(release.await(5, TimeUnit.SECONDS), "stop worker was not released");
+                            stop.invoke(service);
+                        } catch (ReflectiveOperationException | InterruptedException error) {
+                            throw new AssertionError(error);
+                        }
+                    }, 0, TimeUnit.SECONDS);
+                    require(entered.await(5, TimeUnit.SECONDS), "stop worker did not become occupied");
+                    if (admitBeforePosting) {
+                        service.onStartCommand(serviceIntent().setAction(P2pVpnService.ACTION_CONNECT), 0, 101);
+                    }
+                    release.countDown();
+                    pending.get(5, TimeUnit.SECONDS);
+                    if (!admitBeforePosting) {
+                        service.onStartCommand(serviceIntent().setAction(P2pVpnService.ACTION_CONNECT), 0, 101);
+                    }
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                } finally {
+                    release.countDown();
+                }
+            });
+            awaitNativeRunning();
+            onMain(() -> {
+                require(serviceIsForeground(), "superseded " + name + " removed foreground ownership");
+            });
+            currentScope.schedule(() -> {
+                try {
+                    disconnect.invoke(service, true);
+                } catch (ReflectiveOperationException error) {
+                    throw new AssertionError(error);
+                }
+            }, 0, TimeUnit.SECONDS).get(10, TimeUnit.SECONDS);
+            onMain(() -> require(!serviceIsForeground(), "current stop retained foreground ownership"));
+        }
+        sendStatus(2, message("superseded_stop", "passed: three stop paths, before and after start admission"));
+    }
+
+    private boolean serviceIsForeground() {
+        for (ActivityManager.RunningServiceInfo running : getTargetContext()
+                .getSystemService(ActivityManager.class).getRunningServices(Integer.MAX_VALUE)) {
+            if (running.service.getClassName().equals(P2pVpnService.class.getName())) {
+                return running.foreground;
+            }
+        }
+        return false;
     }
 
     private static Bundle message(String key, String value) {

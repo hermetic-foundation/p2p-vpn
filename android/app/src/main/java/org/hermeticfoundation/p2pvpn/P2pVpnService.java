@@ -92,6 +92,9 @@ public final class P2pVpnService extends VpnService {
     private final DiagnosticEventBuffer diagnosticEvents = new DiagnosticEventBuffer();
 
     private ServiceRuntimeWorker.Scope worker;
+    // Main-thread admission and worker processing are separate ownership boundaries.
+    private Object admittedStartOwner = new Object();
+    private Object processedStartOwner = admittedStartOwner;
     private ExecutorService profileJoinWorker;
     private ProfileStore profileStore;
     private File runtimeDirectory;
@@ -160,6 +163,9 @@ public final class P2pVpnService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        Object owner = new Object();
+        admittedStartOwner = owner;
+        worker.execute(() -> processedStartOwner = owner);
         String action = intent == null ? null : intent.getAction();
         VpnMode managerEventMode = vpnManagerEventMode(intent);
         boolean systemStart = isSystemVpnStart(action);
@@ -730,11 +736,7 @@ public final class P2pVpnService extends VpnService {
         if (remainStarted) {
             return;
         }
-        postIfActive(
-                () -> {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
-                    stopSelf();
-                });
+        stopManualService();
     }
 
     private void loadProfileMetadata() {
@@ -1290,11 +1292,7 @@ public final class P2pVpnService extends VpnService {
             updateForegroundNotification();
             return;
         }
-        postIfActive(
-                () -> {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
-                    stopSelf();
-                });
+        stopManualService();
     }
 
     private void selectNetwork(String networkId) {
@@ -1487,8 +1485,12 @@ public final class P2pVpnService extends VpnService {
     }
 
     private void stopManualService() {
+        Object owner = processedStartOwner;
         postIfActive(
                 () -> {
+                    if (admittedStartOwner != owner) {
+                        return;
+                    }
                     stopForeground(STOP_FOREGROUND_REMOVE);
                     stopSelf();
                 });
