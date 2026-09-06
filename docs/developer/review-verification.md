@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including installed startup snapshots on Linux and Android.
+Audited on 2026-09-06, including the current Android multi-network lifecycle run.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -19,12 +19,12 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | Current x86_64 JNI cross-build, debug/test APK assembly, Java unit-test and lint tasks pass offline. | Earlier emulator lifecycle/underlay results predate shared runtime changes; repeat on this APK. |
+| Android | Current JNI/Gradle checks and [68 completed multi-network steps](android-multi-network-review.md) pass at `f026342f`. | API 35 x86_64 emulator, not physical cellular/NAT or battery evidence. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
 | Refresh window | Full-evaluation equivalence across time boundaries; pending notifications and failed updates covered. 256-record follow-up passed. | Debug follow-up measures two skipped refreshes, not a faster ledger evaluator or production CPU. |
-| Live inventory | Regression reproduced `Active` after committed expiry; list/snapshot now share committed membership and audit time. | Native runtime coverage; rebuilt Android device validation remains outstanding. |
+| Live inventory | Expiry regression and current emulator lifecycle pass; lists/snapshots share committed membership and audit time. | The emulator run does not simulate hostile replies or clock rollback; those have separate unit/review coverage. |
 | Membership-page authority | Remote-expiry regression reproduced and fixed; local-expiry recovery and existing resignation/revocation tests pass. | Page authority only; not a new packet or mutation exception. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
@@ -84,7 +84,8 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 ## Android Startup Artifact
 
 Built with cached Nix Rust/NDK tools and offline Gradle after the startup handoff.
-No emulator or physical phone was started during this validation pass.
+The build pass started no device. The subsequent [multi-network run](android-multi-network-review.md)
+used this APK in one clean emulator and verified complete cleanup.
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -101,7 +102,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Workstream | Required Next Evidence |
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
-| Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
+| Session lifecycle | [Membership-sync review](membership-sync-review.md) identifies open response-dispatch, authorization-retirement, and history-bound cases. Reproduce and fix them. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |

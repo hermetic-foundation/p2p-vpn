@@ -488,6 +488,15 @@ receive that reserved snapshot, not assume a new config evaluation matches dispa
 This fixes installed-state ownership, not the packet authorization policy. Final
 Android device and NixOS VM validation remain in the acceptance map.
 
+### Open Membership-Sync Lifecycle Review
+
+The [bounded source review](membership-sync-review.md) identifies wrong-type
+response dispatch, authorization-driven retirement, and history-retention cases.
+Their regression tests and fixes remain required; they are not approved deferrals.
+
+The [Android multi-network run](android-multi-network-review.md) validates normal
+traffic and lifecycle behavior at `f026342f`, not those hostile-response cases.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.
