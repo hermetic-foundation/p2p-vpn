@@ -265,6 +265,45 @@ Remaining: discovery/retry ownership, in-flight request lifecycle, and
 restart/convergence scenarios. This boundary reacts to committed authorization;
 it does not itself discover or propagate membership changes.
 
+### R9: Periodic Redial Retains Unauthorized Overlay Targets
+
+Priority: P2 recovery/resource issue. Status: reproduced and fixed.
+
+At `66b94635`, periodic redial passed startup-configured addresses and retained
+discovery addresses directly to `pending_redial_targets`. The planner checked
+connection/path state but not current overlay authority. Revocation updates the
+forwarder, not those cached transport inputs.
+
+The regression retained all six targets after removal: three unauthorized overlay
+addresses, one authorized overlay address, and two independently configured
+infrastructure addresses. Only the latter three should remain eligible.
+
+| Boundary | Corrected Behavior |
+| --- | --- |
+| Periodic recovery | Direct and relayed overlay targets require current forwarding authority. |
+| Queue/path-loss recovery | Explicitly selected, authorized overlay peers constrain planning. |
+| Infrastructure | Bootstrap and relay roles remain independently eligible. |
+| Dial condition | A removed overlay identity serving infrastructure uses infrastructure connection rules. |
+| Readmission | Restored authority makes cached overlay addresses eligible again. |
+
+Regression coverage includes configuration withdrawal, dual-role infrastructure,
+readmission, signed revocation with static metadata retained, and local resignation.
+Packet admission already rejects unauthorized peers; this is not a demonstrated
+data-plane authorization bypass.
+
+| Validation | Result |
+| --- | --- |
+| Regression before filtering | Failed: six targets retained instead of three. |
+| Offline workspace tests | 1,168 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 249.24 seconds. |
+| Formatting and whitespace | Passed. |
+| Required Clippy groups | Passed; non-fatal style warnings remain. |
+
+Outstanding ownership work: cancellation of targeted queries, retirement of
+discovery entries, and separation of overlay/infrastructure dial backoff. The
+shared retry map includes infrastructure attempts and must not be cleared merely
+because a peer lacks overlay membership.
+
 ## Review Coverage Still Required
 
 ### Namespace Verification Findings

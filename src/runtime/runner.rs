@@ -6000,6 +6000,7 @@ fn handle_redial_tick(
     };
     redial_known_addresses(
         &mut node.swarm,
+        forwarder,
         &bootstrap_addresses,
         &node.relay_peer_addresses,
         &node.configured_peer_addresses,
@@ -7033,6 +7034,7 @@ fn reconcile_runtime_kademlia_scope(
 
 fn redial_known_addresses(
     swarm: &mut Swarm<Behaviour>,
+    forwarder: &Forwarder,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -7046,10 +7048,12 @@ fn redial_known_addresses(
     let overlay_peers = configured_peer_addresses
         .iter()
         .chain(discovered_peer_addresses.iter())
+        .filter(|(peer, _)| forwarder.is_configured_transport_peer(*peer))
         .map(|(peer, _)| *peer)
         .collect::<HashSet<_>>();
     let targets = pending_redial_targets(
         local_peer,
+        |peer| forwarder.is_configured_transport_peer(peer),
         bootstrap_addresses,
         relay_addresses,
         configured_peer_addresses,
@@ -8391,6 +8395,7 @@ fn redial_selected_addresses(
     let local_peer = *swarm.local_peer_id();
     let targets = pending_redial_targets(
         local_peer,
+        |peer| selected_peers.contains(&peer),
         bootstrap_addresses,
         relay_addresses,
         configured_peer_addresses,
@@ -8551,6 +8556,7 @@ fn packet_plane_recovery_targets(
 
 fn pending_redial_targets(
     local_peer: Libp2pPeerId,
+    mut overlay_authorized: impl FnMut(Libp2pPeerId) -> bool,
     bootstrap_addresses: &[(Libp2pPeerId, Multiaddr)],
     relay_addresses: &[(Libp2pPeerId, Multiaddr)],
     configured_peer_addresses: &[(Libp2pPeerId, Multiaddr)],
@@ -8570,7 +8576,7 @@ fn pending_redial_targets(
         .chain(discovered_peer_addresses.iter())
         .filter(|(_, address)| relayed_address_relay_peer(address).is_none())
     {
-        if *peer == local_peer {
+        if *peer == local_peer || !overlay_authorized(*peer) {
             continue;
         }
         match connection_state(peer) {
@@ -8604,7 +8610,7 @@ fn pending_redial_targets(
         .chain(discovered_peer_addresses.iter())
         .filter(|(_, address)| relayed_address_relay_peer(address).is_some())
     {
-        if *peer == local_peer {
+        if *peer == local_peer || !overlay_authorized(*peer) {
             continue;
         }
         match connection_state(peer) {
@@ -23350,6 +23356,23 @@ mod tests {
         let mut capabilities = ControlCapabilities::local("lab", None, 1_280);
         assert!(membership.allows(target_peer));
         assert!(forwarder.is_configured_transport_peer(target_peer));
+        let cached_addresses = [
+            (target_peer, "/ip4/192.168.1.2/tcp/4001".parse().unwrap()),
+            (creator_peer, "/ip4/192.168.1.3/tcp/4001".parse().unwrap()),
+        ];
+        let redial_targets = |policy: &Forwarder| {
+            pending_redial_targets(
+                local.peer_id.parse().unwrap(),
+                |peer| policy.is_configured_transport_peer(peer),
+                &[],
+                &[],
+                &cached_addresses,
+                &[],
+                |_| RedialConnectionState::Disconnected,
+                |_| true,
+            )
+        };
+        assert_eq!(redial_targets(&forwarder).addresses.len(), 2);
 
         let revoked = apply_local_membership_revocation(
             &mut forwarder,
@@ -23373,6 +23396,10 @@ mod tests {
         );
         assert!(!membership.allows(target_peer));
         assert!(!forwarder.is_configured_transport_peer(target_peer));
+        assert_eq!(
+            redial_targets(&forwarder).addresses,
+            vec![cached_addresses[1].clone()]
+        );
 
         let resigned = apply_local_membership_revocation(
             &mut forwarder,
@@ -23387,6 +23414,7 @@ mod tests {
         assert_eq!(resigned.member_peer, local.peer_id);
         assert!(resigned.resigned);
         assert_eq!(forwarder.configured_transport_peers().count(), 0);
+        assert!(redial_targets(&forwarder).addresses.is_empty());
         assert_eq!(membership.len(), 1);
         assert!(tun_runtime.routes.is_empty());
         assert!(membership_record_sync_is_authorized(
@@ -26731,6 +26759,71 @@ mod tests {
     }
 
     #[test]
+    fn redial_targets_follow_live_authority_without_erasing_infrastructure_roles() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let local = identity.peer_id.parse().unwrap();
+        let allowed = peer_id();
+        let removed = peer_id();
+        let relay = peer_id();
+        let mut config = config_with_peer(&identity, allowed);
+        config
+            .peers
+            .extend(config_with_peer(&identity, removed).peers);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let allowed_address: Multiaddr = "/ip4/192.168.1.2/tcp/4001".parse().unwrap();
+        let removed_address: Multiaddr = "/ip4/192.168.1.3/tcp/4001".parse().unwrap();
+        let discovered_address: Multiaddr = "/ip4/11.252.0.3/tcp/4001".parse().unwrap();
+        let relayed: Multiaddr =
+            format!("/ip4/11.252.0.4/tcp/4001/p2p/{relay}/p2p-circuit/p2p/{removed}")
+                .parse()
+                .unwrap();
+        let bootstrap: Multiaddr = "/ip4/11.252.0.5/tcp/4001".parse().unwrap();
+        let infrastructure_relay: Multiaddr = "/ip4/11.252.0.6/tcp/4001".parse().unwrap();
+        let targets_for = |policy: &Forwarder| {
+            pending_redial_targets(
+                local,
+                |peer| policy.is_configured_transport_peer(peer),
+                &[(removed, bootstrap.clone())],
+                &[(removed, infrastructure_relay.clone())],
+                &[
+                    (removed, removed_address.clone()),
+                    (allowed, allowed_address.clone()),
+                ],
+                &[
+                    (removed, discovered_address.clone()),
+                    (removed, relayed.clone()),
+                ],
+                |_| RedialConnectionState::Disconnected,
+                |_| true,
+            )
+        };
+        let initial = targets_for(&forwarder);
+        assert_eq!(initial.addresses.len(), 6);
+
+        let removed_config = config.peers.pop().unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        // Cached transport inputs still contain the removed overlay member.
+        let targets = targets_for(&forwarder);
+        assert_eq!(
+            targets.addresses,
+            vec![
+                (allowed, allowed_address.clone()),
+                (removed, bootstrap.clone()),
+                (removed, infrastructure_relay.clone()),
+            ]
+        );
+        assert_eq!(targets.skipped_connected, 0);
+
+        config.peers.push(removed_config);
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_000).unwrap());
+        assert_eq!(targets_for(&forwarder), initial);
+    }
+
+    #[test]
     fn redial_targets_skip_self_and_connected_peers() {
         let local = peer_id();
         let connected = peer_id();
@@ -26741,6 +26834,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[(connected, bootstrap_address)],
             &[],
             &[(disconnected, peer_address.clone()), (local, local_address)],
@@ -26776,6 +26870,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[(bootstrap, bootstrap_address.clone())],
             &[(relay, relay_address.clone())],
             &[(configured, peer_address.clone())],
@@ -26807,6 +26902,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[],
             &[(configured, configured_address.clone())],
@@ -26847,6 +26943,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[(bootstrap, bootstrap_address.clone())],
             &[(relay, relay_address.clone())],
             &[],
@@ -26880,6 +26977,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[(peer, address.clone())],
             &[(peer, address.clone())],
             &[],
@@ -26939,6 +27037,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[(relay, relay_address.clone())],
             &[(peer, relayed_address.clone())],
@@ -26957,6 +27056,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[(relay, relay_address.clone())],
             &[(peer, relayed_address.clone())],
@@ -26989,6 +27089,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[],
             &[(peer, relayed_address)],
@@ -27024,6 +27125,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[(relay, relay_address)],
             &[(peer, direct_address), (peer, relayed_address.clone())],
@@ -27062,6 +27164,7 @@ mod tests {
 
         let targets = pending_redial_targets(
             local,
+            |_| true,
             &[],
             &[(relay, relay_address)],
             &[(peer, relayed_address)],

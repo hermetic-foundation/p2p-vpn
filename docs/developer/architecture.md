@@ -342,6 +342,14 @@ Relay peers are not VPN members unless they also appear in `peers[]`.
 
 ## Public Discovery
 
+Recovery planning checks current overlay authority before using configured or
+discovered peer addresses, including circuit-relay destinations. Cached addresses
+do not preserve permission to redial a revoked or expired member.
+
+Bootstrap and relay infrastructure roles are independent. Removing overlay
+membership does not remove a separately configured infrastructure role or erase
+its retry backoff. Readmission restores overlay address eligibility.
+
 Public IPFS/libp2p routing is default reachability infrastructure.
 
 Unknown connections are classified after Identify. Exact Kademlia protocol
