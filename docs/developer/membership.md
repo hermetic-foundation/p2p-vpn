@@ -219,6 +219,19 @@ Re-admission requires a membership epoch above the revoked or expired epoch.
 
 ## Audit Projection
 
+Live daemon lists and snapshots borrow the forwarder's committed effective view.
+Audit history is evaluated on demand at that view's evaluation time, not at the
+request's wall-clock time. Timer/merge commits advance the membership view.
+
+| Surface | Time Semantics |
+| --- | --- |
+| Live daemon membership and provenance | Committed forwarding evaluation. |
+| Snapshot `observed_at_unix_seconds` | Time of the snapshot request. |
+| Public record-based inventory constructors | Explicit time supplied by the caller. |
+
+Lists and snapshots share rendering, hostname precedence, ordering, and bounds
+where applicable. Inactive history remains audit information, not admission authority.
+
 Peer inventory projects accepted ledger history without exposing signatures or
 raw records.
 

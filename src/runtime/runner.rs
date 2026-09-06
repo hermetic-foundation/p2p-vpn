@@ -55,7 +55,10 @@ use crate::{
         AutoNatReachability, PacketDropReason, PacketPlaneDropReason, PairingRejectionReason,
         RuntimeMetrics, RuntimeSnapshot,
     },
-    network_peer::{NetworkPeerList, NetworkPeerRuntimeState, NetworkPeerSnapshot},
+    network_peer::{
+        NetworkPeerInventoryEntry, NetworkPeerList, NetworkPeerRuntimeState, NetworkPeerSnapshot,
+        network_peer_inventory_with_membership,
+    },
     pairing::{
         MAX_PAIRING_MEMBERSHIP_RECORDS, PairingOffer, PairingRequest, PairingRequestOptions,
         PairingResponse, apply_pairing_response_to_config_at, build_named_pairing_request_at,
@@ -4797,19 +4800,9 @@ fn handle_runtime_control_request(
             None
         }
         RuntimeControlRequest::NetworkPeers { respond_to } => {
-            let peers = context
-                .forwarder
-                .effective_hostname_records()
-                .map_err(|error| format!("failed to build hostname inventory: {error:?}"))
-                .and_then(|hostname_records| {
-                    NetworkPeerList::from_config_with_hostname_records_at(
-                        context.forwarder.config(),
-                        context.forwarder.member_records(),
-                        &hostname_records,
-                        current_unix_seconds_lossy(),
-                    )
-                    .map_err(|error| format!("failed to build effective peer inventory: {error:?}"))
-                });
+            let peers = runtime_peer_inventory(context.forwarder).map(|inventory| {
+                NetworkPeerList::from_inventory(&context.forwarder.config().network.name, inventory)
+            });
             if respond_to.send(peers).is_err() {
                 eprintln!("control socket network peers response receiver dropped");
             }
@@ -4890,6 +4883,22 @@ fn handle_runtime_control_request(
     }
 }
 
+fn runtime_peer_inventory(forwarder: &Forwarder) -> Result<Vec<NetworkPeerInventoryEntry>, String> {
+    let hostname_records = forwarder
+        .effective_hostname_records()
+        .map_err(|error| format!("failed to build hostname inventory: {error:?}"))?;
+    let audit = forwarder
+        .membership_audit()
+        .map_err(|error| format!("failed to build membership audit: {error:?}"))?;
+    network_peer_inventory_with_membership(
+        forwarder.config(),
+        &hostname_records,
+        forwarder.effective_membership(),
+        audit,
+    )
+    .map_err(|error| format!("failed to build effective peer inventory: {error:?}"))
+}
+
 fn runtime_peer_snapshot(
     forwarder: &Forwarder,
     paths: &PathSet,
@@ -4898,13 +4907,8 @@ fn runtime_peer_snapshot(
     packet_plane_quic: &PacketPlaneQuicSnapshot,
     now_unix_seconds: u64,
 ) -> Result<NetworkPeerSnapshot, String> {
-    let hostname_records = forwarder
-        .effective_hostname_records()
-        .map_err(|error| format!("failed to build hostname inventory: {error:?}"))?;
-    NetworkPeerSnapshot::from_config_with_hostname_records_at(
-        forwarder.config(),
-        forwarder.member_records(),
-        &hostname_records,
+    Ok(NetworkPeerSnapshot::from_inventory_at(
+        runtime_peer_inventory(forwarder)?,
         now_unix_seconds,
         |peer, _| {
             let datagram_backend =
@@ -4932,8 +4936,7 @@ fn runtime_peer_snapshot(
                 NetworkPeerRuntimeState::disconnected()
             }
         },
-    )
-    .map_err(|error| format!("failed to build live peer snapshot: {error:?}"))
+    ))
 }
 
 fn runtime_peer_lines(
@@ -24873,6 +24876,115 @@ mod tests {
         assert!(peers.peers.iter().any(|peer| {
             peer.peer_id == remote.to_string() && peer.hostnames == ["remote-runner"] && !peer.local
         }));
+    }
+
+    #[test]
+    fn runtime_peer_snapshot_uses_committed_membership_not_observation_time() {
+        let issuer = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+        let remote = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse().unwrap();
+        let mut config = config_with_peer(&issuer, transport);
+        config.peers.clear();
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: remote,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: Some(1_100),
+                },
+                1_000,
+            )
+            .unwrap(),
+        ];
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        forwarder.refresh_membership_records(1_100).unwrap();
+        assert!(!forwarder.is_configured_transport_peer(transport));
+
+        let snapshot = runtime_peer_snapshot(
+            &forwarder,
+            &PathSet::new(),
+            &PeerCapabilities::default(),
+            &PacketPlaneSnapshot::default(),
+            &PacketPlaneQuicSnapshot::default(),
+            1_001,
+        )
+        .unwrap();
+        assert_eq!(snapshot.observed_at_unix_seconds, 1_001);
+        let member = snapshot
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == transport.to_string())
+            .unwrap();
+        assert_eq!(
+            member.membership.as_ref().unwrap().state,
+            crate::network_peer::NetworkPeerMembershipState::Expired
+        );
+
+        let list =
+            NetworkPeerList::from_inventory("lab", runtime_peer_inventory(&forwarder).unwrap());
+        assert_eq!(
+            list.peers
+                .iter()
+                .find(|peer| peer.peer_id == transport.to_string())
+                .unwrap()
+                .membership
+                .as_ref()
+                .unwrap()
+                .state,
+            crate::network_peer::NetworkPeerMembershipState::Expired
+        );
+        // Public record-based APIs retain their explicit-time behavior.
+        let historical =
+            NetworkPeerList::from_config_at(&config, &config.network.member_records, 1_001)
+                .unwrap();
+        assert_eq!(
+            historical
+                .peers
+                .iter()
+                .find(|peer| peer.peer_id == transport.to_string())
+                .unwrap()
+                .membership
+                .as_ref()
+                .unwrap()
+                .state,
+            crate::network_peer::NetworkPeerMembershipState::Active
+        );
+
+        // Observation time also cannot expire a still-committed active view.
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_000).unwrap());
+        let snapshot = runtime_peer_snapshot(
+            &forwarder,
+            &PathSet::new(),
+            &PeerCapabilities::default(),
+            &PacketPlaneSnapshot::default(),
+            &PacketPlaneQuicSnapshot::default(),
+            1_200,
+        )
+        .unwrap();
+        assert_eq!(snapshot.observed_at_unix_seconds, 1_200);
+        assert!(forwarder.is_configured_transport_peer(transport));
+        assert_eq!(
+            snapshot
+                .peers
+                .iter()
+                .find(|peer| peer.peer_id == transport.to_string())
+                .unwrap()
+                .membership
+                .as_ref()
+                .unwrap()
+                .state,
+            crate::network_peer::NetworkPeerMembershipState::Active
+        );
     }
 
     #[test]

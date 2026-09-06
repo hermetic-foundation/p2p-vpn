@@ -16,9 +16,9 @@ use crate::{
     },
     identity::NodeIdentity,
     membership::{
-        EffectiveMembership, MAX_MEMBERSHIP_RECORDS, MembershipRecordError,
+        EffectiveMembership, MAX_MEMBERSHIP_RECORDS, MembershipAuditMember, MembershipRecordError,
         MembershipRecordMergeStats, SignedMembershipRecord, effective_membership_at,
-        membership_trust_anchors, merge_membership_records_at,
+        membership_audit_at, membership_trust_anchors, merge_membership_records_at,
     },
     queue::{EnqueueError, Packet, PeerQueues},
     route::{IpCidr, Route, RouteError, RouteTable},
@@ -526,6 +526,16 @@ impl Forwarder {
         };
         let effective_changed = self.take_membership_effective_refresh_pending();
         Ok((stats, effective_changed))
+    }
+
+    pub(crate) fn membership_audit(
+        &self,
+    ) -> Result<Vec<MembershipAuditMember>, MembershipRecordError> {
+        membership_audit_at(
+            &self.member_records,
+            &self.config.network.name,
+            self.membership_refresh_window.evaluated_at,
+        )
     }
 
     pub(crate) fn take_membership_effective_refresh_pending(&mut self) -> bool {

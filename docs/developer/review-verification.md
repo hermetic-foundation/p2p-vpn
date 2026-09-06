@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including committed membership sharing and deadline-aware timer refresh.
+Audited on 2026-09-06, including committed membership inventory and deadline-aware timer refresh.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,192 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass after membership refresh-window optimization, in 188.06 seconds. | Controlled topology, not public NAT traversal. |
+| Workspace | Last full run: 1,193 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | Live code pairing passes after inventory sharing, in 13.29 seconds. All 11 passed at the preceding refresh-window milestone. | Controlled topology, not public NAT traversal; full suite not repeated for this read-only inventory change. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -24,6 +24,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
 | Refresh window | Full-evaluation equivalence across time boundaries; pending notifications and failed updates covered. 256-record follow-up passed. | Debug follow-up measures two skipped refreshes, not a faster ledger evaluator or production CPU. |
+| Live inventory | Regression reproduced `Active` after committed expiry; list/snapshot now share committed membership and audit time. | Native runtime coverage; rebuilt Android device validation remains outstanding. |
 
 ## Exported Flake Checks
 
@@ -51,7 +52,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass after membership refresh-window optimization. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 passed at refresh-window milestone; live code pairing repeated after inventory sharing. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Earlier offline native/Gradle validation; current derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -82,7 +83,7 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 
 | Workstream | Required Next Evidence |
 | --- | --- |
-| Shared authority | Membership, TUN, and daemon DNS share forwarding evaluation. Inventory shares audit/effective evaluation; review its live observation timing. |
+| Shared authority | Membership, TUN, DNS, and inventory share committed evaluation. Review the remaining membership-sync fallback's independent wall-clock evaluation. |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
@@ -10,7 +11,8 @@ use crate::{
     config::{Config, ConfigError, RouteConfig, vpn_ip_host_route},
     dns::canonical_dns_label,
     membership::{
-        MembershipAuditMember, MembershipState, SignedMembershipRecord, membership_views_at,
+        EffectiveMembership, MembershipAuditMember, MembershipState, SignedMembershipRecord,
+        membership_views_at,
     },
     path::PathOrigin,
     route::{builtin_ipv4, builtin_ipv6},
@@ -51,17 +53,17 @@ impl NetworkPeerList {
         hostname_records: &HashMap<PeerId, String>,
         now_unix_seconds: u64,
     ) -> Result<Self, ConfigError> {
-        let peers =
-            network_peer_inventory_at(config, member_records, hostname_records, now_unix_seconds)?
-                .into_iter()
-                .map(|entry| entry.peer)
-                .collect();
+        let inventory =
+            network_peer_inventory_at(config, member_records, hostname_records, now_unix_seconds)?;
+        Ok(Self::from_inventory(&config.network.name, inventory))
+    }
 
-        Ok(Self {
+    pub(crate) fn from_inventory(network: &str, inventory: Vec<NetworkPeerInventoryEntry>) -> Self {
+        Self {
             schema_version: NETWORK_PEER_LIST_SCHEMA_VERSION,
-            network: config.network.name.clone(),
-            peers,
-        })
+            network: network.to_owned(),
+            peers: inventory.into_iter().map(|entry| entry.peer).collect(),
+        }
     }
 }
 
@@ -99,13 +101,28 @@ impl NetworkPeerSnapshot {
         member_records: &[SignedMembershipRecord],
         hostname_records: &HashMap<PeerId, String>,
         now_unix_seconds: u64,
-        mut runtime_state: F,
+        runtime_state: F,
     ) -> Result<Self, ConfigError>
     where
         F: FnMut(PeerId, &NetworkPeer) -> NetworkPeerRuntimeState,
     {
-        let mut inventory =
+        let inventory =
             network_peer_inventory_at(config, member_records, hostname_records, now_unix_seconds)?;
+        Ok(Self::from_inventory_at(
+            inventory,
+            now_unix_seconds,
+            runtime_state,
+        ))
+    }
+
+    pub(crate) fn from_inventory_at<F>(
+        mut inventory: Vec<NetworkPeerInventoryEntry>,
+        now_unix_seconds: u64,
+        mut runtime_state: F,
+    ) -> Self
+    where
+        F: FnMut(PeerId, &NetworkPeer) -> NetworkPeerRuntimeState,
+    {
         let total_peers = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
         let retained = inventory.len().min(MAX_NETWORK_PEER_SNAPSHOT_PEERS);
         let mut selected = inventory.drain(..retained).collect::<Vec<_>>();
@@ -137,7 +154,7 @@ impl NetworkPeerSnapshot {
             peers,
         };
         snapshot.enforce_encoded_size();
-        Ok(snapshot)
+        snapshot
     }
 
     fn enforce_encoded_size(&mut self) {
@@ -431,7 +448,7 @@ impl NetworkPeerBuilder {
 }
 
 #[derive(Debug)]
-struct NetworkPeerInventoryEntry {
+pub(crate) struct NetworkPeerInventoryEntry {
     overlay_peer: PeerId,
     peer: NetworkPeer,
     membership_sources: Vec<NetworkPeerMembershipSource>,
@@ -458,6 +475,32 @@ fn network_peer_inventory_at(
     member_records: &[SignedMembershipRecord],
     hostname_records: &HashMap<PeerId, String>,
     now_unix_seconds: u64,
+) -> Result<Vec<NetworkPeerInventoryEntry>, ConfigError> {
+    network_peer_inventory_from_source(config, hostname_records, || {
+        let (effective, audit) =
+            membership_views_at(member_records, &config.network.name, now_unix_seconds)?;
+        Ok((Cow::Owned(effective), audit))
+    })
+}
+
+pub(crate) fn network_peer_inventory_with_membership(
+    config: &Config,
+    hostname_records: &HashMap<PeerId, String>,
+    effective: &EffectiveMembership,
+    audit: Vec<MembershipAuditMember>,
+) -> Result<Vec<NetworkPeerInventoryEntry>, ConfigError> {
+    network_peer_inventory_from_source(config, hostname_records, || {
+        Ok((Cow::Borrowed(effective), audit))
+    })
+}
+
+fn network_peer_inventory_from_source<'a>(
+    config: &Config,
+    hostname_records: &HashMap<PeerId, String>,
+    membership: impl FnOnce() -> Result<
+        (Cow<'a, EffectiveMembership>, Vec<MembershipAuditMember>),
+        ConfigError,
+    >,
 ) -> Result<Vec<NetworkPeerInventoryEntry>, ConfigError> {
     let local_peer = config.local_peer_id()?;
     let mut peers = HashMap::<PeerId, NetworkPeerBuilder>::new();
@@ -488,8 +531,7 @@ fn network_peer_inventory_at(
         insert_host_routes(entry, &configured.routes)?;
     }
 
-    let (effective, audit) =
-        membership_views_at(member_records, &config.network.name, now_unix_seconds)?;
+    let (effective, audit) = membership()?;
     insert_membership_audit(&mut peers, audit, hostname_records);
     for member in effective.overlay_members() {
         let entry = peer_entry(&mut peers, member.peer, member.transport_peer.to_string());

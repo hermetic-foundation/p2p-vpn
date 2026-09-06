@@ -418,6 +418,29 @@ Tests check command inverses, no-op reconciliation, protected metadata, expiry c
 and existing transaction failure behavior. Forwarding already rejected withdrawn
 authority; this reproduces stale kernel-route intent, not an overlay admission bypass.
 
+### R13: Live Inventory Could Disagree With Committed Membership
+
+Priority: P2 presentation consistency. Status: reproduced and corrected.
+
+| Responsibility | Source |
+| --- | --- |
+| Committed effective view and audit evaluation time | `src/runtime/forward.rs`: `effective_membership`, `membership_audit` |
+| Shared inventory rendering and bounds | `src/network_peer.rs`: `network_peer_inventory_from_source`, `from_inventory_at` |
+| Live list and snapshot requests | `src/runtime/runner.rs`: `runtime_peer_inventory`, `runtime_peer_snapshot` |
+
+Live inventory independently evaluated records at request wall-clock time.
+After forwarding committed expiry at 1100, a snapshot observed at 1001 reported
+the same peer as active. Forwarding remained withdrawn; this was not packet admission.
+
+- The regression failed with `Active` instead of `Expired` before the fix.
+- Live rendering now borrows forwarding membership and derives audit history at its committed evaluation time.
+- Observation timestamps remain request timestamps, even when different from the authorization evaluation time.
+- Explicit-time public constructors preserve their record validation, evaluation, and response schemas.
+
+The same test covers a future observation without prematurely expiring a committed
+active view, peer-list consistency, and historical API compatibility. Audit remains
+on demand; no second permanent membership map is added to the daemon.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.

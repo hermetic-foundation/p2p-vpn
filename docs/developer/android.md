@@ -569,6 +569,11 @@ confirmed UI action
 The detail screen renders only current members. Revoked, expired, and inactive
 records remain in the native snapshot for audit but are not rendered as peers.
 
+Live snapshot membership follows the daemon's committed forwarding view; audit
+provenance uses that same evaluation time. The snapshot observation timestamp
+still records the request time. This prevents clock skew from reviving UI peers
+whose expiry is already committed by the daemon.
+
 An active signed peer remains revocable when the Android profile also contains
 pairing-generated static peer metadata.
 
