@@ -33,6 +33,8 @@ use p2p_vpn::{
 };
 
 const CHILD_ENV: &str = "P2P_VPN_TUN_E2E_MODE";
+#[path = "support/idle_sample.rs"]
+mod idle_sample;
 const KEEP_TEMP_ENV: &str = "P2P_VPN_TUN_E2E_KEEP_TEMP";
 const ORCHESTRATOR_TIMEOUT_ENV: &str = "P2P_VPN_TUN_E2E_ORCHESTRATOR_TIMEOUT_SECONDS";
 const WAIT_TIMEOUT_SCALE_ENV: &str = "P2P_VPN_TUN_E2E_WAIT_SCALE";
@@ -214,6 +216,10 @@ fn namespace_repro_artifacts_include_replay_commands_and_metadata() {
     assert!(metadata.contains(DIRECT_TEST_NAME));
     assert!(metadata.contains("temp_dir:"));
     assert!(metadata.contains("current_exe:"));
+    assert_eq!(
+        namespace_replay_env_exports_from([(idle_sample::SAMPLE_ENV, Some("60".to_owned()))]),
+        "export P2P_VPN_TUN_E2E_IDLE_SECONDS='60'\n"
+    );
     let replay_commands = namespace_repro_commands(
         "'focused-test'",
         "'/tmp/p2p-vpn-artifacts'",
@@ -329,12 +335,24 @@ outbound_quic_datagram_packets 1\n";
 
 fn reexec_orchestrator(test_name: &str) {
     let current_exe = env::current_exe().expect("current test binary");
+    let idle_extra = idle_sample::requested_duration().map_or(Duration::ZERO, |duration| {
+        assert_eq!(
+            test_name, DIRECT_TEST_NAME,
+            "idle sampling requires the direct UDP fixture"
+        );
+        assert!(
+            keep_temp_artifacts(),
+            "idle sampling requires P2P_VPN_TUN_E2E_KEEP_TEMP=1"
+        );
+        idle_sample::WARMUP + duration
+    });
     let default_timeout = if test_name == RELAY_PROMOTION_TEST_NAME {
         Duration::from_secs(150)
     } else {
         Duration::from_secs(90)
     };
-    let timeout = env_duration_override(ORCHESTRATOR_TIMEOUT_ENV).unwrap_or(default_timeout);
+    let timeout =
+        env_duration_override(ORCHESTRATOR_TIMEOUT_ENV).unwrap_or(default_timeout + idle_extra);
     let output = command_output(
         "unshare",
         &[
@@ -354,6 +372,9 @@ fn reexec_orchestrator(test_name: &str) {
     .expect("failed to execute unshare");
 
     assert_output_success("unshare tun e2e orchestrator", &output);
+    if idle_extra > Duration::ZERO {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
 }
 
 fn run_direct_orchestrator(test_name: &str) {
@@ -426,6 +447,7 @@ fn run_direct_orchestrator(test_name: &str) {
         wait_for_packet_plane_datagrams(&temp_dir);
     }
 
+    idle_sample::capture(&temp_dir, &[("a", node_a.id()), ("b", node_b.id())]);
     stop_child(&mut node_a);
     stop_child(&mut node_b);
     assert_ping_success(
@@ -1716,9 +1738,13 @@ fn namespace_repro_commands(
 
 fn namespace_replay_env_exports() -> String {
     namespace_replay_env_exports_from(
-        [ORCHESTRATOR_TIMEOUT_ENV, WAIT_TIMEOUT_SCALE_ENV]
-            .into_iter()
-            .map(|name| (name, env::var(name).ok())),
+        [
+            ORCHESTRATOR_TIMEOUT_ENV,
+            WAIT_TIMEOUT_SCALE_ENV,
+            idle_sample::SAMPLE_ENV,
+        ]
+        .into_iter()
+        .map(|name| (name, env::var(name).ok())),
     )
 }
 

@@ -282,7 +282,7 @@
             pkgs.procps
             pkgs.stdenv.cc
             pkgs.util-linux
-          ];
+          ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.glibc.bin ];
           text = ''
             if [[ ! -f Cargo.toml || ! -d tests ]]; then
               echo "p2p-vpn-tun-e2e must be run from the p2p-vpn repository root" >&2
@@ -7132,7 +7132,7 @@
               pkgs.iputils
               pkgs.procps
               pkgs.util-linux
-            ];
+            ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.glibc.bin ];
 
             RUST_BACKTRACE = "1";
             RUST_MIN_STACK = "8388608";

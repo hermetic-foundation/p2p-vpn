@@ -13,7 +13,7 @@ security audit. Source inspection is distinguished from reproduced behavior.
 | Authorization consistency | Shared policy and cross-consumer regression tests | In progress |
 | Runtime ownership | Cohesive state owners and testable recovery decisions | In progress |
 | Operational verification | Restart, revocation, minimal LAN/relay recovery, isolation | In progress |
-| Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | Pending |
+| Resource behavior | Comparable idle CPU, memory, connection, and retry measurements | In progress |
 | Documentation | Architecture and user instructions match verified behavior | Pending |
 
 Confirmed correctness or security findings must be fixed, or explicitly deferred
@@ -758,7 +758,63 @@ pause builds for cleanup at 10 GiB of task-created temporary output.
 Do not garbage-collect unrelated Nix roots or user caches. Clean task-created
 temporary artifacts after their final use.
 
-### Live Environment Preflight
+### Controlled Idle Measurement Plan
+
+Use the existing isolated two-node UDP namespace fixture. Establish and verify
+packet forwarding first, then warm up for 30 seconds before a bounded idle sample.
+
+1. Keep normal namespace tests unchanged unless sampling is explicitly enabled.
+2. Record process start identity, CPU ticks, RSS, threads, socket descriptors,
+   TCP states, and start/end daemon counters without generating payload traffic.
+3. Record binary hash, clock tick frequency, elapsed time, and topology.
+4. Run identical fixture code and build settings against baseline and reviewed
+   runtime revisions; retain raw samples before interpreting deltas.
+
+This LAN fixture cannot establish public-DHT or mobile idle resource behavior.
+
+#### Reviewed-Build Capture
+
+Runtime source: `2dfa965a`, with measurement-only fixture additions. Rust 1.97.1,
+unoptimized integration tests, debug information and incremental compilation off.
+The fixture logs metrics every second. No builds ran during the final capture.
+
+| Setting | Recorded Value |
+| --- | --- |
+| Warmup / interval | 30 / 60 seconds |
+| Samples | 61 per node, approximately one second apart |
+| Clock ticks / available CPUs | 100 per second / 16 |
+| Kernel | `6.18.47` |
+| Host one-minute load, before / after | 3.98 / 3.43 |
+
+| Observation | Node A | Node B |
+| --- | ---: | ---: |
+| CPU, percent of one core | 0.250 | 0.233 |
+| RSS range, KiB | 34,756-34,804 | 34,300-34,320 |
+| Threads | 20 | 20 |
+| Socket FD range | 13-14 | 11-12 |
+| New direct connections | 1 | 1 |
+| Redial attempts | 0 | 1 |
+| New outgoing connection errors | 0 | 0 |
+| Path probes sent | 12 | 12 |
+| Probe failures / path demotions | 0 / 0 | 0 / 0 |
+
+Both interval boundaries selected direct UDP. Payload-send and accepted-inbound
+counters did not increase. TCP reconnect activity remains visible despite stable
+endpoint socket counts; this is not a zero-background-work claim.
+
+Raw report: `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-1183087/idle-sample.json`.
+Executable SHA-256:
+`4a599126d487379378e934e9defa653971f522ec60480c2702d3a573cee1e6e5`.
+
+The three sampler/parser regressions and replay-export assertions pass. Workspace:
+1,178 passed, 15 ignored. Required Clippy groups, formatting, and Nix source parity
+pass. The sampling fixture passed twice; normal mode passed in 15.07 seconds,
+without the sampling delay.
+
+An equivalent pre-review baseline capture is still required. These numbers do
+not prove improvement, absence of resource regressions, or production performance.
+
+### Live Service Observations
 
 On 2026-09-06, both local instances were running the store output
 `s5mvmma78p5s0mlq936gp6n21fmf1aha-p2p-vpn-0.1.0`.

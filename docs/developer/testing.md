@@ -25,7 +25,45 @@ nix develop -c cargo test packet_plane
 nix develop -c cargo test overlay
 ```
 
-## Format
+## Controlled Idle Sampling
+
+Run as the workspace user, not through `sudo`. Requires Linux user/network
+namespaces, `/dev/net/tun`, `ip`, `ping`, `getconf`, and readable `/proc` data.
+
+```sh
+P2P_VPN_TUN_E2E_KEEP_TEMP=1 P2P_VPN_TUN_E2E_IDLE_SECONDS=60 \
+  nix develop -c cargo test --test tun_namespace \
+  tun_namespace_ping_crosses_two_node_overlay -- --ignored --exact --nocapture
+```
+
+The fixture verifies direct UDP traffic, waits 30 seconds, then samples once per
+second without generating additional payload traffic. Sampling accepts 10 through
+300 seconds and extends the default orchestrator deadline automatically.
+
+| Artifact Field | Meaning |
+| --- | --- |
+| `binary_sha256` | Identity of the integration-test executable running both nodes. |
+| `clock_ticks_per_second` | Conversion factor for process CPU ticks. |
+| `samples` | Per-process CPU, RSS in KiB, threads, socket FDs, and TCP states. |
+| `daemon_before`, `daemon_after` | Runtime counters and path state at interval boundaries. |
+| `host_load_before`, `host_load_after` | Host load context; not CPU attributed to the VPN. |
+
+The printed `idle-sample.json` path is retained with normal fixture artifacts.
+TCP state codes include `01` for established, `02` for SYN-sent, and `0A` for listen.
+TCP tables cover each isolated network namespace; socket FDs cover the node process.
+
+Compute one-core CPU percent as `100 * delta(cpu_ticks) / CLK_TCK / delta(elapsed_seconds)`.
+Compare identical fixture code, compiler/profile settings, warmup, and sample
+duration across revisions. Keep raw samples and verify path health in both runs.
+
+This is an isolated LAN integration-test workload, not a release-binary, public-DHT,
+or Android benchmark. Endpoint queries add some observation overhead. Do not infer
+production performance from one run or equate stable sockets with zero retries.
+
+The fixture emits runtime metrics every second. Preserve that logging interval
+and account for host load when comparing samples.
+
+## Rust Formatting
 
 ```sh
 nix develop -c cargo fmt -- --check
