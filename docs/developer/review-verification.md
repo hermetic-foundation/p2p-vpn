@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including the membership response-dispatch fix.
+Audited on 2026-09-06, including membership-sync authorization retirement.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,15 +11,15 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,196 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | Code pairing passes after the response-dispatch fix in 13.32 seconds; prior all-11 run passed in 188.47 seconds. | Controlled topology, not public NAT traversal; all-11 run predates the latest fix. |
+| Workspace | Last full run: 1,199 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 pass after sync authorization retirement, in 188.76 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | JNI/Gradle checks and [68 completed multi-network steps](android-multi-network-review.md) pass at `f026342f`. | Predates the response-dispatch fix; API 35 x86_64 emulator, not physical cellular/NAT or battery evidence. |
+| Android | JNI/Gradle checks and [68 completed multi-network steps](android-multi-network-review.md) pass at `f026342f`. | Predates the sync lifecycle fixes; API 35 x86_64 emulator, not physical cellular/NAT or battery evidence. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -27,6 +27,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Live inventory | Expiry regression and current emulator lifecycle pass; lists/snapshots share committed membership and audit time. | The emulator run does not simulate hostile replies or clock rollback; those have separate unit/review coverage. |
 | Membership-page authority | Remote-expiry regression reproduced and fixed; local-expiry recovery and existing resignation/revocation tests pass. | Page authority only; not a new packet or mutation exception. |
 | Membership response dispatch | Wrong-type response leak reproduced and fixed; owner cleanup, retry boundary, and newer-request isolation pass. | Injected usable-connection event, not live hostile-peer transport ordering. |
+| Membership sync retirement | Revoked first/final/restart replies stop; expiry and static-peer removal release pending owners; local recovery is preserved. | Application ownership, not transport-request cancellation; historical maps and stale-connection ordering remain open. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
 ## Exported Flake Checks
@@ -55,7 +56,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass after installed startup snapshot handoff. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass after sync authorization retirement. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -103,7 +104,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Workstream | Required Next Evidence |
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
-| Session lifecycle | [Membership-sync review](membership-sync-review.md): wrong-type dispatch is fixed; authorization retirement, history bounds, and stale-connection ordering remain. |
+| Session lifecycle | [Membership-sync review](membership-sync-review.md): dispatch and authorization withdrawal are fixed; history bounds and stale-connection ordering remain. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |

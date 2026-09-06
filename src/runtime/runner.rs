@@ -560,6 +560,7 @@ struct MembershipRecordSyncs {
     active_by_peer: HashMap<Libp2pPeerId, request_response::OutboundRequestId>,
     completed_snapshots: HashMap<Libp2pPeerId, String>,
     retry_after: HashMap<Libp2pPeerId, Instant>,
+    checked_policy_revision: Option<(u64, u64)>,
 }
 
 impl MembershipRecordSyncs {
@@ -587,6 +588,7 @@ impl MembershipRecordSyncs {
     ) {
         self.active_by_peer.insert(pending.peer, request_id);
         self.pending.insert(request_id, pending);
+        self.checked_policy_revision = None;
     }
 
     fn take(
@@ -614,6 +616,35 @@ impl MembershipRecordSyncs {
         if let Some(request_id) = self.active_by_peer.remove(&peer) {
             self.pending.remove(&request_id);
         }
+    }
+
+    fn reconcile_authorization(
+        &mut self,
+        forwarder: &Forwarder,
+        metrics: &RuntimeMetrics,
+    ) -> usize {
+        // Remote sync authority can change while local packet authorization is already empty.
+        let revision = (
+            forwarder.authorization_revision(),
+            forwarder.membership_revision(),
+        );
+        if self.checked_policy_revision == Some(revision) {
+            return 0;
+        }
+        let retired = self
+            .pending
+            .iter()
+            .filter_map(|(request_id, pending)| {
+                (!forwarder.authorizes_membership_sync(pending.peer)).then_some(*request_id)
+            })
+            .collect::<Vec<_>>();
+        for request_id in &retired {
+            if let Some(pending) = self.take(*request_id) {
+                fail_membership_record_sync(self, metrics, pending.peer, "authorization_withdrawn");
+            }
+        }
+        self.checked_policy_revision = Some(revision);
+        retired.len()
     }
 }
 
@@ -1612,6 +1643,7 @@ where
 
     let mut packet_authorization_revision = None;
     loop {
+        membership_record_syncs.reconcile_authorization(&forwarder, &metrics);
         if packet_authorization_revision != Some(forwarder.authorization_revision()) {
             reconcile_recovery_query_authorization(
                 &forwarder,
@@ -18406,6 +18438,10 @@ fn handle_membership_record_sync_response(
         fail_membership_record_sync(syncs, metrics, pending.peer, "response_peer_mismatch");
         return false;
     }
+    if !forwarder.authorizes_membership_sync(peer) {
+        fail_membership_record_sync(syncs, metrics, peer, "authorization_withdrawn");
+        return false;
+    }
 
     let page = match response {
         ControlResponse::MembershipRecordsPage(page) => page,
@@ -34223,6 +34259,27 @@ mod tests {
         assert_eq!(snapshot.membership_state_persists, 0);
     }
 
+    fn membership_sync_test_node(identity: NodeIdentity) -> P2pNode {
+        build_node(&HostConfig {
+            identity,
+            network_name: "lab".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig::default(),
+        })
+        .expect("node")
+    }
+
     async fn dispatch_membership_sync_test_response(
         node: &mut P2pNode,
         forwarder: &mut Forwarder,
@@ -34320,24 +34377,7 @@ mod tests {
         let remote_peer = remote.peer_id.parse().expect("remote peer");
         let config = config_with_peer(&local, remote_peer);
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
-        let mut node = build_node(&HostConfig {
-            identity: local,
-            network_name: "lab".to_owned(),
-            membership_tag: None,
-            mtu: 1280,
-            max_concurrent_control_streams: 64,
-            max_concurrent_packet_streams: 256,
-            listen_addresses: Vec::new(),
-            external_addresses: Vec::new(),
-            bootstrap_peers: Vec::new(),
-            known_peers: Vec::new(),
-            relay_reservations: Vec::new(),
-            relay_server: false,
-            relay_resources: crate::config::RelayResourceConfig::default(),
-            resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
-        })
-        .expect("node");
+        let mut node = membership_sync_test_node(local);
         let capabilities = ControlCapabilities::local("lab", None, 1280)
             .with_membership_record_inventory(&records);
         let metrics = RuntimeMetrics::default();
@@ -34401,6 +34441,225 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn membership_record_sync_rejects_replies_after_remote_revocation() {
+        for response_kind in ["first_page", "final_page", "restart"] {
+            let (local, remote, records) = membership_record_sync_records(12);
+            let remote_peer = remote.peer_id.parse().unwrap();
+            let mut config = config_with_peer(&local, remote_peer);
+            config.network.member_records = records[..3].to_vec();
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut node = membership_sync_test_node(local.clone());
+            let capabilities = ControlCapabilities::local("lab", None, 1280)
+                .with_membership_record_inventory(&records);
+            let metrics = RuntimeMetrics::default();
+            let mut syncs = MembershipRecordSyncs::default();
+            send_membership_record_sync_request(
+                &mut node.swarm,
+                &mut syncs,
+                &metrics,
+                PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities),
+            );
+            if response_kind == "final_page" {
+                let (&request_id, pending) = syncs.pending.iter().next().unwrap();
+                let page =
+                    build_membership_records_page(&pending.request, &records, "lab", None, &[])
+                        .unwrap();
+                assert!(page.next_cursor.is_some());
+                dispatch_membership_sync_test_response(
+                    &mut node,
+                    &mut forwarder,
+                    &mut syncs,
+                    &metrics,
+                    remote_peer,
+                    request_id,
+                    ControlResponse::MembershipRecordsPage(page),
+                )
+                .await;
+                assert_eq!(forwarder.member_records().len(), 3);
+            }
+            let (&request_id, pending) = syncs.pending.iter().next().unwrap();
+            let response = if response_kind == "restart" {
+                ControlResponse::MembershipRecordsRejected(
+                    MembershipRecordsRejectionReason::SnapshotChanged,
+                )
+            } else {
+                let page =
+                    build_membership_records_page(&pending.request, &records, "lab", None, &[])
+                        .unwrap();
+                assert_eq!(page.next_cursor.is_none(), response_kind == "final_page");
+                ControlResponse::MembershipRecordsPage(page)
+            };
+            let now = current_unix_seconds_lossy();
+            let revocation =
+                issue_local_membership_revocation_at(&forwarder, &local, &remote.peer_id, now)
+                    .unwrap();
+            forwarder
+                .merge_membership_records(&[revocation], now)
+                .unwrap();
+            assert!(!forwarder.authorizes_membership_sync(remote_peer));
+            let retained = forwarder.member_records().to_vec();
+            let requests_sent = metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_page_requests_sent;
+
+            dispatch_membership_sync_test_response(
+                &mut node,
+                &mut forwarder,
+                &mut syncs,
+                &metrics,
+                remote_peer,
+                request_id,
+                response,
+            )
+            .await;
+
+            assert!(
+                syncs.pending.is_empty(),
+                "{response_kind}: retired request continued"
+            );
+            assert!(syncs.active_by_peer.is_empty());
+            assert!(syncs.completed_snapshots.is_empty());
+            assert_eq!(
+                forwarder.member_records(),
+                retained,
+                "{response_kind}: merged after revocation"
+            );
+            let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+            assert_eq!(snapshot.membership_record_page_requests_sent, requests_sent);
+            assert_eq!(snapshot.membership_record_sync_failures, 1);
+            assert_eq!(snapshot.membership_record_syncs_restarted, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_retires_on_expiry_without_a_response() {
+        let local = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let remote_peer = remote.peer_id.parse().unwrap();
+        let now = current_unix_seconds_lossy();
+        let local_expiry = now + 3_600;
+        let remote_expiry = local_expiry + 3_600;
+        let mut config = config_with_peer(&local, remote_peer);
+        for (member, expiry) in [(local.clone(), local_expiry), (remote, remote_expiry)] {
+            config.network.member_records.push(
+                issue_membership_record_at(
+                    &local,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member,
+                        membership_epoch: 1,
+                        sequence: 1,
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: Some(expiry),
+                    },
+                    now,
+                )
+                .unwrap(),
+            );
+        }
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let mut node = membership_sync_test_node(local);
+        let capabilities = ControlCapabilities::local("lab", None, 1280)
+            .with_membership_record_inventory(forwarder.member_records());
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        send_membership_record_sync_request(
+            &mut node.swarm,
+            &mut syncs,
+            &metrics,
+            PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities),
+        );
+        let request_id = *syncs.pending.keys().next().unwrap();
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+
+        forwarder.refresh_membership_records(local_expiry).unwrap();
+        assert!(!forwarder.is_configured_transport_peer(remote_peer));
+        assert!(forwarder.authorizes_membership_sync(remote_peer));
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+        assert!(
+            syncs.contains(request_id),
+            "active remote keeps recovery authority"
+        );
+        let packet_revision = forwarder.authorization_revision();
+        let membership_revision = forwarder.membership_revision();
+
+        forwarder.refresh_membership_records(remote_expiry).unwrap();
+        assert!(!forwarder.authorizes_membership_sync(remote_peer));
+        assert_eq!(forwarder.authorization_revision(), packet_revision);
+        assert_ne!(forwarder.membership_revision(), membership_revision);
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
+        assert!(syncs.pending.is_empty());
+        assert!(syncs.active_by_peer.is_empty());
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+        let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+        assert_eq!(snapshot.membership_record_sync_failures, 1);
+        assert_eq!(snapshot.membership_record_page_requests_sent, 1);
+
+        dispatch_membership_sync_test_response(
+            &mut node,
+            &mut forwarder,
+            &mut syncs,
+            &metrics,
+            remote_peer,
+            request_id,
+            ControlResponse::MembershipRecordsRejected(
+                MembershipRecordsRejectionReason::SnapshotChanged,
+            ),
+        )
+        .await;
+        assert!(syncs.pending.is_empty());
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_sync_failures,
+            1
+        );
+        assert!(!forwarder.authorizes_membership_sync(remote_peer));
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_retires_on_static_peer_removal() {
+        let local = NodeIdentity::generate_ed25519().unwrap();
+        let remote_peer = peer_id();
+        let mut config = config_with_peer(&local, remote_peer);
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let mut node = membership_sync_test_node(local);
+        let capabilities =
+            ControlCapabilities::local("lab", None, 1280).with_membership_record_inventory(&[]);
+        let metrics = RuntimeMetrics::default();
+        let mut syncs = MembershipRecordSyncs::default();
+        send_membership_record_sync_request(
+            &mut node.swarm,
+            &mut syncs,
+            &metrics,
+            PendingMembershipRecordSync::first(remote_peer, &capabilities, &capabilities),
+        );
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+        let packet_revision = forwarder.authorization_revision();
+        let membership_revision = forwarder.membership_revision();
+        config.peers.clear();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config, current_unix_seconds_lossy())
+                .unwrap(),
+        );
+        assert!(!forwarder.authorizes_membership_sync(remote_peer));
+        assert_ne!(forwarder.authorization_revision(), packet_revision);
+        assert_eq!(forwarder.membership_revision(), membership_revision);
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 1);
+        assert!(syncs.pending.is_empty());
+        assert!(syncs.active_by_peer.is_empty());
+        assert_eq!(syncs.reconcile_authorization(&forwarder, &metrics), 0);
+        assert_eq!(
+            metrics
+                .snapshot(crate::queue::QueueStats::default())
+                .membership_record_sync_failures,
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn membership_record_sync_merges_a_verified_multi_page_snapshot() {
         let (local, remote, records) = membership_record_sync_records(12);
         let mut config = config_with_peer(
@@ -34408,7 +34667,7 @@ mod tests {
             remote.peer_id.parse().expect("remote transport peer"),
         );
         config.peers.clear();
-        config.network.member_records = records[..2].to_vec();
+        config.network.member_records = records[..3].to_vec();
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut node = build_node(&HostConfig {
@@ -34467,7 +34726,7 @@ mod tests {
                 .expect("membership page");
             pages += 1;
             if page.next_cursor.is_some() {
-                assert_eq!(forwarder.member_records().len(), 2);
+                assert_eq!(forwarder.member_records().len(), 3);
             }
             handle_membership_record_sync_response(
                 &mut node.swarm,
@@ -34498,7 +34757,7 @@ mod tests {
         assert_eq!(snapshot.membership_record_page_requests_sent, 2);
         assert_eq!(snapshot.membership_record_pages_received, 2);
         assert_eq!(snapshot.membership_record_syncs_completed, 1);
-        assert_eq!(snapshot.membership_records_accepted, 10);
+        assert_eq!(snapshot.membership_records_accepted, 9);
     }
 
     #[tokio::test]
@@ -34509,7 +34768,7 @@ mod tests {
             remote.peer_id.parse().expect("remote transport peer"),
         );
         config.peers.clear();
-        config.network.member_records = records[..2].to_vec();
+        config.network.member_records = records[..3].to_vec();
         let mut forwarder = Forwarder::from_config(&config).expect("forwarder");
         let mut membership = OverlayMembership::from_config(&config).expect("membership");
         let mut node = build_node(&HostConfig {
@@ -34572,7 +34831,7 @@ mod tests {
                 previous_tags: &[],
             },
         );
-        assert_eq!(forwarder.member_records(), &records[..2]);
+        assert_eq!(forwarder.member_records(), &records[..3]);
 
         let (second_request_id, second_request) = syncs
             .pending
@@ -34602,8 +34861,8 @@ mod tests {
             },
         );
 
-        assert_eq!(forwarder.member_records(), &records[..2]);
-        assert_eq!(membership.len(), 2);
+        assert_eq!(forwarder.member_records(), &records[..3]);
+        assert_eq!(membership.len(), 3);
         assert!(syncs.pending.is_empty());
         assert!(syncs.retry_after.contains_key(&remote_peer));
         let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
