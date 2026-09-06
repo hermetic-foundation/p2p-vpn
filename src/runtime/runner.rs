@@ -13065,7 +13065,7 @@ async fn handle_control_request(
             context
                 .metrics
                 .record_membership_record_page_request_received();
-            let response = if !membership_record_sync_is_authorized(context.forwarder, peer) {
+            let response = if !context.forwarder.authorizes_membership_sync(peer) {
                 Err(MembershipRecordsRejectionReason::UnauthorizedPeer)
             } else if !context
                 .membership_page_rate_limiters
@@ -17829,23 +17829,6 @@ fn send_membership_departure_to_connected_members(
         sent += 1;
     }
     sent
-}
-
-fn membership_record_sync_is_authorized(forwarder: &Forwarder, peer: Libp2pPeerId) -> bool {
-    if forwarder.is_configured_transport_peer(peer) {
-        return true;
-    }
-
-    effective_membership_at(
-        forwarder.member_records(),
-        &forwarder.config().network.name,
-        current_unix_seconds_lossy(),
-    )
-    .is_ok_and(|membership| {
-        membership
-            .overlay_members()
-            .any(|member| member.transport_peer == peer)
-    })
 }
 
 fn update_observed_packet_plane_endpoints(
@@ -23458,14 +23441,8 @@ mod tests {
         assert!(redial_targets(&forwarder).addresses.is_empty());
         assert_eq!(membership.len(), 1);
         assert!(tun_runtime.routes.is_empty());
-        assert!(membership_record_sync_is_authorized(
-            &forwarder,
-            creator_peer,
-        ));
-        assert!(!membership_record_sync_is_authorized(
-            &forwarder,
-            target_peer,
-        ));
+        assert!(forwarder.authorizes_membership_sync(creator_peer));
+        assert!(!forwarder.authorizes_membership_sync(target_peer));
         assert!(matches!(
             issue_local_membership_revocation_at(
                 &forwarder,
@@ -24827,6 +24804,45 @@ mod tests {
             response.try_recv().expect("shutdown response"),
             vec!["shutdown accepted".to_owned()]
         );
+    }
+
+    #[test]
+    fn membership_sync_uses_committed_expiry_without_blocking_local_recovery() {
+        for expire_local in [false, true] {
+            let issuer = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+            let remote = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+            let transport = remote.peer_id.parse().unwrap();
+            let mut config = config_with_peer(&issuer, transport);
+            let now = current_unix_seconds_lossy();
+            let expiry = now + 3_600;
+            for (member, expires) in [(issuer.clone(), expire_local), (remote, !expire_local)] {
+                config.network.member_records.push(
+                    issue_membership_record_at(
+                        &issuer,
+                        MembershipRecordOptions {
+                            network_name: "lab".to_owned(),
+                            member,
+                            membership_epoch: 1,
+                            sequence: 1,
+                            roles: vec![MembershipRole::OverlayMember],
+                            route_grants: Vec::new(),
+                            expires_at_unix_seconds: expires.then_some(expiry),
+                        },
+                        now,
+                    )
+                    .unwrap(),
+                );
+            }
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            assert!(forwarder.authorizes_membership_sync(transport));
+            forwarder.refresh_membership_records(expiry).unwrap();
+            assert!(!forwarder.is_configured_transport_peer(transport));
+            assert_eq!(
+                forwarder.authorizes_membership_sync(transport),
+                expire_local
+            );
+            assert!(!forwarder.authorizes_membership_sync(peer_id()));
+        }
     }
 
     #[test]

@@ -318,6 +318,16 @@ impl Forwarder {
             .any(|configured| *configured == peer)
     }
 
+    pub(crate) fn authorizes_membership_sync(&self, peer: Libp2pPeerId) -> bool {
+        // Active remote members can retrieve membership records even when local
+        // membership is inactive. This exception does not authorize packets.
+        self.is_configured_transport_peer(peer)
+            || self
+                .effective_membership
+                .overlay_members()
+                .any(|member| member.transport_peer == peer)
+    }
+
     pub fn configured_overlay_peers(&self) -> impl Iterator<Item = PeerId> + '_ {
         self.authorization.peers.keys().copied()
     }

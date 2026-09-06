@@ -301,6 +301,10 @@ capture connected active members
 
 The page exception authorizes only active identities in the signed ledger.
 
+`Forwarder::authorizes_membership_sync` uses committed membership, including
+committed expiry and revocation. It does not reevaluate history at request time.
+Normally authorized configured peers retain their existing sync access.
+
 It does not restore packet, route, service, pairing, or mutation authority to the
 resigned node. A fully isolated resignation remains durable but cannot converge
 until another member becomes reachable.

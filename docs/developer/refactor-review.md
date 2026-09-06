@@ -441,6 +441,27 @@ The same test covers a future observation without prematurely expiring a committ
 active view, peer-list consistency, and historical API compatibility. Audit remains
 on demand; no second permanent membership map is added to the daemon.
 
+### R14: Membership-Page Fallback Recomputed Remote Authorization
+
+Priority: P2 control-plane authorization consistency. Status: reproduced and corrected.
+
+| Responsibility | Source |
+| --- | --- |
+| Normal admission and inactive-local exception | `src/runtime/forward.rs`: `authorizes_membership_sync` |
+| Membership-page request dispatch | `src/runtime/runner.rs`: `ControlRequest::MembershipRecords` |
+
+The fallback independently evaluated signed history at wall-clock time. After
+committing remote expiry at a later time, it could still authorize that remote
+identity to retrieve membership pages. Packet authorization remained withdrawn.
+
+- The regression failed by returning `true` after committed remote expiry.
+- The decision now belongs to the forwarder and uses its committed effective view.
+- Local expiry still permits active signed remote members to retrieve records.
+- Unknown peers remain rejected; existing resignation/revocation tests retain their coverage.
+
+Page-size, rate-limit, snapshot, and network-scope validation are unchanged.
+The recovery exception does not grant packet, service, or mutation authority.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.
