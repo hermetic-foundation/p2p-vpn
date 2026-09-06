@@ -520,8 +520,8 @@ fn run_mdns_orchestrator() {
     let initiator_log = read_log(&temp_dir.join("node-a.log"));
     let responder_log = read_log(&temp_dir.join("node-b.log"));
     assert!(
-        initiator_log.contains("event=control_capabilities_accepted ")
-            && initiator_log.contains("discovered_address_dial_attempts 1"),
+        log_metric_positive(&initiator_log, "control_capability_accepts")
+            && log_metric_positive(&initiator_log, "discovered_address_dial_attempts"),
         "node A did not discover and validate node B through mDNS\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
@@ -709,7 +709,7 @@ fn run_invite_relay_orchestrator() {
         "relay did not accept a circuit for invite-imported config\nrelay log:\n{relay_log}\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     assert!(
-        initiator_log.contains("event=control_capabilities_accepted "),
+        log_metric_positive(&initiator_log, "control_capability_accepts"),
         "invite-imported node did not exchange accepted capabilities\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}",
     );
     cleanup_temp_dir(temp_dir);
@@ -997,9 +997,10 @@ fn run_dht_orchestrator() {
     wait_for_child_namespace(bootstrap.id());
     wait_for_child_namespace(node_a.id());
     wait_for_child_namespace(node_b.id());
-    configure_three_node_underlay(bootstrap.id(), node_a.id(), node_b.id(), "dht", "10.252.0");
-    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "10.252.0.254"]);
-    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "10.252.0.254"]);
+    // Public discovery rejects RFC1918 hints. This subnet exists only in isolated namespaces.
+    configure_three_node_underlay(bootstrap.id(), node_a.id(), node_b.id(), "dht", "11.252.0");
+    ns_command(node_a.id(), "ping", &["-c", "1", "-W", "2", "11.252.0.254"]);
+    ns_command(node_b.id(), "ping", &["-c", "1", "-W", "2", "11.252.0.254"]);
 
     fs::write(&start_bootstrap, b"start").expect("write bootstrap start file");
     wait_for_file(&temp_dir.join("ready-bootstrap"));
@@ -1035,7 +1036,7 @@ fn run_dht_orchestrator() {
     let bootstrap_log = read_log(&temp_dir.join("node-bootstrap.log"));
     assert!(
         initiator_log.contains("event=kademlia_query_progressed")
-            && initiator_log.contains("event=control_capabilities_accepted "),
+            && log_metric_positive(&initiator_log, "control_capability_accepts"),
         "node A did not discover and validate node B through Kademlia\nnode-a log:\n{initiator_log}\nnode-b log:\n{responder_log}\nbootstrap log:\n{bootstrap_log}",
     );
     assert_packet_plane_datagrams_used("node A", &initiator_log, &responder_log);
@@ -1936,10 +1937,11 @@ fn wait_for_pairing_replay_rejection(temp_dir: &Path, role: &str) {
 }
 
 fn wait_for_packet_plane_sessions(temp_dir: &Path, role: &str) {
+    // A failed discovery handshake can need a 10-second backoff and the next 10-second tick.
     wait_for_daemon_state(
         temp_dir,
         role,
-        scaled_wait_timeout(Duration::from_secs(15)),
+        scaled_wait_timeout(Duration::from_secs(30)),
         "validated peer with packet-plane session",
         |lines| {
             state_colon_count(lines, "validated peers").is_some_and(|count| count >= 1)
@@ -1949,6 +1951,7 @@ fn wait_for_packet_plane_sessions(temp_dir: &Path, role: &str) {
                     .is_some_and(|count| count >= 1)
         },
     );
+    wait_for_selected_path(temp_dir, role, "direct_udp_datagram");
 }
 
 fn wait_for_direct_promotion(temp_dir: &Path, role: &str) {
@@ -2293,6 +2296,18 @@ fn log_metric_positive(log: &str, metric: &str) -> bool {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .is_some_and(|value| value > 0)
     })
+}
+
+#[test]
+fn capability_evidence_requires_acceptance_not_receipt() {
+    assert!(log_metric_positive(
+        "event=control_capabilities_received\n  control_capability_accepts 1\n",
+        "control_capability_accepts",
+    ));
+    assert!(!log_metric_positive(
+        "event=control_capabilities_received\n  control_capability_accepts 0\n",
+        "control_capability_accepts",
+    ));
 }
 
 fn log_tail(log: &str, lines: usize) -> String {
@@ -2920,8 +2935,8 @@ fn dht_overlay_config(
     let (interface, listen, packet_endpoint, local_routes, peer_routes) = match role {
         "a" => (
             "hse2ea",
-            "/ip4/10.252.0.1/tcp/42301",
-            "10.252.0.1:43301",
+            "/ip4/11.252.0.1/tcp/42301",
+            "11.252.0.1:43301",
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
                 metric: 100,
@@ -2930,8 +2945,8 @@ fn dht_overlay_config(
         ),
         "b" => (
             "hse2eb",
-            "/ip4/10.252.0.2/tcp/42302",
-            "10.252.0.2:43302",
+            "/ip4/11.252.0.2/tcp/42302",
+            "11.252.0.2:43302",
             Vec::new(),
             vec![RouteConfig {
                 prefix: "10.41.0.0/24".to_owned(),
@@ -2950,9 +2965,11 @@ fn dht_overlay_config(
     );
     config.network.bootstrap_peers = vec![p2p_vpn::config::BootstrapPeerConfig {
         id: bootstrap.peer_id.clone(),
-        address: format!("/ip4/10.252.0.254/tcp/42300/p2p/{}", bootstrap.peer_id),
+        address: format!("/ip4/11.252.0.254/tcp/42300/p2p/{}", bootstrap.peer_id),
     }];
     config.network.discovery = dht_test_discovery();
+    // AutoNAT is disabled in this fixture; declare the simulated public listener explicitly.
+    config.network.external_addresses = config.network.listen_addresses.clone();
     enable_test_packet_plane(&mut config, packet_endpoint);
     config
 }
@@ -3276,8 +3293,8 @@ fn bootstrap_config(identity: &NodeIdentity) -> Config {
             member_records: Vec::new(),
             vpn_ip: None,
             routes: Vec::new(),
-            listen_addresses: vec!["/ip4/10.252.0.254/tcp/42300".to_owned()],
-            external_addresses: vec!["/ip4/10.252.0.254/tcp/42300".to_owned()],
+            listen_addresses: vec!["/ip4/11.252.0.254/tcp/42300".to_owned()],
+            external_addresses: vec!["/ip4/11.252.0.254/tcp/42300".to_owned()],
             bootstrap_peers: Vec::new(),
             discovery: dht_bootstrap_discovery(),
             relay: RelayConfig::default(),

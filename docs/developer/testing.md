@@ -889,8 +889,16 @@ These tests require Linux namespace and TUN support.
 | --- | --- |
 | Child diagnostics | Drain stdout and stderr concurrently; retain at most 1 MiB per stream plus a truncation marker. |
 | Node ownership | Kill and reap namespace children when the orchestrator unwinds after an assertion. |
-| Capability evidence | Check the structured `control_capabilities_accepted` event. |
+| Capability evidence | Check the acceptance counter, covering inbound requests and responses; receipt alone is insufficient. |
 | Datagram evidence | Read sessions, healthy paths, and transmitted packets from `daemon-state`; read accepted inbound packets from `daemon-status`. |
+| Measured UDP traffic | Wait for the selected UDP path, not merely an installed session, before sending the ping burst. |
+
+The DHT fixture uses simulated public addresses on `11.252.0.0/24` inside isolated
+network namespaces, without a default route to an external network. AutoNAT is off;
+the fixture explicitly advertises its known listener addresses.
+
+This tests public-address discovery policy locally. It is not a public-WAN proof,
+and production rejection of third-party private-address hints remains enabled.
 
 Do not rebuild the test executable while a namespace suite is running.
 Each orchestrator re-executes that executable; replacement invalidates later cases.
