@@ -249,6 +249,7 @@ struct PacketPlaneNegotiator {
 
 #[derive(Debug)]
 struct PendingPacketPlaneHello {
+    request_id: Option<request_response::OutboundRequestId>,
     secret: PacketPlaneEphemeralSecret,
     hello: VerifiedPacketPlaneHandshake,
     backend: PacketDatagramBackend,
@@ -294,6 +295,7 @@ impl PacketPlaneNegotiator {
         self.pending.insert(
             peer,
             PendingPacketPlaneHello {
+                request_id: None,
                 secret,
                 hello,
                 backend,
@@ -329,6 +331,12 @@ impl PacketPlaneNegotiator {
 
     fn has_pending(&self, peer: PeerId) -> bool {
         self.pending.contains_key(&peer)
+    }
+
+    fn owns_request(&self, peer: PeerId, request_id: request_response::OutboundRequestId) -> bool {
+        self.pending
+            .get(&peer)
+            .is_some_and(|pending| pending.request_id == Some(request_id))
     }
 
     fn remove_peer(&mut self, peer: PeerId) {
@@ -1864,11 +1872,6 @@ where
                 }
             }
             _ = timers.queue_expiry.tick() => {
-                expire_pending_packet_plane_hellos(
-                    &mut packet_plane_negotiator,
-                    &metrics,
-                    Instant::now(),
-                );
                 expire_outbound_queue(&mut queues, &metrics);
                 let expired_replay_sessions = forwarder.expire_replay_sessions();
                 if expired_replay_sessions > 0 {
@@ -1902,6 +1905,7 @@ where
                     metrics: &metrics,
                     session_ttl: packet_plane_session_ttl,
                 };
+                expire_pending_packet_plane_hellos(&mut expiry_context, Instant::now());
                 expire_packet_plane_sessions(&mut expiry_context);
             }
             _ = timers.code_pairing.tick() => {
@@ -12083,6 +12087,23 @@ async fn handle_control_event(
                 },
             ..
         } => {
+            if matches!(
+                &response,
+                ControlResponse::PacketPlaneAccepted(_) | ControlResponse::PacketPlaneRejected(_)
+            ) && !context
+                .packet_plane_negotiator
+                .owns_request(PeerId::from_libp2p(peer), request_id)
+            {
+                log_runtime_event(
+                    LogLevel::Info,
+                    "packet_plane_stale_response_ignored",
+                    &[
+                        ("peer", &peer.to_string()),
+                        ("request_id", &request_id.to_string()),
+                    ],
+                );
+                return Ok(());
+            }
             let validation_scope = MembershipValidationScope::from_capabilities(
                 context.local_capabilities,
                 context.previous_membership_tags,
@@ -16843,10 +16864,13 @@ fn maybe_send_packet_plane_hello(
         Ok((secret, handshake, verified)) => match handshake.encode() {
             Ok(encoded) => {
                 negotiator.insert(remote_overlay, secret, verified, backend);
-                swarm
+                let request_id = swarm
                     .behaviour_mut()
                     .control
                     .send_request(&peer, ControlRequest::PacketPlaneHello(encoded));
+                if let Some(pending) = negotiator.pending.get_mut(&remote_overlay) {
+                    pending.request_id = Some(request_id);
+                }
                 if backend == PacketDatagramBackend::OwnedQuic {
                     if let Some(packet_plane_quic) = packet_plane_quic {
                         negotiator.start_quic_connection(
@@ -16866,7 +16890,10 @@ fn maybe_send_packet_plane_hello(
                 log_runtime_event(
                     LogLevel::Info,
                     "packet_plane_hello_sent",
-                    &[("peer", &remote_overlay.to_string())],
+                    &[
+                        ("peer", &remote_overlay.to_string()),
+                        ("request_id", &request_id.to_string()),
+                    ],
                 );
             }
             Err(error) => {
@@ -17558,8 +17585,15 @@ fn handle_expired_packet_plane_session(
         ],
     );
 
-    if let Some(peer) = context.forwarder.transport_peer_for_overlay(session.peer)
-        && let Some(capabilities) = context.peer_capabilities.get(session.peer)
+    retry_packet_plane_negotiation(context, session.peer);
+}
+
+fn retry_packet_plane_negotiation(
+    context: &mut PacketPlaneExpiryContext<'_>,
+    overlay_peer: PeerId,
+) {
+    if let Some(peer) = context.forwarder.transport_peer_for_overlay(overlay_peer)
+        && let Some(capabilities) = context.peer_capabilities.get(overlay_peer)
     {
         maybe_send_packet_plane_hello(
             context.swarm,
@@ -17577,13 +17611,12 @@ fn handle_expired_packet_plane_session(
     }
 }
 
-fn expire_pending_packet_plane_hellos(
-    negotiator: &mut PacketPlaneNegotiator,
-    metrics: &RuntimeMetrics,
-    now: Instant,
-) {
-    for (peer, backend) in negotiator.expire_stale(now, PACKET_PLANE_PENDING_HELLO_TIMEOUT) {
-        metrics.record_control_failure();
+fn expire_pending_packet_plane_hellos(context: &mut PacketPlaneExpiryContext<'_>, now: Instant) {
+    for (peer, backend) in context
+        .negotiator
+        .expire_stale(now, PACKET_PLANE_PENDING_HELLO_TIMEOUT)
+    {
+        context.metrics.record_control_failure();
         log_runtime_event(
             LogLevel::Warn,
             "packet_plane_pending_hello_expired",
@@ -17592,6 +17625,7 @@ fn expire_pending_packet_plane_hellos(
                 ("backend", packet_datagram_backend_name(backend)),
             ],
         );
+        retry_packet_plane_negotiation(context, peer);
     }
 }
 
@@ -37202,6 +37236,149 @@ mod tests {
 
         assert_eq!(expired, vec![(peer, PacketDatagramBackend::OwnedUdp)]);
         assert!(!negotiator.has_pending(peer));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn expired_packet_plane_hello_retries_without_an_external_event() {
+        for (direct_path, authorized, retries) in [
+            (true, true, true),
+            (false, true, false),
+            (true, false, false),
+        ] {
+            let mut identities = [
+                NodeIdentity::generate_ed25519().expect("local"),
+                NodeIdentity::generate_ed25519().expect("remote"),
+            ];
+            identities.sort_by_key(|identity| {
+                identity
+                    .peer_id
+                    .parse::<PeerId>()
+                    .expect("overlay")
+                    .as_bytes()
+            });
+            let [local_identity, remote_identity] = identities;
+            let remote = remote_identity
+                .peer_id
+                .parse::<Libp2pPeerId>()
+                .expect("peer");
+            let remote_overlay = PeerId::from_libp2p(remote);
+            let mut node = pairing_test_node(&local_identity);
+            let mut config = config_with_peer(&local_identity, remote);
+            if !authorized {
+                config.peers.clear();
+            }
+            let forwarder = Forwarder::from_config(&config).expect("forwarder");
+            let mut packet_plane =
+                PacketPlaneRuntime::bind(vec!["127.0.0.1:0".parse().expect("endpoint")])
+                    .await
+                    .expect("packet plane");
+            let local_capabilities =
+                packet_plane_test_capabilities(packet_plane.primary_listener().expect("listener"));
+            let mut peer_capabilities = PeerCapabilities::default();
+            peer_capabilities.record(
+                remote_overlay,
+                packet_plane_test_capabilities("127.0.0.1:51820".parse().expect("remote endpoint")),
+            );
+            let mut paths = PathSet::new();
+            paths.record_established(
+                remote_overlay,
+                if direct_path {
+                    PathKind::DirectTcpStream
+                } else {
+                    PathKind::CircuitRelay
+                },
+            );
+            let mut negotiator = PacketPlaneNegotiator::default();
+            let secret = test_packet_plane_secret(7);
+            let hello = verified_test_packet_plane_handshake(
+                PacketPlaneHandshakeKind::Hello,
+                &local_identity,
+                &secret,
+                1280,
+                packet_plane.primary_listener().expect("listener"),
+            );
+            negotiator.insert(
+                remote_overlay,
+                secret,
+                hello,
+                PacketDatagramBackend::OwnedUdp,
+            );
+            let now = Instant::now();
+            let expired_at = now
+                .checked_sub(PACKET_PLANE_PENDING_HELLO_TIMEOUT)
+                .expect("expired deadline");
+            negotiator
+                .pending
+                .get_mut(&remote_overlay)
+                .expect("pending")
+                .created_at = expired_at;
+            let metrics = RuntimeMetrics::default();
+            let mut context = PacketPlaneExpiryContext {
+                swarm: &mut node.swarm,
+                forwarder: &forwarder,
+                paths: &mut paths,
+                peer_capabilities: &peer_capabilities,
+                packet_plane: &mut packet_plane,
+                packet_plane_quic: None,
+                negotiator: &mut negotiator,
+                identity: &local_identity,
+                local_capabilities: &local_capabilities,
+                metrics: &metrics,
+                session_ttl: Duration::from_secs(90),
+            };
+            expire_pending_packet_plane_hellos(&mut context, now);
+            assert_eq!(context.negotiator.has_pending(remote_overlay), retries);
+            assert_eq!(
+                metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .control_requests_sent,
+                u64::from(retries)
+            );
+            expire_pending_packet_plane_hellos(&mut context, now);
+            assert_eq!(
+                metrics
+                    .snapshot(crate::queue::QueueStats::default())
+                    .control_requests_sent,
+                u64::from(retries),
+                "successive ticks must not create a retry storm"
+            );
+            if retries {
+                let first = context.negotiator.pending[&remote_overlay]
+                    .request_id
+                    .expect("request ID");
+                assert!(context.negotiator.owns_request(remote_overlay, first));
+                assert!(
+                    !context
+                        .negotiator
+                        .owns_request(config.local_peer_id().expect("local"), first)
+                );
+                context
+                    .negotiator
+                    .pending
+                    .get_mut(&remote_overlay)
+                    .expect("retry")
+                    .created_at = expired_at;
+                expire_pending_packet_plane_hellos(&mut context, now);
+                let second = context.negotiator.pending[&remote_overlay]
+                    .request_id
+                    .expect("replacement ID");
+                assert_ne!(first, second);
+                assert!(
+                    !context.negotiator.owns_request(remote_overlay, first),
+                    "late replies must not consume the replacement negotiation"
+                );
+                assert!(context.negotiator.owns_request(remote_overlay, second));
+                assert_eq!(
+                    metrics
+                        .snapshot(crate::queue::QueueStats::default())
+                        .control_requests_sent,
+                    2
+                );
+                context.negotiator.clear();
+                assert!(!context.negotiator.owns_request(remote_overlay, second));
+            }
+        }
     }
 
     #[tokio::test]

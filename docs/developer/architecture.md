@@ -184,6 +184,23 @@ Runtime route advertisements are claims, not dynamic routing authority.
 | libp2p circuit relay stream fallback | Connection-pinned packet stream. |
 | Native libp2p QUIC DATAGRAM | Blocked by dependency surface. |
 
+## Packet-Plane Negotiation
+
+Pending handshakes expire after 25 seconds. The expiry timer retries eligible
+initiators using cached capabilities; it does not require a fresh connection or
+capability event. Session expiry uses the same eligibility checks.
+
+| Boundary | Rule |
+| --- | --- |
+| Authorization | The remote peer must remain authorized by the forwarder. |
+| Path | A healthy direct stream path is required for negotiation. |
+| Initiator | Only the designated lower overlay ID sends a hello. |
+| Retry rate | A replacement remains pending until completion or its next deadline. |
+| Late replies | Accept/reject responses must match the current libp2p request ID. |
+
+`packet_plane_pending_hello_expired`, `packet_plane_hello_sent`, and
+`packet_plane_stale_response_ignored` expose timeout, retry, and correlation events.
+
 ## Queueing
 
 Queues are per peer.

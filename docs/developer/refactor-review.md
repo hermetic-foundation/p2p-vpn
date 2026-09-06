@@ -306,6 +306,38 @@ proof of a production outage. The fixture forces three-second session lifetimes;
 probe scheduling and handshake retry ownership need deterministic investigation.
 Do not increase deadlines merely to conceal this behavior.
 
+### Handshake Timeout Follow-up
+
+The timeout handler removed pending negotiations without starting another attempt.
+A deterministic runner test reproduced the missing retry with cached capabilities
+and a healthy direct path, without a new connection or capability event.
+
+Timeout and session-expiry paths now share negotiation eligibility. Each timeout
+can start one replacement; subsequent timer ticks preserve its 25-second deadline.
+Revoked/unknown peers and relay-only paths cannot use this retry path.
+
+Pending initiators also own their libp2p request ID. Late accept/reject responses
+from expired attempts are discarded before they can replace or remove a newer
+negotiation. This does not change the wire format or configuration.
+
+The regression failed before the retry and passed afterward. Workspace validation
+passes 1,152 enabled tests. Network-move recovery passed in the serial suite and
+two isolated repeats (47.25 and 47.21 seconds), without changing its deadlines.
+Formatting and required Clippy groups pass; existing style warnings remain.
+
+`/tmp/p2p-vpn-network-move-tun-e2e-733676` retains a passing trace showing a pending
+hello expire, a new request ID, and direct UDP promotion. The test verifies traffic
+before link loss, over relay fallback, and after direct-path restoration.
+
+The complete namespace run was still 10/11: relay promotion established healthy
+direct TCP and UDP paths but failed its explicit DCUtR-success assertion. Node B
+reported `AttemptsExceeded(3)`; neither node reported success. This is not evidence
+of successful hole punching and remains an open verification issue.
+
+Retained failure: `/tmp/p2p-vpn-relay-promotion-tun-e2e-732272`. Neither the new
+timeout-retry branch nor stale-response branch ran in that failure trace.
+Inbound handshake ordering and the broader session-ownership audit also remain open.
+
 ### Update Failure Audit
 
 | Path | Observed Behavior | Follow-up |
