@@ -4,6 +4,9 @@ The Android target reuses the Rust protocol and runtime.
 
 Java owns Android lifecycle, permissions, persistence, and the VPN interface.
 
+Open lifecycle findings and the planned ownership changes are recorded in the
+[Android lifecycle review](android-lifecycle-review.md).
+
 ## Component Map
 
 ```text

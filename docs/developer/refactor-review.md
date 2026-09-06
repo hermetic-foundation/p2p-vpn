@@ -346,6 +346,22 @@ The fileset now includes Rust files under `tests/` automatically. A new
 source, and is included in the operational gate. Non-Rust test fixtures still
 require explicit fileset inclusion.
 
+### R11: Android Destruction Can Discard Native Cleanup
+
+Priority: P2. Status: executor failure ordering reproduced; service fix pending.
+
+The per-service executor queues native cleanup behind ongoing work, waits six
+seconds, then discards pending tasks with `shutdownNow()`. A blocked worker can
+therefore prevent cleanup from running even after that work eventually returns.
+
+A standalone JVM reproducer confirms the discarded cleanup. A second model shows
+why merely delaying unscoped cleanup can stop a replacement process-global runtime.
+Neither result is an Android device or JNI end-to-end reproduction.
+
+The [Android lifecycle review](android-lifecycle-review.md) records source references,
+reproduction steps, and the process-wide ownership plan. Per-service admission,
+exactly-once teardown ordering, and replacement isolation must be verified together.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.
