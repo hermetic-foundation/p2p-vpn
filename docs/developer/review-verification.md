@@ -66,7 +66,7 @@ was started. This is not an estimate of work required with available binary subs
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
-| Address resources | Identify admission is bounded in both DHT modes. Audit internal/query-driven insertion; admission limits alone are insufficient. |
+| Address resources | Identify admission is bounded. [Internal mutation paths are mapped](kademlia-retention-review.md); real-swarm reproduction and query-memory measurements remain. |
 | Resource comparison | Evaluate signed-ledger scale and affected hot paths; distinguish measured changes from inference. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |

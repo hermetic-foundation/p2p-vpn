@@ -873,6 +873,11 @@ address count. No overlay discovery entries are created for these routing peers.
 This closes the demonstrated Identify bypass, not internal libp2p insertion.
 The separate DHT's query-driven address lifecycle still requires review.
 
+The [pinned Kademlia source audit](kademlia-retention-review.md) now maps internal
+connection, pending-bucket, query, and address-change mutations. Manual insertion
+mode and routing-event cleanup alone are insufficient. Real-swarm reproduction
+and peak query-retention measurement remain outstanding.
+
 Post-fix workspace validation: 1,183 passed, 15 opt-in tests ignored. Explicit
 peerless code-pairing and DHT-discovery namespace cases both passed in 25.37 seconds.
 The other namespace scenarios and Android/VM gates were not repeated for this fix.
