@@ -130,6 +130,23 @@ The runtime revision advances when a retained event becomes effective.
 
 This refreshes forwarding, DNS, routes, and capabilities without another merge.
 
+### Runtime Refresh Window
+
+The forwarder owns the evaluated ledger and its next signed-time boundary.
+An unchanged timer refresh can reuse that evaluation inside its validity window.
+
+| Event | Action |
+| --- | --- |
+| Time inside the evaluated window | Reuse authority; still deliver pending authorization-change notification. |
+| Record issue or expiry boundary reached | Reevaluate and update revisions when the derived state changes. |
+| Time before the last evaluation | Reevaluate, preserving existing clock-rollback semantics. |
+| Successful merge, restore, or reconfiguration | Replace authority and its refresh window together. |
+| Rejected update | Preserve the committed authority and window. |
+
+All retained records contribute boundaries, including inactive historical records.
+Incoming records and public explicit prune calls still follow full validation.
+This avoids repeated timer work without skipping ingestion checks or deleting history.
+
 ### Signed-Time Threat Model
 
 A signature authenticates the signer and payload. It does not prove when the

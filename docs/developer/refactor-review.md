@@ -654,8 +654,25 @@ The shared projection preserves DNS validation order and signed hostname precede
 - Existing DNS tests retain fail-closed publication, retry, UDP/TCP, and size-limit coverage.
 
 Retaining the evaluated member map adds memory beyond the prior transient projection.
-DNS borrows it without cloning, but signed-ledger RSS and final Android measurements
-remain outstanding. Do not infer a whole-daemon resource improvement from less evaluation.
+The [signed-ledger comparison](forwarder-resource-comparison.md) samples RSS through
+256 records. Exact allocation cost and final Android measurements remain outstanding.
+
+#### Unchanged Refresh Follow-Up
+
+`Forwarder::refresh_membership_records` previously reevaluated the full retained
+ledger on every timer call, even with no new records or signed-time transitions.
+Debug diagnostics exposed this repeated work; production CPU cost is not established.
+
+| Ownership | Rule |
+| --- | --- |
+| `MembershipRefreshWindow` | Last evaluation time and earliest future issue/expiry among all retained records. |
+| Forwarder construction and successful updates | Replace the window together with the derived membership. |
+| Timer refresh | Reuse only inside that window; reevaluate before its start or at/after its end. |
+| Ingestion and public prune API | Preserve the existing full validation path and result contract. |
+
+Tests compare cached refreshes with full evaluation through activation, expiry,
+clock rollback, and integer-limit time. Rejected merges preserve the window;
+skipped timer work still drains pending authorization-change notifications.
 
 ### Snapshot Validation and Recovery Finding
 

@@ -73,3 +73,25 @@ binary generations. The rejected attempt is not included as a successful sample.
 
 This is bounded signed-ledger scale evidence, not a production certification or
 a substitute for the [idle comparison](idle-resource-comparison.md).
+
+## Refresh-Window Follow-Up
+
+A subsequent working change based on `60c83310` added deadline-aware timer reuse.
+One fresh 256-record debug sample used the same diagnostic and ledger fingerprint.
+No concurrent review build ran during this sample.
+
+| Measurement | Value |
+| --- | ---: |
+| Construction | 4,064,476 microseconds |
+| Three refreshes | 8,202,474 microseconds |
+| Fixture RSS | 16,548 KiB |
+| Constructed RSS | 22,716 KiB |
+| Refreshed RSS / peak RSS | 24,204 KiB |
+
+Construction uses wall-clock time; the first refresh at 1001 moves backward and
+therefore reevaluates. The next two reuse the resulting window. This explains the
+reduction from roughly 24.5 seconds for three full evaluations, not a faster evaluator.
+
+Raw log: `/tmp/p2p-vpn-review-refresh-window-256.log`.
+This single follow-up is not a replacement for the paired baseline samples,
+a memory-improvement claim, or release-profile/Android evidence.

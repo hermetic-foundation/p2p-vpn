@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including DNS borrowing of committed membership and its resource diagnostic.
+Audited on 2026-09-06, including committed membership sharing and deadline-aware timer refresh.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,190 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | All 11 pass after DNS snapshot sharing, in 189.00 seconds. | Controlled topology, not public NAT traversal. |
+| Workspace | Last full run: 1,192 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 pass after membership refresh-window optimization, in 188.06 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -23,6 +23,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
+| Refresh window | Full-evaluation equivalence across time boundaries; pending notifications and failed updates covered. 256-record follow-up passed. | Debug follow-up measures two skipped refreshes, not a faster ledger evaluator or production CPU. |
 
 ## Exported Flake Checks
 
@@ -50,7 +51,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass after DNS snapshot sharing. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass after membership refresh-window optimization. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Earlier offline native/Gradle validation; current derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -86,7 +87,7 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
-| Resource comparison | Signed-ledger process RSS sampled through the 256-record limit. Isolate retained allocations and review unchanged refresh work with release-profile evidence. |
+| Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |

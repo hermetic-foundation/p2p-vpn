@@ -38,6 +38,7 @@ pub struct Forwarder {
     hostname_records: Vec<SignedHostnameRecord>,
     authorization: ForwardingAuthorization,
     effective_membership: EffectiveMembership,
+    membership_refresh_window: MembershipRefreshWindow,
     membership_revision: u64,
     authorization_revision: u64,
     membership_effective_refresh_pending: bool,
@@ -55,7 +56,40 @@ pub struct ForwarderUpdate {
     member_records: Vec<SignedMembershipRecord>,
     authorization: ForwardingAuthorization,
     effective_membership: EffectiveMembership,
+    membership_refresh_window: MembershipRefreshWindow,
     mtu: usize,
+}
+
+// The ledger is immutable between commits. Time can only change its projection at
+// an issue/expiry boundary; earlier observations must be evaluated again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MembershipRefreshWindow {
+    evaluated_at: u64,
+    next_transition: Option<u64>,
+}
+
+impl MembershipRefreshWindow {
+    fn from_records(records: &[SignedMembershipRecord], evaluated_at: u64) -> Self {
+        let next_transition = records
+            .iter()
+            .flat_map(|record| {
+                [
+                    Some(record.payload.issued_at_unix_seconds),
+                    record.payload.expires_at_unix_seconds,
+                ]
+            })
+            .flatten()
+            .filter(|time| *time > evaluated_at)
+            .min();
+        Self {
+            evaluated_at,
+            next_transition,
+        }
+    }
+
+    fn contains(self, now: u64) -> bool {
+        now >= self.evaluated_at && self.next_transition.is_none_or(|next| now < next)
+    }
 }
 
 impl ForwarderUpdate {
@@ -179,6 +213,10 @@ impl Forwarder {
         Ok(Self {
             local_peer,
             config: config.clone(),
+            membership_refresh_window: MembershipRefreshWindow::from_records(
+                &member_records,
+                now_unix_seconds,
+            ),
             member_records,
             hostname_records: Vec::new(),
             authorization,
@@ -362,6 +400,8 @@ impl Forwarder {
         self.membership_effective_refresh_pending |= effective_changed;
         self.authorization = authorization;
         self.effective_membership = effective_membership;
+        self.membership_refresh_window =
+            MembershipRefreshWindow::from_records(&member_records, now_unix_seconds);
         self.member_records = member_records;
         Ok(stats)
     }
@@ -439,6 +479,10 @@ impl Forwarder {
 
         Ok(ForwarderUpdate {
             config,
+            membership_refresh_window: MembershipRefreshWindow::from_records(
+                &member_records,
+                now_unix_seconds,
+            ),
             member_records,
             authorization,
             effective_membership,
@@ -459,6 +503,7 @@ impl Forwarder {
         self.member_records = update.member_records;
         self.authorization = update.authorization;
         self.effective_membership = update.effective_membership;
+        self.membership_refresh_window = update.membership_refresh_window;
         self.membership_effective_refresh_pending = false;
         self.mtu = update.mtu;
     }
@@ -474,7 +519,11 @@ impl Forwarder {
         &mut self,
         now_unix_seconds: u64,
     ) -> Result<(MembershipRecordMergeStats, bool), ForwardError> {
-        let stats = self.prune_membership_records(now_unix_seconds)?;
+        let stats = if self.membership_refresh_window.contains(now_unix_seconds) {
+            MembershipRecordMergeStats::default()
+        } else {
+            self.prune_membership_records(now_unix_seconds)?
+        };
         let effective_changed = self.take_membership_effective_refresh_pending();
         Ok((stats, effective_changed))
     }
@@ -1508,6 +1557,134 @@ mod tests {
             forwarder
                 .authorizes_advertised_routes(member_peer, &[ControlRoute::new("10.42.0.0/24", 1)])
         );
+    }
+
+    #[test]
+    fn membership_refresh_window_matches_full_evaluation_across_time_changes() {
+        let issuer = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse().unwrap();
+        let grant = |member: &NodeIdentity, issued, expires| {
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: member.clone(),
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: expires,
+                },
+                issued,
+            )
+            .unwrap()
+        };
+        let mut config = config_for(transport);
+        config.peers.clear();
+        config.network.local_peer = issuer.peer_id.clone();
+        config.network.private_key = Some(issuer.private_key.clone());
+        config.network.member_records = vec![
+            grant(&issuer, 900, Some(1_200)),
+            grant(&remote, 1_001, Some(1_100)),
+        ];
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_000)
+                .unwrap(),
+        );
+        assert_eq!(
+            forwarder.membership_refresh_window.next_transition,
+            Some(1_001)
+        );
+        for now in [
+            1_000,
+            1_001,
+            1_050,
+            1_099,
+            1_100,
+            1_100,
+            1_200,
+            1_300,
+            1_099,
+            899,
+            900,
+            1_001,
+            u64::MAX,
+        ] {
+            let before = forwarder.membership_refresh_window;
+            let (expected, membership) =
+                ForwardingAuthorization::from_records(&config, &config.network.member_records, now)
+                    .unwrap();
+            let changed = expected != forwarder.authorization;
+            let (stats, reported_changed) = forwarder.refresh_membership_records(now).unwrap();
+            assert_eq!(stats, MembershipRecordMergeStats::default());
+            assert_eq!(reported_changed, changed, "time {now}");
+            assert_eq!(forwarder.authorization, expected, "time {now}");
+            assert_eq!(forwarder.effective_membership, membership, "time {now}");
+            assert_eq!(forwarder.member_records(), config.network.member_records);
+            assert_eq!(
+                forwarder.membership_refresh_window.evaluated_at,
+                if before.contains(now) {
+                    before.evaluated_at
+                } else {
+                    now
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn membership_refresh_window_preserves_pending_changes_and_failed_merge_state() {
+        let issuer = NodeIdentity::generate_ed25519().unwrap();
+        let remote = NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse().unwrap();
+        let mut config = config_for(transport);
+        config.peers.clear();
+        config.network.local_peer = issuer.peer_id.clone();
+        config.network.private_key = Some(issuer.private_key.clone());
+        let record = issue_membership_record_at(
+            &issuer,
+            MembershipRecordOptions {
+                network_name: "lab".to_owned(),
+                member: remote,
+                membership_epoch: 1,
+                sequence: 1,
+                roles: vec![MembershipRole::OverlayMember],
+                route_grants: Vec::new(),
+                expires_at_unix_seconds: Some(1_100),
+            },
+            1_000,
+        )
+        .unwrap();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        forwarder
+            .merge_membership_records(std::slice::from_ref(&record), 1_000)
+            .unwrap();
+        let before = forwarder.membership_refresh_window;
+        let revision = forwarder.membership_revision();
+        let mut invalid = record.clone();
+        invalid.payload.sequence += 1;
+        assert!(
+            forwarder
+                .merge_membership_records(&[invalid], 1_099)
+                .is_err()
+        );
+        assert_eq!(forwarder.membership_refresh_window, before);
+        assert_eq!(forwarder.membership_revision(), revision);
+        assert!(forwarder.refresh_membership_records(1_050).unwrap().1);
+        assert!(!forwarder.refresh_membership_records(1_050).unwrap().1);
+        assert_eq!(forwarder.membership_refresh_window, before);
+        assert!(forwarder.is_configured_transport_peer(transport));
+        assert!(forwarder.refresh_membership_records(1_100).unwrap().1);
+        assert!(!forwarder.is_configured_transport_peer(transport));
+
+        // Reconfiguration replaces the schedule, even when removing all history.
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_001).unwrap());
+        assert_eq!(forwarder.membership_refresh_window.next_transition, None);
+        assert_eq!(forwarder.membership_refresh_window.evaluated_at, 1_001);
+        assert!(!forwarder.refresh_membership_records(u64::MAX).unwrap().1);
     }
 
     #[test]
