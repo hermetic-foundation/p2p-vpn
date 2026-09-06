@@ -5,8 +5,8 @@
 Source reviewed at `6dbb680c` on 2026-09-06. A read-only reviewer identified
 the cases below; parent inspection checked the relevant control flow.
 The initial source review preceded regression work. A2 is now reproduced and
-fixed with JVM coverage. A1 and A3 are fixed with emulator instrumentation.
-The health-poll native-failure scenario and broader platform gates remain open.
+fixed with JVM and native-failure emulator coverage. A1 and A3 are fixed with
+emulator instrumentation. Broader platform and resource gates remain open.
 
 Successful workflow tests do not exercise every event ordering. Unresolved cases
 remain open even when the [network workflow](android-network-workflow-review.md) or
@@ -104,8 +104,51 @@ before the poll executes, not recurring JNI reads or native-failure recovery.
 
 - Before log: `/tmp/p2p-vpn-review-health-poll-before.log`.
 - After log: `/tmp/p2p-vpn-review-health-poll-after.log`.
-- Android delivery and native-failure recovery still require platform coverage.
+- The subsequent platform case below covers recurring JNI reads and native-failure recovery.
 - This fix is not evidence that the separate multi-network underlay failure is resolved.
+
+#### Native Health Recovery Instrumentation
+
+Passed on 2026-09-06 using API 35 x86_64, shared runtime `4b90f3bc`, and rebuilt JNI.
+The case runs in the existing isolated-emulator lifecycle instrumentation APK;
+no fault-injection hook was added to the production app.
+
+| Stage | Checked Invariant |
+| --- | --- |
+| Three manager callbacks | Old poll cancelled; a distinct live poll remains; runtime generation unchanged |
+| Three ordinary polls | Each performs JNI status work and rearms itself without further manager callbacks |
+| Native stop | Worker calls real `nativeStop`; Java remains connected with connection intent and health polling intact |
+| Failure detection | Ordinary poll clears connected state, records health failure, and schedules one native-runtime recovery |
+| Automatic recovery | Generation increases exactly once; peer identity and enabled networks survive; backoff resets and polling resumes |
+| Existing lifecycle cases | Deferred join, three superseded-stop paths, occupied-worker replacement, and native cleanup pass |
+
+Removing the connected branch's `scheduleStatusPoll()` reproduced
+`manager event lost health polling`, with `passed=false` and result code `0`.
+After restoring the branch and rebuilding, the combined scenario passed again.
+
+- Initial pass: `/tmp/p2p-vpn-review-health-poll-instrumentation.log`.
+- Negative control: `/tmp/p2p-vpn-review-health-poll-mutation.log`.
+- Final pass: `/tmp/p2p-vpn-review-health-poll-final-instrumentation.log`.
+- Final Gradle unit, lint, app, and instrumentation checks passed offline.
+- One disposable emulator; app data cleared only there between runs; emulator stopped and temporary state removed.
+
+| Final Artifact | SHA-256 |
+| --- | --- |
+| Debug APK | `51271da4c14072954ebe64ab3ab2f15d9ac4aecde1870e64fb32590a6ebb19e3` |
+| Instrumentation APK | `275ebdee2f8f2bbc8d07e69af1840acdb868b2714310124ee1ee3bf5209be640` |
+| Unstripped x86_64 JNI | `1873e08e5f6f010d380e22b0185b8f0e0cd30a691f7a68154f1104ffb5d74ced` |
+
+Add `-e health_poll true` to the [lifecycle runner](android-lifecycle-review.md#run-it).
+Require `health_poll=passed`, `passed=true`, and `INSTRUMENTATION_CODE: -1`;
+ADB may return success even when the test fails.
+
+Callbacks enter the real service on the main thread but are synthesized by the
+test, not emitted by Android's VPN manager. Native stop is graceful fault
+injection, not a crash. This case does not measure packet traffic or battery use.
+
+The test establishes one automatic recovery, not retry exhaustion. Production
+backoff caps the retry delay, not the total retry count. The earlier underlay
+failure still lacks causal attribution; this result does not supply it.
 
 ### A3: Deferred Connect Intent
 

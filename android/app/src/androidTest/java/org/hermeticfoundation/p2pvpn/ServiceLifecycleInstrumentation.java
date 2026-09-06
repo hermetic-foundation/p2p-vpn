@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.net.VpnService;
+import android.net.VpnManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -19,6 +20,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -90,6 +92,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
             String peer = P2pVpnService.debugSnapshot().peerId;
             connect();
             awaitNativeRunning();
+            if ("true".equals(arguments.getString("health_poll"))) {
+                exerciseHealthPoll();
+            }
 
             old = currentScope;
             ScheduledFuture<?> occupied = old.schedule(() -> {
@@ -163,6 +168,112 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
         Field worker = P2pVpnService.class.getDeclaredField("worker");
         worker.setAccessible(true);
         currentScope = (ServiceRuntimeWorker.Scope) worker.get(instance.get(null));
+    }
+
+    private void exerciseHealthPoll() throws Exception {
+        require(Build.VERSION.SDK_INT >= 33, "VPN manager events require API 33");
+        P2pVpnService service = (P2pVpnService) serviceField(null, "debugInstance");
+        await(() -> onWorker(() -> Boolean.TRUE.equals(serviceField(service, "connected"))
+                && Boolean.FALSE.equals(serviceField(service, "operationInProgress"))
+                && serviceField(service, "underlayRecoveryFuture") == null), 15, "settled service");
+        Object generation = onWorker(() -> serviceField(service, "runtimeGeneration"));
+        Object networks = onWorker(() -> serviceField(service, "activeNetworkIds"));
+        String peer = P2pVpnService.debugSnapshot().peerId;
+        Method arm = P2pVpnService.class.getDeclaredMethod("scheduleStatusPoll");
+        arm.setAccessible(true);
+        for (int i = 0; i < 3; i++) {
+            ScheduledFuture<?> old = onWorker(() -> {
+                arm.invoke(service);
+                return (ScheduledFuture<?>) serviceField(service, "statusFuture");
+            });
+            onMain(() -> service.onStartCommand(new Intent(VpnManager.ACTION_VPN_MANAGER_EVENT)
+                    .addCategory(VpnManager.CATEGORY_EVENT_ALWAYS_ON_STATE_CHANGED), 0, 0));
+            onWorker(() -> {
+                ScheduledFuture<?> next = (ScheduledFuture<?>) serviceField(service, "statusFuture");
+                require(old.isCancelled(), "manager event did not retire its old poll");
+                require(next != null && next != old && !next.isDone(), "manager event lost health polling");
+                require(generation.equals(serviceField(service, "runtimeGeneration")), "manager event restarted runtime");
+                return null;
+            });
+        }
+        // No further callbacks or explicit poll scheduling may sustain this chain.
+        for (int i = 0; i < 3; i++) {
+            ScheduledFuture<?> poll = onWorker(() -> (ScheduledFuture<?>) serviceField(service, "statusFuture"));
+            require(poll != null, "missing recurring poll");
+            poll.get(5, TimeUnit.SECONDS);
+            onWorker(() -> {
+                ScheduledFuture<?> next = (ScheduledFuture<?>) serviceField(service, "statusFuture");
+                require(!poll.isCancelled() && next != null && next != poll && !next.isDone(), "poll did not recur");
+                require(generation.equals(serviceField(service, "runtimeGeneration")), "healthy polling restarted runtime");
+                return null;
+            });
+        }
+        DiagnosticEventBuffer events = (DiagnosticEventBuffer) serviceField(service, "diagnosticEvents");
+        long previousSequence = events.snapshot().entries.stream().mapToLong(entry -> entry.sequence).max().orElse(0);
+        onWorker(() -> {
+            NativeResponse.objectValue(NativeBridge.nativeStop());
+            require("stopped".equals(nativePhase()), "fault injection did not stop native runtime");
+            require(Boolean.TRUE.equals(serviceField(service, "connected")), "fault changed Java connection state");
+            require(Boolean.TRUE.equals(serviceField(service, "desiredConnected")), "connection intent was lost");
+            require(serviceField(service, "statusFuture") != null, "fault cancelled health polling");
+            return null;
+        });
+        await(() -> onWorker(() -> {
+            if (Boolean.TRUE.equals(serviceField(service, "connected"))) { return false; }
+            require(Boolean.TRUE.equals(serviceField(service, "desiredConnected")), "health failure lost intent");
+            require(generation.equals(serviceField(service, "runtimeGeneration")), "unexpected early restart");
+            require(Integer.valueOf(1).equals(serviceField(service, "reconnectAttempts")), "expected one recovery attempt");
+            require("Recovering native runtime".equals(serviceField(service, "reconnectDetail")), "wrong recovery trigger");
+            ScheduledFuture<?> retry = (ScheduledFuture<?>) serviceField(service, "reconnectFuture");
+            require(retry != null && !retry.isDone(), "health failure did not schedule recovery");
+            require(serviceField(service, "statusFuture") == null, "failed runtime kept polling");
+            return true;
+        }), 5, "health-poll failure detection");
+        awaitNativeRunning();
+        await(() -> onWorker(() -> Boolean.TRUE.equals(serviceField(service, "connected"))
+                && Boolean.FALSE.equals(serviceField(service, "operationInProgress"))), 10, "service recovery");
+        onWorker(() -> {
+            require(Long.valueOf(((Long) generation) + 1).equals(serviceField(service, "runtimeGeneration")), "recovery generation mismatch");
+            require(networks.equals(serviceField(service, "activeNetworkIds")), "recovery changed enabled networks");
+            require(peer.equals(P2pVpnService.debugSnapshot().peerId), "recovery changed peer identity");
+            require(serviceField(service, "reconnectFuture") == null, "recovery retained retry timer");
+            require(Integer.valueOf(0).equals(serviceField(service, "reconnectAttempts")), "recovery retained backoff");
+            ScheduledFuture<?> poll = (ScheduledFuture<?>) serviceField(service, "statusFuture");
+            require(poll != null && !poll.isDone(), "recovery did not restore health polling");
+            return null;
+        });
+        long failedSequence = events.snapshot().entries.stream()
+                .filter(entry -> entry.sequence > previousSequence && "runtime_health_failed".equals(entry.name))
+                .mapToLong(entry -> entry.sequence).findFirst().orElse(0);
+        require(failedSequence > previousSequence, "missing native health failure evidence");
+        require(events.snapshot().entries.stream().anyMatch(entry -> entry.sequence > failedSequence
+                && "runtime_stopped".equals(entry.name)), "missing health-triggered stop evidence");
+        Bundle status = new Bundle();
+        status.putString("health_poll", "passed");
+        sendStatus(0, status);
+    }
+
+    private static Object serviceField(P2pVpnService service, String name) {
+        try {
+            Field field = P2pVpnService.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(service);
+        } catch (ReflectiveOperationException error) {
+            throw new AssertionError("service field unavailable: " + name, error);
+        }
+    }
+
+    private <T> T onWorker(Callable<T> action) {
+        AtomicReference<T> result = new AtomicReference<>();
+        try {
+            currentScope.schedule(() -> {
+                try { result.set(action.call()); }
+                catch (Exception error) { throw new AssertionError("worker action failed", error); }
+            }, 0, TimeUnit.MILLISECONDS).get(5, TimeUnit.SECONDS);
+            return result.get();
+        } catch (Exception error) {
+            throw new AssertionError("worker action did not complete", error);
+        }
     }
 
     private void exerciseDeferredJoin() throws Exception {

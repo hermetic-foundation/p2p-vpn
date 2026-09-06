@@ -19,7 +19,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Nix consumer evaluation | `nixos-consumer-flake-eval` built; all 15 configuration contracts pass. | Does not build the consumer OS or execute the service. |
 | Membership VM | Earlier four-node run passed 18 subtests. | Predates later ownership changes. |
 | Storage repair VM | Current-at-test binary recovered automatically after permission repair. | Predates `0acbd725`; tests startup rejection, not ENOSPC or power loss. |
-| Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass with rebuilt APK and fixture at `643d798e`, including underlay transitions and reboot restoration. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; targeted native-failure health polling and sustained overload remain unverified. |
+| Android | [68 multi-network checks](android-multi-network-review.md#latest-attempt) pass at `643d798e`; [native health recovery](android-event-ownership-review.md#native-health-recovery-instrumentation) passes at `4b90f3bc`. | Controlled emulator, not physical carrier/VPN evidence. Earlier failures retain unresolved causal attribution; sustained overload remains unverified. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
 | Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
@@ -116,11 +116,11 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
-| Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) are fixed with JVM and emulator coverage. Health-poll native-failure recovery still needs platform coverage. |
+| Android lifecycle ownership | [Three event-ownership findings](android-event-ownership-review.md) have JVM/emulator coverage, including recurring JNI health polling and automatic native-failure recovery at `4b90f3bc`. Reconcile broader lifecycle evidence on final code. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
-| Platform validation | Android multi-network passes at `643d798e`; repeat affected VM gates and targeted Android health recovery on final shared-runtime code. |
+| Platform validation | Android multi-network passes at `643d798e`, targeted native health recovery at `4b90f3bc`; repeat affected VM and final shared-runtime gates. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
 | Packet stream ownership | [Dispatch, closure, admission, stream budgets, and stale response accounting](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, sustained overload measurements, and final platform validation. |
