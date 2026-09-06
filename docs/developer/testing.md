@@ -891,7 +891,7 @@ These tests require Linux namespace and TUN support.
 | Node ownership | Kill and reap namespace children when the orchestrator unwinds after an assertion. |
 | Capability evidence | Check the acceptance counter, covering inbound requests and responses; receipt alone is insufficient. |
 | Datagram evidence | Read sessions, healthy paths, and transmitted packets from `daemon-state`; read accepted inbound packets from `daemon-status`. |
-| Measured UDP traffic | Wait for the selected UDP path, not merely an installed session, before sending the ping burst. |
+| Measured datagram traffic | Direct UDP and owned QUIC cases wait for sessions and selected datagram paths on both nodes before sending the finite ping burst. |
 
 The DHT fixture uses simulated public addresses on `11.252.0.0/24` inside isolated
 network namespaces, without a default route to an external network. AutoNAT is off;

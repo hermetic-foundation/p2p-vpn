@@ -406,9 +406,13 @@ fn run_direct_orchestrator(test_name: &str) {
         wait_for_peer_ready(&temp_dir, "a");
         wait_for_peer_ready(&temp_dir, "b");
         wait_for_owned_quic_packet_plane_sessions(&temp_dir);
+        wait_for_selected_path(&temp_dir, "a", "direct_quic_datagram");
+        wait_for_selected_path(&temp_dir, "b", "direct_quic_datagram");
     } else {
-        wait_for_daemon_running(&temp_dir, "a");
-        wait_for_daemon_running(&temp_dir, "b");
+        wait_for_packet_plane_sessions(&temp_dir, "a");
+        wait_for_packet_plane_sessions(&temp_dir, "b");
+        wait_for_selected_path(&temp_dir, "a", "direct_udp_datagram");
+        wait_for_selected_path(&temp_dir, "b", "direct_udp_datagram");
     }
     let host_ping = ping_from_namespace(node_a.id(), "hse2ea", address_b);
     let routed_ping = ping_from_namespace(node_b.id(), "hse2eb", NODE_A_LOCAL_ROUTE_ADDRESS);
