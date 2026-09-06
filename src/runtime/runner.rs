@@ -1566,7 +1566,19 @@ where
     );
     tokio::pin!(shutdown);
 
+    let mut packet_authorization_revision = None;
     loop {
+        if packet_authorization_revision != Some(forwarder.membership_revision()) {
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut packet_plane,
+                packet_plane_quic.as_mut(),
+                &mut packet_plane_negotiator,
+                &mut paths,
+                &mut path_probe_tracker,
+            );
+            packet_authorization_revision = Some(forwarder.membership_revision());
+        }
         tokio::select! {
             reason = &mut shutdown => {
                 log_runtime_event(
@@ -17488,6 +17500,49 @@ fn complete_packet_plane_quic_responder(
         ],
     );
     Ok(())
+}
+
+fn reconcile_packet_plane_authorization(
+    forwarder: &Forwarder,
+    packet_plane: &mut PacketPlaneRuntime,
+    mut packet_plane_quic: Option<&mut PacketPlaneQuicRuntime>,
+    negotiator: &mut PacketPlaneNegotiator,
+    paths: &mut PathSet,
+    probes: &mut PathProbeTracker,
+) -> usize {
+    let mut peers: HashSet<_> = packet_plane.peers().collect();
+    if let Some(quic) = packet_plane_quic.as_deref() {
+        peers.extend(quic.peers());
+    }
+    peers.extend(negotiator.pending.keys().copied());
+    peers.extend(negotiator.pending_responders.keys().copied());
+    peers.extend(
+        negotiator
+            .quic_connection_task_handles
+            .keys()
+            .map(|(peer, _)| *peer),
+    );
+    peers.retain(|peer| forwarder.transport_peer_for_overlay(*peer).is_none());
+    let removed = peers.len();
+    for peer in peers {
+        negotiator.remove_peer(peer);
+        packet_plane.forget_peer(peer);
+        if let Some(quic) = packet_plane_quic.as_deref_mut() {
+            quic.forget_peer(peer);
+        }
+        for kind in [PathKind::DirectUdpDatagram, PathKind::DirectQuicDatagram] {
+            paths.mark_unhealthy(peer, kind);
+            probes.clear_path(peer, kind);
+        }
+    }
+    if removed > 0 {
+        log_runtime_event(
+            LogLevel::Info,
+            "packet_plane_authorization_removed",
+            &[("peers", &removed.to_string())],
+        );
+    }
+    removed
 }
 
 fn handle_packet_plane_quic_connection_task(
@@ -35198,6 +35253,34 @@ mod tests {
             .await
             .is_err()
         );
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let mut probes = PathProbeTracker::default();
+        let allowed = Forwarder::from_config(&config).expect("authorized policy");
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &allowed,
+                &mut sender_packet_plane,
+                None,
+                &mut negotiator,
+                &mut paths,
+                &mut probes
+            ),
+            0
+        );
+        assert!(sender_packet_plane.has_session(remote_overlay));
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut sender_packet_plane,
+                None,
+                &mut negotiator,
+                &mut paths,
+                &mut probes
+            ),
+            1
+        );
+        assert!(!sender_packet_plane.has_session(remote_overlay));
+        assert_eq!(sender_packet_plane.listener_count(), 1);
     }
 
     #[tokio::test]
@@ -35293,6 +35376,38 @@ mod tests {
         assert_eq!(packet_in_flight.in_flight_for(remote_overlay), 0);
         assert_eq!(inbound.peer, Some(local_overlay));
         assert_eq!(inbound.frame.payload, packet);
+
+        let mut udp = PacketPlaneRuntime::disabled();
+        let mut negotiator = PacketPlaneNegotiator::default();
+        let mut probes = PathProbeTracker::default();
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut udp,
+                Some(&mut sender_packet_plane),
+                &mut negotiator,
+                &mut paths,
+                &mut probes
+            ),
+            0
+        );
+        let mut without_peer = config.clone();
+        without_peer.peers.clear();
+        let update = forwarder.prepare_reconfigure(without_peer, 1_000).unwrap();
+        forwarder.commit_reconfigure(update);
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut udp,
+                Some(&mut sender_packet_plane),
+                &mut negotiator,
+                &mut paths,
+                &mut probes
+            ),
+            1
+        );
+        assert!(!sender_packet_plane.has_session(remote_overlay));
+        assert!(!sender_packet_plane.has_connection(remote_overlay));
     }
 
     #[tokio::test]
@@ -36819,6 +36934,64 @@ mod tests {
         .expect("reverse-dial receive should not time out")
         .expect("reverse-dial receive");
         assert_eq!(received.frame, frame);
+    }
+
+    #[tokio::test]
+    async fn authorization_cleanup_cancels_only_unauthorized_quic_tasks() {
+        let identity = NodeIdentity::generate_ed25519().unwrap();
+        let allowed = peer_id();
+        let forwarder = Forwarder::from_config(&config_with_peer(&identity, allowed)).unwrap();
+        let denied = PeerId::from_libp2p(peer_id());
+        let allowed = PeerId::from_libp2p(allowed);
+        let mut negotiator = PacketPlaneNegotiator::default();
+        for (peer, role) in [
+            (denied, PacketPlaneQuicNegotiationRole::Initiator),
+            (denied, PacketPlaneQuicNegotiationRole::Responder),
+            (allowed, PacketPlaneQuicNegotiationRole::Initiator),
+        ] {
+            let abort_handle = negotiator
+                .quic_connection_tasks
+                .spawn(std::future::pending());
+            negotiator.quic_connection_task_handles.insert(
+                (peer, role),
+                PacketPlaneQuicConnectionTask {
+                    generation: 7,
+                    abort_handle,
+                },
+            );
+        }
+        assert_eq!(
+            reconcile_packet_plane_authorization(
+                &forwarder,
+                &mut PacketPlaneRuntime::disabled(),
+                None,
+                &mut negotiator,
+                &mut PathSet::new(),
+                &mut PathProbeTracker::default()
+            ),
+            1
+        );
+        assert!(!negotiator.finish_quic_connection_task(
+            denied,
+            PacketPlaneQuicNegotiationRole::Initiator,
+            7
+        ));
+        assert_eq!(negotiator.quic_connection_task_handles.len(), 1);
+        for _ in 0..2 {
+            let result = timeout(
+                TokioDuration::from_secs(1),
+                negotiator.quic_connection_tasks.join_next(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(matches!(result, Err(error) if error.is_cancelled()));
+        }
+        negotiator.clear();
+        assert!(
+            matches!(negotiator.quic_connection_tasks.join_next().await.unwrap(),
+            Err(error) if error.is_cancelled())
+        );
     }
 
     #[tokio::test]

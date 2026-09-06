@@ -215,6 +215,41 @@ dispatch in `handle_packet_plane_received`. Installed UDP sessions expire by
 establishment age, not received activity. Remaining teardown work should not be
 described as a demonstrated inbound TUN-authorization bypass.
 
+### R8: Owned Sessions Outlive Authorization Changes
+
+Priority: P2 lifecycle/resource issue. Status: packet-session cleanup implemented;
+broader authorization-driven runtime cleanup remains open.
+
+Transport disconnect handling intentionally retains active owned packet sessions
+for ordinary recovery. Previously, membership changes had no equivalent teardown
+boundary, so removed members could retain session and negotiation state until expiry.
+
+The runtime now reconciles owned packet state before selecting the next event
+after a forwarder membership revision changes. Unchanged revisions do not scan
+session maps. The current forwarder authorization is the policy source.
+
+| Removed State | Preserved State |
+| --- | --- |
+| Unauthorized UDP sessions and endpoint associations | Other peers sharing an endpoint; UDP listeners |
+| Unauthorized QUIC sessions and connection handles | Authorized sessions; QUIC endpoint |
+| Pending initiator/responder negotiations and task handles | Authorized pending work |
+| Healthy owned-datagram path status and pending probes | Public libp2p connections and other transport paths |
+
+Cancelled task generations cannot install late QUIC results. Tests cover both
+negotiation roles, idempotent UDP removal, shared endpoints, authorized-session
+retention, and cleanup of established UDP and QUIC sessions.
+
+| Validation | Result |
+| --- | --- |
+| Offline workspace tests | 1,165 passed; 15 intentionally ignored. |
+| Explicit serial namespace suite | All 11 passed in 188.24 seconds. |
+| Formatting and whitespace | Passed. |
+| Required Clippy groups | Passed; non-fatal style warnings remain. |
+
+Remaining: discovery/retry ownership, queued state, peer-capability cleanup, and
+restart/convergence scenarios. This boundary reacts to committed authorization;
+it does not itself discover or propagate membership changes.
+
 ## Review Coverage Still Required
 
 ### Namespace Verification Findings

@@ -186,6 +186,14 @@ Runtime route advertisements are claims, not dynamic routing authority.
 
 ## Packet-Plane Negotiation
 
+Before selecting the next runtime event after an authorization revision changes,
+the daemon removes unauthorized owned sessions and pending negotiations. UDP
+endpoint associations, QUIC handles, datagram path health, and pending probes are
+cleaned together. Cancelled task generations cannot reinstall a late connection.
+
+This does not disconnect public libp2p infrastructure or remove listeners.
+Unchanged authorization revisions do not rescan session maps.
+
 Pending handshakes expire after 25 seconds. The expiry timer retries eligible
 initiators using cached capabilities; it does not require a fresh connection or
 capability event. Session expiry uses the same eligibility checks.

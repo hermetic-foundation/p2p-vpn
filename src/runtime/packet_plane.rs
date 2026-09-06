@@ -1209,6 +1209,18 @@ impl PacketPlaneRuntime {
         removed
     }
 
+    pub(crate) fn peers(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.sessions.keys().copied()
+    }
+
+    pub(crate) fn forget_peer(&mut self, peer: PeerId) -> bool {
+        let Some(session) = self.sessions.remove(&peer) else {
+            return false;
+        };
+        self.remove_endpoint_mapping(peer, session.endpoint);
+        true
+    }
+
     fn expire_sessions_at(
         &mut self,
         now: Instant,
@@ -1520,6 +1532,10 @@ impl PacketPlaneQuicRuntime {
 
     pub fn forget_connection(&mut self, peer: PeerId) -> bool {
         self.connections.remove(&peer).is_some()
+    }
+
+    pub(crate) fn peers(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.sessions.keys().chain(self.connections.keys()).copied()
     }
 
     pub fn forget_peer(&mut self, peer: PeerId) -> bool {
@@ -2620,6 +2636,26 @@ mod tests {
         assert_eq!(runtime.session_count(), 0);
         assert!(runtime.session_endpoints.is_empty());
         assert!(runtime.forget_all_sessions().is_empty());
+    }
+
+    #[test]
+    fn forgetting_one_peer_preserves_shared_endpoint_owners() {
+        let mut runtime = PacketPlaneRuntime::disabled();
+        let mut peers = Vec::new();
+        for _ in 0..2 {
+            let (secret, _, hello, accept) = verified_session_pair();
+            runtime
+                .establish_session(PacketPlaneSessionRole::Initiator, &secret, &hello, &accept)
+                .unwrap();
+            peers.push(accept.peer);
+        }
+        assert_eq!(runtime.session_endpoints.len(), 1);
+        assert!(runtime.forget_peer(peers[0]));
+        assert!(!runtime.forget_peer(peers[0]));
+        assert!(runtime.has_session(peers[1]));
+        assert_eq!(runtime.session_endpoints.values().next().unwrap().len(), 1);
+        assert!(runtime.forget_peer(peers[1]));
+        assert!(runtime.session_endpoints.is_empty());
     }
 
     #[test]
