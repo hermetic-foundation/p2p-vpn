@@ -488,14 +488,15 @@ receive that reserved snapshot, not assume a new config evaluation matches dispa
 This fixes installed-state ownership, not the packet authorization policy. Final
 Android device and NixOS VM validation remain in the acceptance map.
 
-### Open Membership-Sync Lifecycle Review
+### Membership-Sync Lifecycle Review
 
 The [bounded source review](membership-sync-review.md) identifies wrong-type
 response dispatch, authorization-driven retirement, and history-retention cases.
-Wrong-type dispatch, authorization withdrawal, and history growth are reproduced and fixed.
+Wrong-type dispatch, authorization withdrawal, history growth, and terminal
+stale-response ownership are reproduced and fixed.
 Control-event and owner tests cover revoked replies, expiry, static-peer removal,
-local recovery, and bounded reconnect history. Stale-connection ordering remains
-required work; it is not an approved deferral.
+local recovery, bounded reconnect history, and controlled retirement after a real
+loopback response. Broader lifecycle review and final platform gates remain.
 
 The [Android multi-network run](android-multi-network-review.md) validates normal
 traffic and lifecycle behavior at `f026342f`, not those hostile-response cases.

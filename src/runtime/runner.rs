@@ -571,6 +571,16 @@ impl MembershipRecordSyncs {
         self.pending.contains_key(&request_id)
     }
 
+    fn owns_request(
+        &self,
+        peer: Libp2pPeerId,
+        request_id: request_response::OutboundRequestId,
+    ) -> bool {
+        self.pending
+            .get(&request_id)
+            .is_some_and(|pending| pending.peer == peer)
+    }
+
     fn can_start(&self, peer: Libp2pPeerId, snapshot: &str, now: Instant) -> bool {
         self.pending.len() < MAX_CONCURRENT_MEMBERSHIP_SYNCS
             && !self.active_by_peer.contains_key(&peer)
@@ -12134,6 +12144,24 @@ async fn handle_control_event(
     event: request_response::Event<ControlRequest, ControlResponse>,
 ) -> Result<(), RunnerError> {
     if !request_response_message_is_usable(context.connection_epochs, &event, "control") {
+        // The transport has completed a response even if its connection is now stale.
+        if let request_response::Event::Message {
+            peer,
+            message: Message::Response { request_id, .. },
+            ..
+        } = &event
+            && context
+                .membership_record_syncs
+                .owns_request(*peer, *request_id)
+        {
+            context.membership_record_syncs.take(*request_id);
+            fail_membership_record_sync(
+                context.membership_record_syncs,
+                context.metrics,
+                *peer,
+                "stale_connection",
+            );
+        }
         return Ok(());
     }
     match event {
@@ -34283,7 +34311,14 @@ mod tests {
             relay_server: false,
             relay_resources: crate::config::RelayResourceConfig::default(),
             resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
+            discovery: DiscoveryConfig {
+                mdns: false,
+                kademlia: false,
+                kademlia_provider_advertisement: false,
+                dcutr: false,
+                autonat: false,
+                ..DiscoveryConfig::default()
+            },
         })
         .expect("node")
     }
@@ -34296,6 +34331,35 @@ mod tests {
         peer: Libp2pPeerId,
         request_id: request_response::OutboundRequestId,
         response: ControlResponse,
+    ) {
+        let connection_id = ConnectionId::new_unchecked(1);
+        let mut connection_epochs = ConnectionEpochs::default();
+        assert!(connection_epochs.record_established(connection_id));
+        dispatch_membership_sync_test_event(
+            node,
+            forwarder,
+            syncs,
+            metrics,
+            &mut connection_epochs,
+            request_response::Event::Message {
+                peer,
+                connection_id,
+                message: Message::Response {
+                    request_id,
+                    response,
+                },
+            },
+        )
+        .await;
+    }
+
+    async fn dispatch_membership_sync_test_event(
+        node: &mut P2pNode,
+        forwarder: &mut Forwarder,
+        syncs: &mut MembershipRecordSyncs,
+        metrics: &RuntimeMetrics,
+        connection_epochs: &mut ConnectionEpochs,
+        event: request_response::Event<ControlRequest, ControlResponse>,
     ) {
         struct UnusedPacketIo;
         impl crate::runtime::tun::PacketRead for UnusedPacketIo {
@@ -34314,9 +34378,6 @@ mod tests {
         let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config()).expect("TUN");
         let mut local_capabilities = ControlCapabilities::local("lab", None, 1280)
             .with_membership_record_inventory(forwarder.member_records());
-        let connection_id = ConnectionId::new_unchecked(1);
-        let mut connection_epochs = ConnectionEpochs::default();
-        assert!(connection_epochs.record_established(connection_id));
         handle_control_event(
             &mut node.swarm,
             &mut SwarmEventContext {
@@ -34362,21 +34423,126 @@ mod tests {
                 code_pairing_sessions: &mut CodePairingSessions::new(),
                 pairing_state_store: None,
                 active_connections: &mut HashMap::new(),
-                connection_epochs: &mut connection_epochs,
+                connection_epochs,
                 membership_probe_connections: &mut MembershipProbeConnections::default(),
                 kademlia_maintenance: &mut KademliaMaintenance::new(Instant::now()),
             },
-            request_response::Event::Message {
-                peer,
-                connection_id,
-                message: Message::Response {
-                    request_id,
-                    response,
-                },
-            },
+            event,
         )
         .await
-        .expect("dispatch control response");
+        .expect("dispatch control event");
+    }
+
+    #[tokio::test]
+    async fn membership_record_sync_retires_a_completed_response_on_a_retiring_connection() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (local, remote, records) = membership_record_sync_records(3);
+            let remote_peer = remote.peer_id.parse().unwrap();
+            let config = config_with_peer(&local, remote_peer);
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            let mut node = membership_sync_test_node(local);
+            let mut remote_node = membership_sync_test_node(remote);
+            remote_node.swarm.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+            let address = loop {
+                if let SwarmEvent::NewListenAddr { address, .. } = remote_node.swarm.select_next_some().await {
+                    break address;
+                }
+            };
+            let mut epochs = ConnectionEpochs::default();
+            for _ in 0..2 {
+                node.swarm.dial(DialOpts::peer_id(remote_peer)
+                    .condition(PeerCondition::Always).addresses(vec![address.clone()]).build()).unwrap();
+                loop {
+                    tokio::select! {
+                        event = node.swarm.select_next_some() => {
+                            if let SwarmEvent::ConnectionEstablished { peer_id, connection_id, .. } = event {
+                                assert_eq!(peer_id, remote_peer);
+                                assert!(epochs.record_established(connection_id));
+                                break;
+                            }
+                        }
+                        _ = remote_node.swarm.select_next_some() => {}
+                    }
+                }
+            }
+            assert_eq!(epochs.established.len(), 2);
+            let local_capabilities = ControlCapabilities::local("lab", None, 1280)
+                .with_membership_record_inventory(&[]);
+            let remote_capabilities = ControlCapabilities::local("lab", None, 1280)
+                .with_membership_record_inventory(&records);
+            let mut syncs = MembershipRecordSyncs::default();
+            let metrics = RuntimeMetrics::default();
+            send_membership_record_sync_request(
+                &mut node.swarm, &mut syncs, &metrics,
+                PendingMembershipRecordSync::first(remote_peer, &local_capabilities, &remote_capabilities),
+            );
+            let request_id = *syncs.pending.keys().next().unwrap();
+            assert!(node.swarm.behaviour().control.is_pending_outbound(&remote_peer, &request_id));
+            let response_event = loop {
+                tokio::select! {
+                    event = node.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Control(event @ request_response::Event::Message {
+                            message: Message::Response { .. }, ..
+                        })) = event { break event; }
+                    }
+                    event = remote_node.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::Control(request_response::Event::Message {
+                            message: Message::Request { request, channel, .. }, ..
+                        })) = event {
+                            assert!(matches!(request, ControlRequest::MembershipRecords(_)));
+                            remote_node.swarm.behaviour_mut().control.send_response(channel,
+                                ControlResponse::MembershipRecordsRejected(MembershipRecordsRejectionReason::SnapshotChanged)
+                            ).unwrap();
+                        }
+                    }
+                }
+            };
+            let request_response::Event::Message {
+                peer, connection_id, message: Message::Response { request_id: completed_request, .. },
+            } = &response_event else { panic!("expected response"); };
+            assert_eq!(*peer, remote_peer);
+            assert_eq!(*completed_request, request_id);
+            let connection_id = *connection_id;
+            assert!(!node.swarm.behaviour().control.is_pending_outbound(&remote_peer, &request_id));
+            assert!(epochs.mark_retiring(connection_id));
+            assert!(node.swarm.close_connection(connection_id));
+            assert!(epochs.established.iter().any(|id| epochs.is_usable(*id)));
+            dispatch_membership_sync_test_event(
+                &mut node, &mut forwarder, &mut syncs, &metrics, &mut epochs, response_event,
+            ).await;
+            assert!(syncs.pending.is_empty(), "terminal stale response stranded its owner");
+            assert!(syncs.active_by_peer.is_empty());
+            let retry_at = syncs.history.retry_deadline(remote_peer).unwrap();
+            assert!(!syncs.can_start(remote_peer, "new", retry_at - Duration::from_nanos(1)));
+            assert!(syncs.can_start(remote_peer, "new", retry_at));
+
+            send_membership_record_sync_request(
+                &mut node.swarm, &mut syncs, &metrics,
+                PendingMembershipRecordSync::first(remote_peer, &local_capabilities, &remote_capabilities),
+            );
+            let newer = *syncs.pending.keys().next().unwrap();
+            assert_ne!(newer, request_id);
+            for (peer, id) in [(remote_peer, request_id), (peer_id(), newer)] {
+                dispatch_membership_sync_test_event(
+                    &mut node, &mut forwarder, &mut syncs, &metrics, &mut epochs,
+                    request_response::Event::Message {
+                        peer, connection_id,
+                        message: Message::Response {
+                            request_id: id,
+                            response: ControlResponse::MembershipRecordsRejected(MembershipRecordsRejectionReason::SnapshotChanged),
+                        },
+                    },
+                ).await;
+                assert!(syncs.contains(newer));
+                assert_eq!(syncs.active_by_peer.get(&remote_peer), Some(&newer));
+                assert_eq!(syncs.history.retry_deadline(remote_peer), Some(retry_at));
+            }
+            let snapshot = metrics.snapshot(crate::queue::QueueStats::default());
+            assert_eq!(snapshot.membership_record_sync_failures, 1);
+            assert_eq!(snapshot.membership_record_syncs_restarted, 0);
+            assert_eq!(snapshot.membership_record_page_requests_sent, 2);
+            assert!(forwarder.member_records().is_empty());
+        }).await.expect("loopback membership response deadline");
     }
 
     #[tokio::test]

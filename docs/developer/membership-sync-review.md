@@ -6,9 +6,9 @@ Source review at `f026342f`, covering outbound membership paging and its owner
 maps in `src/runtime/runner.rs`. A read-only review agent identified these cases;
 parent inspection confirmed the dispatch order and map retention behavior.
 
-Wrong-type response dispatch, authorization withdrawal, and history growth are
-reproduced and fixed. Stale-connection ordering remains open acceptance work,
-not an approved deferral or a packet-admission bypass claim.
+Wrong-type response dispatch, authorization withdrawal, history growth, and
+terminal stale-response ownership are reproduced and fixed. Broader lifecycle
+review and final platform validation remain in the acceptance map.
 
 ## Resolved: Wrong-Type Response Ownership
 
@@ -109,13 +109,30 @@ retained peers can still have later individual deadlines.
 These tests establish entry bounds and retry behavior, not daemon RSS or live
 overload performance. Logs use `/tmp/p2p-vpn-review-sync-history-*`.
 
-## Open Review Gap
+## Resolved: Terminal Stale Responses
 
-| Priority | Finding | Source |
-| --- | --- | --- |
-| Unreproduced | Stale-connection filtering precedes membership request retirement. Validate terminal response ordering and owner cleanup. | `handle_control_event`, `request_response_message_is_usable` |
+| Boundary | Evidence |
+| --- | --- |
+| Real transport completion | A loopback test establishes two TCP connections and exchanges a membership request/response. `is_pending_outbound` becomes false before application dispatch. |
+| Controlled retirement | The test marks the response connection retiring and requests its closure, while another established connection remains usable. |
+| Before fix | The stale-event filter stranded the application owner even though libp2p had completed its request. |
+| Cleanup | Stale responses retire membership ownership only when both peer and request ID match. Existing retry accounting records `stale_connection`. |
+| Isolation | Replayed old IDs and wrong-peer stale events cannot consume a newer request or change its retry deadline. |
+| Payload | The discarded response cannot restart paging or merge records. Stale incoming requests retain their previous filtering behavior. |
 
-### Regression Cases
+The retirement point is deliberately controlled after transport completion,
+before application dispatch. This validates the ownership invariant with real
+libp2p traffic; it does not measure the race's frequency during physical network moves.
+
+The fixture disables discovery and uses explicit loopback TCP connections. The
+regression and all ten focused sync tests pass; the workspace passes 1,208 tests
+with 18 opt-in tests ignored. Logs use `/tmp/p2p-vpn-review-sync-stale-*`.
+
+All 11 namespace scenarios pass in 188.03 seconds, including network movement and
+relay promotion. Required Clippy groups, changed-file formatting, and whitespace
+checks also pass. Final Android and NixOS VM gates remain in the acceptance map.
+
+## Regression Cases
 
 1. **Passed:** deliver a packet-plane rejection using an outstanding membership
    request ID; verify owner release, retry boundaries, and late-reply isolation.
@@ -123,12 +140,10 @@ overload performance. Logs use `/tmp/p2p-vpn-review-sync-history-*`.
    restart, or merge, plus retirement without a reply and local-recovery preservation.
 3. **Passed:** cycle peer identities through failure/completion and disconnection;
    verify entry bounds and preserve backoff for retained and evicted peers.
-4. Deliver a queued response from a retiring connection while another survives.
-   Verify stale-event filtering does not strand the request owner.
+4. **Passed:** retire a completed response's connection before application
+   dispatch; release its owner without consuming newer or differently owned requests.
 
-Case four also needs event-order validation: the early-return path is visible,
-but its occurrence with real libp2p event ordering has not been reproduced.
-Map growth is an ownership concern; process-memory exhaustion was not measured.
+Process-memory exhaustion and uncontrolled WAN race frequency were not measured.
 
 ## Existing Safeguards
 

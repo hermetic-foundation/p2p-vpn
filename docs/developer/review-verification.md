@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including bounded membership-sync history.
+Audited on 2026-09-06, including terminal stale-response ownership.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,8 +11,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,207 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
-| Namespace integration | Code pairing passes after history bounds in 13.21 seconds; the prior all-11 run passed in 188.76 seconds. | Controlled topology, not public NAT traversal; all-11 run predates history extraction. |
+| Workspace | Last full run: 1,208 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Namespace integration | All 11 pass after terminal stale-response cleanup, in 188.03 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
 | Nix source parity | `rust-test-sources` built successfully. | Verifies packaged test inclusion, not execution. |
@@ -27,7 +27,8 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Live inventory | Expiry regression and current emulator lifecycle pass; lists/snapshots share committed membership and audit time. | The emulator run does not simulate hostile replies or clock rollback; those have separate unit/review coverage. |
 | Membership-page authority | Remote-expiry regression reproduced and fixed; local-expiry recovery and existing resignation/revocation tests pass. | Page authority only; not a new packet or mutation exception. |
 | Membership response dispatch | Wrong-type response leak reproduced and fixed; owner cleanup, retry boundary, and newer-request isolation pass. | Injected usable-connection event, not live hostile-peer transport ordering. |
-| Membership sync retirement | Revoked first/final/restart replies stop; expiry and static-peer removal release pending owners; local recovery is preserved. | Application ownership, not transport-request cancellation; stale-connection ordering remains open. |
+| Membership sync retirement | Revoked first/final/restart replies stop; expiry and static-peer removal release pending owners; local recovery is preserved. | Application ownership, not transport-request cancellation. |
+| Stale sync responses | Two loopback TCP connections; real completed response followed by controlled retirement reproduces the owner leak and verifies cleanup/newer-ID isolation. | Controlled application ordering, not physical WAN race-frequency evidence. |
 | Sync history | Completion and retry maps each cap at 1,024 peers; overflow preserves backoff; authorization pruning and disconnect retention pass. | Entry-count/deadline evidence, not RSS or live overload measurements. |
 | Startup ownership | Linux and Android pass installed snapshots; expiry deletion and metadata guards pass. Android reactivation asserts its reserved snapshot. | External library integrations must opt into the additive snapshot handoff to avoid config-derived compatibility behavior. |
 
@@ -57,7 +58,7 @@ not imply that the corresponding Nix derivation was built successfully.
 | `nixos-vm-pairing`, `nixos-vm-code-pairing-lan`, `nixos-vm-code-pairing-relay` | Namespace pairing passes; separate current VM outputs not verified. |
 | `nixos-vm-quic-datagram`, `nixos-vm-quic-stream` | Current VM outputs not verified. |
 | `nixos-vm-forced-relay`, `nixos-vm-network-move` | Namespace equivalents pass; current VM outputs not verified. |
-| `namespace-smoke-preflighted` | All 11 pass after sync authorization retirement. Derivation result not established. |
+| `namespace-smoke-preflighted` | All 11 pass after terminal stale-response cleanup. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
 | `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
@@ -105,7 +106,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Workstream | Required Next Evidence |
 | --- | --- |
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
-| Session lifecycle | [Membership-sync review](membership-sync-review.md): dispatch, authorization withdrawal, and history bounds are fixed; stale-connection ordering remains. |
+| Session lifecycle | [Membership-sync review](membership-sync-review.md) cases are fixed. Reconcile broader session-lifecycle review and final platform evidence. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Signed-ledger RSS sampled through 256 records; timer refresh reuses valid evaluations. Isolate retained allocations and establish release-profile/daemon impact. |
