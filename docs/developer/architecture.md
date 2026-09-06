@@ -180,9 +180,25 @@ Runtime route advertisements are claims, not dynamic routing authority.
 | Owned UDP packet plane | Implemented. |
 | Owned Quinn QUIC DATAGRAM packet plane | Implemented. |
 | Direct libp2p QUIC stream | Connection-pinned packet stream. |
-| libp2p TCP stream fallback | Compatibility request-response stream. |
+| libp2p TCP stream fallback | Connection-pinned packet stream. |
 | libp2p circuit relay stream fallback | Connection-pinned packet stream. |
 | Native libp2p QUIC DATAGRAM | Blocked by dependency surface. |
+
+### Stream Ownership
+
+| Direction | Default Owner |
+| --- | --- |
+| Outbound TCP, QUIC, and relay packets/probes | Pinned behaviour targets the selected connection ID |
+| Inbound `/p2p-vpn/packet/1` | Request-response behaviour emits `BehaviourEvent::Packet` |
+| Compatibility outbound Forwarder calls | Existing request-response API remains available |
+
+The derived host registers `packet` before `pinned_packet_stream`. The pinned
+libp2p `SelectUpgrade` prioritizes the first matching handler. A TCP/QUIC socket
+regression requires this inbound event contract; field reordering must preserve it.
+
+The standalone pinned behaviour retains inbound support for callers that compose
+it without request-response inbound handling. Its inbound worker budget does not
+describe the default host's separate request-response budget.
 
 ## Packet-Plane Negotiation
 
@@ -245,7 +261,7 @@ The path manager scores available paths.
 Direct datagram paths are preferred when a compatible packet-plane session
 exists.
 
-QUIC and relay stream packets and health probes are pinned to the selected
+TCP, QUIC, and relay stream packets and health probes are pinned to the selected
 connection. A stale connection failure cannot demote a healthy replacement.
 
 Direct-connection deduplication uses the negotiated handshake role. During TCP

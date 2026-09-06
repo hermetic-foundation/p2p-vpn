@@ -125,7 +125,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Platform validation | Android multi-network passes at `643d798e`, targeted native health recovery at `4b90f3bc`; repeat affected VM and final shared-runtime gates. |
 | Android underlay failure | Latest transition passes with independent OS underlay diagnostics. Earlier failure attribution remains unresolved; a pass alone does not establish its cause. |
 | Android update traffic | Latest replacement traffic passes with ping timing and reply sequences retained. Preserve earlier 4/5 evidence and investigate attribution alongside remaining transport ownership work. |
-| Packet stream ownership | [Dispatch, closure, admission, stream budgets, and stale response accounting](packet-stream-ownership-review.md) have regressions. Resolve duplicate inbound ownership, sustained overload measurements, and final platform validation. |
+| Packet stream ownership | [Dispatch, closure, admission, stream budgets, stale accounting, and default inbound ownership](packet-stream-ownership-review.md) have regressions. Default Packet events remain compatible; sustained overload and final platform validation remain open. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 

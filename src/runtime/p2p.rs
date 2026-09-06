@@ -56,6 +56,8 @@ pub struct Behaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub pairing_mdns: Toggle<mdns::tokio::Behaviour>,
     pub control: request_response::Behaviour<ControlCodec>,
+    // SelectUpgrade gives the first matching handler priority. Keep this before
+    // pinned_packet_stream to preserve the default inbound Packet event contract.
     pub packet: request_response::Behaviour<PacketCodec>,
     pub pairing: request_response::Behaviour<PairingCodec>,
     pub pairing_code: request_response::Behaviour<PairingCodeCodec>,
@@ -1639,73 +1641,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_quic_nodes_exchange_pinned_packet_stream_request() {
-        let mut listener = build_node(&HostConfig {
-            identity: NodeIdentity::generate_ed25519().expect("listener identity"),
-            network_name: "lab".to_owned(),
-            membership_tag: None,
-            mtu: 1280,
-            max_concurrent_control_streams: 64,
-            max_concurrent_packet_streams: 256,
-            listen_addresses: vec![
-                "/ip4/127.0.0.1/udp/0/quic-v1"
-                    .parse()
-                    .expect("listen address"),
-            ],
-            external_addresses: Vec::new(),
-            bootstrap_peers: Vec::new(),
-            known_peers: Vec::new(),
-            relay_reservations: Vec::new(),
-            relay_server: false,
-            relay_resources: crate::config::RelayResourceConfig::default(),
-            resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
-        })
-        .expect("listener node");
-        let listener_address = next_listen_address(&mut listener.swarm).await;
+    async fn default_tcp_and_quic_hosts_deliver_pinned_requests_to_packet_owner() {
+        for listen in ["/ip4/127.0.0.1/tcp/0", "/ip4/127.0.0.1/udp/0/quic-v1"] {
+            let mut listener = build_node(&HostConfig {
+                identity: NodeIdentity::generate_ed25519().expect("listener identity"),
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: vec![listen.parse().expect("listen address")],
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: Vec::new(),
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: DiscoveryConfig::default(),
+            })
+            .expect("listener node");
+            let listener_address = next_listen_address(&mut listener.swarm).await;
 
-        let mut dialer = build_node(&HostConfig {
-            identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
-            network_name: "lab".to_owned(),
-            membership_tag: None,
-            mtu: 1280,
-            max_concurrent_control_streams: 64,
-            max_concurrent_packet_streams: 256,
-            listen_addresses: Vec::new(),
-            external_addresses: Vec::new(),
-            bootstrap_peers: Vec::new(),
-            known_peers: vec![(listener.local_peer_id, listener_address)],
-            relay_reservations: Vec::new(),
-            relay_server: false,
-            relay_resources: crate::config::RelayResourceConfig::default(),
-            resources: crate::config::ResourceConfig::default(),
-            discovery: DiscoveryConfig::default(),
-        })
-        .expect("dialer node");
-        let connection_id = next_connection_to_peer(
-            &mut listener.swarm,
-            &mut dialer.swarm,
-            listener.local_peer_id,
-        )
-        .await;
-        let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).expect("frame");
-        let request_id = dialer
-            .swarm
-            .behaviour_mut()
-            .pinned_packet_stream
-            .send_request_on_connection(listener.local_peer_id, connection_id, frame.clone());
-
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            exchange_until_pinned_packet_stream_response(
+            let mut dialer = build_node(&HostConfig {
+                identity: NodeIdentity::generate_ed25519().expect("dialer identity"),
+                network_name: "lab".to_owned(),
+                membership_tag: None,
+                mtu: 1280,
+                max_concurrent_control_streams: 64,
+                max_concurrent_packet_streams: 256,
+                listen_addresses: Vec::new(),
+                external_addresses: Vec::new(),
+                bootstrap_peers: Vec::new(),
+                known_peers: vec![(listener.local_peer_id, listener_address)],
+                relay_reservations: Vec::new(),
+                relay_server: false,
+                relay_resources: crate::config::RelayResourceConfig::default(),
+                resources: crate::config::ResourceConfig::default(),
+                discovery: DiscoveryConfig::default(),
+            })
+            .expect("dialer node");
+            let connection_id = next_connection_to_peer(
                 &mut listener.swarm,
                 &mut dialer.swarm,
-                frame,
-                request_id,
-            ),
-        )
-        .await
-        .expect("pinned packet stream exchange timed out");
+                listener.local_peer_id,
+            )
+            .await;
+            let frame = Frame::packet(1, 7, vec![0x45, 0, 0, 20]).expect("frame");
+            let request_id = dialer
+                .swarm
+                .behaviour_mut()
+                .pinned_packet_stream
+                .send_request_on_connection(listener.local_peer_id, connection_id, frame.clone());
+
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                exchange_until_pinned_packet_stream_response(
+                    &mut listener.swarm,
+                    &mut dialer.swarm,
+                    frame,
+                    request_id,
+                ),
+            )
+            .await
+            .expect("pinned packet stream exchange timed out");
+        }
     }
 
     #[tokio::test]
@@ -2334,29 +2334,15 @@ mod tests {
                 event = listener.select_next_some() => {
                     match event {
                         SwarmEvent::Behaviour(BehaviourEvent::PinnedPacketStream(
-                            pinned_packet_stream::Event::InboundRequest {
-                                peer,
-                                connection_id,
-                                request_id,
-                                frame,
-                            },
+                            pinned_packet_stream::Event::InboundRequest { .. },
                         )) => {
-                            assert_eq!(peer, *dialer.local_peer_id());
-                            assert_eq!(frame, expected_frame);
-                            let channel = pinned_packet_stream::Behaviour::response_channel(
-                                *dialer.local_peer_id(),
-                                connection_id,
-                                request_id,
-                            );
-                            listener
-                                .behaviour_mut()
-                                .pinned_packet_stream
-                                .send_response(channel, packet::PacketResponse::Accepted);
+                            panic!("default host changed its inbound Packet event owner");
                         }
                         SwarmEvent::Behaviour(BehaviourEvent::Packet(request_response::Event::Message {
                             message: Message::Request { request, channel, .. },
-                            ..
+                            peer, ..
                         })) => {
+                            assert_eq!(peer, *dialer.local_peer_id());
                             assert_eq!(request, expected_frame);
                             listener
                                 .behaviour_mut()

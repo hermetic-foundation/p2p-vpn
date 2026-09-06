@@ -173,14 +173,33 @@ on its two test nodes. It exercises real TCP and QUIC sockets with a pinned
 receiver, but does not prove default-host inbound dispatch selects that receiver.
 
 Default-host request-response inbound work has its existing independent budget.
-Pinned outbound work now has its own bound. Review duplicate protocol ownership
-and event compatibility separately before consolidating the default inbound owner.
+Pinned outbound work has its own bound. Source review confirms that the pinned
+libp2p `SelectUpgrade` gives the first matching handler priority.
+
+The chosen compatibility contract retains `packet` before `pinned_packet_stream`
+in the derived host. Default inbound requests emit `BehaviourEvent::Packet`;
+standalone pinned behaviour users retain their existing inbound support.
+
+The default TCP/QUIC socket test now rejects inbound `PinnedPacketStream` events
+instead of accepting either owner. It also checks the authenticated peer, frame,
+and matching pinned outbound response. This documents and guards the existing
+owner; it does not remove the second registration or merge their budgets.
+
+The focused TCP/QUIC exchange passed in 0.29 seconds. Source basis:
+`libp2p-core 0.43.2` (`upgrade/select.rs`), `libp2p-swarm 0.47.1`
+(`handler/select.rs`), and `libp2p-swarm-derive 0.35.1` (field-order handler composition).
+
+Log: `/tmp/p2p-vpn-review-default-packet-owner.log`.
+
+Workspace verification passed: 1,226 tests, 18 opt-in tests ignored. Required
+Clippy groups, changed-file formatting, and Nix source parity passed. Runtime
+behaviour is unchanged; namespace and Android scenarios were not rerun for this contract test.
 
 #### Remaining Evidence
 
 1. Measure sustained queue/ownership retention and recovery under saturation.
 2. Repeat affected platform checks after further runtime changes; retain earlier packet-loss evidence.
-3. Resolve duplicate inbound protocol ownership without silently changing supported event consumers.
+3. Preserve the documented default inbound owner in any future handler consolidation.
 
 #### Verification
 
