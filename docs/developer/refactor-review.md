@@ -875,8 +875,9 @@ The separate DHT's query-driven address lifecycle still requires review.
 
 The [pinned Kademlia source audit](kademlia-retention-review.md) now maps internal
 connection, pending-bucket, query, and address-change mutations. Manual insertion
-mode and routing-event cleanup alone are insufficient. Real-swarm reproduction
-and peak query-retention measurement remain outstanding.
+mode and routing-event cleanup alone are insufficient. A loopback diagnostic now
+reproduces 65 retained addresses after 65 connections in both DHT modes. Internal
+enforcement and peak query-retention measurement remain outstanding.
 
 Post-fix workspace validation: 1,183 passed, 15 opt-in tests ignored. Explicit
 peerless code-pairing and DHT-discovery namespace cases both passed in 25.37 seconds.

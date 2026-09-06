@@ -45,16 +45,45 @@ stores reported addresses before passing candidate identities to the query strat
 
 ## Next Verification
 
-1. Reproduce repeated confirmed outbound connections for one routing identity
-   with real local swarms, without Identify supplying those addresses.
-2. Measure bucket retention and application-owner state across disconnects.
-3. Exercise private-primary/public-pairing mode as well as a shared public DHT.
-4. Separately exercise query-local retention with bounded synthetic peer responses.
-5. Select enforcement only after establishing which hooks cover every mutation.
+1. Add enforcement for internally learned bucket addresses and turn the diagnostic
+   below into a regression that requires the bound to hold.
+2. Exercise query-local retention with bounded synthetic peer responses.
+3. Verify pending entries and address changes, not only `RoutingUpdated` events.
 
 Any reconciliation must preserve configured seeds, active connections, and fresh
 LAN/relay alternatives. Address pruning must not become a reconnect loop or
 authorize public routing identities as overlay members.
+
+## Local-Swarm Reproduction
+
+`runtime::p2p::tests::measure_internal_kademlia_connection_address_retention`
+uses real TCP loopback listeners and one remote identity. It waits for each
+Kademlia routing update, disconnects, and repeats through 65 distinct listener ports.
+
+| DHT Mode | Completed Connections | Retained Addresses After Disconnect |
+| --- | ---: | ---: |
+| Shared public DHT | 65 | 65 |
+| Private primary plus public-pairing DHT | 65 | 65 |
+
+The final combined diagnostic passed in 2.84 seconds. Its success means the internal
+growth was reproduced, not that the 64-address application bound held.
+
+All 31 enabled p2p-module tests also passed; the diagnostic is opt-in and was run
+separately. No production implementation changes are included in this milestone.
+
+- Public bootstrap seeds are removed before polling either swarm.
+- mDNS, AutoNAT, DCUtR, and provider advertisement are disabled.
+- No application Identify/admission handler is invoked.
+- Each mode has a 30-second outer deadline; dropping the swarms closes listeners.
+
+This establishes library-retained bucket growth beyond the application's limit.
+It does not measure RSS, execute the complete daemon event adapter, or demonstrate
+a public-network attack. The enforcement gap remains open.
+
+```bash
+cargo test --offline --locked --lib \
+  measure_internal_kademlia_connection_address_retention -- --ignored --nocapture
+```
 
 ## Reproduce the Audit
 
@@ -67,5 +96,6 @@ rg -n 'timeout:|struct QueryPeers|addresses:' \
   PATH_TO_VENDOR/libp2p-kad-0.48.0/src/query.rs
 ```
 
-This review used the installed Nix vendor directory. No dependency upgrade,
-network experiment, or additional source build was performed.
+The source audit used the installed Nix vendor directory. The local-swarm
+diagnostic used the cached Nix Rust toolchain; no dependency upgrade, external
+network test, or additional toolchain build was performed.

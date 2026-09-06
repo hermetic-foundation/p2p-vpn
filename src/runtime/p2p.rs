@@ -1325,6 +1325,117 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "opt-in loopback diagnostic for internal Kademlia address retention"]
+    async fn measure_internal_kademlia_connection_address_retention() {
+        for separate in [false, true] {
+            Box::pin(exercise_internal_kademlia_connection_address_retention(
+                separate,
+            ))
+            .await;
+        }
+    }
+
+    async fn exercise_internal_kademlia_connection_address_retention(separate: bool) {
+        let config = || HostConfig {
+            identity: NodeIdentity::generate_ed25519().expect("identity"),
+            network_name: "retention-diagnostic".to_owned(),
+            membership_tag: None,
+            mtu: 1280,
+            max_concurrent_control_streams: 64,
+            max_concurrent_packet_streams: 256,
+            listen_addresses: Vec::new(),
+            external_addresses: Vec::new(),
+            bootstrap_peers: Vec::new(),
+            known_peers: Vec::new(),
+            relay_reservations: Vec::new(),
+            relay_server: false,
+            relay_resources: crate::config::RelayResourceConfig::default(),
+            resources: crate::config::ResourceConfig::default(),
+            discovery: DiscoveryConfig {
+                mdns: false,
+                autonat: false,
+                dcutr: false,
+                kademlia_provider_advertisement: false,
+                kademlia_protocol: if separate {
+                    crate::config::PRIVATE_KADEMLIA_PROTOCOL.to_owned()
+                } else {
+                    crate::config::PUBLIC_IPFS_KADEMLIA_PROTOCOL.to_owned()
+                },
+                ..DiscoveryConfig::default()
+            },
+        };
+        let mut listener = build_node(&config()).expect("listener");
+        let mut dialer = build_node(&config()).expect("dialer");
+        for node in [&mut listener, &mut dialer] {
+            assert_eq!(node.swarm.behaviour().pairing_kad.is_enabled(), separate);
+            for seed in public_ipfs_bootstrap_peer_configs() {
+                let (peer, _) = seed.peer_address().expect("seed");
+                public_pairing_kad_mut(node.swarm.behaviour_mut()).remove_peer(&peer);
+            }
+            public_pairing_kad_mut(node.swarm.behaviour_mut()).set_mode(Some(kad::Mode::Server));
+        }
+        let remote = listener.local_peer_id;
+        let samples = super::super::address_retention::MAX_DISCOVERED_ADDRESSES_PER_PEER + 1;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            for index in 1..=samples {
+                listener
+                    .swarm
+                    .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                    .unwrap();
+                let address = next_listen_address(&mut listener.swarm).await;
+                dialer
+                    .swarm
+                    .dial(address.with(Protocol::P2p(remote)))
+                    .expect("dial loopback");
+                loop {
+                    tokio::select! {
+                        event = listener.swarm.select_next_some() => { let _ = event; }
+                        event = dialer.swarm.select_next_some() => {
+                            let routing = match event {
+                                SwarmEvent::Behaviour(BehaviourEvent::Kad(event)) if !separate => Some(event),
+                                SwarmEvent::Behaviour(BehaviourEvent::PairingKad(event)) if separate => Some(event),
+                                _ => None,
+                            };
+                            if let Some(kad::Event::RoutingUpdated { peer, addresses, .. }) = routing
+                                && peer == remote && addresses.len() == index {
+                                break;
+                            }
+                        }
+                    }
+                }
+                dialer.swarm.disconnect_peer_id(remote).expect("disconnect");
+                loop {
+                    tokio::select! {
+                        event = listener.swarm.select_next_some() => { let _ = event; }
+                        event = dialer.swarm.select_next_some() => {
+                            if matches!(event, SwarmEvent::ConnectionClosed {
+                                peer_id, num_established: 0, ..
+                            } if peer_id == remote) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("loopback retention diagnostic deadline");
+        let retained = public_pairing_kad_mut(dialer.swarm.behaviour_mut())
+            .kbuckets()
+            .flat_map(|bucket| {
+                bucket
+                    .iter()
+                    .map(|entry| entry.node.value.len())
+                    .collect::<Vec<_>>()
+            })
+            .sum::<usize>();
+        eprintln!(
+            "internal_kademlia_retention separate={separate} connections={samples} addresses={retained}"
+        );
+        assert_eq!(retained, samples);
+    }
+
+    #[tokio::test]
     async fn two_nodes_keep_idle_connection_alive_between_pings() {
         let discovery = relay_test_discovery();
         let mut listener = build_node(&HostConfig {

@@ -11,7 +11,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | 1,183 enabled tests pass; 15 opt-in tests ignored. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,183 passed, 15 opt-in tests ignored. New retention diagnostic runs separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 passed at `0acbd725`; pairing and DHT cases pass after the admission fix. | Other nine not repeated after that fix; controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -66,7 +66,7 @@ was started. This is not an estimate of work required with available binary subs
 | Recovery ownership | Finish timer/event and stale-completion review beyond the extracted targeted-query owner. |
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
-| Address resources | Identify admission is bounded. [Internal mutation paths are mapped](kademlia-retention-review.md); real-swarm reproduction and query-memory measurements remain. |
+| Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
 | Resource comparison | Evaluate signed-ledger scale and affected hot paths; distinguish measured changes from inference. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
