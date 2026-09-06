@@ -776,7 +776,7 @@ This LAN fixture cannot establish public-DHT or mobile idle resource behavior.
 
 Runtime source: `2dfa965a`, with measurement-only fixture additions. Rust 1.97.1,
 unoptimized integration tests, debug information and incremental compilation off.
-The fixture logs metrics every second. No builds ran during the final capture.
+The fixture logs metrics every second. No task builds ran during the final capture.
 
 | Setting | Recorded Value |
 | --- | --- |
@@ -811,8 +811,13 @@ The three sampler/parser regressions and replay-export assertions pass. Workspac
 pass. The sampling fixture passed twice; normal mode passed in 15.07 seconds,
 without the sampling delay.
 
-An equivalent pre-review baseline capture is still required. These numbers do
-not prove improvement, absence of resource regressions, or production performance.
+A [same-fixture baseline comparison](idle-resource-comparison.md) now records two
+successful captures per revision and one baseline startup failure. CPU and connection
+activity are similar; the reviewed node A has a higher resident footprint.
+
+Large signed ledgers, release-profile footprint, public routing, and Android remain
+outside this measurement. It does not prove production performance or complete
+the broader resource review.
 
 ### Live Service Observations
 

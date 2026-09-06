@@ -63,6 +63,8 @@ production performance from one run or equate stable sockets with zero retries.
 The fixture emits runtime metrics every second. Preserve that logging interval
 and account for host load when comparing samples.
 
+Recorded results: [controlled idle comparison](idle-resource-comparison.md).
+
 ## Rust Formatting
 
 ```sh
