@@ -14,6 +14,8 @@ import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
 import java.lang.reflect.Field;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
@@ -70,7 +72,7 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
         try {
             bind();
             Context context = getTargetContext();
-            onMain(() -> context.startForegroundService(serviceIntent()
+            onMain(() -> context.startService(serviceIntent()
                     .setAction(P2pVpnService.ACTION_DEBUG_COMMAND)
                     .putExtra(P2pVpnService.EXTRA_DEBUG_COMMAND, "create-profile")
                     .putExtra(P2pVpnService.EXTRA_DEBUG_VALUE, "lifecycle-test")));
@@ -78,6 +80,9 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
                 P2pVpnService.Snapshot snapshot = P2pVpnService.debugSnapshot();
                 return snapshot != null && snapshot.hasProfile && !snapshot.busy;
             }, 30, "profile creation");
+            if ("true".equals(arguments.getString("deferred_join"))) {
+                exerciseDeferredJoin();
+            }
             String peer = P2pVpnService.debugSnapshot().peerId;
             connect();
             awaitNativeRunning();
@@ -154,6 +159,94 @@ public final class ServiceLifecycleInstrumentation extends Instrumentation {
         Field worker = P2pVpnService.class.getDeclaredField("worker");
         worker.setAccessible(true);
         currentScope = (ServiceRuntimeWorker.Scope) worker.get(instance.get(null));
+    }
+
+    private void exerciseDeferredJoin() throws Exception {
+        setVpnConsent(true);
+        onMain(() -> require(VpnService.prepare(getTargetContext()) == null,
+                "emulator VPN consent is required"));
+        Field instance = P2pVpnService.class.getDeclaredField("debugInstance");
+        instance.setAccessible(true);
+        P2pVpnService service = (P2pVpnService) instance.get(null);
+        Class<?> operationClass = Class.forName(P2pVpnService.class.getName() + "$ProfileJoinOperation");
+        Class<?> resultClass = Class.forName(P2pVpnService.class.getName() + "$ProfileJoinResult");
+        Constructor<?> operationConstructor = operationClass.getDeclaredConstructor(String.class);
+        operationConstructor.setAccessible(true);
+        Method failure = resultClass.getDeclaredMethod("failure", String.class);
+        Method success = resultClass.getDeclaredMethod("success", AndroidProfile.class);
+        Method complete = P2pVpnService.class.getDeclaredMethod("completeProfileJoin", String.class, resultClass);
+        Method request = P2pVpnService.class.getDeclaredMethod("connectRequested", boolean.class);
+        Method disconnect = P2pVpnService.class.getDeclaredMethod("disconnectRequested", boolean.class);
+        for (Method method : new Method[] {failure, success, complete, request, disconnect}) {
+            method.setAccessible(true);
+        }
+        Field operation = P2pVpnService.class.getDeclaredField("profileJoinOperation");
+        Field busy = P2pVpnService.class.getDeclaredField("operationInProgress");
+        Field desired = P2pVpnService.class.getDeclaredField("desiredConnected");
+        Field collection = P2pVpnService.class.getDeclaredField("profileCollection");
+        for (Field field : new Field[] {operation, busy, desired, collection}) {
+            field.setAccessible(true);
+        }
+        // Hold the asynchronous result at the worker boundary; no public pairing is needed.
+        for (int variant = 0; variant < 3; variant++) {
+            int current = variant;
+            currentScope.schedule(() -> {
+                try {
+                    String id = PairingOperationId.generate();
+                    operation.set(service, operationConstructor.newInstance(id));
+                    busy.setBoolean(service, true);
+                    request.invoke(service, false);
+                    require(desired.getBoolean(service), "busy join lost connect intent");
+                    require(!P2pVpnService.debugSnapshot().connected, "connection started before join completion");
+                    if (current == 1) {
+                        desired.setBoolean(service, false);
+                    }
+                    ProfileCollection before = (ProfileCollection) collection.get(service);
+                    Object result = current == 2
+                            ? success.invoke(null, AndroidProfile.fromNative(NativeResponse.objectValue(
+                                    NativeBridge.nativeCreateProfile("joined-lifecycle", "test-phone"))))
+                            : failure.invoke(null, "Injected join failure");
+                    complete.invoke(service, id, result);
+                    require(!busy.getBoolean(service), "join retained operation ownership");
+                    require(operation.get(service) == null, "join retained completion ownership");
+                    if (current == 1) {
+                        require(!P2pVpnService.debugSnapshot().connected, "withdrawn intent restarted VPN");
+                    } else {
+                        require(P2pVpnService.debugSnapshot().connected,
+                                "join completion did not resume requested connection: "
+                                        + P2pVpnService.debugSnapshot().connectionDetail);
+                    }
+                    if (current == 2) {
+                        ProfileCollection saved = (ProfileCollection) collection.get(service);
+                        require(saved.networks.size() == 2, "successful join did not persist second network");
+                        int enabled = 0;
+                        for (ProfileCollection.Entry network : saved.networks) {
+                            if (network.enabled) enabled++;
+                        }
+                        require(enabled == 1, "join changed enabled network set");
+                        for (ProfileCollection.Entry original : before.networks) {
+                            require(saved.find(original.id).enabled == original.enabled,
+                                    "join changed existing network activation");
+                        }
+                        for (ProfileCollection.Entry network : saved.networks) {
+                            if (before.find(network.id) == null) {
+                                require(!network.enabled, "joined network was enabled implicitly");
+                            }
+                        }
+                    }
+                    disconnect.invoke(service, true);
+                } catch (ReflectiveOperationException | P2pVpnException error) {
+                    throw new AssertionError(error);
+                }
+            }, 0, TimeUnit.SECONDS).get(30, TimeUnit.SECONDS);
+        }
+        sendStatus(2, message("deferred_join", "passed: failed join, withdrawn intent, successful disabled join"));
+    }
+
+    private static Bundle message(String key, String value) {
+        Bundle result = new Bundle();
+        result.putString(key, value);
+        return result;
     }
 
     private void unbindAndStop() {

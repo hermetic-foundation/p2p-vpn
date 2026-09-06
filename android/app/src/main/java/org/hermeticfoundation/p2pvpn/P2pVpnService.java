@@ -1247,6 +1247,9 @@ public final class P2pVpnService extends VpnService {
             operationInProgress = false;
             releasePairingMulticastLock();
             publishSnapshot();
+            if (desiredConnected && !connected) {
+                startConnection("Connecting after network join");
+            }
             finishPairingForegroundService();
         }
     }

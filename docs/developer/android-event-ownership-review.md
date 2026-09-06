@@ -5,7 +5,7 @@
 Source reviewed at `6dbb680c` on 2026-09-06. A read-only reviewer identified
 the cases below; parent inspection checked the relevant control flow.
 The initial source review preceded regression work. A2 is now reproduced and
-fixed with JVM coverage; A1 and A3 remain open.
+fixed with JVM coverage. A3 is fixed with emulator instrumentation; A1 remains open.
 
 Successful workflow tests do not exercise every event ordering. Unresolved cases
 remain open even when the [network workflow](android-network-workflow-review.md) or
@@ -83,6 +83,41 @@ status timer could mask the omission; the regression must start without either.
 Required regression: latch the join result, request connection, then release
 success and failure variants. The existing enabled network must start afterward;
 the newly joined network must retain its explicit disabled default.
+
+#### Implemented Recovery
+
+Join completion now resumes the existing startup path when connection intent
+remains set and no runtime is connected. It runs after clearing join ownership
+and busy state, on both success and failure. It does not alter network enablement.
+
+| Instrumented ordering | Result on API 35 x86_64 |
+| --- | --- |
+| Failed join with deferred connect | Native VPN starts after completion |
+| Connection intent withdrawn before completion | VPN remains disconnected |
+| Successful join with deferred connect | Existing enabled network starts; joined network persists disabled |
+| Subsequent occupied-worker replacement | Existing lifecycle and native-cleanup assertions pass |
+
+The test injects join results at the real service worker boundary, not over
+public pairing. It uses real encrypted profile storage, Android VPN preparation,
+and JNI startup. It does not establish packet delivery or public discovery.
+
+- Before fix: `join completion did not resume requested connection`.
+- Final run: `passed=true`, instrumentation result code `-1`.
+- Logs: `/tmp/p2p-vpn-review-deferred-join-{before,after}.txt`.
+- Unit tests, lint, debug APK, and instrumentation APK assembly passed offline.
+
+The harness now uses `startService` for its bound-service debug setup, which
+does not enter foreground mode. Initial setup attempts also omitted VPN
+preparation; neither setup failure is counted as production regression evidence.
+
+Run the existing [lifecycle instrumentation](android-lifecycle-review.md#run-it)
+with the additional argument `-e deferred_join true`. Require the
+`deferred_join=passed` status as well as the final instrumentation success.
+
+| Tested artifact | SHA-256 |
+| --- | --- |
+| App APK | `83cd125da404ab0b0634489caea08badf09875906f5d9f41923eb9b5d2610ea3` |
+| Instrumentation APK | `b9e7e330b77d2900dfa011aac845efaea48b0754566be8fcc3a7372bf23b8a20` |
 
 ## Implementation Sequence
 
