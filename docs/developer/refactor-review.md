@@ -92,9 +92,9 @@ inventory ordering now use its local eligibility and static/signed precedence.
 Forwarding derives the packet allowlist from its transport-peer map, eliminating
 one repeated ledger evaluation per construction, merge, and configuration update.
 Forwarding now also shares one evaluated ledger between route compilation and
-transport admission. Internal post-commit runtime membership refreshes now copy
-that snapshot. Prepared reconfiguration, TUN, DNS, and inventory ownership remain
-part of the review; public record-based constructors are preserved.
+transport admission. Internal prepared and post-commit runtime membership views
+now copy that snapshot. TUN, DNS, and inventory ownership remain part of the review;
+public record-based constructors are preserved.
 
 New policy tests cover unknown versus configured identities, exact grant expiry,
 and local expiry/resignation without erasing surviving network membership.
@@ -547,7 +547,7 @@ The public API does not prevent callers from committing a stale or foreign updat
 Runtime callers do not do this; changing that contract needs separate design and
 coverage rather than silently ignoring updates in this refactor.
 
-Remaining ownership work includes sharing evaluation with TUN/runtime membership,
+Remaining ownership work includes sharing evaluation with TUN,
 reviewing revision consumers, and extracting recovery decisions and timer effects.
 
 ### Runtime Membership Snapshot Plan
@@ -557,8 +557,8 @@ reviewing revision consumers, and extracting recovery decisions and timer effect
 3. Keep local identity inclusion and configured infrastructure admission separate.
 4. Verify existing membership, expiry, revocation, and namespace behavior.
 
-This removes independent ledger evaluation after a forwarding commit. Prepared
-reconfiguration and TUN route derivation remain separate boundaries to review.
+This removes independent ledger evaluation after a forwarding commit. The follow-up
+below also covers prepared runtime membership; TUN route derivation remains separate.
 
 Implemented `OverlayMembership::replace_from_forwarder` for all six internal
 post-commit refresh paths. Public record-based APIs remain unchanged. Both paths
@@ -574,6 +574,17 @@ network movement and relay promotion. Android and full NixOS VM validation have
 not been repeated for this snapshot-copy change.
 Required Clippy groups, Rust formatting, and Nix test-source parity pass; existing
 style warnings remain. No throughput or memory improvement is claimed from these checks.
+
+#### Prepared Membership Follow-Up
+
+- Crate-private `ForwarderUpdate` accessors expose the configuration and evaluated peer set.
+- Pairing, persisted-enrollment recovery, and local revocation derive membership from that update.
+- Prepared and committed membership share one constructor, preserving local identity inclusion.
+- Expiry tests compare prepared, committed, and compatible record-based views at the same timestamp.
+
+Both local and remote expiry withdraw remote overlay admission without erasing
+signed history or promoting configured bootstrap infrastructure into the overlay.
+All membership preparation remains fallible before route application and commit.
 
 ### Snapshot Validation and Recovery Finding
 

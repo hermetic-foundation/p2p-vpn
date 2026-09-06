@@ -2793,11 +2793,6 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     }
 
     let now = current_unix_seconds_lossy();
-    let next_membership = OverlayMembership::from_config_with_member_records(
-        &next_config,
-        &next_config.network.member_records,
-        now,
-    )?;
     let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
         &next_config,
         &next_config.network.member_records,
@@ -2805,6 +2800,7 @@ fn reconcile_persisted_pairing_enrollments_with_route_update(
     )?;
     let tun_update = next_tun.additive_update_from(tun_runtime)?;
     let update = forwarder.prepare_reconfigure(next_config, now)?;
+    let next_membership = OverlayMembership::from_forwarder_update(&update)?;
     apply(tun_runtime, &next_tun, &tun_update)?;
     forwarder.commit_reconfigure(update);
     *membership = next_membership;
@@ -9308,19 +9304,30 @@ impl OverlayMembership {
     }
 
     fn replace_from_forwarder(&mut self, forwarder: &Forwarder) -> Result<(), ConfigError> {
-        let config = forwarder.config();
+        *self =
+            Self::from_transport_peers(forwarder.config(), forwarder.configured_transport_peers())?;
+        Ok(())
+    }
+
+    fn from_forwarder_update(update: &ForwarderUpdate) -> Result<Self, ConfigError> {
+        Self::from_transport_peers(update.config(), update.configured_transport_peers())
+    }
+
+    fn from_transport_peers(
+        config: &Config,
+        transport_peers: impl Iterator<Item = Libp2pPeerId>,
+    ) -> Result<Self, ConfigError> {
         let local_peer = config
             .local_peer()?
             .parse()
             .map_err(ConfigError::Libp2pPeerId)?;
-        let mut peers = forwarder
-            .configured_transport_peers()
-            .collect::<HashSet<_>>();
+        let mut peers = transport_peers.collect::<HashSet<_>>();
         peers.insert(local_peer);
         let configured_infrastructure_peers = Self::infrastructure_peers(config)?;
-        self.peers = peers;
-        self.configured_infrastructure_peers = configured_infrastructure_peers;
-        Ok(())
+        Ok(Self {
+            peers,
+            configured_infrastructure_peers,
+        })
     }
 
     #[must_use]
@@ -14711,11 +14718,6 @@ fn prepare_pairing_runtime_enrollment(
             .parse::<Libp2pPeerId>()
             .map_err(crate::pairing::PairingError::from)?
     };
-    let membership = OverlayMembership::from_config_with_member_records(
-        &next_config,
-        &next_config.network.member_records,
-        now_unix_seconds,
-    )?;
     let current_tun = TunRuntimeConfig::from_config_with_member_records_at(
         &current_config,
         &current_config.network.member_records,
@@ -14729,6 +14731,7 @@ fn prepare_pairing_runtime_enrollment(
     let tun_update = next_tun.additive_update_from(&current_tun)?;
     let membership_tag = next_config.membership_tag()?;
     let update = forwarder.prepare_reconfigure(next_config, now_unix_seconds)?;
+    let membership = OverlayMembership::from_forwarder_update(&update)?;
 
     Ok(PreparedPairingRuntimeEnrollment {
         forwarder: update,
@@ -15590,12 +15593,8 @@ fn apply_local_membership_revocation(
     let forwarder_update = forwarder
         .prepare_reconfigure(next_config.clone(), now_unix_seconds)
         .map_err(|error| format!("failed to prepare membership revocation: {error:?}"))?;
-    let next_membership = OverlayMembership::from_config_with_member_records(
-        &next_config,
-        &next_config.network.member_records,
-        now_unix_seconds,
-    )
-    .map_err(|error| format!("failed to refresh membership authorization: {error:?}"))?;
+    let next_membership = OverlayMembership::from_forwarder_update(&forwarder_update)
+        .map_err(|error| format!("failed to refresh membership authorization: {error:?}"))?;
     let next_tun = TunRuntimeConfig::from_config_with_member_records_at(
         &next_config,
         &next_config.network.member_records,
@@ -29883,6 +29882,62 @@ mod tests {
             from_snapshot.configured_infrastructure_peers,
             membership.configured_infrastructure_peers
         );
+    }
+
+    #[test]
+    fn prepared_membership_matches_committed_authority_at_expiry() {
+        for expire_local in [false, true] {
+            let local = NodeIdentity::generate_ed25519().unwrap();
+            let remote = NodeIdentity::generate_ed25519().unwrap();
+            let local_peer = local.peer_id.parse().unwrap();
+            let remote_peer = remote.peer_id.parse().unwrap();
+            let bootstrap = peer_id();
+            let mut config = config_with_peer(&local, remote_peer);
+            config.network.bootstrap_peers.push(BootstrapPeerConfig {
+                id: bootstrap.to_string(),
+                address: "/ip4/127.0.0.1/tcp/4001".to_owned(),
+            });
+            let mut forwarder = Forwarder::from_config(&config).unwrap();
+            for (member, expires) in [(local.clone(), expire_local), (remote, !expire_local)] {
+                config.network.member_records.push(
+                    issue_membership_record_at(
+                        &local,
+                        MembershipRecordOptions {
+                            network_name: "lab".to_owned(),
+                            member,
+                            membership_epoch: 1,
+                            sequence: 1,
+                            roles: vec![MembershipRole::OverlayMember],
+                            route_grants: Vec::new(),
+                            expires_at_unix_seconds: expires.then_some(1_100),
+                        },
+                        1_000,
+                    )
+                    .unwrap(),
+                );
+            }
+            for now in [1_099, 1_100] {
+                let update = forwarder.prepare_reconfigure(config.clone(), now).unwrap();
+                let prepared = OverlayMembership::from_forwarder_update(&update).unwrap();
+                let compatible = OverlayMembership::from_config_with_member_records(
+                    &config,
+                    &config.network.member_records,
+                    now,
+                )
+                .unwrap();
+                assert_eq!(prepared, compatible);
+                assert!(prepared.allows(local_peer));
+                assert_eq!(prepared.allows(remote_peer), now < 1_100);
+                assert!(!prepared.allows(bootstrap));
+                assert!(prepared.allows_configured_infrastructure(bootstrap));
+
+                forwarder.commit_reconfigure(update);
+                let mut committed = OverlayMembership::default();
+                committed.replace_from_forwarder(&forwarder).unwrap();
+                assert_eq!(prepared, committed);
+                assert_eq!(forwarder.member_records(), config.network.member_records);
+            }
+        }
     }
 
     #[test]

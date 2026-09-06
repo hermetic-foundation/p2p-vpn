@@ -56,6 +56,16 @@ pub struct ForwarderUpdate {
     mtu: usize,
 }
 
+impl ForwarderUpdate {
+    pub(crate) fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub(crate) fn configured_transport_peers(&self) -> impl Iterator<Item = Libp2pPeerId> + '_ {
+        self.authorization.peers.values().copied()
+    }
+}
+
 // Replace derived forwarding authority together; retained history is not admission state.
 #[derive(Debug, PartialEq, Eq)]
 struct ForwardingAuthorization {

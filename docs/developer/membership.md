@@ -331,8 +331,12 @@ Post-commit refreshes include restore, pairing-response installation, capability
 updates, DHT updates, paged sync, and expiry. They retain local identity inclusion
 and independently derive the configured infrastructure allowlist.
 
-Record-based public constructors and prepared reconfiguration still evaluate
-membership from records. Copying a committed snapshot does not change those APIs.
+Prepared pairing, enrollment recovery, and revocation copy the authorized peer set
+from their `ForwarderUpdate` before applying routes. Prepared and committed views
+share the same constructor; infrastructure peers remain separate from overlay authority.
+
+Record-based public constructors remain unchanged. TUN route derivation still
+evaluates records separately, using the preparation transaction's timestamp.
 
 Kernel route commands have inverse operations for rollback.
 
