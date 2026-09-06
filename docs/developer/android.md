@@ -905,6 +905,8 @@ the validated diagnostic report, and cleanup results.
 Cleanup also records `device.diagnostics.os_underlay` from Android's connectivity
 service, independently of the app tracker. It includes only coarse network kinds
 and validated, internet, and non-VPN capability flags; addresses are excluded.
+Combined transports containing VPN are labeled `vpn`, even when Android also
+reports the underlying Wi-Fi or cellular transport.
 
 - `status=parsed`: `networks` contains the active agents, possibly none.
 - `status=unsupported`: the dump format was not recognized; availability is unknown.

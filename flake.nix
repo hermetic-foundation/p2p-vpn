@@ -918,6 +918,8 @@
                       'Current Networks:' \
                       '  NetworkAgentInfo{network{100} ni{WIFI CONNECTED} lp{192.0.2.44 private.example} nc{[ Transports: WIFI Capabilities: INTERNET&NOT_VPN&VALIDATED]}}' \
                       '  NetworkAgentInfo{network{101} ni{MOBILE CONNECTED} nc{[ Transports: CELLULAR Capabilities: INTERNET&NOT_VPN]}}' \
+                      '  NetworkAgentInfo{network{102} nc{[ Transports: WIFI|VPN Capabilities: INTERNET&VALIDATED]}}' \
+                      '  NetworkAgentInfo{network{103} nc{[ Transports: VPN|CELLULAR Capabilities: INTERNET]}}' \
                       '  NetworkOffer [ Transports: WIFI Capabilities: INTERNET&VALIDATED ]'
                     ;;
                   'shell am broadcast --receiver-foreground -a org.hermeticfoundation.p2pvpn.debug.AUTOMATION -n org.hermeticfoundation.p2pvpn.debug/org.hermeticfoundation.p2pvpn.DebugAutomationReceiver --es command status')
@@ -1509,7 +1511,9 @@
                       status: "parsed",
                       networks: [
                         {kind: "wifi", validated: true, internet: true, not_vpn: true},
-                        {kind: "cellular", validated: false, internet: true, not_vpn: true}
+                        {kind: "cellular", validated: false, internet: true, not_vpn: true},
+                        {kind: "vpn", validated: true, internet: true, not_vpn: false},
+                        {kind: "vpn", validated: false, internet: true, not_vpn: false}
                       ]
                     } and
                     (.device.diagnostics.export |

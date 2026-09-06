@@ -2439,11 +2439,12 @@ summarize_android_connectivity() {
   jq -Rs '
     if contains("Current Networks:") then
       [split("\n")[] | select(test("^\\s*NetworkAgentInfo\\{")) |
+        ([capture("Transports: (?<kinds>[A-Z_|]+)")][0].kinds // "" | split("|")) as $transports |
         {
-          kind: (if contains("Transports: WIFI") then "wifi"
-            elif contains("Transports: CELLULAR") then "cellular"
-            elif contains("Transports: ETHERNET") then "ethernet"
-            elif contains("Transports: VPN") then "vpn"
+          kind: (if $transports | index("VPN") then "vpn"
+            elif $transports | index("WIFI") then "wifi"
+            elif $transports | index("CELLULAR") then "cellular"
+            elif $transports | index("ETHERNET") then "ethernet"
             else "other" end),
           validated: test("Capabilities: [^]]*\\bVALIDATED\\b"),
           internet: test("Capabilities: [^]]*\\bINTERNET\\b"),
