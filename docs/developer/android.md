@@ -902,6 +902,10 @@ nix run .#android-e2e -- --preflight --output ./android-e2e-preflight
 `evidence.json` records preflight checks, the device contract, scenario steps,
 the validated diagnostic report, and cleanup results.
 
+Steps include host Unix-millisecond timestamps. Bidirectional Android ping
+measurements also retain start/end timestamps and up to 100 received reply
+sequence numbers, without addresses or packet contents. Missing replies remain failures.
+
 Cleanup also records `device.diagnostics.os_underlay` from Android's connectivity
 service, independently of the app tracker. It includes only coarse network kinds
 and validated, internet, and non-VPN capability flags; addresses are excluded.

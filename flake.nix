@@ -453,6 +453,17 @@
                 printf '%s\n' 'Current Networks:' \
                   | summarize_android_connectivity \
                   | jq -e '. == {status: "parsed", networks: []}' >/dev/null
+                source <(sed -n '/^ping_measurement() {$/,/^}$/p' ${./scripts/android-e2e.sh})
+                printf '%s\n' \
+                  '64 bytes from 100.64.0.9: icmp_seq=1 ttl=64 time=1.0 ms' \
+                  'From private.example icmp_seq=2 Destination Host Unreachable' \
+                  '64 bytes from 100.64.0.9: icmp_seq=3 ttl=64 time=1.0 ms' \
+                  | ping_measurement /dev/stdin 100 \
+                  | jq -e '
+                    keys == ["finished_unix_millis", "reply_sequences", "started_unix_millis"] and
+                    .started_unix_millis == 100 and .finished_unix_millis >= 100 and
+                    .reply_sequences == [1, 3]
+                  ' >/dev/null
 
                 test_root="$TMPDIR/android-e2e-test"
                 mkdir -p \
@@ -1470,10 +1481,16 @@
                     ;;
                   shell\ ping\ -c\ 5\ -W\ 5\ *)
                     record_fake_traffic 5
+                    for sequence in 1 2 3 4 5; do
+                      printf '64 bytes from 100.64.0.9: icmp_seq=%s ttl=64 time=1.0 ms\n' "$sequence"
+                    done
                     printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
                     ;;
                   shell\ ping6\ -c\ 5\ -W\ 5\ *)
                     record_fake_traffic 5
+                    for sequence in 1 2 3 4 5; do
+                      printf '64 bytes from fd42::9: icmp_seq=%s ttl=64 time=1.0 ms\n' "$sequence"
+                    done
                     printf '5 packets transmitted, 5 packets received, 0%% packet loss\n'
                     ;;
                   shell\ ping\ -c\ 1\ -W\ 2\ *)
@@ -1507,6 +1524,10 @@
                   local diagnostic_size
                   jq -e --argjson expected_connected "$expected_connected" '
                     .cleanup.diagnostic_report_redacted and
+                    all(.steps[]; (.recorded_unix_millis | type == "number")) and
+                    all(.steps[] | select(.measurement.reply_sequences? != null);
+                      .measurement.reply_sequences == [1, 2, 3, 4, 5] and
+                      .measurement.finished_unix_millis >= .measurement.started_unix_millis) and
                     .device.diagnostics.os_underlay == {
                       status: "parsed",
                       networks: [

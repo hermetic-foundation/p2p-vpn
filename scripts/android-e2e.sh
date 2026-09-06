@@ -237,7 +237,10 @@ record_step() {
     --arg name "$name" \
     --arg status "$status" \
     --arg detail "$detail" \
-    '{name: $name, status: $status, detail: $detail}' \
+    --argjson recorded_unix_millis "$(date +%s%3N)" \
+    --argjson measurement "${4:-null}" \
+    '{name: $name, status: $status, detail: $detail, recorded_unix_millis: $recorded_unix_millis}
+      + (if $measurement == null then {} else {measurement: $measurement} end)' \
     >> "$steps_file"
 }
 
@@ -536,6 +539,8 @@ measure_bidirectional_traffic() {
   record_step "${step_prefix}linux_to_android_ipv6" passed \
     "Linux received 5 of 5 IPv6 replies$detail_suffix"
 
+  local ping_started_unix_millis
+  ping_started_unix_millis="$(date +%s%3N)"
   if ! adb_run shell ping -c 5 -W 5 "$linux_ipv4" \
     > "${file_prefix}-android-ipv4.txt" 2>&1 \
     || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
@@ -544,12 +549,15 @@ measure_bidirectional_traffic() {
     received="$(ping_received_count "${file_prefix}-android-ipv4.txt")"
     outcome=failed
     outcome_detail="Android-to-Linux IPv4 ping received $received of 5 replies$detail_suffix"
-    record_step "${step_prefix}android_to_linux_ipv4" failed "$outcome_detail"
+    record_step "${step_prefix}android_to_linux_ipv4" failed "$outcome_detail" \
+      "$(ping_measurement "${file_prefix}-android-ipv4.txt" "$ping_started_unix_millis")"
     return 1
   fi
   record_step "${step_prefix}android_to_linux_ipv4" passed \
-    "Android received 5 of 5 IPv4 replies$detail_suffix"
+    "Android received 5 of 5 IPv4 replies$detail_suffix" \
+    "$(ping_measurement "${file_prefix}-android-ipv4.txt" "$ping_started_unix_millis")"
 
+  ping_started_unix_millis="$(date +%s%3N)"
   if ! adb_run shell ping6 -c 5 -W 5 "$linux_ipv6" \
     > "${file_prefix}-android-ipv6.txt" 2>&1 \
     || ! grep -Eq '5 packets transmitted, 5 (packets )?received' \
@@ -558,11 +566,13 @@ measure_bidirectional_traffic() {
     received="$(ping_received_count "${file_prefix}-android-ipv6.txt")"
     outcome=failed
     outcome_detail="Android-to-Linux IPv6 ping received $received of 5 replies$detail_suffix"
-    record_step "${step_prefix}android_to_linux_ipv6" failed "$outcome_detail"
+    record_step "${step_prefix}android_to_linux_ipv6" failed "$outcome_detail" \
+      "$(ping_measurement "${file_prefix}-android-ipv6.txt" "$ping_started_unix_millis")"
     return 1
   fi
   record_step "${step_prefix}android_to_linux_ipv6" passed \
-    "Android received 5 of 5 IPv6 replies$detail_suffix"
+    "Android received 5 of 5 IPv6 replies$detail_suffix" \
+    "$(ping_measurement "${file_prefix}-android-ipv6.txt" "$ping_started_unix_millis")"
 }
 
 pair_selected_network() {
@@ -2235,6 +2245,14 @@ run_multi_network_scenario() {
     "Overlapping routes were rejected before persistence or live-runtime mutation"
 
   run_multi_network_lifecycle
+}
+
+ping_measurement() {
+  jq -Rs --argjson started "$2" --argjson finished "$(date +%s%3N)" '
+    {started_unix_millis: $started, finished_unix_millis: $finished,
+      reply_sequences: [split("\n")[] | select(test("^[0-9]+ bytes from ")) |
+        capture("icmp_seq=(?<seq>[0-9]+)").seq | tonumber][0:100]}
+  ' "$1"
 }
 
 ping_received_count() {
