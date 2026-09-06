@@ -1,7 +1,9 @@
 # Controlled Idle Comparison
 
 Recorded 2026-09-06. This compares an isolated integration-test workload, not
-release binaries, public DHT operation, or Android power consumption.
+packaged daemons, public DHT operation, or Android power consumption.
+The original comparison uses debug builds; the [release follow-up](#release-profile-follow-up)
+records current-only optimized observations separately.
 
 ## Subjects
 
@@ -119,8 +121,66 @@ independent clean rebuilds reproduced both recorded hashes.
 ## Remaining Scope
 
 - Larger signed-membership ledgers and multiple network instances.
-- Release-profile footprint and the observed RSS difference.
+- A matching release-profile baseline and attribution of the observed RSS difference.
 - Public-discovery failure pressure and Android lifecycle/power behavior.
 
 The broader review goal remains active. This comparison supplies limited idle
 evidence; it does not establish production readiness or finish runtime ownership work.
+
+## Release-Profile Follow-Up
+
+### Method
+
+- Runtime and fixture: `89709e4f`; Nix Rust 1.97.1; Cargo release defaults; incremental compilation disabled.
+- Same two-node direct-UDP topology, empty signed ledger, 30-second warmup, and 60-second sample.
+- Two successful captures, each with 61 observations per node. No task builds during sampling.
+- Current-only evidence: no matching release baseline was measured. Do not attribute debug/release differences to a revision change.
+- [Derived summaries](release-idle-resource-summary.json) retain raw artifact paths, hashes, counter boundaries, and executable identities.
+
+### Results
+
+CPU is a percentage of one core. RSS is KiB and includes the integration-test
+process running the daemon; it is not an allocation counter or packaged-CLI footprint.
+
+| Run | A CPU | B CPU | A RSS Range | B RSS Range | Host 1-Minute Load, Before / After |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Release 1 | 0.150% | 0.167% | 19,444-19,448 | 19,484-19,500 | 1.73 / 1.21 |
+| Release 2 | 0.150% | 0.133% | 19,600-19,620 | 19,220-19,224 | 0.85 / 0.67 |
+
+Both captures had these observations during the measured minute:
+
+| Observation | Node A | Node B |
+| --- | ---: | ---: |
+| Threads | 20 | 20 |
+| Socket descriptor range | 13-14 | 11-12 |
+| New direct connections | 1 | 1 |
+| Redial attempts | 0 | 1 |
+| New outgoing connection errors | 0 | 0 |
+| Path probes sent / failed | 12 / 0 | 12 / 0 |
+| New sent / accepted payload packets | 0 / 0 | 0 / 0 |
+| TUN reads / unauthorized-source drops | 1 / 1 | 1 / 1 |
+
+- Each node retained its process start time; both boundary snapshots selected a healthy direct UDP path.
+- Stable socket counts do not mean zero reconnection work. Connection and redial increments remain visible above.
+- The dropped packets were not captured; their protocol/source is not established by these counters.
+- Startup connection errors predate sampling: 35 per node in run 1; 10 on A and 35 on B in run 2. None were added during capture.
+- Short, isolated samples do not prove absence of leaks, public-discovery storms, or sustained-load regressions.
+
+### Artifacts and Failed Setup
+
+| Attempt | Directory ID | Result |
+| --- | --- | --- |
+| Setup failure | `2011119` | No idle report; missing CLI helper after package cleanup |
+| Release 1 | `2014856` | Passed; `idle-sample.json` retained |
+| Release 2 | `2016577` | Passed; `idle-sample.json` retained |
+
+Directories use `/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-<ID>/`.
+The failed attempt's node logs show live control sockets, but the harness could
+not execute the removed `CARGO_BIN_EXE_p2p-vpn` helper to query them.
+
+Rebuilding the matching current CLI restored the helper. Runtime source, fixture
+assertions, and deadlines were unchanged. The failure log remains at
+`/tmp/p2p-vpn-review-release-idle-1.log`; no successful sample hides that attempt.
+
+All capture processes exited. No physical device, public relay, or deployed
+service was changed for these measurements.

@@ -56,9 +56,14 @@ Compute one-core CPU percent as `100 * delta(cpu_ticks) / CLK_TCK / delta(elapse
 Compare identical fixture code, compiler/profile settings, warmup, and sample
 duration across revisions. Keep raw samples and verify path health in both runs.
 
-This is an isolated LAN integration-test workload, not a release-binary, public-DHT,
-or Android benchmark. Endpoint queries add some observation overhead. Do not infer
+This is an isolated LAN integration-test workload, not a packaged-daemon, public-DHT,
+or Android benchmark. Add `--release` for optimized tests and record that profile
+separately. Endpoint queries add some observation overhead. Do not infer
 production performance from one run or equate stable sockets with zero retries.
+
+When saving test executables for cross-revision runs, also preserve the matching
+`p2p-vpn` CLI at its compiled `CARGO_BIN_EXE_p2p-vpn` path. The harness invokes it
+for control queries; package cleanup can remove it even when the test binary survives.
 
 The fixture emits runtime metrics every second. Preserve that logging interval
 and account for host load when comparing samples.

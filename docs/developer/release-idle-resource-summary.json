@@ -1,0 +1,309 @@
+{
+  "schema_version": 1,
+  "measured_on": "2026-09-06",
+  "runtime_and_fixture_revision": "89709e4f",
+  "profile": "Cargo release defaults; incremental=0; Nix Rust 1.97.1; offline; jobs=2",
+  "test_binary_sha256": "e28b5fa0c7852458166e16edcf2b43d54efe510411c77e1e86cff224faef6b4a",
+  "cli_binary_sha256": "48f514af5db9e8379dff888d0f348410a0dd79fbc00f81c1a441c32283a45d1d",
+  "topology": "two isolated namespaces; direct UDP; no Internet route",
+  "warmup_seconds": 30,
+  "sample_seconds": 60,
+  "clock_ticks_per_second": 100,
+  "fixture_metrics_interval_seconds": 1,
+  "scope": "Derived summaries; raw captures retained at artifact paths. No release baseline, public connectivity, packet capture, or Android measurement.",
+  "failed_attempt": {
+    "log": "/tmp/p2p-vpn-review-release-idle-1.log",
+    "directory": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-2011119",
+    "exit_code": 101,
+    "reason": "Package cleanup removed the compiled CARGO_BIN_EXE_p2p-vpn CLI helper; no idle capture produced.",
+    "repair": "Rebuilt current CLI with unchanged source, fixture, and deadlines before runs below."
+  },
+  "runs": [
+    {
+      "round": 1,
+      "artifact": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-2014856/idle-sample.json",
+      "host_load_before": "1.73 2.26 2.23 2/1585 2015659",
+      "host_load_after": "1.21 2.03 2.15 2/1586 2016444",
+      "roles": [
+        {
+          "role": "a",
+          "observations": 61,
+          "elapsed_seconds": 60.001645708,
+          "cpu_ticks": 9,
+          "cpu_percent_one_core": 0.14999588584284504,
+          "rss_kib": [
+            19444,
+            19448
+          ],
+          "threads": [
+            20
+          ],
+          "socket_fds": [
+            13,
+            14
+          ],
+          "counters": {
+            "tun_read_packets": {
+              "before": 24,
+              "after": 25,
+              "delta": 1
+            },
+            "outbound_sent_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "inbound_accepted_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "outbound_drop_unauthorized_source_packets": {
+              "before": 4,
+              "after": 5,
+              "delta": 1
+            },
+            "direct_connections_established": {
+              "before": 1,
+              "after": 2,
+              "delta": 1
+            },
+            "redial_attempts": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "before": 35,
+              "after": 35,
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "before": 9,
+              "after": 21,
+              "delta": 12
+            },
+            "outbound_path_probe_failures": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            }
+          },
+          "selected_path_before": "direct_udp_datagram",
+          "selected_path_after": "direct_udp_datagram"
+        },
+        {
+          "role": "b",
+          "observations": 61,
+          "elapsed_seconds": 60.002172036999994,
+          "cpu_ticks": 10,
+          "cpu_percent_one_core": 0.1666606334489618,
+          "rss_kib": [
+            19484,
+            19500
+          ],
+          "threads": [
+            20
+          ],
+          "socket_fds": [
+            11,
+            12
+          ],
+          "counters": {
+            "tun_read_packets": {
+              "before": 20,
+              "after": 21,
+              "delta": 1
+            },
+            "outbound_sent_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "inbound_accepted_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "outbound_drop_unauthorized_source_packets": {
+              "before": 4,
+              "after": 5,
+              "delta": 1
+            },
+            "direct_connections_established": {
+              "before": 1,
+              "after": 2,
+              "delta": 1
+            },
+            "redial_attempts": {
+              "before": 0,
+              "after": 1,
+              "delta": 1
+            },
+            "outgoing_connection_errors": {
+              "before": 35,
+              "after": 35,
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "before": 9,
+              "after": 21,
+              "delta": 12
+            },
+            "outbound_path_probe_failures": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            }
+          },
+          "selected_path_before": "direct_udp_datagram",
+          "selected_path_after": "direct_udp_datagram"
+        }
+      ],
+      "artifact_sha256": "e9e88151a7bafac7cef3b78130ba3e19a83c8c6886c3292da1ab5a4f18143d4f"
+    },
+    {
+      "round": 2,
+      "artifact": "/tmp/p2p-vpn-tun_namespace_ping_crosses_two_node_overlay-2016577/idle-sample.json",
+      "host_load_before": "0.85 1.78 2.05 1/1587 2017358",
+      "host_load_after": "0.67 1.56 1.96 2/1585 2018144",
+      "roles": [
+        {
+          "role": "a",
+          "observations": 61,
+          "elapsed_seconds": 60.003003237,
+          "cpu_ticks": 9,
+          "cpu_percent_one_core": 0.14999249228329087,
+          "rss_kib": [
+            19600,
+            19620
+          ],
+          "threads": [
+            20
+          ],
+          "socket_fds": [
+            13,
+            14
+          ],
+          "counters": {
+            "tun_read_packets": {
+              "before": 24,
+              "after": 25,
+              "delta": 1
+            },
+            "outbound_sent_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "inbound_accepted_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "outbound_drop_unauthorized_source_packets": {
+              "before": 4,
+              "after": 5,
+              "delta": 1
+            },
+            "direct_connections_established": {
+              "before": 2,
+              "after": 3,
+              "delta": 1
+            },
+            "redial_attempts": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            },
+            "outgoing_connection_errors": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "before": 9,
+              "after": 21,
+              "delta": 12
+            },
+            "outbound_path_probe_failures": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            }
+          },
+          "selected_path_before": "direct_udp_datagram",
+          "selected_path_after": "direct_udp_datagram"
+        },
+        {
+          "role": "b",
+          "observations": 61,
+          "elapsed_seconds": 60.003728329,
+          "cpu_ticks": 8,
+          "cpu_percent_one_core": 0.1333250486725768,
+          "rss_kib": [
+            19220,
+            19224
+          ],
+          "threads": [
+            20
+          ],
+          "socket_fds": [
+            11,
+            12
+          ],
+          "counters": {
+            "tun_read_packets": {
+              "before": 20,
+              "after": 21,
+              "delta": 1
+            },
+            "outbound_sent_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "inbound_accepted_packets": {
+              "before": 10,
+              "after": 10,
+              "delta": 0
+            },
+            "outbound_drop_unauthorized_source_packets": {
+              "before": 4,
+              "after": 5,
+              "delta": 1
+            },
+            "direct_connections_established": {
+              "before": 2,
+              "after": 3,
+              "delta": 1
+            },
+            "redial_attempts": {
+              "before": 0,
+              "after": 1,
+              "delta": 1
+            },
+            "outgoing_connection_errors": {
+              "before": 35,
+              "after": 35,
+              "delta": 0
+            },
+            "outbound_path_probes_sent": {
+              "before": 9,
+              "after": 21,
+              "delta": 12
+            },
+            "outbound_path_probe_failures": {
+              "before": 0,
+              "after": 0,
+              "delta": 0
+            }
+          },
+          "selected_path_before": "direct_udp_datagram",
+          "selected_path_after": "direct_udp_datagram"
+        }
+      ],
+      "artifact_sha256": "3efab4630a34785236c3533481914fc828ae1bdf0cd9dc617115a9d5520fe6c6"
+    }
+  ]
+}
