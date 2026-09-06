@@ -106,3 +106,45 @@ Destroy/recreate, always-on recovery, and network transitions remain to be exerc
 If a native call never returns, Java queue ownership alone cannot guarantee timely
 teardown. Audit native termination bounds separately; do not hide that limitation
 behind a second unbounded executor or a detached cleanup thread.
+
+## Native Termination Audit
+
+Source inspection at `3fab5e16`; these are configured limits, not measured deadlines.
+Paths below are relative to `crates/p2p-vpn-android/src/`.
+
+| Component | Mechanism | Source |
+| --- | --- | --- |
+| Control RPC | Five-second async timeout | `lib.rs:59`, `CONTROL_TIMEOUT` |
+| TUN reader | Nonblocking descriptor, stop flag, 250 ms poll | `lib.rs:1227` |
+| TUN writer | Stop flag and 250 ms total write poll budget | `lib.rs:1271` |
+| Network attempt | Four-second graceful stop, then abort with one-second wait | `lib.rs:2141` |
+| Async runtime | One-second shutdown timeout after supervisors finish | `lib.rs:1912` |
+| Native stop | Signals all supervisors, sets TUN stop, closes queues, joins threads | `lib.rs:2192` |
+
+`PacketSwitch::write_next` holds a network's state lock during TUN writes.
+Queue closure can wait for that lock; the Android writer's polling budget matters
+to shutdown as well as packet backpressure (`supervisor.rs:284`).
+
+The supervisor thread waits for all network supervisors before shutting down Tokio.
+Async timeouts require scheduler progress, and `thread::join` has no timeout here.
+Do not add the constants together and claim a hard native-stop deadline.
+
+## Emulator Readiness
+
+On 2026-09-06, the cached Nix harness passed boot and always-on preflight.
+KVM, launcher, ADB, and scenario prerequisites were available. No emulator was
+started, and no current-source JNI lifecycle scenario was run.
+
+| Evidence | Location |
+| --- | --- |
+| Boot preflight | `/tmp/p2p-vpn-review-android-preflight/evidence.json` |
+| Always-on preflight | `/tmp/p2p-vpn-review-android-always-on-preflight/evidence.json` |
+| Cached harness | `/nix/store/sq4xzqlac96snx4dsglbj41dbga2c356-p2p-vpn-android-e2e` |
+
+An offline, substitution-disabled dry run for current `.#android-e2e-runtime`
+planned 1,479 builds. None were started. This is not the plan with public caches
+enabled and does not establish that those inputs must be built from source.
+
+Before lifecycle E2E, obtain a bounded current-source JNI build and package it with
+the current Java code. Verify artifact provenance; the cached harness points to
+older APK and fixture outputs and cannot certify the new service owner unchanged.
