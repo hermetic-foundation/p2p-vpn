@@ -121,6 +121,7 @@ Logs use `/tmp/p2p-vpn-review-startup-snapshot-*`.
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Android underlay failure | Capture OS cellular availability/validation independently of the app tracker, then resolve and rerun the failed multi-network transition. |
 | Android update traffic | Investigate the retained 4/5 reverse IPv4 result after APK replacement, including packet timing and path changes. |
+| Packet stream ownership | Reproduce and fix [selected TCP connection dispatch and pinned closure outcomes](packet-stream-ownership-review.md), without assuming they caused the Android loss. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |
 
