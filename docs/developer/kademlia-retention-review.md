@@ -99,3 +99,41 @@ rg -n 'timeout:|struct QueryPeers|addresses:' \
 The source audit used the installed Nix vendor directory. The local-swarm
 diagnostic used the cached Nix Rust toolchain; no dependency upgrade, external
 network test, or additional toolchain build was performed.
+
+## Enforcement Decision
+
+A pinned crate patch is proposed, pending the user's preference about maintaining
+modified third-party code. No dependency or runtime change has been made for it.
+
+| Public Hook | Limitation Verified in Pinned Source |
+| --- | --- |
+| `KBucketRef` | Exposes present entries and `has_pending`, not pending entry contents. |
+| `QueryMut` | Exposes ID, query info, statistics, and `finish`; no address-cache mutation. |
+| `QueryRef` | Exposes information/statistics, not retained address bytes. |
+| Routing events | Do not cover every pending-entry or address-change mutation. |
+
+An application sweep can improve visible bucket retention, but cannot enforce
+strict limits on inaccessible query caches. Cancelling queries solely on elapsed
+time or request counts does not measure their retained addresses.
+
+### Proposed Patch Boundary
+
+1. Keep libp2p's identity, transport, DHT wire format, and query semantics.
+2. Bound insertion/replacement inside bucket address and query-cache owners.
+3. Cover confirmed connections, pending entries, peer responses, and address changes.
+4. Test size/count overflow and preserve useful alternatives under churn.
+5. Convert the loopback diagnostic into bound-enforcing regression coverage.
+
+### Packaging Requirements
+
+| Surface | Required Work If Approved |
+| --- | --- |
+| Source provenance | Retain crate version, license, upstream checksum, and a focused change record. |
+| Cargo | Use one pinned source for desktop, Android, tests, and offline development. |
+| Desktop Nix | Extend `flake.nix`'s explicit `rustSource` fileset. |
+| Android Nix | Extend `nix/android.nix`'s explicit `nativeSource` fileset. |
+| Verification | Test lock/source parity, native Android compilation, and discovery/recovery scenarios. |
+
+The installed upstream crate source occupies approximately 688 KiB. This is a
+source-size observation, not a build-space estimate. Reuse existing targets and
+check derivation plans before starting any rebuild.
