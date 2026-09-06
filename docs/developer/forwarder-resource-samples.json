@@ -1,0 +1,295 @@
+{
+  "baseline_revision": "f24831fa",
+  "current_revision": "44da11bd",
+  "profile": "unoptimized test; debug=0; incremental=0",
+  "samples": [
+    {
+      "version": "baseline",
+      "count": 8,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-8-1.log",
+      "build_us": 124487,
+      "constructed": {
+        "peak_rss_kib": 24056,
+        "rss_kib": 24056
+      },
+      "fixture": {
+        "peak_rss_kib": 19540,
+        "rss_kib": 19540
+      },
+      "ledger_sha256_base64": "+mfzsnkekaWUkxY+wQOqjOCzRKz/xvpSBFH5sSqJglU=",
+      "records": 8,
+      "refresh_us": 756175,
+      "refreshed": {
+        "peak_rss_kib": 24884,
+        "rss_kib": 24884
+      },
+      "refreshes": 3,
+      "binary_sha256": "4e61f5df948e74468b1192ae585a904045eb6be9a4ff145e475a176044dbc22f"
+    },
+    {
+      "version": "current",
+      "count": 8,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-8-1.log",
+      "build_us": 124298,
+      "constructed": {
+        "peak_rss_kib": 23500,
+        "rss_kib": 23500
+      },
+      "fixture": {
+        "peak_rss_kib": 18996,
+        "rss_kib": 18996
+      },
+      "ledger_sha256_base64": "+mfzsnkekaWUkxY+wQOqjOCzRKz/xvpSBFH5sSqJglU=",
+      "records": 8,
+      "refresh_us": 748416,
+      "refreshed": {
+        "peak_rss_kib": 24232,
+        "rss_kib": 24232
+      },
+      "refreshes": 3,
+      "binary_sha256": "226e8b5f7622c6e1470ca2dd21c771c153dd1281e14d662c7446e9d1f082893b"
+    },
+    {
+      "version": "current",
+      "count": 8,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-8-2.log",
+      "build_us": 124219,
+      "constructed": {
+        "peak_rss_kib": 23000,
+        "rss_kib": 23000
+      },
+      "fixture": {
+        "peak_rss_kib": 18688,
+        "rss_kib": 18688
+      },
+      "ledger_sha256_base64": "+mfzsnkekaWUkxY+wQOqjOCzRKz/xvpSBFH5sSqJglU=",
+      "records": 8,
+      "refresh_us": 748694,
+      "refreshed": {
+        "peak_rss_kib": 23924,
+        "rss_kib": 23924
+      },
+      "refreshes": 3,
+      "binary_sha256": "226e8b5f7622c6e1470ca2dd21c771c153dd1281e14d662c7446e9d1f082893b"
+    },
+    {
+      "version": "baseline",
+      "count": 8,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-8-2.log",
+      "build_us": 125549,
+      "constructed": {
+        "peak_rss_kib": 24668,
+        "rss_kib": 24668
+      },
+      "fixture": {
+        "peak_rss_kib": 19980,
+        "rss_kib": 19980
+      },
+      "ledger_sha256_base64": "+mfzsnkekaWUkxY+wQOqjOCzRKz/xvpSBFH5sSqJglU=",
+      "records": 8,
+      "refresh_us": 755224,
+      "refreshed": {
+        "peak_rss_kib": 25392,
+        "rss_kib": 25392
+      },
+      "refreshes": 3,
+      "binary_sha256": "4e61f5df948e74468b1192ae585a904045eb6be9a4ff145e475a176044dbc22f"
+    },
+    {
+      "version": "baseline",
+      "count": 128,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-128-1.log",
+      "build_us": 2011289,
+      "constructed": {
+        "peak_rss_kib": 24736,
+        "rss_kib": 24736
+      },
+      "fixture": {
+        "peak_rss_kib": 19468,
+        "rss_kib": 19468
+      },
+      "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+      "records": 128,
+      "refresh_us": 12126201,
+      "refreshed": {
+        "peak_rss_kib": 25700,
+        "rss_kib": 25700
+      },
+      "refreshes": 3,
+      "binary_sha256": "4e61f5df948e74468b1192ae585a904045eb6be9a4ff145e475a176044dbc22f"
+    },
+    {
+      "version": "current",
+      "count": 128,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-128-1.log",
+      "build_us": 2029919,
+      "constructed": {
+        "peak_rss_kib": 24292,
+        "rss_kib": 24292
+      },
+      "fixture": {
+        "peak_rss_kib": 19032,
+        "rss_kib": 19032
+      },
+      "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+      "records": 128,
+      "refresh_us": 12182300,
+      "refreshed": {
+        "peak_rss_kib": 25592,
+        "rss_kib": 25592
+      },
+      "refreshes": 3,
+      "binary_sha256": "226e8b5f7622c6e1470ca2dd21c771c153dd1281e14d662c7446e9d1f082893b"
+    },
+    {
+      "version": "current",
+      "count": 128,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-128-2.log",
+      "build_us": 2043827,
+      "constructed": {
+        "peak_rss_kib": 24412,
+        "rss_kib": 24412
+      },
+      "fixture": {
+        "peak_rss_kib": 19096,
+        "rss_kib": 19096
+      },
+      "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+      "records": 128,
+      "refresh_us": 12288423,
+      "refreshed": {
+        "peak_rss_kib": 25840,
+        "rss_kib": 25840
+      },
+      "refreshes": 3,
+      "binary_sha256": "226e8b5f7622c6e1470ca2dd21c771c153dd1281e14d662c7446e9d1f082893b"
+    },
+    {
+      "version": "baseline",
+      "count": 128,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-128-2.log",
+      "build_us": 2064177,
+      "constructed": {
+        "peak_rss_kib": 24916,
+        "rss_kib": 24916
+      },
+      "fixture": {
+        "peak_rss_kib": 19864,
+        "rss_kib": 19864
+      },
+      "ledger_sha256_base64": "vlaZGs8r5R3pjZEZkDUwj5ClJP09ur08l0//HbyVP8E=",
+      "records": 128,
+      "refresh_us": 12351569,
+      "refreshed": {
+        "peak_rss_kib": 25880,
+        "rss_kib": 25880
+      },
+      "refreshes": 3,
+      "binary_sha256": "4e61f5df948e74468b1192ae585a904045eb6be9a4ff145e475a176044dbc22f"
+    },
+    {
+      "version": "baseline",
+      "count": 256,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-256-1.log",
+      "binary_sha256": "4352b8b161883d95d57bb33a4e52753fed9152c9c73d3b1240b5fb0b1d367dd4",
+      "build_us": 4033452,
+      "constructed": {
+        "peak_rss_kib": 25156,
+        "rss_kib": 25156
+      },
+      "fixture": {
+        "peak_rss_kib": 20168,
+        "rss_kib": 20168
+      },
+      "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+      "records": 256,
+      "refresh_us": 24250887,
+      "refreshed": {
+        "peak_rss_kib": 26424,
+        "rss_kib": 26424
+      },
+      "refreshes": 3
+    },
+    {
+      "version": "current",
+      "count": 256,
+      "round": 1,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-256-1.log",
+      "binary_sha256": "4664265f98b209da8cf32d8f0e779b692dce4c143eb7db8c4b16a99c5adb7358",
+      "build_us": 4067050,
+      "constructed": {
+        "peak_rss_kib": 24624,
+        "rss_kib": 24624
+      },
+      "fixture": {
+        "peak_rss_kib": 19040,
+        "rss_kib": 19040
+      },
+      "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+      "records": 256,
+      "refresh_us": 24544006,
+      "refreshed": {
+        "peak_rss_kib": 26348,
+        "rss_kib": 26348
+      },
+      "refreshes": 3
+    },
+    {
+      "version": "current",
+      "count": 256,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-current-256-2.log",
+      "binary_sha256": "4664265f98b209da8cf32d8f0e779b692dce4c143eb7db8c4b16a99c5adb7358",
+      "build_us": 4094917,
+      "constructed": {
+        "peak_rss_kib": 24276,
+        "rss_kib": 24276
+      },
+      "fixture": {
+        "peak_rss_kib": 18940,
+        "rss_kib": 18940
+      },
+      "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+      "records": 256,
+      "refresh_us": 24490976,
+      "refreshed": {
+        "peak_rss_kib": 25712,
+        "rss_kib": 25536
+      },
+      "refreshes": 3
+    },
+    {
+      "version": "baseline",
+      "count": 256,
+      "round": 2,
+      "path": "/tmp/p2p-vpn-review-forwarder-baseline-256-2.log",
+      "binary_sha256": "4352b8b161883d95d57bb33a4e52753fed9152c9c73d3b1240b5fb0b1d367dd4",
+      "build_us": 4096893,
+      "constructed": {
+        "peak_rss_kib": 25268,
+        "rss_kib": 25268
+      },
+      "fixture": {
+        "peak_rss_kib": 20316,
+        "rss_kib": 20316
+      },
+      "ledger_sha256_base64": "CGt/DjhUrbYz0kShyOQpGjm7vfK0sZeoUjQWWD54dE4=",
+      "records": 256,
+      "refresh_us": 24594192,
+      "refreshed": {
+        "peak_rss_kib": 26560,
+        "rss_kib": 26560
+      },
+      "refreshes": 3
+    }
+  ]
+}

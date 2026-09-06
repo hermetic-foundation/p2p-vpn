@@ -2,7 +2,7 @@
 
 ## Scope
 
-Audited on 2026-09-06, including DNS borrowing of committed membership.
+Audited on 2026-09-06, including DNS borrowing of committed membership and its resource diagnostic.
 This is the current acceptance map for
 the [reliability review](refactor-review.md), not a production certification.
 Earlier milestones remain historical evidence, not automatic proof for later changes.
@@ -11,7 +11,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 
 | Area | Evidence | Limitation |
 | --- | --- | --- |
-| Workspace | Last full run: 1,190 passed, 17 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
+| Workspace | Last full run: 1,190 passed, 18 opt-in tests ignored. Diagnostics run separately. | Native Linux toolchain; not an Android device run. |
 | Namespace integration | All 11 pass after DNS snapshot sharing, in 189.00 seconds. | Controlled topology, not public NAT traversal. |
 | Static analysis | Required correctness, suspicious, and performance Clippy groups pass. | Existing non-fatal style warnings remain. |
 | Formatting | Changed Rust files pass rustfmt; whitespace checks pass. | Not proof of the complete flake `fmt` target. |
@@ -22,6 +22,7 @@ Earlier milestones remain historical evidence, not automatic proof for later cha
 | Android | Emulator lifecycle, always-on, and underlay recovery passed earlier. | JNI must be rebuilt and relevant scenarios repeated after shared runtime changes. |
 | Resources | Two controlled idle samples per compared revision. | Small static topology; see [measurement limits](idle-resource-comparison.md). |
 | Inventory evaluation | [Joint/separate diagnostic](inventory-evaluation-measurement.md) passed at 8, 32, and 128 records. | Single unoptimized run; not daemon throughput or memory evidence. |
+| Retained membership | [Forwarder comparison](forwarder-resource-comparison.md): 12 fresh-process samples at 8, 128, and 256 records. | Larger current samples show higher RSS growth; not exact map allocation cost or release-profile CPU evidence. |
 
 ## Exported Flake Checks
 
@@ -85,7 +86,7 @@ A combined offline, substitution-disabled dry run for it and `nixos-module` plan
 | Session lifecycle | Review remaining in-flight requests and authorization-driven retirement. |
 | Pairing orchestration | Assess transaction ownership across preparation, persistence, and finalization. |
 | Address resources | Identify admission is bounded. [Internal growth is reproduced](kademlia-retention-review.md) in both DHT modes; enforcement and query-memory measurements remain. |
-| Resource comparison | Measure the retained effective-membership map's RSS cost, signed-ledger scale, and affected hot paths; distinguish measurement from inference. |
+| Resource comparison | Signed-ledger process RSS sampled through the 256-record limit. Isolate retained allocations and review unchanged refresh work with release-profile evidence. |
 | Platform validation | Repeat affected Android and VM gates on final shared-runtime code. |
 | Packaging/tooling | Resolve or explicitly account for unverified exported checks without uncontrolled source builds. |
 | Documentation | Reconcile architecture and user workflows with final behavior and evidence. |

@@ -1053,6 +1053,105 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "opt-in fresh-process signed membership resource diagnostic"]
+    fn measure_forwarder_signed_membership_resources() {
+        use base64::Engine as _;
+        use sha2::{Digest as _, Sha256};
+
+        let count = std::env::var("P2P_VPN_REVIEW_LEDGER_RECORDS")
+            .unwrap_or_else(|_| "128".to_owned())
+            .parse::<usize>()
+            .unwrap();
+        assert!([8, 128, MAX_MEMBERSHIP_RECORDS].contains(&count));
+        // Deterministic test identities only; never persisted or connected to a network.
+        let identity = |index: u64| {
+            let mut seed = [0_u8; 32];
+            seed[..8].copy_from_slice(&index.to_le_bytes());
+            let keypair = Keypair::ed25519_from_bytes(seed).unwrap();
+            NodeIdentity::from_private_key(
+                &base64::engine::general_purpose::STANDARD
+                    .encode(keypair.to_protobuf_encoding().unwrap()),
+            )
+            .unwrap()
+        };
+        let root = identity(0);
+        let root_peer = root.peer_id.parse().unwrap();
+        let mut config = config_for(root_peer);
+        config.peers.clear();
+        config.network.local_peer = root.peer_id.clone();
+        config.network.private_key = Some(root.private_key.clone());
+        let mut addresses = std::collections::HashSet::new();
+        for index in 0..10_000 {
+            let member = identity(index);
+            let peer = PeerId::from_libp2p(member.peer_id.parse().unwrap());
+            if !addresses.insert(builtin_ipv4(peer)) {
+                continue;
+            }
+            config.network.member_records.push(
+                issue_membership_record_at(
+                    &root,
+                    MembershipRecordOptions {
+                        network_name: "lab".to_owned(),
+                        member,
+                        membership_epoch: 1,
+                        sequence: 1,
+                        roles: vec![MembershipRole::OverlayMember],
+                        route_grants: Vec::new(),
+                        expires_at_unix_seconds: None,
+                    },
+                    1_000,
+                )
+                .unwrap(),
+            );
+            if config.network.member_records.len() == count {
+                break;
+            }
+        }
+        assert_eq!(config.network.member_records.len(), count);
+        let fingerprint = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(
+            serde_json::to_vec(&config.network.member_records).unwrap(),
+        ));
+        let memory = || {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap();
+            let kib = |field: &str| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix(field))
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            };
+            serde_json::json!({"rss_kib": kib("VmRSS:"), "peak_rss_kib": kib("VmHWM:")})
+        };
+        let fixture_memory = memory();
+        let started = Instant::now();
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        let build_us = started.elapsed().as_micros();
+        assert_eq!(forwarder.configured_transport_peers().count(), count - 1);
+        let constructed_memory = memory();
+        let started = Instant::now();
+        for now in 1_001..=1_003 {
+            forwarder.refresh_membership_records(now).unwrap();
+        }
+        let refresh_us = started.elapsed().as_micros();
+        assert_eq!(forwarder.member_records(), config.network.member_records);
+        assert_eq!(forwarder.membership_revision(), 0);
+        assert_eq!(forwarder.authorization_revision(), 0);
+        eprintln!(
+            "forwarder_resource_sample {}",
+            serde_json::json!({
+            "records": count, "ledger_sha256_base64": fingerprint, "refreshes": 3,
+                "fixture": fixture_memory, "constructed": constructed_memory,
+                "refreshed": memory(), "build_us": build_us, "refresh_us": refresh_us,
+            })
+        );
+    }
+
     fn config_for(remote: Libp2pPeerId) -> Config {
         let remote_overlay = PeerId::from_libp2p(remote);
         let local_peer = loop {
