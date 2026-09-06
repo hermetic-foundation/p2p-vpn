@@ -462,6 +462,32 @@ identity to retrieve membership pages. Packet authorization remained withdrawn.
 Page-size, rate-limit, snapshot, and network-scope validation are unchanged.
 The recovery exception does not grant packet, service, or mutation authority.
 
+### R15: Startup Reconstructed Installed TUN State
+
+Priority: P2 route-state ownership. Status: installed-snapshot handoff implemented.
+
+| Responsibility | Source |
+| --- | --- |
+| Optional installed-state handoff | `src/runtime/runner.rs`: `RuntimePlatform::with_installed_tun`, `startup_tun_runtime` |
+| Successful Linux installation | `src/main.rs`: `up` |
+| Android activation baseline | `crates/p2p-vpn-android/src/supervisor.rs`: `NetworkControl::activate` |
+
+The CLI installed routes before daemon startup. The runtime later reconstructed
+its installed baseline using a fresh ledger evaluation. Expiry between those
+steps could erase the delta needed to remove the earlier installed route.
+
+Android reactivation resets dispatch to reserved routes. Its runtime must likewise
+receive that reserved snapshot, not assume a new config evaluation matches dispatch.
+
+- The startup test retains pre-expiry routes until reconciliation emits every deletion.
+- Metadata mismatches fail before packet-reader startup; legacy callers retain config-derived behavior.
+- The CLI and Android adapter now supply actual integration-owned snapshots.
+- Android reactivation tests assert that each generation receives the reserved snapshot.
+- Startup overlay membership derives peers from the forwarder rather than a second clock read.
+
+This fixes installed-state ownership, not the packet authorization policy. Final
+Android device and NixOS VM validation remain in the acceptance map.
+
 ### NixOS Membership VM Evidence
 
 The four-VM `nixos-vm-membership-convergence` check passed all 18 subtests.

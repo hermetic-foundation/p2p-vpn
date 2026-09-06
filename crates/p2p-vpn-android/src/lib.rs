@@ -1995,6 +1995,7 @@ mod android {
                 run_config_until_with_runtime_platform(
                     config,
                     RuntimePlatform::new(port.packet_io, port.route_controller)
+                        .with_installed_tun(port.installed_tun)
                         .with_control(control_receiver),
                     None,
                     None,

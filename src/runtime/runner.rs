@@ -695,6 +695,7 @@ impl TunRouteController for PreconfiguredTunRoutes {
 pub struct RuntimePlatform {
     packet_io: PacketIo,
     route_controller: Box<dyn TunRouteController>,
+    installed_tun: Option<TunRuntimeConfig>,
     control: Option<RuntimeControlReceiver>,
 }
 
@@ -704,6 +705,7 @@ impl RuntimePlatform {
         Self {
             packet_io,
             route_controller: Box::new(route_controller),
+            installed_tun: None,
             control: None,
         }
     }
@@ -711,6 +713,13 @@ impl RuntimePlatform {
     #[must_use]
     pub fn with_control(mut self, control: RuntimeControlReceiver) -> Self {
         self.control = Some(control);
+        self
+    }
+
+    /// Supplies the exact snapshot already installed by the host integration.
+    #[must_use]
+    pub fn with_installed_tun(mut self, installed: TunRuntimeConfig) -> Self {
+        self.installed_tun = Some(installed);
         self
     }
 }
@@ -935,6 +944,7 @@ where
     let RuntimePlatform {
         packet_io,
         route_controller,
+        installed_tun,
         control,
     } = platform;
     let identity = config.identity()?;
@@ -989,7 +999,10 @@ where
         }
     };
     let forwarder = Forwarder::from_config(&config)?;
-    let membership = OverlayMembership::from_config(&config)?;
+    let membership = OverlayMembership::from_transport_peers(
+        forwarder.config(),
+        forwarder.configured_transport_peers(),
+    )?;
     let previous_membership_tags = config.previous_membership_tags()?;
 
     Box::pin(run_node_until_with_membership_state(
@@ -999,6 +1012,7 @@ where
         previous_membership_tags,
         packet_io,
         route_controller,
+        installed_tun,
         config.effective_packet_mtu(),
         config.queue,
         config.resources,
@@ -1262,6 +1276,7 @@ where
         previous_membership_tags,
         packet_io,
         Box::new(route_controller),
+        None,
         mtu,
         queue_config,
         resources,
@@ -1283,6 +1298,22 @@ where
     .await
 }
 
+fn startup_tun_runtime(
+    forwarder: &Forwarder,
+    installed: Option<TunRuntimeConfig>,
+) -> Result<TunRuntimeConfig, RunnerError> {
+    let Some(installed) = installed else {
+        // Compatibility for external integrations that do not supply an installed snapshot.
+        return Ok(TunRuntimeConfig::from_config(forwarder.config())?);
+    };
+    let desired = TunRuntimeConfig::from_config_with_routes(
+        forwarder.config(),
+        forwarder.authorized_routes(),
+    )?;
+    desired.route_reconciliation_from(&installed)?;
+    Ok(installed)
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 async fn run_node_until_with_membership_state<Shutdown>(
@@ -1292,6 +1323,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
     previous_membership_tags: Vec<String>,
     packet_io: PacketIo,
     mut route_controller: Box<dyn TunRouteController>,
+    installed_tun: Option<TunRuntimeConfig>,
     mtu: u16,
     queue_config: QueueConfig,
     resources: ResourceConfig,
@@ -1313,6 +1345,7 @@ async fn run_node_until_with_membership_state<Shutdown>(
 where
     Shutdown: Future<Output = ShutdownReason> + Send,
 {
+    let mut tun_runtime = startup_tun_runtime(&forwarder, installed_tun)?;
     let (reader, mut writer) = packet_io.split();
     let metrics = Arc::new(RuntimeMetrics::default());
     let mut tun_rx = spawn_tun_reader(reader, Arc::clone(&metrics), mtu);
@@ -1380,8 +1413,6 @@ where
         })
         .transpose()?;
     let membership_state_store = membership_state_path.map(MembershipStateStore::new);
-    // `p2p-vpn up` installs routes from the file-backed config before runtime state is restored.
-    let mut tun_runtime = TunRuntimeConfig::from_config(forwarder.config())?;
     let mut code_pairing_sessions = load_code_pairing_sessions(
         pairing_state_store.as_ref(),
         &node.network_name,
@@ -24804,6 +24835,82 @@ mod tests {
             response.try_recv().expect("shutdown response"),
             vec!["shutdown accepted".to_owned()]
         );
+    }
+
+    #[test]
+    fn startup_preserves_installed_routes_until_expiry_reconciliation() {
+        let issuer = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+        let remote = crate::identity::NodeIdentity::generate_ed25519().unwrap();
+        let transport = remote.peer_id.parse().unwrap();
+        let mut config = config_with_peer(&issuer, transport);
+        config.network.member_records = vec![
+            issue_membership_record_at(
+                &issuer,
+                MembershipRecordOptions {
+                    network_name: "lab".to_owned(),
+                    member: remote,
+                    membership_epoch: 1,
+                    sequence: 1,
+                    roles: vec![MembershipRole::OverlayMember],
+                    route_grants: Vec::new(),
+                    expires_at_unix_seconds: Some(1_100),
+                },
+                1_000,
+            )
+            .unwrap(),
+        ];
+        let installed = TunRuntimeConfig::from_config_with_member_records_at(
+            &config,
+            &config.network.member_records,
+            1_001,
+        )
+        .unwrap();
+        assert!(!installed.routes.is_empty());
+        let mut forwarder = Forwarder::from_config(&config).unwrap();
+        forwarder.commit_reconfigure(
+            forwarder
+                .prepare_reconfigure(config.clone(), 1_100)
+                .unwrap(),
+        );
+        let mut runtime = startup_tun_runtime(&forwarder, Some(installed.clone())).unwrap();
+        assert_eq!(runtime, installed);
+        let mut commands = Vec::new();
+        sync_live_tun_routes_with(&forwarder, &mut runtime, |command| {
+            commands.push(command.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(runtime.routes.is_empty());
+        assert_eq!(commands.len(), installed.routes.len());
+        assert!(commands.iter().all(|command| command.contains("route del")));
+
+        for field in ["name", "mtu", "addresses"] {
+            let mut invalid = installed.clone();
+            match field {
+                "name" => invalid.name = "wrong0".to_owned(),
+                "mtu" => invalid.mtu += 1,
+                _ => invalid
+                    .additional_addresses
+                    .push(IpCidr::new("10.1.2.3".parse().unwrap(), 32).unwrap()),
+            }
+            assert!(
+                startup_tun_runtime(&forwarder, Some(invalid)).is_err(),
+                "{field}"
+            );
+        }
+        assert_eq!(
+            startup_tun_runtime(&forwarder, None).unwrap(),
+            TunRuntimeConfig::from_config(&config).unwrap()
+        );
+
+        // Startup membership borrows the forwarder's time, not a new wall-clock evaluation.
+        forwarder.commit_reconfigure(forwarder.prepare_reconfigure(config, 1_001).unwrap());
+        let membership = OverlayMembership::from_transport_peers(
+            forwarder.config(),
+            forwarder.configured_transport_peers(),
+        )
+        .unwrap();
+        assert!(membership.allows(transport));
     }
 
     #[test]

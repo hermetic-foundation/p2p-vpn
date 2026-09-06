@@ -61,6 +61,14 @@ The shared runtime receives a `RuntimePlatform`.
 Android supplies supervisor-backed packet I/O. Java establishes the physical
 TUN and initial routes; Rust validates packet dispatch and live route updates.
 
+The supervisor hands each runtime the reserved per-network TUN snapshot through
+`RuntimePlatform::with_installed_tun`. Reactivation resets dispatch to those
+reserved routes and supplies the same snapshot, before persisted updates replay.
+
+One shared immutable snapshot is retained per supervisor network. Runtime startup
+owns its installed-state copy; it is not reconstructed from current wall-clock
+membership, which may have changed while the network was stopped.
+
 | Concern | Linux | Android |
 | --- | --- | --- |
 | TUN creation | Rust `tun` crate | `VpnService.Builder` |

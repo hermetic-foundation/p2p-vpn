@@ -9613,9 +9613,10 @@ async fn up(
 
     println!("starting libp2p packet forwarding runtime");
     let metrics_interval = metrics_interval_seconds.map(Duration::from_secs);
-    Box::pin(runner::run_config_until_with_membership_state(
+    Box::pin(runner::run_config_until_with_runtime_platform(
         config,
-        device,
+        runner::RuntimePlatform::new(device.into_packet_io(), runner::LinuxTunRoutes)
+            .with_installed_tun(runtime),
         metrics_interval,
         control_socket,
         pairing_state,

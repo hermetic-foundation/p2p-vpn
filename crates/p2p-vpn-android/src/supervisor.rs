@@ -61,6 +61,7 @@ pub(crate) struct NetworkPort {
     pub generation: u64,
     pub packet_io: PacketIo,
     pub route_controller: SupervisorTunRoutes,
+    pub installed_tun: TunRuntimeConfig,
 }
 
 pub(crate) struct PacketSwitch {
@@ -114,6 +115,7 @@ impl PacketSwitch {
 
             let control = NetworkControl {
                 id: network.id.clone(),
+                initial_tun: Arc::new(network.tun.clone()),
                 routes: routes.clone(),
                 state: Arc::new(Mutex::new(NetworkPortState::default())),
                 limits,
@@ -1312,6 +1314,7 @@ struct InboundPort {
 #[derive(Clone)]
 struct NetworkControl {
     id: String,
+    initial_tun: Arc<TunRuntimeConfig>,
     routes: DispatchRegistry,
     state: Arc<Mutex<NetworkPortState>>,
     limits: QueueLimits,
@@ -1356,6 +1359,7 @@ impl NetworkControl {
         }
         Ok(NetworkPort {
             id: self.id.clone(),
+            installed_tun: self.initial_tun.as_ref().clone(),
             generation,
             packet_io: PacketIo::new(
                 PortReader {
@@ -3166,6 +3170,7 @@ mod tests {
         .expect("switch");
         let switch = Arc::new(switch);
         let old_port = ports.pop().expect("old port");
+        assert_eq!(old_port.installed_tun, current);
         let old_generation = old_port.generation;
         let mut old_routes = old_port.route_controller;
         let (mut old_reader, mut old_writer) = old_port.packet_io.split();
@@ -3183,6 +3188,7 @@ mod tests {
         switch.remove_network("alpha");
 
         let (new_port, new_lease) = switch.activate_network("alpha").expect("new activation");
+        assert_eq!(new_port.installed_tun, current);
         assert!(new_port.generation > old_generation);
         let (mut new_reader, mut new_writer) = new_port.packet_io.split();
         drop(old_lease);

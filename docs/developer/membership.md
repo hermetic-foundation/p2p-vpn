@@ -404,6 +404,23 @@ Successful mutations persist state and advertise new capabilities immediately.
 
 Startup order matters because `p2p-vpn up` installs file-backed routes first.
 
+The CLI supplies the exact TUN snapshot whose commands it successfully installed.
+Android supplies the supervisor's reserved per-network snapshot on each activation.
+Startup validates interface metadata before starting packet-reader work.
+
+```rust
+RuntimePlatform::new(packet_io, route_controller)
+    .with_installed_tun(installed_snapshot)
+```
+
+- Installed routes remain the delta baseline even if their signed grants expire during startup.
+- Desired routes and overlay membership use the forwarder's committed authorization.
+- Persisted pairing/membership restoration reconciles from installed state before normal forwarding starts.
+- Existing library entry points remain available; omitting the snapshot retains config-derived compatibility behavior.
+
+External integrations that install routes should provide their successful snapshot.
+The runtime cannot infer an external route controller's actual state from configuration.
+
 ```text
 capture installed TUN snapshot
   -> restore prepared/applied pairing enrollments
