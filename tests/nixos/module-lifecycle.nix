@@ -48,6 +48,8 @@ pkgs.testers.nixosTest {
     };
 
   testScript = ''
+    ${builtins.readFile ./storage_recovery.py}
+
     def assert_private_query_fails_fast(name):
         for label, command in [
             ("resolvectl", f"resolvectl query {name}"),
@@ -239,6 +241,15 @@ pkgs.testers.nixosTest {
         machine.succeed(
             "test $(sha256sum /var/lib/p2p-vpn/beta/private.key | cut -d' ' -f1) "
             "= $(cat /tmp/beta-key.sha)"
+        )
+
+    with subtest("storage repair recovers automatically without changing identity"):
+        assert_membership_storage_recovery(
+            machine, "alpha", "alpha-host.alpha.p2p-vpn.internal"
+        )
+        machine.succeed(
+            "test $(sha256sum /var/lib/p2p-vpn/alpha/private.key | cut -d' ' -f1) "
+            "= $(cat /tmp/alpha-key.sha)"
         )
 
     with subtest("private suffix guard recovers after a crash"):

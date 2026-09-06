@@ -667,7 +667,38 @@ exercises the checkpoint and restoration helpers with a real temporary store.
 Source inspection finds error propagation at initial persistence, local
 revocation, pairing approval, and the event-loop checkpoint. The live runtime
 exits on checkpoint failure; the test's explicit retry is not an automatic
-in-process recovery claim. Supervisor restart after a storage failure remains untested.
+in-process recovery claim.
+
+### Supervisor Recovery After Storage Repair
+
+`tests/nixos/storage_recovery.py` adds a shared VM assertion, included in the
+module-lifecycle test. It makes the membership file group/world readable,
+observes a load failure and an automatic restart attempt, then repairs only its mode.
+
+| Assertion | Scope |
+| --- | --- |
+| Failure evidence | A journal cursor excludes earlier errors; the service restart counter must increase. |
+| Automatic recovery | No start/restart command follows permission repair. |
+| DNS recovery | The daemon and resolver helper must be active; resolver caches are flushed before querying. |
+| State preservation | Membership-file digest and owner-only mode remain correct. |
+| Stable replacement | The recovered PID remains nonzero and unchanged for six seconds. |
+
+The focused run uses one node from the cached membership-convergence VM driver,
+with the current offline-built binary substituted through a runtime unit override.
+The other three VMs are not started. No physical hosts are changed.
+
+Binary SHA-256:
+`be23fc0a459ac5cc9116abb933b142ca41002bc7698fc2797c85bb08f893bf14`.
+Driver: `/nix/store/jmr6h5fdsg4xyg3k0cpxmjnz1qd05ram-nixos-test-driver-p2p-vpn-nixos-vm-membership-convergence`.
+
+Final focused run passed in 26.39 seconds; the recovery assertion took 12.92 seconds.
+Evidence: `/tmp/p2p-vpn-review-storage-vm-final.log`. The driver stopped the VM and
+removed its disk state. Nix evaluation, generated-script compilation, and Nix
+formatting passed.
+
+This isolates startup rejection and supervisor recovery. It does not simulate
+ENOSPC, a mid-write crash, or lost revocation records. The complete module-lifecycle
+flake check remains unrun: its offline, substitution-disabled plan requires 95 builds.
 
 ### Address Retention: Confirmed Growth
 
