@@ -61,6 +61,10 @@ Accepted Submit and Poll responses release their matching in-flight retry state
 before local application. A recoverable persistence or route error retains the
 existing retry delay; successful completion clears pending state.
 
+Expiry stops a join's traffic and removes its code. If a matching Prepared
+enrollment exists, it retains the remote transcript for restart recovery,
+consistent with restoring an operation whose deadline passed while stopped.
+
 ## Code and Locator
 
 The code contains 80 random bits.

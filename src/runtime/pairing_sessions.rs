@@ -2611,10 +2611,20 @@ impl CodePairingSessions {
     }
 
     fn deactivate_join(&mut self, terminal: TerminalStatus) {
+        let preserve_recovery = matches!(terminal, TerminalStatus::Expired)
+            && self.join.as_ref().is_some_and(|join| {
+                self.enrollments.iter().any(|enrollment| {
+                    enrollment.operation_id == join.id
+                        && enrollment.role == PairingEnrollmentRole::Joiner
+                        && enrollment.state == PairingEnrollmentState::Prepared
+                })
+            });
         if let Some(operation) = &mut self.join {
             operation.code.take();
-            operation.pending_submission = None;
-            operation.remote_approval = None;
+            if !preserve_recovery {
+                operation.pending_submission = None;
+                operation.remote_approval = None;
+            }
             operation.terminal = Some(terminal);
         }
         self.clear_transient_handshakes();
@@ -5414,6 +5424,49 @@ mod tests {
             }
         );
         assert!(restored.pending_approval.is_none());
+    }
+
+    #[test]
+    fn prepared_join_survives_live_expiry_checkpoint() {
+        let (mut sessions, enrollment, now) = prepared_join_fixture(10);
+        let expired_at = now + Duration::from_secs(11);
+        sessions.expire(1_011, expired_at);
+        assert_eq!(
+            sessions.join_status(&enrollment.operation_id).unwrap(),
+            PairingJoinStatus::Expired
+        );
+        assert!(sessions.due_remote_poll(expired_at).is_none());
+        assert!(sessions.due_pending_submission(expired_at).is_none());
+        assert!(sessions.join.as_ref().unwrap().code.is_none());
+        let bytes = sessions.encode_persisted("runners").unwrap();
+        let mut restored =
+            CodePairingSessions::restore_persisted(&bytes, "runners", 1_011, expired_at).unwrap();
+        restored
+            .validate_prepared_recovery("runners", &enrollment)
+            .expect("live expiry must preserve prepared recovery dependencies");
+        restored
+            .recover_prepared_join("runners", &enrollment)
+            .unwrap();
+        assert_eq!(
+            restored.join_status(&enrollment.operation_id).unwrap(),
+            PairingJoinStatus::Completed
+        );
+        assert_eq!(
+            restored.join_completion(&enrollment.operation_id),
+            Some((enrollment.offer.as_ref().unwrap(), &enrollment.response))
+        );
+    }
+
+    #[test]
+    fn unprepared_join_live_expiry_discards_remote_approval() {
+        let (mut sessions, _, now) = prepared_join_fixture(10);
+        sessions.enrollments.clear();
+        sessions.expire(1_011, now + Duration::from_secs(11));
+        let operation = sessions.join.as_ref().unwrap();
+        assert!(operation.remote_approval.is_none());
+        assert!(operation.pending_submission.is_none());
+        assert!(operation.code.is_none());
+        assert!(matches!(operation.terminal, Some(TerminalStatus::Expired)));
     }
 
     #[test]

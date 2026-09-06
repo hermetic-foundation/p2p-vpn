@@ -10,7 +10,7 @@ within the [reliability review](refactor-review.md).
 | Priority | Case | Evidence and status |
 | --- | --- | --- |
 | P1 | Cancel after completion produces unrestorable state | Reproduced for inviter and joiner; cancellation now preserves completed state. |
-| P1 | Prepared enrollment loses recovery dependencies | Secondary source review; failure-injection reproduction and fix remain pending. |
+| P1 | Prepared enrollment loses recovery dependencies | Live join expiry reproduced and fixed; cancellation, rejection, and replacement remain open. |
 | P2 | Accepted Submit failure leaves submission in flight | Reproduced at response dispatch; release the matching request before applying acceptance. |
 | P2 | New operation prevents acknowledgement of older enrollment | Secondary source review; reproduce across restart and declarative configuration changes. |
 
@@ -108,3 +108,37 @@ Verification after the retry fix:
 | Formatting | Changed Rust and whitespace checks pass |
 
 Android runtime gates remain outstanding for the combined transaction changes.
+
+## Live Join Expiry
+
+### Failure and Correction
+
+1. Prepare a joiner enrollment but leave runtime application incomplete.
+2. Expire the operation in the running daemon, then checkpoint its state.
+3. Restore and validate recovery; the old expiry path has deleted the remote approval.
+
+`deactivate_join` now retains recovery dependencies on expiry only when a matching
+Prepared joiner enrollment exists. This matches the existing restore policy.
+Cancellation and other terminal transitions are not changed by this fix.
+
+### Evidence Boundary
+
+- `prepared_join_survives_live_expiry_checkpoint` reproduced failed recovery validation before the correction.
+- The test covers live expiry, serialization, restore, validation, and session finalization.
+- The expired operation loses its code and cannot issue polls or submissions.
+- An unprepared expiry test checks that remote approval state is still discarded.
+
+These are session-state tests, not injected daemon route failure followed by restart.
+Replacement or cancellation can still invalidate Prepared recovery; that broader finding
+remains open, as does migration of already-invalid saved state.
+
+| Gate after live-expiry fix | Result |
+| --- | --- |
+| Pairing sessions | 50 passed |
+| Native workspace | 1,213 passed, 18 opt-in tests ignored |
+| Code-pairing namespace | Passed, 13.36 seconds |
+| Clippy | Required correctness, suspicious, and performance groups pass |
+| Formatting | Changed Rust and whitespace checks pass |
+| Nix `rust-test-sources` | Built offline; source inclusion only |
+
+Android runtime and full NixOS VM gates were not rerun for this incremental fix.
