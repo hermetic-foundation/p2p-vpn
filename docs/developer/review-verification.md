@@ -67,7 +67,8 @@ not imply that the corresponding Nix derivation was built successfully.
 | `namespace-smoke-preflighted` | All 11 pass with pinned resource bounds. Derivation result not established. |
 | `android`, `android-e2e-fixture` | Current offline x86_64 JNI/Gradle validation; full Nix derivation results not established. |
 | `android-e2e-structure` | Evaluated check body passed with installed tools earlier, outside a Nix sandbox. |
-| `android-device-audit-structure`, `debug-bundle-structure` | Current result not verified. |
+| `android-device-audit-structure` | Full evaluated check body passed with cached tools outside a Nix sandbox; mock-device evidence only. See tooling follow-up below. |
+| `debug-bundle-structure` | New process-argument privacy regression passed from working-tree and evaluated Nix source; full wrapper/derivation result remains unverified. |
 | `public-relay-repro-structure`, `public-vpn-capture-structure` | Current result not verified. |
 | `public-vpn-repro-structure`, `public-vpn-repro-evidence-structure` | Current result not verified. |
 | `public-vpn-evidence-check`, `public-vpn-move-evidence-check` | Synthetic verifier fixtures; current result not verified. Not live WAN tests. |
@@ -75,6 +76,38 @@ not imply that the corresponding Nix derivation was built successfully.
 An offline, substitution-disabled dry run for the two public-VPN verifier checks
 planned 967 derivations, including ShellCheck's source dependency chain. No build
 was started. This is not an estimate of work required with available binary substitutes.
+
+### Tooling Follow-Up
+
+On 2026-09-06, the full evaluated Android device-audit check body passed at
+`336b90cd`, using cached ShellCheck and the locked nixpkgs shebang hook. The
+driver supplied the matching `isScript` helper; execution was outside a Nix sandbox.
+
+| Mock Scenario | Result |
+| --- | --- |
+| Preflight and wrong ABI | Valid fixture accepted; wrong ABI rejected before install |
+| Unattended destructive setup | Rejected without installing |
+| Full, core, and upstream-VPN audits | Expected transitions and evidence assertions pass |
+| Injected Doze failure | Expected failed outcome; Doze released, screen awake, private state removed, profile preserved |
+| Evidence eligibility | All short fake-device reports retain `proof_eligible=false` |
+
+- Evaluated body: `/tmp/p2p-vpn-review-device-audit-check.sh`.
+- Driver: `/tmp/p2p-vpn-review-device-audit-driver.sh`.
+- Log: `/tmp/p2p-vpn-review-device-audit-run.log`.
+- Terminal success marker: `/tmp/p2p-vpn-review-device-audit-passed`.
+- Retained mock artifacts total approximately 200 KiB; no real ADB device was accessed.
+
+The debug-bundle review found full process arguments could expose a pairing code.
+Commit `5b5c1b87` removes arguments while retaining PID, parent PID, state, and
+command name. An isolated sentinel fixture failed before the change and passes afterward.
+
+The privacy test also passed from the Nix-evaluated source tree, and ShellCheck
+and shell syntax checks passed. Bundles still contain network/host information
+and optional command output; this is not a general anonymization guarantee.
+
+An offline debug-bundle derivation dry run planned 980 source builds. None were
+started. The complete wrapper/derivation remains unverified; the focused privacy
+regression does not substitute for that packaging result.
 
 ### Lightweight Consumer Check
 
