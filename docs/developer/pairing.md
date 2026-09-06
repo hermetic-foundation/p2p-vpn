@@ -19,6 +19,23 @@ The code exchange uses libp2p request-response control streams.
 
 It works over direct TCP, direct QUIC, or circuit relay connections.
 
+## Connection Admission
+
+Identify may arrive before the pairing request. A connection already admitted
+as a membership probe can remain available for file pairing when it advertises
+`/p2p-vpn/pairing/1` and its original probe deadline has not expired.
+
+| Condition | Result |
+| --- | --- |
+| Matching admitted connection and pairing protocol | Preserve the bounded probe |
+| Different connection, missing protocol, expired or quarantined probe | No file-pairing exemption |
+| Repeated Identify | Does not extend the deadline |
+| Pairing protocol advertised | Does not grant packet, route, or infrastructure authority |
+
+Existing signature, transport-identity, offer-expiry, and replay checks still
+decide whether file pairing succeeds. Active code sessions retain their own
+bounded lifecycle.
+
 ## Local RPC Methods
 
 | Method | State Transition |

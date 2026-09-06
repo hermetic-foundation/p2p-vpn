@@ -10462,6 +10462,20 @@ struct MembershipProbeConnections {
 }
 
 impl MembershipProbeConnections {
+    fn allows_file_pairing_probe(
+        &self,
+        peer: Libp2pPeerId,
+        connection_id: ConnectionId,
+        protocols: &[libp2p::StreamProtocol],
+        now: Instant,
+    ) -> bool {
+        identify_protocols_include(protocols, crate::runtime::pairing::PAIRING_PROTOCOL)
+            && self
+                .by_peer
+                .get(&peer)
+                .is_some_and(|probe| probe.connection_id == connection_id && now < probe.expires_at)
+    }
+
     fn admit(
         &mut self,
         peer: Libp2pPeerId,
@@ -19376,6 +19390,10 @@ fn handle_identify_received(
     let public_pairing_kademlia_routing =
         identify_protocols_include(&info.protocols, PUBLIC_IPFS_KADEMLIA_PROTOCOL);
     let kademlia_routing = overlay_kademlia_routing || public_pairing_kademlia_routing;
+    let pairing_probe = context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        || context
+            .membership_probe_connections
+            .allows_file_pairing_probe(peer_id, connection_id, &info.protocols, Instant::now());
     let identify_source = if context.membership.allows(peer_id) {
         DiscoveredPeerAddressSource::AuthenticatedPeerIdentify
     } else {
@@ -19412,10 +19430,7 @@ fn handle_identify_received(
             );
         }
     }
-    if !context.membership.allows(peer_id)
-        && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
-        && kademlia_routing
-    {
+    if !context.membership.allows(peer_id) && !pairing_probe && kademlia_routing {
         match context.routing_infrastructure_peers.admit(peer_id) {
             RoutingInfrastructureAdmission::Admitted => {
                 classify_membership_probe_as_routing(context.membership_probe_connections, peer_id);
@@ -19473,7 +19488,7 @@ fn handle_identify_received(
     }
     if context.infrastructure_peers.contains(peer_id)
         && !context.membership.allows(peer_id)
-        && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        && !pairing_probe
         && !relay_hop
     {
         if context.relay_server_enabled || kademlia_routing {
@@ -19498,7 +19513,7 @@ fn handle_identify_received(
         }
     }
     if !context.membership.allows(peer_id)
-        && !context.code_pairing_sessions.allows_pairing_probe(peer_id)
+        && !pairing_probe
         && !relay_hop
         && !kademlia_routing
         && !context.relay_server_enabled
@@ -29511,6 +29526,38 @@ mod tests {
         assert!(address_targets_peer(peer, &relayed_without_target));
         assert!(address_targets_peer(peer, &relayed_target));
         assert!(!address_targets_peer(peer, &relayed_other_target));
+    }
+
+    #[test]
+    fn file_pairing_identify_requires_an_admitted_unexpired_connection() {
+        let peer = peer_id();
+        let connection = ConnectionId::new_unchecked(1);
+        let other_connection = ConnectionId::new_unchecked(2);
+        let protocols = vec![libp2p::StreamProtocol::new(
+            crate::runtime::pairing::PAIRING_PROTOCOL,
+        )];
+        let now = Instant::now();
+        let mut probes = MembershipProbeConnections::default();
+
+        assert!(!probes.allows_file_pairing_probe(peer, connection, &protocols, now));
+        probes.admit(peer, connection, false, now);
+        assert!(probes.allows_file_pairing_probe(peer, connection, &protocols, now));
+        assert!(!probes.allows_file_pairing_probe(peer, other_connection, &protocols, now));
+        assert!(!probes.allows_file_pairing_probe(peer_id(), connection, &protocols, now));
+        assert!(!probes.allows_file_pairing_probe(peer, connection, &[], now));
+        assert!(!probes.allows_file_pairing_probe(
+            peer,
+            connection,
+            &protocols,
+            now + MEMBERSHIP_PROBE_CONNECTION_TTL,
+        ));
+        assert_eq!(
+            probes.expired(now + MEMBERSHIP_PROBE_CONNECTION_TTL),
+            vec![(peer, connection)]
+        );
+
+        probes.quarantine(peer, now);
+        assert!(!probes.allows_file_pairing_probe(peer, connection, &protocols, now));
     }
 
     #[test]

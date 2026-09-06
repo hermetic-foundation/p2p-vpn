@@ -112,7 +112,7 @@ migration information in the membership reference.
 
 ### R5: Identify Can Disconnect a File-Pairing Probe
 
-Priority: P1. Status: observed on changed code and unchanged baseline; fix pending.
+Priority: P1. Status: fixed; direct and relayed namespace verification passed.
 
 `handle_identify_received` exempts active code-pairing sessions from non-relay
 infrastructure rejection, but does not preserve a bounded file-pairing probe.
@@ -129,8 +129,15 @@ The baseline's eventual success does not establish stable behavior. Preserve
 pairing-capable probes only within their existing admission and expiry bounds;
 protocol advertisement must never grant overlay membership or infrastructure status.
 
-Add an event-order regression where Identify precedes pairing completion, then
-verify direct, relayed, malformed, and expired probe behavior.
+The policy regression covers unadmitted identities, mismatched connections,
+missing protocol support, deadline expiry, and quarantine. The direct namespace
+test now rejects traces with Identify-driven non-relay disconnections, even if
+pairing eventually succeeds. Both direct and relayed file pairing passed with
+the fix, including traffic and the direct test's existing replay rejection.
+
+Post-fix validation: 1,143 workspace tests passed, with 14 ignored in the default
+run. Peerless code pairing also passed separately. Formatting and the required
+Clippy correctness, suspicious, and performance checks passed; style warnings remain.
 
 ## Review Coverage Still Required
 

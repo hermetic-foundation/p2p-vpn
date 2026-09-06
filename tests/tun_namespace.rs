@@ -1205,6 +1205,10 @@ fn run_pairing_orchestrator() {
         inviter_log.contains("pairing_request_accepted"),
         "node B did not log an accepted live pairing request\nnode-b log:\n{inviter_log}",
     );
+    assert!(
+        !inviter_log.contains("reason=identified_non_relay_peer"),
+        "Identify disconnected a file-pairing probe as infrastructure\n{inviter_log}",
+    );
     cleanup_temp_dir(temp_dir);
 }
 
