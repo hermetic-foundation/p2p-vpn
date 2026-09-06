@@ -22055,6 +22055,62 @@ mod tests {
         (config, inviter, joiner, offer, request, response)
     }
 
+    async fn receive_pairing_acceptance_with_retry(
+        node: &mut P2pNode,
+        remote: &mut P2pNode,
+        sessions: &mut CodePairingSessions,
+        expected_request: &PairingCodeRequest,
+        acceptance: &PairingResponse,
+    ) -> (request_response::OutboundRequestId, PairingCodeResponse) {
+        timeout(Duration::from_secs(10), async {
+            let discovery = DiscoveryConfig {
+                mdns: false,
+                kademlia: false,
+                ..DiscoveryConfig::default()
+            };
+            let metrics = RuntimeMetrics::default();
+            let mut tick = tokio::time::interval(Duration::from_millis(20));
+            let mut received = 0;
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => drive_code_pairing_discovery(
+                        &mut node.swarm, sessions, &node.identity, "lab", &discovery, &metrics,
+                    ),
+                    event = remote.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(
+                            request_response::Event::Message {
+                                peer, message: Message::Request { request, channel, .. }, ..
+                            }
+                        )) = event {
+                            assert_eq!(peer, *node.swarm.local_peer_id());
+                            assert_eq!(serde_json::to_value(request).unwrap(), serde_json::to_value(expected_request).unwrap());
+                            received += 1;
+                            assert_eq!(received, 1, "only one request may own the acceptance");
+                            remote.swarm.behaviour_mut().pairing_code.send_response(
+                                channel, PairingCodeResponse::Accepted { response: Box::new(acceptance.clone()) },
+                            ).unwrap();
+                        }
+                    }
+                    event = node.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(BehaviourEvent::PairingCode(event)) = event {
+                            match event {
+                                request_response::Event::Message {
+                                    peer, message: Message::Response { request_id, response }, ..
+                                } => {
+                                    assert_eq!(peer, *remote.swarm.local_peer_id());
+                                    assert_eq!(received, 1);
+                                    return (request_id, response);
+                                }
+                                request_response::Event::OutboundFailure { error, .. } => panic!("loopback pairing failed: {error}"),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }).await.expect("automatic pairing retry must deliver acceptance")
+    }
+
     #[tokio::test]
     async fn accepted_pairing_retries_after_local_application_failure() {
         for (poll, persistence_failure) in
@@ -22068,6 +22124,36 @@ mod tests {
             config.peers.clear();
             let mut forwarder = Forwarder::from_config(&config).unwrap();
             let mut node = membership_sync_test_node(joiner);
+            let mut remote = membership_sync_test_node(inviter);
+            remote
+                .swarm
+                .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .unwrap();
+            timeout(Duration::from_secs(10), async {
+                let address = loop {
+                    if let SwarmEvent::NewListenAddr { address, .. } =
+                        remote.swarm.select_next_some().await
+                    {
+                        break address;
+                    }
+                };
+                node.swarm
+                    .dial(DialOpts::peer_id(peer).addresses(vec![address]).build())
+                    .unwrap();
+                loop {
+                    tokio::select! {
+                        event = node.swarm.select_next_some() => {
+                            if let SwarmEvent::ConnectionEstablished { peer_id, .. } = event {
+                                assert_eq!(peer_id, peer);
+                                break;
+                            }
+                        }
+                        _ = remote.swarm.select_next_some() => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
             let now = Instant::now();
             let mut sessions = CodePairingSessions::new();
             let started = sessions
@@ -22104,32 +22190,12 @@ mod tests {
                         now,
                     )
                     .unwrap();
-                assert!(sessions.due_remote_poll(now).is_some());
                 PairingCodeRequest::Poll { ticket }
             } else {
-                assert!(sessions.due_pending_submission(now).is_some());
                 PairingCodeRequest::Submit {
                     request: Box::new(request),
                 }
             };
-            let request_id = node
-                .swarm
-                .behaviour_mut()
-                .pairing_code
-                .send_request(&peer, wire_request);
-            let outbound = OutboundPairing {
-                operation_id: started.operation_id.clone(),
-                peer,
-                offer,
-                transcript_sha256: transcript,
-            };
-            if poll {
-                sessions.insert_outbound_poll(request_id, outbound).unwrap();
-            } else {
-                sessions
-                    .insert_outbound_submit(request_id, outbound)
-                    .unwrap();
-            }
             let state_path = test_pairing_state_path(if poll {
                 "accepted-poll-retry"
             } else {
@@ -22142,6 +22208,7 @@ mod tests {
             let store = PairingStateStore::new(&state_path);
             struct FailingRoutes {
                 calls: usize,
+                fail: bool,
             }
             impl TunRouteController for FailingRoutes {
                 fn reconcile(
@@ -22151,10 +22218,17 @@ mod tests {
                     _: &TunRouteUpdate,
                 ) -> Result<(), RunnerError> {
                     self.calls += 1;
-                    Err(io::Error::other("injected route failure").into())
+                    if self.fail {
+                        Err(io::Error::other("injected route failure").into())
+                    } else {
+                        Ok(())
+                    }
                 }
             }
-            let mut routes = FailingRoutes { calls: 0 };
+            let mut routes = FailingRoutes {
+                calls: 0,
+                fail: true,
+            };
             struct UnusedPacketIo;
             impl crate::runtime::tun::PacketRead for UnusedPacketIo {
                 fn read_packet(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
@@ -22170,78 +22244,107 @@ mod tests {
             let mut membership = OverlayMembership::from_config(&config).unwrap();
             let mut tun_runtime = TunRuntimeConfig::from_config(&config).unwrap();
             let mut capabilities = ControlCapabilities::local("lab", None, 1280);
-            handle_pairing_code_response(
-                &mut node.swarm,
-                &mut SwarmEventContext {
-                    forwarder: &mut forwarder,
-                    membership: &mut membership,
-                    tun_runtime: &mut tun_runtime,
-                    route_controller: &mut routes,
-                    infrastructure_peers: &mut InfrastructurePeers::default(),
-                    routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
-                    writer: &mut writer,
-                    paths: &mut PathSet::new(),
-                    peer_capabilities: &mut PeerCapabilities::default(),
-                    relay_readiness: &mut RelayReadiness::default(),
-                    auto_relay: &mut AutoRelayState::default(),
-                    public_discovery_backoff: &mut PublicDiscoveryBackoff::default(),
-                    public_discovery_holdoff_active: false,
-                    relay_addresses: &[],
-                    configured_peer_addresses: &[],
-                    configured_relay_reservation_listeners: &mut HashSet::new(),
-                    retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
-                    relay_server_enabled: false,
-                    discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
-                    packet_in_flight: &mut PacketInFlight::new(1),
-                    inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
-                    pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
-                    membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
-                    membership_record_syncs: &mut MembershipRecordSyncs::default(),
-                    pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, now),
-                    metrics: &RuntimeMetrics::default(),
-                    local_capabilities: &mut capabilities,
-                    persistent_packet_endpoint_candidates: &[],
-                    persistent_packet_plane_quic_endpoint_candidates: &[],
-                    previous_membership_tags: &[],
-                    discovery: &DiscoveryConfig::default(),
-                    identity: &node.identity,
-                    packet_plane: &mut PacketPlaneRuntime::disabled(),
-                    packet_plane_quic: None,
-                    packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
-                    path_probe_tracker: &mut PathProbeTracker::default(),
-                    packet_plane_session_ttl: Duration::from_secs(60),
-                    packet_plane_replay_windows_per_session: 1,
-                    pairing_replay_tokens: &mut PairingReplayTokens::default(),
-                    code_pairing_sessions: &mut sessions,
-                    pairing_state_store: Some(&store),
-                    active_connections: &mut HashMap::new(),
-                    connection_epochs: &mut ConnectionEpochs::default(),
-                    membership_probe_connections: &mut MembershipProbeConnections::default(),
-                    kademlia_maintenance: &mut KademliaMaintenance::new(now),
-                },
-                peer,
-                None,
-                request_id,
-                PairingCodeResponse::Accepted {
-                    response: Box::new(response),
-                },
-            )
-            .unwrap();
-            fs::remove_dir_all(state_path.parent().unwrap()).unwrap();
-            assert_eq!(routes.calls, usize::from(!persistence_failure));
-            assert!(sessions.join_completion(&started.operation_id).is_none());
-            assert!(forwarder.config().peers.is_empty());
-            assert!(sessions.due_pending_submission(now).is_none());
-            assert!(sessions.due_remote_poll(now).is_none());
-            let later = Instant::now() + Duration::from_secs(10);
-            if poll {
-                assert!(sessions.due_remote_poll(later).is_some(), "poll must retry");
-            } else {
-                assert!(
-                    sessions.due_pending_submission(later).is_some(),
-                    "submit must retry"
-                );
+            let mut previous_request = None;
+            for attempt in 0..2 {
+                let (request_id, wire_response) = receive_pairing_acceptance_with_retry(
+                    &mut node,
+                    &mut remote,
+                    &mut sessions,
+                    &wire_request,
+                    &response,
+                )
+                .await;
+                assert_ne!(previous_request, Some(request_id));
+                previous_request = Some(request_id);
+                handle_pairing_code_response(
+                    &mut node.swarm,
+                    &mut SwarmEventContext {
+                        forwarder: &mut forwarder,
+                        membership: &mut membership,
+                        tun_runtime: &mut tun_runtime,
+                        route_controller: &mut routes,
+                        infrastructure_peers: &mut InfrastructurePeers::default(),
+                        routing_infrastructure_peers: &mut RoutingInfrastructurePeers::default(),
+                        writer: &mut writer,
+                        paths: &mut PathSet::new(),
+                        peer_capabilities: &mut PeerCapabilities::default(),
+                        relay_readiness: &mut RelayReadiness::default(),
+                        auto_relay: &mut AutoRelayState::default(),
+                        public_discovery_backoff: &mut PublicDiscoveryBackoff::default(),
+                        public_discovery_holdoff_active: false,
+                        relay_addresses: &[],
+                        configured_peer_addresses: &[],
+                        configured_relay_reservation_listeners: &mut HashSet::new(),
+                        retiring_configured_relay_reservation_listeners: &mut HashSet::new(),
+                        relay_server_enabled: false,
+                        discovered_peer_addresses: &mut DiscoveredPeerAddresses::default(),
+                        packet_in_flight: &mut PacketInFlight::new(1),
+                        inbound_packet_rate_limiters: &mut PeerRateLimiters::new(1),
+                        pairing_request_rate_limiters: &mut PeerRateLimiters::new(1),
+                        membership_page_rate_limiters: &mut PeerRateLimiters::new(1),
+                        membership_record_syncs: &mut MembershipRecordSyncs::default(),
+                        pairing_handshake_rate_limiter: &mut GlobalRateLimiter::new(1, now),
+                        metrics: &RuntimeMetrics::default(),
+                        local_capabilities: &mut capabilities,
+                        persistent_packet_endpoint_candidates: &[],
+                        persistent_packet_plane_quic_endpoint_candidates: &[],
+                        previous_membership_tags: &[],
+                        discovery: &DiscoveryConfig::default(),
+                        identity: &node.identity,
+                        packet_plane: &mut PacketPlaneRuntime::disabled(),
+                        packet_plane_quic: None,
+                        packet_plane_negotiator: &mut PacketPlaneNegotiator::default(),
+                        path_probe_tracker: &mut PathProbeTracker::default(),
+                        packet_plane_session_ttl: Duration::from_secs(60),
+                        packet_plane_replay_windows_per_session: 1,
+                        pairing_replay_tokens: &mut PairingReplayTokens::default(),
+                        code_pairing_sessions: &mut sessions,
+                        pairing_state_store: Some(&store),
+                        active_connections: &mut HashMap::new(),
+                        connection_epochs: &mut ConnectionEpochs::default(),
+                        membership_probe_connections: &mut MembershipProbeConnections::default(),
+                        kademlia_maintenance: &mut KademliaMaintenance::new(now),
+                    },
+                    peer,
+                    None,
+                    request_id,
+                    wire_response,
+                )
+                .unwrap();
+                if attempt == 0 {
+                    assert_eq!(routes.calls, usize::from(!persistence_failure));
+                    assert!(sessions.join_completion(&started.operation_id).is_none());
+                    assert!(forwarder.config().peers.is_empty());
+                    assert!(!membership.allows(peer));
+                    assert!(sessions.due_pending_submission(Instant::now()).is_none());
+                    assert!(sessions.due_remote_poll(Instant::now()).is_none());
+                    if persistence_failure {
+                        fs::remove_dir(&state_path).unwrap();
+                    }
+                    routes.fail = false;
+                } else {
+                    assert_eq!(routes.calls, 1 + usize::from(!persistence_failure));
+                    assert!(forwarder.is_configured_transport_peer(peer));
+                    assert!(membership.allows(peer));
+                    assert!(sessions.join_completion(&started.operation_id).is_some());
+                    let restored = CodePairingSessions::restore_persisted(
+                        &store.load().unwrap().unwrap(),
+                        "lab",
+                        current_unix_seconds_lossy(),
+                        Instant::now(),
+                    )
+                    .unwrap();
+                    assert!(restored.join_completion(&started.operation_id).is_some());
+                    assert_eq!(
+                        restored.enrollment(&started.operation_id).unwrap().state,
+                        PairingEnrollmentState::Applied
+                    );
+                    let later = Instant::now() + Duration::from_secs(60);
+                    assert!(sessions.due_pending_submission(later).is_none());
+                    assert!(sessions.due_remote_poll(later).is_none());
+                }
             }
+            fs::remove_dir_all(state_path.parent().unwrap()).unwrap();
         }
     }
 

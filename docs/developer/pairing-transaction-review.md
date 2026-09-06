@@ -62,13 +62,14 @@ already corrupted by the old transition. Recovery compatibility remains an open 
 
 1. Inject failure after Prepared persistence and before runtime commit; exercise
    cancellation, rejection, expiry, and same-role replacement before recovery.
-2. Extend response-dispatch coverage through successful continuation after repair;
-   lower-level runtime retry and persisted restart reconciliation now pass.
-3. Extend historical acknowledgement coverage through daemon startup compaction
+2. Extend historical acknowledgement coverage through daemon startup compaction
    under incompatible declarative authority and multiple sequential pairings.
-4. Reconcile old invalid snapshots without silently dropping committed membership
+3. Reconcile old invalid snapshots without silently dropping committed membership
    or weakening restored-state authorization checks.
-5. Run affected native, namespace, and Android gates after transaction fixes.
+4. Run affected native, namespace, and Android gates after transaction fixes.
+
+Accepted-response continuation now has the [live retry coverage](#live-retry-through-completion)
+below. Lower-level partial rollback and persisted restart remain separate tests.
 
 Secondary-review observations are not yet equivalent to reproduced failures.
 No production state has been altered to investigate these cases.
@@ -88,11 +89,11 @@ This does not add retries to terminally rejected pairings or change the wire pro
 
 ### Evidence Boundary
 
-The runner regression `accepted_pairing_retries_after_local_application_failure`
-dispatches signed acceptance directly, with public discovery disabled.
+The original runner regression `accepted_pairing_retries_after_local_application_failure`
+dispatched signed acceptance directly, with public discovery disabled.
 The initial Submit persistence case failed at `submit must retry` before correction.
 
-The test matrix covers Submit and Poll with a rejected state-file destination or
+The original test matrix covers Submit and Poll with a rejected state-file destination or
 an injected route-controller error. It checks retry eligibility, no immediate retry,
 and unchanged peer configuration. It does not simulate partial route rollback,
 power loss, or delivery of the subsequent retry over a physical network.
@@ -126,14 +127,55 @@ Both cases pass without a production-code change. The command executor is
 injected: this checks transaction ordering and logical publication, not actual
 kernel state, crash recovery, durable finalization, or automatic retry delivery.
 
-The separate accepted-response test still checks retry eligibility only.
-Automatic live response retries through completion remain open; persisted restart
-reconciliation is covered below.
+The accepted-response test now drives live loopback retries through completion,
+as described below. Persisted restart reconciliation remains separate coverage.
 Log: `/tmp/p2p-vpn-review-pairing-partial-routes.log`.
 
 The full workspace passed with 1,226 tests and 18 opt-in tests ignored.
 No runtime implementation changed, so device and namespace deployment tests
 were not repeated for this coverage-only addition.
+
+### Live Retry Through Completion
+
+The accepted-response regression now runs two real TCP libp2p swarms. The remote
+serves a signed fixture acceptance; the joiner uses `drive_code_pairing_discovery`
+and dispatches received responses through `handle_pairing_code_response`.
+
+| Case | Failure | Recovery Assertion |
+| --- | --- | --- |
+| Submit and Poll | Directory occupies the state-file path | Remove obstruction; normal retry persists and completes enrollment |
+| Submit and Poll | Route controller rejects reconciliation | Repair controller; normal retry applies and persists enrollment |
+
+- Every attempt crosses loopback; the remote verifies the exact expected request and sender identity.
+- Retry ownership is created by the production driver, not inserted directly by the test.
+- Failed application leaves the peer unauthorized and completion absent; immediate retry remains suppressed.
+- After repair, a new request ID delivers acceptance without manually advancing time or clearing in-flight state.
+- Successful recovery authorizes the peer, persists Applied state, and retains completion after reload.
+- Completed operations have no pending submission or poll even at a later retry deadline.
+
+The four-case test passed in 5.51 seconds. Public discovery is disabled, and the
+route controller is injected. Connection promotion, actual kernel changes, full
+inviter approval, PAKE negotiation, and physical WAN retries are not covered here.
+
+Log: `/tmp/p2p-vpn-review-pairing-live-retry.log`.
+
+Removing the accepted-response ownership release as a temporary negative control
+made the first Submit retry time out after 10 seconds. The production block was
+restored unchanged; the final Rust diff only extends tests.
+
+Negative-control log: `/tmp/p2p-vpn-review-pairing-live-retry-mutation.log`.
+
+| Gate After Restoring Production Code | Result |
+| --- | --- |
+| Full native workspace | 1,226 passed, 18 opt-in tests ignored; includes the live retry matrix |
+| Code-pairing namespace | Passed, 13.28 seconds |
+| Clippy | Required correctness, suspicious, and performance groups pass; non-fatal style warnings remain |
+| Formatting and whitespace | Changed Rust and diff checks pass |
+| Nix `rust-test-sources` | Built offline; verifies test inclusion, not a complete package build |
+
+Logs use `/tmp/p2p-vpn-review-pairing-live-*`. No production implementation changed,
+so Android and full NixOS VM gates were not repeated for this test-only extension.
+This remains executable coverage, not a formal proof of the pairing state machine.
 
 ### Persisted Restart Repair
 
